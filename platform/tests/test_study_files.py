@@ -46,9 +46,29 @@ def test_register_writes_event_blob_and_row(project: Project) -> None:
 def test_unchanged_file_is_idempotent(project: Project) -> None:
     _write(project, "docs/plan.md", "v1")
     first = register_file(project, "docs/plan.md", "study-document", None, project.human_actor())
-    again = register_file(project, "docs/plan.md", "other", "x", project.human_actor())
+    again = register_file(project, "docs/plan.md", "study-document", None, project.human_actor())
     assert not again.changed and again.registration == first.registration
     assert len(list_files(project)) == 1 and not list_files(project)[0].history
+
+
+def test_same_content_with_another_kind_or_title_is_a_new_registration(project: Project) -> None:
+    _write(project, "docs/plan.md", "v1")
+    first = register_file(project, "docs/plan.md", "study-document", None, project.human_actor())
+    second = register_file(project, "docs/plan.md", "other", "Plan", project.human_actor())
+    assert second.changed and second.metadata_only
+    reg = second.registration
+    assert (reg.version, reg.kind, reg.title) == (2, "other", "Plan")
+    assert reg.supersedes == first.registration.event_id
+    assert reg.sha256 == first.registration.sha256 and reg.blob == first.registration.blob
+    third = register_file(project, "docs/plan.md", "other", " Plan ", project.human_actor())
+    assert not third.changed
+
+
+def test_site_folder_is_refused(project: Project) -> None:
+    _write(project, "site/x.md", "x")
+    with pytest.raises(FactoryValidationError):
+        register_file(project, "site/x.md", "other", None, project.human_actor())
+    assert list_files(project) == []
 
 
 def test_changed_file_is_a_new_version_that_supersedes(project: Project) -> None:
@@ -166,6 +186,8 @@ def test_cli_register_list_status(project: Project, tmp_path: Path) -> None:
     assert second.exit_code == 0, second.output
     assert "registered docs/plan.md v2" in second.stdout
     assert "unchanged docs/notes.md v1" in second.stdout
+    third = runner.invoke(app, ["files", "register", "docs/notes.md", "--kind", "other"], env=env)
+    assert "re-registered (kind or title changed) docs/notes.md v2" in third.stdout
     listed = runner.invoke(app, ["files", "list", "--json"], env=env)
     assert listed.exit_code == 0, listed.output
     data = json.loads(listed.stdout)

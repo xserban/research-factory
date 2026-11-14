@@ -14,7 +14,7 @@ from factory.services import site_runs
 from factory.services.check import check
 from factory.services.context import Project
 from factory.services.site import products
-from factory.services.site_runs import batch_prefix, build_runs, run_groups
+from factory.services.site_runs import batch_prefix, build_runs, run_groups, runs_stamp
 from factory.services.study_files import register_file
 from factory.services.unreferenced_files import (
     event_strings,
@@ -124,6 +124,53 @@ def test_runs_page_links_the_ops_folder(project: Project, tmp_path: Path) -> Non
     assert "unlinked" in html and "ops/screeners/layerA-1.txt" in html
     assert (out / "ops").is_symlink()
     assert os.readlink(out / "ops") == str(project.paths.dir / "ops")
+
+
+def test_runs_page_notes_the_absolute_link_and_encodes_hrefs(
+    project: Project, tmp_path: Path
+) -> None:
+    _write(project, "ops/a b-1.txt")
+    out = tmp_path / "site"
+    out.mkdir()
+    build_runs(project, out)
+    html = (out / "index.html").read_text(encoding="utf-8")
+    assert "not meant to be copied or published" in html and "ops/a%20b-1.txt" in html
+
+
+def test_runs_stamp_follows_the_ops_listing(project: Project) -> None:
+    empty = runs_stamp(project)
+    path = _write(project, "ops/a.txt", b"1")
+    one = runs_stamp(project)
+    assert one != empty and runs_stamp(project) == one
+    path.write_bytes(b"22")
+    assert runs_stamp(project) != one
+
+
+def test_broken_and_outside_symlinks_and_unreadable_files_do_not_raise(
+    project: Project, tmp_path: Path
+) -> None:
+    _write(project, "ops/real.txt")
+    (project.paths.dir / "ops" / "broken").symlink_to(project.paths.dir / "nowhere")
+    outer = tmp_path / "outer.txt"
+    outer.write_text("o", encoding="utf-8")
+    (project.paths.dir / "ops" / "out").symlink_to(outer)
+    (project.paths.dir / "ops" / "in").symlink_to(project.paths.dir / "ops" / "real.txt")
+    unreadable = _write(project, "inputs/locked.txt")
+    unreadable.chmod(0)
+    try:
+        assert walk_files(project.paths.dir) == ["inputs/locked.txt", "ops/in", "ops/real.txt"]
+        report = unreferenced_files(project)
+    finally:
+        unreadable.chmod(0o644)
+    assert report.unreferenced == 3
+
+
+def test_event_spellings_dot_slash_and_factory_root_relative_count(project: Project) -> None:
+    from factory.services.unreferenced_files import _spellings
+
+    prefix = str(project.paths.dir.resolve()) + "/"
+    names = _spellings("ops/a.txt", prefix, str(project.paths.dir) + "/", project.paths.dir.name)
+    assert {"./ops/a.txt", f"projects/{project.paths.dir.name}/ops/a.txt"} <= names
 
 
 def test_runs_page_without_ops_is_empty(project: Project, tmp_path: Path) -> None:

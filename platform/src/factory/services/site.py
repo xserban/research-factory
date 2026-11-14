@@ -293,10 +293,22 @@ def _build_documents(project: Project, out: Path) -> None:
     build_documents(project, out)
 
 
+def _documents_stamp(project: Project) -> str:
+    from factory.services.site_documents import documents_stamp
+
+    return documents_stamp(project)
+
+
 def _build_runs(project: Project, out: Path) -> None:
     from factory.services.site_runs import build_runs
 
     build_runs(project, out)
+
+
+def _runs_stamp(project: Project) -> str:
+    from factory.services.site_runs import runs_stamp
+
+    return runs_stamp(project)
 
 
 def products() -> list[Product]:
@@ -490,6 +502,7 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("file.%",),
             build=_build_documents,
+            stamp=_documents_stamp,
         ),
         Product(
             id="runs",
@@ -501,6 +514,7 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("runner.%", "task.%"),
             build=_build_runs,
+            stamp=_runs_stamp,
         ),
         Product(
             id="bibliography",

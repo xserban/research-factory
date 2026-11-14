@@ -10,9 +10,9 @@ Invariants:
 - A path is relative to the project folder, inside it after symlinks are resolved, an existing
   regular file, and not under `events/`, `blobs/`, `library/` or `.index/`. Anything else is
   refused with nothing written.
-- Registering a path whose current hash equals its latest registration writes nothing and returns
-  that registration (`changed` is false); a changed file is a new registration that supersedes the
-  latest one.
+- Registering a path whose current hash, kind and title all equal its latest registration writes
+  nothing and returns that registration (`changed` is false); a changed file, or the same content
+  with a different kind or title, is a new registration that supersedes the latest one.
 - `file_status` only reads: it never registers or rewrites anything.
 """
 
@@ -27,7 +27,13 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.model.files import FILE_KINDS, FileKind, FileRegistered, path_issue
+from factory.model.files import (
+    EXCLUDED_TOP_FOLDERS,
+    FILE_KINDS,
+    FileKind,
+    FileRegistered,
+    path_issue,
+)
 from factory.services.context import Project
 
 Status = Literal["unchanged", "changed", "missing"]
@@ -54,7 +60,9 @@ class Registered:
     registration: Registration
     changed: bool
     """True when this call wrote a new registration; false when the file was already registered
-    with this content."""
+    with this content, kind and title."""
+    metadata_only: bool = False
+    """True when the new registration changes only the kind or title (same content)."""
 
 
 @dataclass(frozen=True)
@@ -123,7 +131,7 @@ def _locate(project: Project, path: str) -> Path:
     if not target.is_relative_to(root):
         raise _issue("path", "the file is outside the project folder")
     inside = target.relative_to(root).parts
-    if inside and inside[0] in ("events", "blobs", "library", ".index"):
+    if inside and inside[0] in EXCLUDED_TOP_FOLDERS:
         raise _issue("path", f"{inside[0]}/ belongs to the platform and is not registered")
     if not target.exists():
         raise _issue("path", f"no such file: {path}")
@@ -143,7 +151,8 @@ def register_file(
 
     Refused, with nothing written: for a non-human actor, an unknown kind, a path that is absolute,
     escapes the folder, lies under an excluded folder, does not exist or is not a file. An
-    unchanged file writes nothing and returns its latest registration."""
+    file with the same kind and title writes nothing and returns its latest registration; the same
+    content with another kind or title is a new registration."""
     if actor.kind != "human":
         raise _issue("actor", "a human registers study files")
     if kind not in FILE_KINDS:
@@ -155,7 +164,13 @@ def register_file(
     digest = hashlib.sha256(data).hexdigest()
     with project.index.exclusive():
         previous = _latest(project, path)
-        if previous is not None and previous.sha256 == digest:
+        clean_title = title.strip() if title else None
+        if (
+            previous is not None
+            and previous.sha256 == digest
+            and previous.kind == kind
+            and previous.title == clean_title
+        ):
             return Registered(previous, False)
         blob = project.blobs.put(data)
         payload = FileRegistered(
@@ -163,14 +178,14 @@ def register_file(
             sha256=digest,
             size=len(data),
             kind=cast(FileKind, kind),
-            title=title.strip() if title else None,
+            title=clean_title,
             supersedes=previous.event_id if previous else None,
         )
         event = project.events.make("file.registered", payload, actor, input_blob=blob)
         project.record([event])
     stored = _latest(project, path)
     assert stored is not None and stored.event_id == event.id
-    return Registered(stored, True)
+    return Registered(stored, True, previous is not None and previous.sha256 == digest)
 
 
 def list_files(project: Project) -> list[StudyFile]:

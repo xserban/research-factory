@@ -7,15 +7,21 @@ modification-date range and the total size. A group is *linked* when a file name
 id (`run_...`) or a task id (`tsk_...`) that some event names; the others are flagged unlinked.
 Nothing is written to the project: `ops/` is symlinked into the product's out folder so each
 file opens from the page. Pass labels are not matched (a name seldom holds one).
+
+The `out/ops` link is absolute: the Runs product links this project's `ops/` folder and is not
+meant to be copied or published as is. `runs_stamp` (stat of the `ops/` listing) makes the hub
+rebuild when a file of `ops/` changes.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from factory.events.reader import event_files
 from factory.services.context import Project
@@ -95,6 +101,16 @@ def _walk(ops: Path) -> list[RunFile]:
     return found
 
 
+def runs_stamp(project: Project) -> str:
+    """A hash of (path, size, mtime) of every file under `ops/`. Stat only."""
+    ops = project.paths.dir / "ops"
+    digest = hashlib.sha256()
+    if ops.is_dir():
+        for item in _walk(ops):
+            digest.update(f"{item.path}\0{item.size}\0{item.mtime}\0".encode())
+    return digest.hexdigest()[:12]
+
+
 def run_groups(project: Project) -> list[RunGroup]:
     """The groups of `ops/` by (first-level folder, batch prefix), unlinked first, then by
     folder and prefix. Empty without an `ops/` folder. Read-only."""
@@ -130,9 +146,13 @@ def _size(n: int) -> str:
     return f"{value:.1f} GB"
 
 
+def _href(path: str) -> str:
+    return "ops/" + "/".join(quote(s, safe="") for s in path.split("/"))
+
+
 def _group_html(group: RunGroup) -> str:
     items = "".join(
-        f"<li><a href='ops/{esc(f.path)}'>{esc(f.path)}</a> "
+        f"<li><a href='{esc(_href(f.path))}'>{esc(f.path)}</a> "
         f"<span class=hist>{_day(f.mtime)}, {_size(f.size)}</span></li>"
         for f in sorted(group.files, key=lambda f: f.path)
     )
@@ -167,7 +187,9 @@ def build_runs(project: Project, out: Path) -> None:
     unlinked = sum(1 for g in groups if not g.linked)
     summary = note(
         f"{total} file(s) in {len(groups)} group(s) under ops/; {unlinked} group(s) unlinked "
-        "(no file name holds a run or task id that an event names). The files are not events."
+        "(no file name holds a run or task id that an event names). The files are not events. "
+        "This page links the project's ops/ folder and is not meant to be copied or published "
+        "as is."
     )
     empty = "" if groups else note("There is no ops/ folder, or it holds no file.")
     table = (

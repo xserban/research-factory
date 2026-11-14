@@ -22,8 +22,8 @@ from factory.model.identity import ULID_RE
 
 EVENT_ID_RE = rf"^ev_{ULID_RE}$"
 SHA256_HEX_RE = r"^[0-9a-f]{64}$"
-EXCLUDED_TOP_FOLDERS: tuple[str, ...] = ("events", "blobs", "library", ".index")
-"""Folders of the project the platform owns: never registered as study files."""
+EXCLUDED_TOP_FOLDERS: tuple[str, ...] = ("events", "blobs", "library", ".index", "site")
+"""Folders of the project the platform owns (`site/` is hub output): never registered."""
 
 FileKind = Literal["study-document", "validation", "input", "ops", "other"]
 FILE_KINDS: tuple[str, ...] = ("study-document", "validation", "input", "ops", "other")

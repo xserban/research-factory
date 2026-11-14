@@ -46,7 +46,7 @@ def files_register_cmd(
     kind: Annotated[str, typer.Option("--kind", help=" | ".join(FILE_KINDS))],
     title: Annotated[str | None, typer.Option("--title", help="A title (one file).")] = None,
 ) -> None:
-    """Register files as records of the study. An unchanged file writes nothing."""
+    """Register files as records of the study. Unchanged content, kind and title write nothing."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
@@ -66,7 +66,13 @@ def files_register_cmd(
                 failed = True
                 continue
             reg = result.registration
-            word = "registered" if result.changed else "unchanged"
+            word = (
+                "unchanged"
+                if not result.changed
+                else "re-registered (kind or title changed)"
+                if result.metadata_only
+                else "registered"
+            )
             typer.echo(f"{word} {reg.path} v{reg.version} {reg.sha256[:12]} {reg.event_id}")
     if failed:
         raise typer.Exit(1)
