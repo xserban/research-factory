@@ -151,6 +151,12 @@ def _build_prisma(project: Project, out: Path) -> None:
     build_prisma(project, out)
 
 
+def _build_flow(project: Project, out: Path) -> None:
+    from factory.services.site_flow import build_flow
+
+    build_flow(project, out)
+
+
 def _build_bibliography(project: Project, out: Path) -> None:
     from factory.services.site_bibliography import build_bibliography
 
@@ -263,7 +269,7 @@ def _build_costs(project: Project, out: Path) -> None:
 
 
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
-    "Overview": ("dashboard", "prisma", "costs"),
+    "Overview": ("dashboard", "prisma", "flow", "costs"),
     "Sources": ("feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
     "Mining": ("miners", "agreement", "steps", "lifecycle"),
@@ -433,6 +439,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_prisma,
+        ),
+        Product(
+            id="flow",
+            title="Flow explorer",
+            group="Overview",
+            description="The PRISMA flow by source, every identified record with the step it "
+            "reached, a trail of what happened to each work, and the records that never became "
+            "works.",
+            entry="index.html",
+            inputs=(*CORPUS_EVENTS, "extraction.%", "reference.%"),
+            build=_build_flow,
         ),
         Product(
             id="bibliography",
