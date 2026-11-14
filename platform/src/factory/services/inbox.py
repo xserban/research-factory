@@ -253,6 +253,29 @@ def add_links(
     return BatchResult[str](written=written, rejected=rejected)
 
 
+def find_open_duplicate(project: Project, link: str, *, page: bool = False) -> str | None:
+    """The id of an item that is not withdrawn and has the same identifier as `link` (None when
+    there is none, or when `link` is not a supported link). Reads only; writes nothing."""
+    identifier = parse_link(link)
+    if identifier is None and page:
+        identifier = parse_page_link(link)
+    if identifier is None:
+        return None
+    cursor: str | None = None
+    while True:
+        found = list_items(project, cursor=cursor)
+        for view in found.items:
+            if (
+                view.status != "withdrawn"
+                and view.identifier_kind == identifier.kind
+                and view.identifier_value == identifier.value
+            ):
+                return view.item_id
+        if found.next_cursor is None:
+            return None
+        cursor = found.next_cursor
+
+
 # --- Withdrawal ---
 
 

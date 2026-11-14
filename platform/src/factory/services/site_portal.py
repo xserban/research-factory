@@ -89,6 +89,8 @@ _CSS: Final = (
     ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}"
     "a.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;"
     "padding:14px 16px;color:inherit;text-decoration:none}"
+    "form.card input,form.card select{background:var(--bg);color:var(--fg);border:1px solid var(--line);"
+    "border-radius:4px;padding:4px 8px;font:inherit}"
     "a.card:hover{border-color:var(--acc)}.t{font-weight:600;font-size:17px}"
     ".s{color:var(--mut);font-size:13px;font-family:ui-monospace,monospace}"
     ".m{display:flex;gap:14px;margin-top:10px;font-size:13px}.m b{font-size:16px}"
@@ -132,6 +134,44 @@ f.addEventListener('submit',function(ev){
 """
 
 
+_INBOX_SCRIPT: Final = """
+(function(){
+var m=document.querySelector('meta[name=factory-token]'),f=document.getElementById('inbox-form');
+if(!m||!f||location.protocol==='file:')return;
+var btn=f.querySelector('button'),msg=document.getElementById('inbox-msg');btn.disabled=false;
+f.addEventListener('submit',function(ev){
+  ev.preventDefault();btn.disabled=true;msg.textContent='adding...';
+  var body={project:f.project.value,value:f.value.value};
+  if(f.note.value.trim())body.note=f.note.value;
+  fetch('/api/inbox/add',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':m.content},body:JSON.stringify(body)})
+  .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
+  .then(function(r){
+    btn.disabled=false;
+    if(r.ok){msg.textContent=(r.duplicate?'duplicate: already in the inbox as ':'added as ')+r.item_id;if(!r.duplicate)f.value.value='';return;}
+    msg.textContent='error: '+((r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused');
+  }).catch(function(x){msg.textContent='request failed: '+x;btn.disabled=false;});
+});
+})();
+"""
+
+
+def _inbox_form(rows: list[PortalRow]) -> str:
+    """The add-to-inbox form: a project select, one link or identifier, an optional note."""
+    options = "".join(
+        f"<option value='{e(r.slug, quote=True)}'>{e(r.title)}</option>" for r in rows
+    )
+    return (
+        "<form id=inbox-form class=card style='margin-top:20px'><div class=t>Add to inbox</div>"
+        "<p class=s>A DOI, arXiv id or link; kept as an inbox item, like "
+        "<code>factory inbox add</code>.</p>"
+        f"<p><select name=project>{options}</select> "
+        "<input name=value placeholder='doi, arXiv id or link' required maxlength=500> "
+        "<input name=note placeholder='note (optional)' maxlength=300> "
+        "<button type=submit disabled>Add</button></p>"
+        "<p class=s id=inbox-msg role=status></p></form>"
+    )
+
+
 def render_portal(
     rows: list[PortalRow], *, create_token: str | None = None, feed_panel: str = ""
 ) -> str:
@@ -163,8 +203,8 @@ def render_portal(
         if create_token
         else ""
     )
-    form = _FORM if create_token else ""
-    script = f"<script>{_FORM_SCRIPT}</script>" if create_token else ""
+    form = (_FORM + (_inbox_form(rows) if rows else "")) if create_token else ""
+    script = f"<script>{_FORM_SCRIPT}{_INBOX_SCRIPT}</script>" if create_token else ""
     return with_bar(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         + token_meta
