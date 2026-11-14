@@ -19,6 +19,7 @@ Invariants:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -342,6 +343,10 @@ def lookup_query(kind: IdentifierKind, value: str) -> QuerySpec:
         return QuerySpec(
             source="arxiv", kind=QueryKind.ID_LIST, text=value, purpose=QueryPurpose.SUPPLIED
         )
+    if kind is IdentifierKind.PMID:
+        return QuerySpec(
+            source="pubmed", kind=QueryKind.ID_LIST, text=value, purpose=QueryPurpose.SUPPLIED
+        )
     prefix = "doi" if kind is IdentifierKind.DOI else "openalex"
     return QuerySpec(
         source="openalex",
@@ -407,6 +412,11 @@ def _resolve_one(
             return ResolveOutcome(item_id=item.item_id, status=None, issues=[found])
         page_sha256, value = found
         kind = IdentifierKind.DOI
+    if kind is IdentifierKind.PMCID:
+        converted = _pmcid_target(project, value, page_fetch or fetch_page)
+        if isinstance(converted, ValidationIssue):
+            return ResolveOutcome(item_id=item.item_id, status=None, issues=[converted])
+        kind, value = converted
     query = lookup_query(kind, value)
     supplied_by: SubmitterKind = "human" if item.actor_kind == "human" else "agent"
     with project.index.exclusive():
@@ -467,6 +477,43 @@ def _resolve_one(
             ]
         )
     return ResolveOutcome(item_id=item.item_id, status=status, work_id=work_id, run_id=run.run_id)
+
+
+_IDCONV = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
+
+
+def _pmcid_target(
+    project: Project, pmcid: str, fetch: Callable[[str], httpx.Response]
+) -> tuple[IdentifierKind, str] | ValidationIssue:
+    """The PMID (else the DOI) of a PMCID from the NCBI ID converter, or the issue that keeps
+    the item open. The converter's reply is archived in the library, as a page is.
+
+    (`PmcJatsRoute._convert` in `sources/fulltext/pmc.py` is private and works from a `Work`, so
+    it is not reused.)"""
+    try:
+        response = fetch(f"{_IDCONV}?ids={pmcid}&format=json")
+    except (httpx.HTTPError, OSError) as exc:
+        return ValidationIssue("link", f"pmcid-converter-unavailable: {exc}")
+    if response.status_code >= 400:
+        return ValidationIssue("link", f"pmcid-converter-refused: HTTP {response.status_code}")
+    project.library.put(response.content)
+    try:
+        data = json.loads(response.content)
+    except ValueError:
+        return ValidationIssue("link", "pmcid-converter-unreadable: not JSON")
+    records = data.get("records") if isinstance(data, dict) else None
+    for record in records if isinstance(records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        pmid = str(record.get("pmid") or "").strip()
+        if pmid.isdigit() and pmid.lstrip("0"):
+            return IdentifierKind.PMID, pmid.lstrip("0")
+        doi = str(record.get("doi") or "").strip()
+        if doi:
+            parsed = parse_link(doi)
+            if parsed is not None and parsed.kind in (IdentifierKind.DOI, IdentifierKind.ARXIV):
+                return parsed.kind, parsed.value
+    return ValidationIssue("link", "pmcid-not-converted")
 
 
 def _page_doi(

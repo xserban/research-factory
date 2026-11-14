@@ -9,6 +9,8 @@ from factory.inbox.links import MAX_LINK, IdentifierKind, LinkIdentifier, parse_
 ARXIV = IdentifierKind.ARXIV
 DOI = IdentifierKind.DOI
 OPENALEX = IdentifierKind.OPENALEX
+PMID = IdentifierKind.PMID
+PMCID = IdentifierKind.PMCID
 
 
 @pytest.mark.parametrize(
@@ -43,6 +45,17 @@ OPENALEX = IdentifierKind.OPENALEX
         ("https://openalex.org/W3138516171", OPENALEX, "W3138516171", None),
         ("https://api.openalex.org/works/w3138516171", OPENALEX, "W3138516171", None),
         ("W3138516171", OPENALEX, "W3138516171", None),
+        ("https://pubmed.ncbi.nlm.nih.gov/31452104/", PMID, "31452104", None),
+        ("https://pubmed.ncbi.nlm.nih.gov/31452104", PMID, "31452104", None),
+        ("https://pubmed.ncbi.nlm.nih.gov/31452104/?term=x#abs", PMID, "31452104", None),
+        ("https://www.ncbi.nlm.nih.gov/pubmed/31452104", PMID, "31452104", None),
+        ("PMID: 31452104", PMID, "31452104", None),
+        ("pmid:31452104", PMID, "31452104", None),
+        ("https://pmc.ncbi.nlm.nih.gov/articles/PMC6700123/", PMCID, "PMC6700123", None),
+        ("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6700123/", PMCID, "PMC6700123", None),
+        ("https://pmc.ncbi.nlm.nih.gov/articles/PMC6700123?x=1", PMCID, "PMC6700123", None),
+        ("PMC6700123", PMCID, "PMC6700123", None),
+        ("pmc6700123", PMCID, "PMC6700123", None),
     ],
 )
 def test_parse_supported(link: str, kind: IdentifierKind, value: str, version: str | None) -> None:
@@ -62,6 +75,15 @@ def test_parse_supported(link: str, kind: IdentifierKind, value: str, version: s
         "2103.140",
         "10.12/abc",
         "https://arxiv.org/list/cs.LG/recent",
+        "31452104",
+        "PMC",
+        "PMID:",
+        "pmid: abc",
+        "https://pubmed.ncbi.nlm.nih.gov/",
+        "https://example.org/pubmed/31452104",
+        "https://pubmed.example.org/31452104/",
+        "https://example.org/articles/PMC6700123/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC/",
     ],
 )
 def test_parse_unsupported(link: str) -> None:

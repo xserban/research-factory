@@ -2,8 +2,9 @@
 
 Pure and offline. Accepted forms: bare arXiv ids (new and old style, optional `arXiv:`
 scheme) and `arxiv.org/{abs,pdf,html}/` URLs; bare DOIs, `doi:` and `doi.org` URLs, and any
-URL whose path contains a DOI (`10.<4-9 digits>/…`); OpenAlex work ids and URLs. Anything else
-is unsupported and yields `None`.
+URL whose path contains a DOI (`10.<4-9 digits>/…`); OpenAlex work ids and URLs; PubMed
+(`pubmed.ncbi.nlm.nih.gov/<n>`, `PMID: <n>`) and PubMed Central (`PMC<n>`,
+`pmc.ncbi.nlm.nih.gov/articles/PMC<n>`) links. Anything else is unsupported and yields `None`.
 
 Invariants: the returned value is normalised with the same functions that build work
 identity (`normalize_arxiv`, `normalize_doi`), so a parsed link and a retrieved record never
@@ -61,6 +62,18 @@ _OPENALEX_BARE = re.compile(r"(?P<id>w\d+)", re.IGNORECASE)
 _OPENALEX_URL = re.compile(
     r"(?:https?://)?(?:api\.)?openalex\.org/(?:works/)?(?P<id>w\d+)/?", re.IGNORECASE
 )
+_PMID = r"(?P<id>[1-9]\d{0,9})"
+_PMID_BARE = re.compile(rf"pmid:\s*{_PMID}", re.IGNORECASE)
+_PMID_URL = re.compile(
+    rf"(?:https?://)?(?:pubmed\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov/pubmed)/{_PMID}/?",
+    re.IGNORECASE,
+)
+_PMCID_BARE = re.compile(r"PMC(?P<id>\d{1,12})", re.IGNORECASE)
+_PMCID_URL = re.compile(
+    r"(?:https?://)?(?:pmc\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov/pmc)"
+    r"/articles/PMC(?P<id>\d{1,12})/?",
+    re.IGNORECASE,
+)
 _QUERY_OR_FRAGMENT = re.compile(r"[?#].*$")
 _BRACKET_PAIRS = {")": "(", "]": "[", "}": "{"}
 
@@ -69,6 +82,10 @@ class IdentifierKind(StrEnum):
     ARXIV = "arxiv"
     DOI = "doi"
     OPENALEX = "openalex"
+    PMID = "pmid"
+    PMCID = "pmcid"
+    """A PubMed id (digits) and a PubMed Central id (`PMC<digits>`); a bare number is never a
+    PMID (plan pmid-seeds). A PMCID is converted to a PMID or DOI at resolution."""
     PAGE = "page"
     """A publisher page whose `citation_doi` meta tag is read once at resolution (slice 4a Later,
     plan SG). Captured only on request (`LinkInput.page`); `parse_link` never returns it."""
@@ -116,6 +133,14 @@ def _openalex(match: re.Match[str]) -> LinkIdentifier:
     )
 
 
+def _pmid(match: re.Match[str]) -> LinkIdentifier:
+    return LinkIdentifier(kind=IdentifierKind.PMID, value=match.group("id"), version=None)
+
+
+def _pmcid(match: re.Match[str]) -> LinkIdentifier:
+    return LinkIdentifier(kind=IdentifierKind.PMCID, value=f"PMC{match.group('id')}", version=None)
+
+
 def stored_link(link: str) -> str:
     """The link as an item keeps it: stripped, without a query or fragment tail."""
     return _QUERY_OR_FRAGMENT.sub("", link.strip())
@@ -135,6 +160,10 @@ def parse_link(link: str) -> LinkIdentifier | None:
         return _arxiv(m)
     if m := _OPENALEX_BARE.fullmatch(text):
         return _openalex(m)
+    if m := _PMID_BARE.fullmatch(text) or _PMID_URL.fullmatch(text):
+        return _pmid(m)
+    if m := _PMCID_BARE.fullmatch(text) or _PMCID_URL.fullmatch(text):
+        return _pmcid(m)
     if m := _DOI_BARE.fullmatch(text):
         return _doi(m.group("doi"))
     if m := _ARXIV_URL.fullmatch(text):
