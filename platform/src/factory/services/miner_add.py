@@ -35,7 +35,12 @@ from factory.model.miners import MinerUse
 from factory.model.protocol import ProtocolStatus
 from factory.services.context import Project
 from factory.services.mining import _taxonomy_issues, register_miner, registered_row
-from factory.services.protocol import amend_protocol, amendment_issues, current_protocol
+from factory.services.protocol import (
+    amend_protocol,
+    amendment_issues,
+    current_protocol,
+    require_amendment_gate,
+)
 
 __all__ = ["MinerAdded", "add_miner"]
 
@@ -137,7 +142,9 @@ def add_miner(
     Refused, with nothing written: for a system actor (`actor`); a malformed file (`document`,
     `spec`, `use`, `reason`); a spec of the wrong shape or meaning or with a bad taxonomy
     reference (as `register_miner`); a use setting that is unknown or invalid, or `evidence`
-    (`use.<name>`); a protocol that is not ready (`protocol`). `reason` overrides the file's."""
+    (`use.<name>`); a protocol that is not ready (`protocol`); a protocol amendment the review gate
+    or the protocol rules would refuse. All checks run under the lock that registers, so a real run
+    is not refused after registering. `reason` overrides the file's."""
     if actor.kind == "system":
         raise _refuse("actor", "an agent or a human adds a miner")
     raw_spec, settings, file_reason = _parse(document)
@@ -146,67 +153,62 @@ def add_miner(
     if issues:
         raise FactoryValidationError(issues)
     use = _use(spec, settings)
-    protocol = current_protocol(project)
-    if protocol is None or protocol.status is not ProtocolStatus.READY:
-        raise _refuse("protocol", "the protocol is not ready; record it ready first")
-    digest = miner_digest(spec)
-    existing = registered_row(project, spec.name, spec.version)
-    if existing is not None and existing.digest != digest:
-        raise _refuse(
-            "version",
-            f"{spec.name} version {spec.version} is registered with another digest; "
-            "a change is a new version",
+    with project.index.exclusive():
+        project.index.sync()
+        protocol = current_protocol(project)
+        if protocol is None or protocol.status is not ProtocolStatus.READY:
+            raise _refuse("protocol", "the protocol is not ready; record it ready first")
+        digest = miner_digest(spec)
+        existing = registered_row(project, spec.name, spec.version)
+        if existing is not None and existing.digest != digest:
+            raise _refuse(
+                "version",
+                f"{spec.name} version {spec.version} is registered with another digest; "
+                "a change is a new version",
+            )
+        uses = tuple(protocol.spec.miners or ())
+        already = any((u.name, u.version) == (spec.name, spec.version) for u in uses)
+        replaced_use = next((u for u in uses if u.name == spec.name and not already), None)
+        replaced = None if replaced_use is None else replaced_use.version
+        notes: list[str] = []
+        if replaced_use is not None:
+            dropped = _differences(replaced_use, use)
+            notes.append(
+                f"replaces version {replaced_use.version}'s use"
+                + (f"; its settings dropped: {dropped}" if dropped else "")
+            )
+        same = next((u for u in uses if (u.name, u.version) == (spec.name, spec.version)), None)
+        if same is not None and same != use:
+            notes.append(
+                f"already listed with other use settings ({_differences(same, use)}); "
+                "the listed ones are kept and the file's are ignored"
+            )
+        kept = tuple(u for u in uses if u.name != spec.name)
+        amended = protocol.spec.model_copy(update={"miners": (*kept, use)})
+        why = (
+            reason or file_reason or ""
+        ).strip() or f"list miner {spec.name} version {spec.version}"
+        if not already:
+            require_amendment_gate(project, actor, amended, reason=why, semantic=True, effects={})
+            blockers = amendment_issues(project, actor, amended, spec)
+            if blockers:
+                raise FactoryValidationError(blockers)
+        page = f"miners/{spec.name}.html"
+        result = MinerAdded(
+            name=spec.name,
+            version=spec.version,
+            digest=digest,
+            registered=existing is None,
+            listed=not already,
+            replaced_version=replaced,
+            page=page,
+            hub_page=f"/p/{project.paths.slug}/{page}",
+            checked_only=check_only,
+            notes=notes,
         )
-    uses = tuple(protocol.spec.miners or ())
-    already = any((u.name, u.version) == (spec.name, spec.version) for u in uses)
-    replaced_use = next((u for u in uses if u.name == spec.name and not already), None)
-    replaced = None if replaced_use is None else replaced_use.version
-    notes: list[str] = []
-    if replaced_use is not None:
-        dropped = _differences(replaced_use, use)
-        notes.append(
-            f"replaces version {replaced_use.version}'s use"
-            + (f"; its settings dropped: {dropped}" if dropped else "")
-        )
-    same = next((u for u in uses if (u.name, u.version) == (spec.name, spec.version)), None)
-    if same is not None and same != use:
-        notes.append(
-            f"already listed with other use settings ({_differences(same, use)}); "
-            "the listed ones are kept and the file's are ignored"
-        )
-    kept = tuple(u for u in uses if u.name != spec.name)
-    if not already:
-        blockers = amendment_issues(
-            project, actor, protocol.spec.model_copy(update={"miners": (*kept, use)}), spec
-        )
-        if blockers:
-            raise FactoryValidationError(blockers)
-    page = f"miners/{spec.name}.html"
-    result = MinerAdded(
-        name=spec.name,
-        version=spec.version,
-        digest=digest,
-        registered=existing is None,
-        listed=not already,
-        replaced_version=replaced,
-        page=page,
-        hub_page=f"/p/{project.paths.slug}/{page}",
-        checked_only=check_only,
-        notes=notes,
-    )
-    if check_only:
+        if check_only:
+            return result
+        register_miner(project, actor, raw_spec)
+        if not already:
+            amend_protocol(project, actor, amended, reason=why, semantic=True, effects={})
         return result
-    register_miner(project, actor, raw_spec)
-    if not already:
-        why = (reason or file_reason or "").strip() or (
-            f"list miner {spec.name} version {spec.version}"
-        )
-        amend_protocol(
-            project,
-            actor,
-            protocol.spec.model_copy(update={"miners": (*kept, use)}),
-            reason=why,
-            semantic=True,
-            effects={},
-        )
-    return result

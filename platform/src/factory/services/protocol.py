@@ -69,7 +69,7 @@ from factory.services.protocol_rules import (
     protocol_issues,
     stale_rules,
 )
-from factory.services.question import current_question, get_question
+from factory.services.question import QuestionVersion, current_question, get_question
 from factory.services.reviews import require_protocol_change
 from factory.services.seeds import all_seeds
 from factory.sources.registry import default_sources, window_filter_sources
@@ -506,18 +506,30 @@ class AmendResult(StrictModel):
     prose_only: bool
 
 
+def _state_issues(
+    project: Project,
+) -> tuple[ProtocolVersion | None, QuestionVersion | None, list[ValidationIssue]]:
+    """The current protocol and question, and the issues for a missing or not-ready one."""
+    current = current_protocol(project)
+    question = current_question(project)
+    issues: list[ValidationIssue] = []
+    if current is None or current.status is not ProtocolStatus.READY:
+        issues.append(ValidationIssue("protocol", "only a ready protocol can be amended"))
+    if question is None:
+        issues.append(ValidationIssue("question", "record a question before amending"))
+    return current, question, issues
+
+
 def amendment_issues(
     project: Project, actor: Actor, spec: ProtocolSpec, pending: MinerSpec | None = None
 ) -> list[ValidationIssue]:
-    """The issues that would refuse amending the ready protocol to `spec` on its content (the
-    admission and protocol rules `amend_protocol` runs), writing nothing; `pending`, a miner spec
-    not yet registered, counts as registered. Does not run the review gate."""
-    current = current_protocol(project)
-    question = current_question(project)
-    if current is None or current.status is not ProtocolStatus.READY:
-        return [ValidationIssue("protocol", "only a ready protocol can be amended")]
-    if question is None:
-        return [ValidationIssue("question", "record a question before amending")]
+    """The issues that would refuse amending the ready protocol to `spec` on its content, writing
+    nothing; `pending`, a miner spec not yet registered, counts as registered. The one source of
+    the checks `amend_protocol` runs after the review gate. Callers hold `project.index.exclusive()`
+    and a synced index so the answer holds until they write."""
+    current, question, issues = _state_issues(project)
+    if issues or current is None or question is None:
+        return issues
     admission = agent_admission_issues(actor, current.spec, spec)
     if admission:
         return list(admission)
@@ -542,6 +554,31 @@ def amendment_issues(
     return [*check.errors, *check.gaps]
 
 
+def require_amendment_gate(
+    project: Project,
+    actor: Actor,
+    spec: ProtocolSpec,
+    *,
+    reason: str,
+    semantic: bool,
+    effects: Mapping[str, CriterionEffect],
+    review_request_id: str | None = None,
+) -> None:
+    """Refuse, as `amend_protocol` would, an amendment `actor` may not make (the review gate)."""
+    require_protocol_change(
+        project,
+        actor,
+        ReviewKind.PROTOCOL_AMEND,
+        review_request_id,
+        {
+            "spec": spec.model_dump(mode="json"),
+            "reason": reason,
+            "semantic": semantic,
+            "effects": {cid: effect.value for cid, effect in effects.items()},
+        },
+    )
+
+
 def amend_protocol(
     project: Project,
     actor: Actor,
@@ -563,51 +600,22 @@ def amend_protocol(
         issues.append(ValidationIssue("reason", "must not be empty"))
     with project.index.exclusive():
         project.index.sync()
-        require_protocol_change(
+        require_amendment_gate(
             project,
             actor,
-            ReviewKind.PROTOCOL_AMEND,
-            review_request_id,
-            {
-                "spec": spec.model_dump(mode="json"),
-                "reason": reason,
-                "semantic": semantic,
-                "effects": {cid: effect.value for cid, effect in effects.items()},
-            },
+            spec,
+            reason=reason,
+            semantic=semantic,
+            effects=effects,
+            review_request_id=review_request_id,
         )
-        current = current_protocol(project)
-        question = current_question(project)
-        if current is None or current.status is not ProtocolStatus.READY:
-            issues.append(ValidationIssue("protocol", "only a ready protocol can be amended"))
-        if question is None:
-            issues.append(ValidationIssue("question", "record a question before amending"))
+        current, question, state_issues = _state_issues(project)
+        issues.extend(state_issues)
         if issues or current is None or question is None:
             raise FactoryValidationError(issues)
-        admission = agent_admission_issues(actor, current.spec, spec)
-        if admission:
-            raise FactoryValidationError(admission)
-
-        spec_question = get_question(project, spec.question_id)
-        if spec_question is None:
-            issues.append(ValidationIssue("question_id", "unknown question"))
-            raise FactoryValidationError(issues)
-        check = protocol_issues(
-            spec,
-            question=spec_question,
-            current_question_id=question.question_id,
-            mode=indexed_rigor_mode(project),
-            seeds=all_seeds(project),
-            probes=_measured_probes(project),
-            known_sources=set(default_sources()),
-            window_sources=window_filter_sources(),
-            registered_miners=set(miner_fields(project)),
-            calibrated_miners=calibrated_miners(project, spec),
-            layer_miners=layer_miner_versions(project, spec),
-            registered_taxonomies=registered_taxonomy_versions(project),
-            miner_taxonomies=miner_taxonomy_refs(project, spec),
-        )
-        if check.errors or check.gaps:
-            raise FactoryValidationError([*check.errors, *check.gaps])
+        blockers = amendment_issues(project, actor, spec)
+        if blockers:
+            raise FactoryValidationError(blockers)
 
         changes = criterion_changes(current.spec, spec)
         changed = {cid for cid, kind in changes if kind is ChangeKind.CHANGED}

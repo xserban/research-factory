@@ -132,6 +132,19 @@ def test_a_use_that_breaks_a_protocol_rule_is_refused_with_nothing_registered(
     assert add_miner(project, human, _doc()).listed
 
 
+def test_a_refused_review_gate_registers_nothing(
+    project: Project, human: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("factory.services.reviews.actor_holds", lambda *_: False)
+    before = _events(project)
+    for check_only in (True, False):
+        with pytest.raises(FactoryValidationError) as raised:
+            add_miner(project, human, _doc(), check_only=check_only)
+        assert any(i.field == "permission" for i in raised.value.issues)
+        assert registered_miner(project, VISION_NAME, 1) is None
+        assert _events(project) == before
+
+
 def test_replacing_another_version_names_the_dropped_settings(
     project: Project, human: Actor, world: list[str]
 ) -> None:
