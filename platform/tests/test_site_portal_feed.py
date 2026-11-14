@@ -118,3 +118,10 @@ def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
     with_ranked = site_hub_feed.ProjectFeed("a", "A", "t", listing=a.listing, ranked=ranked(248))
     plain = site_hub_feed.ProjectFeed("n", "N", "t")
     assert site_hub_feed.ranked_total([with_ranked, b, plain]) == 249
+
+
+def test_the_portal_pages_use_the_backlogs_centred_container() -> None:
+    from factory.services.site_portal import _CSS
+
+    assert "max-width:1500px" in _CSS and "margin:0 auto" in _CSS
+    assert "main{padding:24px 0}" in _CSS and "max-width:960px" not in _CSS
