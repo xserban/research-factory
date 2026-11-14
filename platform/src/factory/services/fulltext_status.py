@@ -6,8 +6,12 @@ latest attempt on each route, for a not-retrieved work. `changed_sources` lists 
 no human has resolved, with the hash `factory fulltext resolve` needs.
 
 Invariants:
-- Only works the title/abstract screening promoted (`final_outcomes` gives `Outcome.INCLUDED`) are
-  counted. A named work that is not promoted is refused, as `fetch_fulltext` refuses it.
+- Only canonical works the title/abstract screening promoted (`final_outcomes` gives
+  `Outcome.INCLUDED`, and no active merge absorbed the work) are counted, as the full-text queue
+  counts them. A named work that is not promoted, or is absorbed, is refused.
+- A canonical work's state reads the attempts and documents of the works absorbed into it too
+  (active merges only), consistent with `default_conversion`: the latest attempt per route, by
+  event order, across the work and its absorbed works.
 - "Latest" means latest in event order (the event id), never by timestamp text.
 - The status never reads the library (decision 39): removing a library entry changes no count.
 - Read-only: nothing is written, and the index is synced before it is read.
@@ -24,6 +28,7 @@ from factory.model.base import StrictModel
 from factory.model.fulltext import Route
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.context import Project
+from factory.services.dedup import absorbed_by_primary, absorbed_ids
 
 _NOT_RETRIEVED = frozenset({"not-available", "failed"})
 """The attempt outcomes that record a reason and no document (`Attempted`)."""
@@ -68,12 +73,22 @@ def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) 
     Raises `FactoryValidationError` if a named work is not promoted. Read-only.
     """
     project.index.sync()
-    promoted = {w for w, outcome in final_outcomes(project).items() if outcome is Outcome.INCLUDED}
+    absorbed = absorbed_ids(project)
+    promoted = {
+        w
+        for w, outcome in final_outcomes(project).items()
+        if outcome is Outcome.INCLUDED and w not in absorbed
+    }
     if work_ids is None:
         scope = sorted(promoted)
     else:
         issues = [
-            ValidationIssue("work_ids", f"{work_id}: not promoted at title/abstract")
+            ValidationIssue(
+                "work_ids",
+                f"{work_id}: absorbed into another work by a merge; name its primary"
+                if work_id in absorbed
+                else f"{work_id}: not promoted at title/abstract",
+            )
             for work_id in sorted(set(work_ids))
             if work_id not in promoted
         ]
@@ -83,7 +98,11 @@ def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) 
     attempts = _latest_attempts(project)
     documents = _live_documents(project)
 
-    works = [_work(work_id, attempts, documents) for work_id in scope]
+    family = absorbed_by_primary(project)
+    by_work: dict[str, list[str]] = {}
+    for document, live in documents.items():
+        by_work.setdefault(live.work_id, []).append(document)
+    works = [_work(work_id, family.get(work_id, ()), attempts, by_work) for work_id in scope]
     by_route: dict[Route, int] = {route: 0 for route in Route}
     for entry in works:
         for document in entry.documents:
@@ -95,7 +114,9 @@ def fulltext_status(project: Project, *, work_ids: Sequence[str] | None = None) 
         not_retrieved=_count(works, "not-retrieved"),
         by_route=by_route,
         works=works,
-        changed_sources=_changed_sources(project, frozenset(scope)),
+        changed_sources=_changed_sources(
+            project, frozenset(scope), {a: w for w in scope for a in family.get(w, ())}
+        ),
     )
 
 
@@ -113,12 +134,19 @@ class _Live:
 
 def _work(
     work_id: str,
-    attempts: dict[str, dict[Route, tuple[str, str | None]]],
-    documents: dict[str, _Live],
+    absorbed: tuple[str, ...],
+    attempts: dict[str, dict[Route, tuple[str, str, str | None]]],
+    by_work: dict[str, list[str]],
 ) -> WorkFulltext:
-    """One work's state. `documents` is in event order, so the live list is too."""
-    live = [doc for doc, row in documents.items() if row.work_id == work_id]
-    tried = attempts.get(work_id, {})
+    """One work's state over itself and the works absorbed into it. `by_work` lists each work's live
+    documents in event order; the work's own come first, then each absorbed work's in id order."""
+    members = (work_id, *absorbed)
+    live = [doc for member in members for doc in by_work.get(member, ())]
+    tried: dict[Route, tuple[str, str, str | None]] = {}
+    for member in members:
+        for route, entry in attempts.get(member, {}).items():
+            if route not in tried or entry[0] > tried[route][0]:
+                tried[route] = entry
     if live:
         state: Literal["unsought", "retrieved", "not-retrieved"] = "retrieved"
     elif tried:
@@ -127,14 +155,17 @@ def _work(
         state = "unsought"
     reasons: dict[Route, str] = {}
     if state == "not-retrieved":
-        for route, (outcome, reason) in tried.items():
+        for route, (_, outcome, reason) in tried.items():
             if outcome in _NOT_RETRIEVED and reason is not None:
                 reasons[route] = reason
     return WorkFulltext(work_id=work_id, state=state, documents=live, reasons=reasons)
 
 
-def _changed_sources(project: Project, scope: frozenset[str]) -> list[ChangedSource]:
-    """The open source changes of the works in scope, first seen first, without repeats."""
+def _changed_sources(
+    project: Project, scope: frozenset[str], primary_of: dict[str, str]
+) -> list[ChangedSource]:
+    """The open source changes of the works in scope (and of the works absorbed into them, listed
+    under their own id), first seen first, without repeats."""
     with project.index.connect() as conn:
         rows = (
             conn.execute(
@@ -150,29 +181,30 @@ def _changed_sources(project: Project, scope: frozenset[str]) -> list[ChangedSou
         )
     changes: dict[tuple[str, str], ChangedSource] = {}
     for row in rows:
-        if str(row["work_id"]) in scope:
+        if str(row["work_id"]) in scope or str(row["work_id"]) in primary_of:
             key = (str(row["document_id"]), str(row["observed_hash"]))
             changes.setdefault(key, ChangedSource.model_validate(dict(row)))
     return list(changes.values())
 
 
-def _latest_attempts(project: Project) -> dict[str, dict[Route, tuple[str, str | None]]]:
-    """Per work and route, the outcome and reason of the latest attempt (by event id)."""
+def _latest_attempts(project: Project) -> dict[str, dict[Route, tuple[str, str, str | None]]]:
+    """Per work and route, the event id, outcome and reason of the latest attempt (by event id)."""
     with project.index.connect() as conn:
         rows = (
             conn.execute(
                 text(
-                    "SELECT work_id, route, outcome, reason FROM fulltext_attempts "
+                    "SELECT event_id, work_id, route, outcome, reason FROM fulltext_attempts "
                     "ORDER BY event_id"
                 )
             )
             .mappings()
             .all()
         )
-    latest: dict[str, dict[Route, tuple[str, str | None]]] = {}
+    latest: dict[str, dict[Route, tuple[str, str, str | None]]] = {}
     for row in rows:
         reason = None if row["reason"] is None else str(row["reason"])
         latest.setdefault(str(row["work_id"]), {})[Route(str(row["route"]))] = (
+            str(row["event_id"]),
             str(row["outcome"]),
             reason,
         )

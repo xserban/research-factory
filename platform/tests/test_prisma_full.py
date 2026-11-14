@@ -12,7 +12,7 @@ from factory.services.context import Project
 from factory.services.dedup import merged_after_screening
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.methods import methods_report, render_methods
-from factory.services.prisma import prisma_flow
+from factory.services.prisma import NOT_RUN_BOXES, prisma_flow
 from factory.services.project import project_status
 from factory.services.trace import TraceNode, trace
 from tests.document_helpers import (
@@ -215,6 +215,11 @@ def test_methods_mentions_full_text_plan(
     assert "audit fraction" in body
     boxes = report.prisma.full_text
     assert f"{boxes.not_sought} promoted works were not yet sought" in body
+    assert "0 promoted works were not yet sought" not in render_methods(
+        report.model_copy(
+            update={"prisma": report.prisma.model_copy(update={"full_text": NOT_RUN_BOXES})}
+        )
+    )
     assert f"{boxes.sought} sought" in body and f"{boxes.not_retrieved} not retrieved" in body
 
 

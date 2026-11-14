@@ -17,6 +17,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
 from factory.model.work import Work
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.dedup_cascade import CascadeMerge, dedup, merge_works
 from factory.services.progress import track
@@ -180,6 +181,7 @@ def revert_merge(project: Project, actor: Actor, merge_id: str, reason: str) -> 
         )
 
 
+@memoised
 def active_merges(project: Project) -> list[DedupMerged]:
     """Merges not yet reverted, ordered by merge id."""
     project.index.sync()
@@ -245,9 +247,20 @@ def list_merges(project: Project, *, named: bool = True) -> list[MergeRow]:
     ]
 
 
+@memoised
 def absorbed_ids(project: Project) -> set[str]:
     """The works an active merge absorbed: records of a work whose primary stands for them."""
     return {absorbed for merge in active_merges(project) for absorbed in merge.absorbed}
+
+
+@memoised
+def absorbed_by_primary(project: Project) -> dict[str, tuple[str, ...]]:
+    """Each primary of an active merge with the works absorbed into it, sorted and without repeats.
+    Reverted merges are ignored. Memoised within a call scope, so a bulk reader pays once."""
+    found: dict[str, set[str]] = {}
+    for merge in active_merges(project):
+        found.setdefault(merge.primary, set()).update(merge.absorbed)
+    return {primary: tuple(sorted(items)) for primary, items in found.items()}
 
 
 def canonical_works(project: Project) -> list[Work]:
@@ -343,7 +356,8 @@ class MergedAfterScreening(StrictModel):
 def merged_after_screening(project: Project) -> list[MergedAfterScreening]:
     """Absorbed works whose own final title/abstract outcome differs from their primary's.
 
-    Read-only, for the researcher's review: the primary's outcome stands in every count and
+    A review aid with no consumer yet: nothing in the platform calls it; the researcher reads it
+    to review conflicting merged pairs. Read-only: the primary's outcome stands in every count and
     nothing here changes an event. An absorbed work with no decided outcome of its own (pending
     records are left out by `final_outcomes`) was never screened separately and is not listed.
     Ordered by merge id, then absorbed id."""

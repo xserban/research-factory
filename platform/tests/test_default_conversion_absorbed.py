@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 from factory.events.envelope import Actor
 from factory.services.context import Project
-from factory.services.document_read import default_conversion
+from factory.services.document_read import default_conversion, default_conversions
 from tests.document_helpers import ARTICLE, fetched_document, make_registry, run_convert
 from tests.helpers import SourcesFor
 from tests.notice_helpers import dependent_world, numbered_records
@@ -84,3 +84,18 @@ def test_preference_wins_over_own_and_absorbed(
         conn.commit()
     ref = default_conversion(project, canonical)
     assert ref is not None and ref.document_id == other
+
+
+def test_bulk_form_agrees_with_the_single_form(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    world = dependent_world(project, agent, human, mock_sources, numbered_records(4))
+    canonical, absorbed, own, bare = world.included[:4]
+    fetched_document(project, absorbed, ARTICLE)
+    fetched_document(project, own, ARTICLE + b"<!-- own -->")
+    run_convert(project, make_registry())
+    merge_works(project, canonical, absorbed)
+    ids = [canonical, absorbed, own, bare]
+    bulk = default_conversions(project, ids)
+    assert bulk == {w: default_conversion(project, w) for w in ids}
+    assert bulk[canonical] is not None and bulk[bare] is None

@@ -57,7 +57,7 @@ from factory.services.agreement import (
     tolerated_unscreened_works,
 )
 from factory.services.context import Project
-from factory.services.dedup import active_merges, canonical_works
+from factory.services.dedup import absorbed_by_primary, active_merges, canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
@@ -583,9 +583,11 @@ def _not_retrieved_reasons(
         rows = conn.execute(
             text("SELECT work_id, route, outcome, reason FROM fulltext_attempts ORDER BY event_id")
         ).all()
+    primary_of = {a: p for p, members in absorbed_by_primary(project).items() for a in members}
     latest: dict[str, str] = {}
-    for work_id, route, outcome, reason in rows:
-        latest[str(work_id)] = f"{route}: {reason if reason is not None else outcome}"
+    for work_id, route, outcome, reason in rows:  # an absorbed work's attempt is its primary's
+        key = primary_of.get(str(work_id), str(work_id))
+        latest[key] = f"{route}: {reason if reason is not None else outcome}"
     reasons: dict[str, int] = {}
     attempts: dict[str, int] = {}
     for entry in fulltext_status(project).works:

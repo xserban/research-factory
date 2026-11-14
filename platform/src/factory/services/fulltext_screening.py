@@ -22,7 +22,7 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.dedup import absorbed_ids
-from factory.services.document_read import default_conversion
+from factory.services.document_read import default_conversions
 
 
 class EligibleWork(StrictModel):
@@ -50,8 +50,9 @@ def fulltext_queue(project: Project) -> FulltextQueue:
     )
     eligible: list[EligibleWork] = []
     missing: list[str] = []
+    conversions = default_conversions(project, promoted)
     for work_id in promoted:
-        chosen = default_conversion(project, work_id)
+        chosen = conversions[work_id]
         if chosen is None:
             missing.append(work_id)
         else:

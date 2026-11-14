@@ -40,6 +40,7 @@ Invariants:
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import islice
 
@@ -72,6 +73,7 @@ __all__ = [
     "Segment",
     "conversion_manifest",
     "default_conversion",
+    "default_conversions",
     "document_read",
     "resolve_anchor",
 ]
@@ -507,6 +509,27 @@ def _preferred_document(project: Project, work_id: str) -> str | None:
     return str(row[0])
 
 
+def _choose(
+    own: list[Conversion], absorbed: list[Conversion], preferred: str | None
+) -> Conversion | None:
+    """The default among live conversions: a preferred document (of the work or of a work absorbed
+    into it) wins, at its latest conversion; otherwise the work's own live documents in route
+    order; only when it has none, the absorbed works' live documents in route order."""
+    for live in (own, absorbed):
+        if preferred is not None and any(c.document_id == preferred for c in live):
+            return max(
+                (c for c in live if c.document_id == preferred),
+                key=lambda c: c.conversion_event_id,
+            )
+    if own:
+        return _automatic(own)
+    return _automatic(absorbed) if absorbed else None
+
+
+def _ref(chosen: Conversion | None) -> ConversionRef | None:
+    return None if chosen is None else ConversionRef(chosen.document_id, chosen.conversion_id)
+
+
 def default_conversion(project: Project, work_id: str) -> ConversionRef | None:
     """The conversion `document_read` serves for `work_id` when no document or conversion is named
     (plan 2B2 ruling 5), or None when the work has none. Read-only; the caller syncs the index.
@@ -514,34 +537,52 @@ def default_conversion(project: Project, work_id: str) -> ConversionRef | None:
     Rule: a document the researcher prefers for the work (`document_preferences`) wins, whether it
     belongs to the work or to a work an active (not reverted) merge absorbed into it; otherwise the
     work's own live documents win; only when it has none do the live documents of the works
-    absorbed into it serve, in the automatic route order."""
-    chosen = _default(project, work_id)
-    if chosen is None or _preferred_document(project, work_id) not in (None, chosen.document_id):
-        chosen = _default_with_absorbed(project, work_id, chosen)
-    return None if chosen is None else ConversionRef(chosen.document_id, chosen.conversion_id)
+    absorbed into it serve, in the automatic route order. `default_conversions` is the bulk form."""
+    from factory.services.dedup import absorbed_by_primary
 
-
-def _default_with_absorbed(
-    project: Project, work_id: str, own: Conversion | None
-) -> Conversion | None:
-    """`own` (the work's own default) extended by the live documents of its absorbed works."""
-    from factory.services.dedup import active_merges
-
-    absorbed = sorted(
-        {a for merge in active_merges(project) if merge.primary == work_id for a in merge.absorbed}
-    )
-    live = [
-        c for a in absorbed for c in _query(project, "d.work_id = :work", {"work": a}) if c.live
-    ]
-    if not live:
-        return own
+    own = [c for c in _query(project, "d.work_id = :work", {"work": work_id}) if c.live]
     preferred = _preferred_document(project, work_id)
-    if preferred is not None and any(c.document_id == preferred for c in live):
-        return max(
-            (c for c in live if c.document_id == preferred),
-            key=lambda c: c.conversion_event_id,
-        )
-    return own if own is not None else _automatic(live)
+    absorbed: list[Conversion] = []
+    if not own or (preferred is not None and all(c.document_id != preferred for c in own)):
+        for a in absorbed_by_primary(project).get(work_id, ()):
+            absorbed.extend(c for c in _query(project, "d.work_id = :work", {"work": a}) if c.live)
+    return _ref(_choose(own, absorbed, preferred))
+
+
+def default_conversions(
+    project: Project, work_ids: Sequence[str]
+) -> dict[str, ConversionRef | None]:
+    """`default_conversion` of each work, from one query of the live conversions and one of the
+    preferences, and one read of the active merges. Same rule, same answers; read-only."""
+    from factory.services.dedup import absorbed_by_primary
+
+    wanted = set(work_ids)
+    absorbed_of = absorbed_by_primary(project)
+    needed = wanted | {a for w in wanted for a in absorbed_of.get(w, ())}
+    live: dict[str, list[Conversion]] = {}
+    for c in _query(project, "d.superseded_by IS NULL", {}):
+        if c.work_id in needed:
+            live.setdefault(c.work_id, []).append(c)
+    preferences = _preferred_documents(project)
+    result: dict[str, ConversionRef | None] = {}
+    for work_id in work_ids:
+        absorbed = [c for a in absorbed_of.get(work_id, ()) for c in live.get(a, ())]
+        result[work_id] = _ref(_choose(live.get(work_id, []), absorbed, preferences.get(work_id)))
+    return result
+
+
+def _preferred_documents(project: Project) -> dict[str, str]:
+    """`_preferred_document` of every work that has a preference."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT work_id, document_id, automatic FROM document_preferences ORDER BY event_id"
+            )
+        ).all()
+    latest: dict[str, str | None] = {}
+    for work_id, document_id, automatic in rows:
+        latest[str(work_id)] = None if automatic else str(document_id)
+    return {w: d for w, d in latest.items() if d is not None}
 
 
 def _route_rank(route: Route) -> int:
