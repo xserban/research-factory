@@ -319,22 +319,21 @@ _NEEDS_A_CONVERTER = (FailureReason.NO_CONVERTER, FailureReason.CONVERTER_UNAVAI
 
 
 def convert_lines(summary: ConvertSummary) -> list[str]:
-    """One line per document outcome (document, work, status, reason), then the counts. An
-    `outdated` outcome carries the hint to use `--upgrade`; the count of outdated documents is
-    appended only when it is not zero."""
+    """One line per document outcome (document, work, status, reason), then the counts, every
+    status always named. An `outdated` outcome carries the hint to use `--upgrade`."""
     lines = [
         f"{o.document_id}  {o.work_id}  {o.status}  {_outcome_reason(o)}" for o in summary.outcomes
     ]
-    outdated = f", outdated {summary.outdated}" if summary.outdated else ""
     lines.append(
         f"converted {summary.converted}, unchanged {summary.unchanged}, failed {summary.failed}, "
-        f"raw-missing {summary.raw_missing}, restored {summary.restored}{outdated}"
+        f"raw-missing {summary.raw_missing}, restored {summary.restored}, "
+        f"outdated {summary.outdated}"
     )
     return lines
 
 
 def _outcome_reason(outcome: ConversionOutcome) -> str:
-    if outcome.status == "outdated":
+    if outcome.reason == "other-converter-version":
         return "older converter version; use --upgrade"
     return outcome.reason if outcome.reason else "-"
 

@@ -134,7 +134,7 @@ def test_plain_run_skips_an_older_version_and_reports_it(project: Project, corpu
     assert summary.outdated == 1
     assert summary.converted == 0
     assert summary.outcomes[0].conversion_id is None
-    assert summary.outcomes[0].reason is None
+    assert summary.outcomes[0].reason == "other-converter-version"
     assert event_bytes(project) == before
     assert len(events_of_type(project, "document.converted")) == 1
 

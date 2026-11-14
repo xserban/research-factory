@@ -53,7 +53,9 @@ def test_convert_then_status_shows_the_conversion(project: Project, settings: Se
     assert convert.exit_code == 0, convert.stderr
     lines = convert.stdout.splitlines()
     assert f"{document}  {work}  converted  -" in lines
-    assert lines[-1] == "converted 1, unchanged 0, failed 0, raw-missing 0, restored 0"
+    assert lines[-1] == (
+        "converted 1, unchanged 0, failed 0, raw-missing 0, restored 0, outdated 0"
+    )
 
     status = runner.invoke(app, ["document", "status"], env=_env(settings.root))
 
