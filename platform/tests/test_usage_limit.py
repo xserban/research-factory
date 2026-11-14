@@ -9,7 +9,13 @@ from datetime import UTC, datetime
 import pytest
 
 from factory.services import run_costs
-from factory.services.usage_limit import LIMIT_PATTERN, RESET_PATTERN, detect, parse_reset
+from factory.services.usage_limit import (
+    LIMIT_PATTERN,
+    RESET_PATTERN,
+    detect,
+    parse_reset,
+    read_log,
+)
 
 SAMPLE = "You've hit your 5-hour limit · resets 1pm (Europe/Bucharest)"
 """The researcher's sample of the limit line, as they quoted it in a message. It was NOT captured
@@ -92,3 +98,36 @@ def test_the_line_as_assistant_text_goes_through_the_log_reader() -> None:
 def test_a_normal_log_is_not_a_limit_stop() -> None:
     log = run_costs.parse_log([_assistant("Screened 2 records."), _result("done", is_error=False)])
     assert detect(log.texts, units=2, stage_pending=True, finished_at=END) is None
+
+
+@pytest.mark.parametrize(
+    ("notice", "reset_text"),
+    [
+        (
+            "You've hit your 5-hour limit \u00b7 resets 1pm (Europe/Bucharest)",
+            "1pm (Europe/Bucharest)",
+        ),
+        (
+            "You've hit your 5-hour limit \u00b7 resets 6:10pm (Europe/Bucharest)",
+            "6:10pm (Europe/Bucharest)",
+        ),
+    ],
+)
+def test_a_plain_text_log_from_live_py_is_a_limit_stop(notice: str, reset_text: str) -> None:
+    """Excerpt of a real pilot log (plain text written by live.py, not stream-json): the notice
+    line, then the `exit 0` line. Neither line is marked as an error."""
+    texts, is_error = read_log([notice, "exit 0"])
+    assert is_error is False
+    stop = detect(texts, units=0, stage_pending=True, finished_at=END, result_error=is_error)
+    assert stop is not None and stop.reason == "log"
+    assert stop.reset_text == reset_text
+    assert stop.reset_estimated is False
+
+
+def test_a_plain_text_normal_log_is_not_a_limit_stop() -> None:
+    texts, is_error = read_log(
+        ["Row accepted: 1 written, 0 rejected, work finished.", "exit 0 seconds 51"]
+    )
+    assert (
+        detect(texts, units=0, stage_pending=True, finished_at=END, result_error=is_error) is None
+    )
