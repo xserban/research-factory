@@ -7,13 +7,18 @@ seconds after the previous one: the snapshot of the dashboard takes about a minu
 that is being mined makes it stale all the time.
 
 Invariants:
-- Read-only for the browser except seven allow-listed acts (decision 119): `POST /api/feed/react`,
-  `POST /api/feed/add`, `POST /api/queue/process` (starts the headless runner, which records its
-  own system events), `POST /api/queue/resume` (plan restart-and-costs, R3) and the researcher's
-  layer acts (IDEA-50): `POST /api/mine/work` (`work_id`, optional `reason`), `POST /api/mine/layer`
-  (`layer`, optional `reason`) and `POST /api/layers/move` (`work_id`, `layer`, `reason` required),
-  which call `work_layers.request_mining` and `work_layers.move_layer` as the local human, as the
-  CLI does (`cli:mine request`, `cli:layers move`). A refusal is a structured error, nothing is
+- Read-only for the browser except these allow-listed acts (decision 119). Project acts:
+  `POST /api/feed/react`, `POST /api/feed/add`, `POST /api/feed/configure`,
+  `POST /api/queue/process` (starts the headless runner, which records its own system events),
+  `POST /api/queue/resume` (plan restart-and-costs, R3) and the researcher's layer acts
+  (IDEA-50): `POST /api/mine/work` (`work_id`, optional `reason`), `POST /api/mine/layer`
+  (`layer`, optional `reason`) and `POST /api/layers/move` (`work_id`, `layer`, `reason`
+  required), which call `work_layers.request_mining` and `work_layers.move_layer` as the local
+  human, as the CLI does (`cli:mine request`, `cli:layers move`). Hub acts (main server, hub
+  token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
+  `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
+  as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
+  and writes nothing). A refusal is a structured error, nothing is
   written. `GET /api/layers` reads the latest scheme's layer ids and each work's layer. Any
   other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes
   nothing but the site folder, through `site.build`.
@@ -54,7 +59,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
+from factory.model.screening import Channel
 from factory.services import feed as feed_service
+from factory.services import inbox as inbox_service
 from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
@@ -1026,11 +1033,51 @@ class MainHub:
             "url": f"{PROJECT_PREFIX}{made.slug}/",
         }
 
+    def inbox_add(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """The add-to-inbox act (the portal's form): capture one link or identifier in a listed
+        project's inbox as the local human, like `factory inbox add`. A link whose identifier is
+        already in the inbox is a `duplicate` and writes nothing. Offline; no lookup runs."""
+        slug, bad = _optional_str(body, "project")
+        value, more = _optional_str(body, "value")
+        note, extra = _optional_str(body, "note")
+        bad += more + extra
+        if not slug:
+            bad.append(ValidationIssue("project", "required"))
+        if value is None or not value.strip():
+            bad.append(ValidationIssue("value", "required"))
+        if bad:
+            return 400, _issues(*bad)
+        assert slug is not None and value is not None
+        found = self.slot(slug)
+        if found is None:
+            return 400, _issues(ValidationIssue("project", "unknown project"))
+        project = found.project
+        link = value.strip()
+        try:
+            actor = project.human_actor()
+            authorize_command(project, project.principal, "cli:inbox add")
+            with found.write_lock, project.index.exclusive():
+                project.index.sync()
+                same = inbox_service.find_open_duplicate(project, link)
+                if same is not None:
+                    return 200, {"ok": True, "duplicate": True, "item_id": same}
+                result = inbox_service.add_links(
+                    project, actor, [inbox_service.LinkInput(link, note=note)], Channel.CLI
+                )
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        if result.rejected:
+            return 400, _issues(*result.rejected[0].issues)
+        return 200, {"ok": True, "duplicate": False, "item_id": result.written[0]}
+
     def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
         return {
             "/api/feed/run": lambda _body: self.start_feed_run(refetch=False),
             "/api/feed/refetch": lambda _body: self.start_feed_run(refetch=True),
             "/api/projects/create": self.create_project,
+            "/api/inbox/add": self.inbox_add,
         }
 
     def start_feed(self) -> None:
