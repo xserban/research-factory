@@ -61,7 +61,7 @@ class FeedConfigured(StrictModel):
     config_id: str = Field(pattern=FEED_CONFIG_ID_RE)
     categories: tuple[Category, ...] = Field(min_length=1)
     references: FeedReferences = FeedReferences.CORE
-    shown_per_cycle: int = Field(default=30, ge=1)
+    shown_per_cycle: int = Field(default=100, ge=1)
     exploration_share: float = Field(default=0.1, ge=0, lt=1)
     interval_days: int = Field(default=1, ge=1)
     overlap_days: int = Field(default=2, ge=0)

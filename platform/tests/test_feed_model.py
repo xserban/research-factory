@@ -105,7 +105,7 @@ def test_invalid_config_refused(change: dict[str, Any]) -> None:
 
 def test_config_defaults() -> None:
     config = FeedConfigured.model_validate(CONFIG)
-    assert (config.shown_per_cycle, config.exploration_share, config.interval_days) == (30, 0.1, 1)
+    assert (config.shown_per_cycle, config.exploration_share, config.interval_days) == (100, 0.1, 1)
 
 
 def test_held_count_above_count_refused() -> None:
