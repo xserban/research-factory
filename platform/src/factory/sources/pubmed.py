@@ -101,7 +101,7 @@ def _text(node: ElementTree.Element | None) -> str | None:
     """The text of a node with inline markup (`<i>`, `<sub>`) flattened, whitespace collapsed."""
     if node is None:
         return None
-    joined = " ".join(node.itertext())
+    joined = "".join(node.itertext())
     return " ".join(joined.split()) or None
 
 
@@ -262,6 +262,7 @@ class PubmedSource:
         method = _METHODS.get(spec.purpose, ProvenanceMethod.DATABASE)
         query_sent = ",".join(ids) if is_ids else spec.text
         start = int(resume_from) if resume_from else 0
+        start_at = start
         works: list[Work] = []
         seen: set[str] = set()
         skipped = 0
@@ -272,6 +273,8 @@ class PubmedSource:
             notes.append(
                 f"resumed at offset {start} after a new esearch; the result set may have changed"
             )
+        elif resume_from:
+            notes.append(f"resumed at offset {start}")
 
         def result(status: RunStatus, note: str | None, token: str | None = None) -> SearchResult:
             return SearchResult(
@@ -312,6 +315,9 @@ class PubmedSource:
             )
             pages += 1
             reported, history = self._esearch_result(response)
+            warnings = self._esearch_warnings(response)
+            if warnings:
+                notes.append(f"esearch warnings: {warnings}")
             target = min(reported, _CAP)
             if reported > _CAP:
                 cap = f"esearch-cap: {reported} reported, {_CAP} retrievable"
@@ -327,7 +333,10 @@ class PubmedSource:
                 )
             else:
                 params = self._params(
-                    **history, retstart=start, retmax=self._batch_size, retmode="xml"
+                    **history,
+                    retstart=start,
+                    retmax=min(self._batch_size, target - start),
+                    retmode="xml",
                 )
             try:
                 response = self._http.get(_EFETCH, params)
@@ -376,7 +385,7 @@ class PubmedSource:
         note: str | None = None
         if is_ids:
             returned = {w.identifiers.pmid for w in works}
-            missing = [i for i in ids if i not in returned]
+            missing = [i for i in ids[start_at:] if i not in returned]
             if missing:
                 note = f"{len(missing)} requested id(s) not returned: {', '.join(missing[:10])}"
                 if len(missing) > 10:
@@ -384,9 +393,12 @@ class PubmedSource:
                 if skipped:
                     note += f"; {skipped} {_SKIPPED}"
         elif reported is not None and len(works) < reported:
-            note = f"{skipped} {_SKIPPED}"
+            parts = [f"{skipped} {_SKIPPED}"] if skipped else []
             if len(works) + skipped != reported and not notes:
-                note += "; source count differs"
+                parts.append("source count differs")
+            note = "; ".join(parts) or None
+            if note is None and not notes:
+                note = "fewer records retrieved than reported"
         return result(RunStatus.COMPLETE, note)
 
     def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
@@ -489,6 +501,26 @@ class PubmedSource:
         if not isinstance(payload, dict):
             raise SourceError("pubmed esearch returned no esearchresult")
         return payload
+
+    @staticmethod
+    def _warning_text(payload: dict[str, object]) -> str:
+        """Compact text of the non-empty `errorlist` and `warninglist` of an esearch payload."""
+        parts: list[str] = []
+        for key in ("errorlist", "warninglist"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                for name, items in value.items():
+                    if items:
+                        parts.append(f"{name}={json.dumps(items, ensure_ascii=False)}")
+        return "; ".join(parts)
+
+    def _esearch_warnings(self, response: httpx.Response) -> str:
+        """Warnings of an archived esearch response, redacted; empty when there are none."""
+        try:
+            payload = response.json().get("esearchresult")
+        except (ValueError, AttributeError):
+            return ""
+        return self._redact(self._warning_text(payload)) if isinstance(payload, dict) else ""
 
     @staticmethod
     def _esearch_result(response: httpx.Response) -> tuple[int, dict[str, str | int]]:

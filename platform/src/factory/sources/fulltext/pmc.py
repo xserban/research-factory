@@ -12,7 +12,8 @@ Endpoints, checked 2026-11-14 (the PMC OA web service `oa.fcgi` was retired on 2
 
 Rulings: both the JSON and the JATS come from the bucket (no E-utilities); the latest version is
 used, `source_version` is `PMC<id>.<ver>`; the article is fetched when `is_pmc_openaccess` is true
-or `license_code` is `TDM`, and `licence` is `license_code`; otherwise `not-open-access`.
+or `license_code` is `TDM`, and `licence` is `license_code`; otherwise `not-open-access`, which
+still carries the `license_code` it found.
 Retraction is not refused here: it is recorded by the notices service, so a retracted article is
 fetched like any other and `is_retracted` stays in the archived version JSON.
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -189,8 +191,11 @@ class PmcJatsRoute:
         licence = info.get("license_code")
         licence = licence.strip() if isinstance(licence, str) and licence.strip() else None
         if info.get("is_pmc_openaccess") is not True and licence != _TDM:
-            return not_retrieved(
-                self.route, AttemptOutcome.NOT_AVAILABLE, "not-open-access", metadata=meta
+            return replace(
+                not_retrieved(
+                    self.route, AttemptOutcome.NOT_AVAILABLE, "not-open-access", metadata=meta
+                ),
+                licence=licence,
             )
         xml_url = _OBJECT.format(num=num, ver=ver, ext="xml")
         xml, failure = self._get(xml_url, metadata=meta)
