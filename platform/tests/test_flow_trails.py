@@ -10,6 +10,7 @@ from factory.events.envelope import Actor
 from factory.services.context import Project
 from factory.services.flow_ledger import TOTAL, flow_by_source, flow_ledger
 from factory.services.flow_trails import TEXT_LIMIT, _cut, _details, flow_trails
+from factory.services.prisma import prisma_flow
 from factory.services.site_flow import _embed, build_payload, reached, table_spec, tags
 from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
@@ -79,6 +80,23 @@ def test_embedded_payload_cannot_close_the_script_tag() -> None:
     assert "</" not in _embed({"t": "</script>"})
 
 
+def test_embedded_payload_cannot_open_an_html_comment() -> None:
+    text = _embed({"t": "<!-- x"})
+    assert "<!--" not in text
+    assert json.loads(text) == {"t": "<!-- x"}
+
+
+def test_payload_carries_the_prisma_figures_apart_from_the_ledger_rows(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ft_world(project, agent, human, mock_sources)
+    payload, _ = build_payload(project)
+    flow = prisma_flow(project)
+    assert payload["prisma"]["identified"] == dict(sorted(flow.identified_databases.items()))
+    assert payload["prisma"]["duplicates_removed"] == flow.duplicates_removed
+    assert all("PRISMA" not in row["l"] for row in payload["spec"])
+
+
 def test_reached_and_tags_agree_for_a_duplicate(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
@@ -86,6 +104,4 @@ def test_reached_and_tags_agree_for_a_duplicate(
     for row in flow_ledger(project):
         step, outcome, _ = reached(row)
         assert step and outcome
-        assert ("dup" in tags(row)) == (
-            row.canonical_id is not None and not row.noncanonical_promoted
-        )
+        assert ("dup" in tags(row)) == (row.canonical_id is not None)

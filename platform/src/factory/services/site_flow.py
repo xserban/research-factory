@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+from factory.errors import FactoryError
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.flow_ledger import (
     OTHER_GROUP,
@@ -26,7 +28,7 @@ from factory.services.flow_ledger import (
 )
 from factory.services.flow_skipped import run_gaps, skipped_records
 from factory.services.flow_trails import flow_trails
-from factory.services.prisma import UNSPECIFIED
+from factory.services.prisma import UNSPECIFIED, prisma_flow
 from factory.services.site_flow_page import DATA_MARKER, PAGE
 from factory.services.site_widgets import FUTURE_CSS
 
@@ -41,14 +43,12 @@ STEP_FT: Final = "Full text"
 def tags(row: LedgerRow) -> list[str]:
     """The stage memberships of a row, the keys the by-source table counts.
 
-    `id` every record; `dup` an absorbed duplicate not on the full-text queue; `scr` a record
+    `id` every record; `dup` an absorbed duplicate; `scr` a record
     screened at title/abstract (`ta-inc`, `ta-exc`, `ta-pen` its outcome); `prom` promoted to
     full text with `ns` (not yet sought), `sought` and within it `nr` (not retrieved) or `ret`
     (retrieved); `ft-inc`, `ft-exc`, `ft-pen`, `ft-aw` the full-text outcome."""
     out = ["id"]
-    if row.noncanonical_promoted:
-        pass
-    elif row.canonical_id is not None:
+    if row.canonical_id is not None:
         out.append("dup")
     else:
         out.append("scr")
@@ -123,8 +123,8 @@ def table_spec(works: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for crit in _by_count(works, tag):
             add(crit, depth, tag, crit)
 
-    add("Records identified", 0, "id")
-    add("Duplicate records removed", 1, "dup")
+    add("Works and absorbed duplicate rows (ledger)", 0, "id")
+    add("Absorbed duplicate rows (ledger)", 1, "dup")
     add("Records screened (title/abstract)", 0, "scr")
     add("Excluded", 1, "ta-exc")
     crits("ta-exc", 2)
@@ -164,13 +164,29 @@ def _skipped(project: Project) -> dict[str, Any]:
             }
             for g in run_gaps(project)
         ]
-    except Exception as exc:  # an archived page missing or altered must not stop the product
+    except (FactoryError, ValueError, OSError) as exc:  # a missing or altered archived page
         return {"error": f"{type(exc).__name__}: {exc}", "skipped": [], "gaps": []}
     return {"error": None, "skipped": skipped, "gaps": gaps}
 
 
+def _prisma_figures(project: Project) -> dict[str, Any]:
+    """The PRISMA identification figures, taken from `prisma_flow`, never from the ledger."""
+    flow = prisma_flow(project)
+    return {
+        "identified": dict(sorted(flow.identified_databases.items())),
+        "identified_other": dict(sorted(flow.identified_other.items())),
+        "duplicates_removed": flow.duplicates_removed,
+    }
+
+
 def build_payload(project: Project) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The page payload and the trails (`work id -> steps`) for one project."""
+    """The page payload and the trails (`work id -> steps`) for one project. The ledger is
+    computed once and shared; the memo scope keeps the services it calls from recomputing."""
+    with entering():
+        return _build_payload(project)
+
+
+def _build_payload(project: Project) -> tuple[dict[str, Any], dict[str, Any]]:
     rows = flow_ledger(project)
     works = [_work(row) for row in rows]
     present = {w["g"] for w in works}
@@ -186,14 +202,16 @@ def build_payload(project: Project) -> tuple[dict[str, Any], dict[str, Any]]:
         "total": TOTAL,
         "spec": table_spec(works),
         "works": works,
-        "mismatches": ledger_reconciles(project),
+        "mismatches": ledger_reconciles(project, rows),
+        "prisma": _prisma_figures(project),
         **{f"skip_{k}": v for k, v in _skipped(project).items()},
     }
     return payload, trails
 
 
 def _embed(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return text.replace("</", "<\\/").replace("<!--", "<\\u0021--")
 
 
 def build_flow(project: Project, out: Path) -> None:

@@ -81,20 +81,20 @@ class _Trails:
             handler(event, format_ts(event.ts), event.payload)
 
     def _dedup_merged(self, event: Event, at: str, p: dict[str, object]) -> None:
-        raw = p["absorbed"]
+        raw = p.get("absorbed")
         absorbed = tuple(str(a) for a in raw) if isinstance(raw, list | tuple) else ()
-        primary = str(p["primary"])
-        self.merges[str(p["merge_id"])] = (primary, absorbed)
-        for work_id in (primary, *absorbed):
+        primary = str(p.get("primary") or "")
+        self.merges[str(p.get("merge_id"))] = (primary, absorbed)
+        for work_id in filter(None, (primary, *absorbed)):
             self.add(
                 work_id,
                 at,
                 "merged",
-                _details(primary=primary, absorbed=", ".join(absorbed), rule=p["rule"]),
+                _details(primary=primary, absorbed=", ".join(absorbed), rule=p.get("rule")),
             )
 
     def _dedup_reverted(self, event: Event, at: str, p: dict[str, object]) -> None:
-        primary, absorbed = self.merges.get(str(p["merge_id"]), ("", ()))
+        primary, absorbed = self.merges.get(str(p.get("merge_id")), ("", ()))
         for work_id in (primary, *absorbed):
             if work_id:
                 self.add(
@@ -104,7 +104,7 @@ class _Trails:
                     _details(
                         primary=primary,
                         absorbed=", ".join(absorbed),
-                        reason=_cut(str(p["reason"])),
+                        reason=_cut(str(p.get("reason") or "")),
                         manual="yes" if p.get("manual") else "no",
                     ),
                 )

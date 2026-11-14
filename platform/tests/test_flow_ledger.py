@@ -9,6 +9,7 @@ from factory.services.flow_ledger import (
     ledger_reconciles,
     source_group,
 )
+from factory.services.fulltext_screening import fulltext_queue
 from factory.services.prisma import prisma_flow
 from factory.services.search import list_works
 from tests.fulltext_helpers import _ft_world, _ta_world
@@ -47,7 +48,38 @@ def test_full_text_states_follow_the_boxes(
     _ta_world(project, agent, human, mock_sources)
     total = flow_by_source(project)[TOTAL]
     boxes = prisma_flow(project).full_text
-    assert total.ft_not_sought + total.ft_attempted_failed == boxes.not_retrieved - 1
+    assert total.ft_not_sought == boxes.not_sought
+    assert total.ft_attempted_failed == boxes.not_retrieved
+    assert total.ft_retrieved == boxes.eligible
+    assert total.ft_not_sought + total.ft_attempted_failed + total.ft_retrieved == total.ta_included
     failed = [r for r in flow_ledger(project) if r.ft_state == "attempted-failed"]
     assert failed and all(r.ft_reasons for r in failed)
     assert all(r.ft_outcome is None for r in flow_ledger(project))
+
+
+def test_reconcile_accepts_a_computed_ledger_and_flags_a_drift(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ft_world(project, agent, human, mock_sources)
+    rows = flow_ledger(project)
+    assert ledger_reconciles(project, rows) == []
+    drifted = [
+        row.model_copy(update={"ft_state": "not-sought"}) if row.ft_state == "retrieved" else row
+        for row in rows
+    ]
+    if any(row.ft_state == "retrieved" for row in rows):
+        problems = ledger_reconciles(project, drifted)
+        assert any("not sought" in p for p in problems)
+        assert any("eligible" in p for p in problems)
+
+
+def test_ft_state_follows_the_queue_so_retrieved_matches_eligible(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ft_world(project, agent, human, mock_sources)
+    queue = fulltext_queue(project)
+    by_id = {row.work_id: row for row in flow_ledger(project)}
+    assert {e.work_id for e in queue.eligible} == {
+        w for w, row in by_id.items() if row.ft_state == "retrieved"
+    }
+    assert all(by_id[w].ft_state in {"not-sought", "attempted-failed"} for w in queue.not_retrieved)

@@ -63,6 +63,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 </div>
 <div style="overflow:auto"><table><thead><tr id="head"></tr></thead><tbody id="list"></tbody></table></div>
 <p><button id="more" hidden>Show more</button></p>
+<div id="prisma"></div>
 <h2>Records that never became works</h2>
 <div id="skipped"></div>
 </main>
@@ -93,6 +94,10 @@ function drawTable(){
  $('#flow').querySelectorAll('a').forEach(a=>a.onclick=()=>{const r=DATA.spec[+a.dataset.r];
   F.g=a.dataset.g===DATA.total?'':a.dataset.g;F.k=r.k;F.c=r.c||'';F.st='';F.o='';F.q='';$('#q').value='';syncSel();SHOWN=300;render();$('#bar').scrollIntoView({behavior:'smooth'});});
 }
+function drawPrisma(){const P=DATA.prisma,el=$('#prisma');
+ const src=Object.entries(P.identified).map(([k,n])=>'<tr><td>identified, database: '+esc(k)+'</td><td class="n">'+n+'</td></tr>').join('');
+ const oth=Object.entries(P.identified_other).map(([k,n])=>'<tr><td>identified, other: '+esc(k)+'</td><td class="n">'+n+'</td></tr>').join('');
+ el.innerHTML='<h2>PRISMA identification (from the PRISMA flow)</h2><p class="dim">These figures come from the PRISMA flow, not from the ledger rows above. A merged work\'s absorbed duplicates are grouped by their own provenance, so the per-column ledger rows close only in the total.</p><table><tbody>'+src+oth+'<tr><td>duplicate records removed</td><td class="n">'+P.duplicates_removed+'</td></tr></tbody></table>';}
 function opts(sel,key,label){const vals=[...new Set(W.map(w=>w[key]||''))].filter(v=>v).sort();
  $(sel).innerHTML='<option value="">'+label+': all</option>'+vals.map(v=>'<option>'+esc(v)+'</option>').join('');}
 function syncSel(){$('#fg').value=F.g;$('#fs').value=F.st;$('#fo').value=F.o;
@@ -161,7 +166,7 @@ function drawSkipped(){const el=$('#skipped');
  else{h+='<p>'+Object.entries(by).map(([k,n])=>esc(k)+': '+n).join(' · ')+'</p><details><summary>List them</summary><table class="skip"><thead><tr><th>reason</th><th>source</th><th>query</th><th>run</th><th>native id</th><th>title</th></tr></thead><tbody>'+S.slice(0,2000).map(s=>'<tr><td>'+esc(s[5])+'</td><td>'+esc(s[2])+'</td><td>'+esc(s[1])+'</td><td>'+esc(s[0])+'</td><td>'+esc(s[3])+'</td><td>'+esc(s[4])+'</td></tr>').join('')+'</tbody></table>'+(S.length>2000?'<p class="dim">The first 2000 of '+S.length+' are shown.</p>':'')+'</details>';}
  el.innerHTML=h;}
 opts('#fg','g','Source group');opts('#fs','st','Step');opts('#fo','o','Outcome');opts('#fc','c','Criterion or reason');
-drawTable();drawSkipped();render();
+drawTable();drawPrisma();drawSkipped();render();
 </script></body></html>
 """
 

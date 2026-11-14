@@ -3,12 +3,12 @@ aggregated per source group.
 
 Invariants: read-only (nothing is written); the ledger holds every canonical work and every
 absorbed duplicate once; outcomes come from the functions `prisma_flow` uses, so the counts
-reconcile with it (`ledger_reconciles`). Screening counts run over canonical rows only. Full-text
-counts run over every row on the full-text queue, because the queue can hold a work merged after
-its promotion (`noncanonical_promoted`), which `full_text_boxes` counts too.
+reconcile with it (`ledger_reconciles`). Screening counts run over canonical rows only. The
+full-text state of a row follows its membership of `fulltext_queue` (canonical works only), the
+list `full_text_boxes` counts, so the ledger and the boxes cannot drift apart.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Literal
 
@@ -27,7 +27,7 @@ from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
-from factory.services.prisma import UNSPECIFIED, full_text_boxes, prisma_flow
+from factory.services.prisma import UNCONVERTED, UNSPECIFIED, full_text_boxes, prisma_flow
 from factory.services.search import list_works
 
 OTHER_GROUP = "other"
@@ -53,7 +53,6 @@ class LedgerRow(StrictModel):
     ft_reasons: list[str]
     ft_outcome: Literal["included", "excluded", "pending", "awaiting"] | None
     ft_criterion: str | None
-    noncanonical_promoted: bool
 
 
 class FlowCounts(StrictModel):
@@ -71,7 +70,6 @@ class FlowCounts(StrictModel):
     ft_included: int = 0
     ft_pending: int = 0
     ft_awaiting: int = 0
-    ft_included_noncanonical: int = 0
 
 
 @dataclass
@@ -89,7 +87,6 @@ class _Acc:
     ft_included: int = 0
     ft_pending: int = 0
     ft_awaiting: int = 0
-    ft_included_noncanonical: int = 0
 
     def add(self, other: "_Acc") -> None:
         for f in fields(self):
@@ -150,7 +147,7 @@ def flow_ledger(project: Project) -> list[LedgerRow]:
     for work_id in sorted(set(canonical) | set(absorbed_by) | promoted):
         work = canonical.get(work_id) or raw.get(work_id)
         if work is None:
-            continue
+            raise LookupError(f"work {work_id} is merged or promoted but has no work record")
         primary, rule = absorbed_by.get(work_id, (None, None))
         outcome = ta.get(work_id)
         ft_state: FtState | None = None
@@ -158,13 +155,16 @@ def flow_ledger(project: Project) -> list[LedgerRow]:
         ft_outcome: Literal["included", "excluded", "pending", "awaiting"] | None = None
         if work_id in promoted:
             entry = states.get(work_id)
-            if work_id in eligible or (entry is not None and entry.state == "retrieved"):
+            if work_id in eligible:
                 ft_state = "retrieved"
-            elif entry is not None and entry.state == "not-retrieved":
-                ft_state = "attempted-failed"
-                reasons = sorted(f"{r.value}: {why}" for r, why in entry.reasons.items())
-            else:
+            elif entry is None or entry.state == "unsought":
                 ft_state = "not-sought"
+            else:
+                ft_state = "attempted-failed"
+                if entry.state == "retrieved":  # a live document with no conversion
+                    reasons = [UNCONVERTED]
+                else:
+                    reasons = sorted(f"{r.value}: {why}" for r, why in entry.reasons.items())
             if work_id in eligible and boxes.stage_run:
                 if work_id in unresolved:
                     ft_outcome = "awaiting"
@@ -192,7 +192,6 @@ def flow_ledger(project: Project) -> list[LedgerRow]:
                 ft_criterion=(ft_criteria.get(work_id) or UNSPECIFIED)
                 if ft_outcome == "excluded"
                 else None,
-                noncanonical_promoted=ft_state is not None and work_id not in canonical,
             )
         )
     return rows
@@ -202,12 +201,15 @@ def _bump(counts: dict[str, int], key: str) -> None:
     counts[key] = counts.get(key, 0) + 1
 
 
-def flow_by_source(project: Project) -> dict[str, FlowCounts]:
-    """The PRISMA counts per source group, with a `total` key over every group."""
+def flow_by_source(
+    project: Project, rows: Sequence[LedgerRow] | None = None
+) -> dict[str, FlowCounts]:
+    """The PRISMA counts per source group, with a `total` key over every group. Pass `rows` (the
+    result of `flow_ledger`) to avoid computing the ledger again."""
     groups: dict[str, _Acc] = {}
-    for row in flow_ledger(project):
+    for row in flow_ledger(project) if rows is None else rows:
         counts = groups.setdefault(row.source_group, _Acc())
-        if not row.noncanonical_promoted and row.canonical_id is None:
+        if row.canonical_id is None:
             counts.screened += 1
             if row.ta_outcome is Outcome.INCLUDED:
                 counts.ta_included += 1
@@ -223,7 +225,6 @@ def flow_by_source(project: Project) -> dict[str, FlowCounts]:
             counts.ft_retrieved += 1
         if row.ft_outcome == "included":
             counts.ft_included += 1
-            counts.ft_included_noncanonical += row.noncanonical_promoted
         elif row.ft_outcome == "excluded":
             _bump(counts.ft_excluded, row.ft_criterion or UNSPECIFIED)
         elif row.ft_outcome == "pending":
@@ -238,9 +239,10 @@ def flow_by_source(project: Project) -> dict[str, FlowCounts]:
     return result
 
 
-def ledger_reconciles(project: Project) -> list[str]:
-    """Mismatches between the ledger totals and `prisma_flow`; empty when they agree."""
-    total = flow_by_source(project)[TOTAL]
+def ledger_reconciles(project: Project, rows: Sequence[LedgerRow] | None = None) -> list[str]:
+    """Mismatches between the ledger totals and `prisma_flow`; empty when they agree. Pass `rows`
+    (the result of `flow_ledger`) to avoid computing the ledger again."""
+    total = flow_by_source(project, rows)[TOTAL]
     flow = prisma_flow(project)
     boxes = flow.full_text
     pairs: list[tuple[str, object, object]] = [
@@ -251,6 +253,15 @@ def ledger_reconciles(project: Project) -> list[str]:
         ("full-text included", total.ft_included, boxes.included),
         ("full-text pending", total.ft_pending, boxes.pending),
         ("full-text excluded", dict(sorted(total.ft_excluded.items())), boxes.excluded),
+        ("full-text not sought", total.ft_not_sought, boxes.not_sought),
+        ("full-text not retrieved", total.ft_attempted_failed, boxes.not_retrieved),
+        ("full-text retrieved (eligible)", total.ft_retrieved, boxes.eligible),
+        ("full-text awaiting classification", total.ft_awaiting, boxes.awaiting_classification),
+        (
+            "promoted (not sought + sought) vs title/abstract included",
+            total.ft_not_sought + total.ft_attempted_failed + total.ft_retrieved,
+            total.ta_included,
+        ),
     ]
     return [
         f"{name}: ledger {ours} != prisma {theirs}"
