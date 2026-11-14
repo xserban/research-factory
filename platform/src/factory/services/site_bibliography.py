@@ -73,7 +73,7 @@ const tb=document.getElementById('tb'),cnt=document.getElementById('cnt');
 const E=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function draw(){const rows=D.filter(r=>!q||(r.title+' '+r.author+' '+r.year+' '+r.venue).toLowerCase().includes(q))
  .sort((a,b)=>sortBy==='year'?dir*((+a.year||0)-(+b.year||0))||a.title.localeCompare(b.title):dir*a.title.localeCompare(b.title));
- tb.innerHTML=rows.map(r=>'<tr><td class=y>'+E(r.year)+'</td><td>'+(r.slug?'<a href="../explorer/index.html#open='+r.slug+'">'+E(r.title)+'</a>':E(r.title))+'</td><td>'+E(r.author)+(r.more?' '+r.more:'')+'</td><td class=k>'+E(r.key)+'</td></tr>').join('');
+ tb.innerHTML=rows.map(r=>'<tr><td class=y>'+E(r.year)+'</td><td>'+(r.slug?'<a href="../explorer/index.html#open='+encodeURIComponent(r.slug)+'">'+E(r.title)+'</a>':E(r.title))+'</td><td>'+E(r.author)+(r.more?' '+r.more:'')+'</td><td class=k>'+E(r.key)+'</td></tr>').join('');
  cnt.textContent=rows.length+' of '+D.length+' works';
  document.getElementById('hy').textContent='Year'+(sortBy==='year'?(dir<0?' ↓':' ↑'):'');
  document.getElementById('ht').textContent='Title'+(sortBy==='title'?(dir<0?' ↓':' ↑'):'');}
