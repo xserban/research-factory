@@ -519,3 +519,15 @@ def test_pmcid_converter_reply_is_archived(
     monkeypatch.setattr(explore_project.library, "put", spy)
     _resolve_with(explore_project, human, _pubmed_sources([]), fetch)
     assert body in stored
+
+
+def test_work_keys_include_the_normalised_pmid() -> None:
+    from factory.model.work import Identifiers, Work
+    from factory.services.inbox import _work_keys
+
+    work = Work.model_construct(
+        id="rf:x-12345678", identifiers=Identifiers(openalex="W1", pmid="0031452104")
+    )
+    keys = _work_keys(work)
+    assert "pmid:31452104" in keys
+    assert "openalex:W1" in keys

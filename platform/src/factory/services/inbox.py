@@ -54,7 +54,12 @@ from factory.model.screening import Channel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.seed import normalize_openalex
 from factory.model.work import Work
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import (
+    arxiv_id_from_doi,
+    normalize_arxiv,
+    normalize_doi,
+    work_pmid_key,
+)
 from factory.services import passes
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
@@ -563,6 +568,9 @@ def _work_keys(work: Work) -> set[str]:
         keys.add(f"arxiv:{normalize_arxiv(ids.arxiv)}")
     if ids.openalex:
         keys.add(f"openalex:{normalize_openalex(ids.openalex)}")
+    pmid = work_pmid_key(ids.pmid)
+    if pmid:
+        keys.add(f"pmid:{pmid}")
     return keys
 
 

@@ -8,7 +8,6 @@ so the same paper given in two forms is one seed. Written by `factory.services.s
 
 from __future__ import annotations
 
-import re
 from enum import StrEnum
 from typing import Any, Self
 
@@ -23,7 +22,13 @@ from pydantic import (
 from factory.model.base import StrictModel
 from factory.model.identity import DecisionId
 from factory.model.work import RUN_ID_RE, ProvenanceMethod
-from factory.model.work_ids import WORK_ID_RE, arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import (
+    WORK_ID_RE,
+    arxiv_id_from_doi,
+    normalize_arxiv,
+    normalize_doi,
+    normalize_pmid,
+)
 
 SEED_ID_RE = r"^(SEED|NEG)\d{2,}$"
 POSITIVE_SEED_ID_RE = r"^SEED\d{2,}$"
@@ -44,18 +49,6 @@ def normalize_openalex(value: str) -> str:
     return stripped.upper()
 
 
-_PMID_PREFIX_RE = re.compile(r"^pmid\s*:\s*", re.IGNORECASE)
-
-
-def normalize_pmid(value: str) -> str:
-    """The bare PMID: stripped, a `PMID:` or `pmid:` prefix removed. Raises ValueError unless the
-    rest is all ASCII digits."""
-    stripped = _PMID_PREFIX_RE.sub("", value.strip()).strip()
-    if not (stripped.isascii() and stripped.isdigit()):
-        raise ValueError("pmid must be digits only, optionally prefixed `PMID:`")
-    return stripped
-
-
 class SeedSpec(StrictModel):
     """One seed as stated: its kind, how to cite it, and at least one identifier."""
 
@@ -70,7 +63,8 @@ class SeedSpec(StrictModel):
     @field_validator("pmid")
     @classmethod
     def _normal_pmid(cls, value: str | None) -> str | None:
-        return None if value is None else normalize_pmid(value)
+        """A blank pmid is None, as a blank doi is tolerated; otherwise it is normalised."""
+        return None if value is None or not value.strip() else normalize_pmid(value)
 
     @model_validator(mode="after")
     def _has_identifier(self) -> Self:

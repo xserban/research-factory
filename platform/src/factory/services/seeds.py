@@ -45,7 +45,7 @@ from factory.model.seed import (
     normalize_openalex,
 )
 from factory.model.work import Identifiers, ProvenanceMethod, Work
-from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv
+from factory.model.work_ids import arxiv_id_from_doi, normalize_arxiv, work_pmid_key
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.decision_binding import bind
@@ -672,8 +672,9 @@ def _positive_matches(project: Project) -> list[tuple[_Seed, SeedRole, str | Non
     for work in corpus:
         if work.identifiers.doi:
             by_doi.setdefault(work.identifiers.doi, work.id)
-        if work.identifiers.pmid:
-            by_pmid.setdefault(work.identifiers.pmid, work.id)
+        pmid = work_pmid_key(work.identifiers.pmid)
+        if pmid:
+            by_pmid.setdefault(pmid, work.id)
         arxiv = _work_arxiv(work)
         if arxiv:
             by_arxiv.setdefault(arxiv, work.id)
@@ -713,7 +714,11 @@ def _stated_keys(identifiers: Identifiers) -> tuple[str, ...]:
         else (arxiv_id_from_doi(identifiers.doi) if identifiers.doi else None)
     )
     openalex = normalize_openalex(identifiers.openalex) if identifiers.openalex else None
-    return tuple(value for value in (identifiers.doi, arxiv, openalex, identifiers.pmid) if value)
+    return tuple(
+        value
+        for value in (identifiers.doi, arxiv, openalex, work_pmid_key(identifiers.pmid))
+        if value
+    )
 
 
 def held_out_seed_matcher(project: Project) -> Callable[[Work], bool]:

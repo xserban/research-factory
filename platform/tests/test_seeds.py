@@ -498,7 +498,7 @@ def test_pmid_only_seed_is_valid_and_normalised() -> None:
     assert SeedSpec(kind=SeedKind.POSITIVE, cite="x", pmid="pmid:7").pmid == "7"
 
 
-@pytest.mark.parametrize("bad", ["", "abc", "12a", "PMID 12", "-5", "1.5", "PMC123"])
+@pytest.mark.parametrize("bad", ["abc", "12a", "0", "000", "PMID 12", "-5", "1.5", "PMC123"])
 def test_bad_pmid_is_refused_at_the_boundary(bad: str) -> None:
     with pytest.raises(ValidationError):
         SeedSpec(kind=SeedKind.POSITIVE, cite="x", doi="10.1000/a", pmid=bad)
@@ -557,3 +557,32 @@ def test_seed_is_matched_to_a_corpus_work_by_pmid() -> None:
     position = {"rf:a": 0, "rf:b": 1}
     assert _matching_work(keys, None, {}, {}, {"12": "rf:b"}, position) == "rf:b"
     assert _matching_work(keys, None, {}, {}, {"13": "rf:b"}, position) is None
+
+
+def test_pmid_leading_zeros_are_stripped() -> None:
+    from factory.model.work_ids import normalize_pmid, work_pmid_key
+
+    assert SeedSpec(kind=SeedKind.POSITIVE, cite="x", pmid="PMID: 0031452104").pmid == "31452104"
+    assert normalize_pmid("007") == "7"
+    assert work_pmid_key("0031452104") == "31452104"
+    assert work_pmid_key("PMC1") is None
+    assert work_pmid_key(None) is None
+
+
+def test_blank_pmid_is_tolerated_like_a_blank_doi() -> None:
+    spec = SeedSpec(kind=SeedKind.POSITIVE, cite="x", doi="10.1000/a", pmid="  ")
+    assert spec.pmid is None
+    assert "pmid" not in spec.model_dump()
+    with pytest.raises(ValueError):
+        SeedSpec(kind=SeedKind.POSITIVE, cite="x", pmid="")
+
+
+def test_work_side_pmid_with_zeros_matches_the_seed_key() -> None:
+    from factory.model.work_ids import work_pmid_key
+    from factory.services.seeds import _matching_work
+
+    key = work_pmid_key("0031452104")
+    assert key is not None
+    assert _matching_work({"pmid": "31452104"}, None, {}, {}, {key: "rf:w-1"}, {"rf:w-1": 0}) == (
+        "rf:w-1"
+    )
