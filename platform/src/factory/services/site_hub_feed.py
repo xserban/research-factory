@@ -21,9 +21,12 @@ Invariants:
 
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape as e
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from factory.errors import FactoryError
@@ -76,7 +79,46 @@ def _int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+_CACHE: dict[tuple[str, str], tuple[tuple[tuple[str, int, int], ...], ProjectFeed]] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _signature(events_dir: Path, index_path: Path) -> tuple[tuple[str, int, int], ...]:
+    """Name, size and mtime of every event file and of the index: an appended event, or the
+    projector catching up, changes it."""
+    found: list[tuple[str, int, int]] = []
+    for root, _dirs, files in os.walk(events_dir):
+        for name in files:
+            st = os.stat(os.path.join(root, name))
+            found.append((os.path.join(root, name), st.st_size, st.st_mtime_ns))
+    if index_path.exists():
+        st = index_path.stat()
+        found.append((str(index_path), st.st_size, st.st_mtime_ns))
+    return tuple(sorted(found))
+
+
 def collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed:
+    """`_collect` kept until the project's event files change. Reading the whole log costs seconds
+    on a large project and the hub asks on every page view; the answer depends on the events alone
+    (the token and title are put in afterwards), so a changed size or mtime is the only
+    invalidation needed. A failure is not cached."""
+    key = (str(project.paths.events_dir), slug)
+    try:
+        sig = _signature(project.paths.events_dir, project.paths.index_path)
+    except OSError:
+        return _collect(project, slug, title, token)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return replace(hit[1], title=title, token=token)
+    fresh = _collect(project, slug, title, token)
+    if fresh.error is None:
+        with _CACHE_LOCK:
+            _CACHE[key] = (sig, fresh)
+    return fresh
+
+
+def _collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed:
     """Read one project's feed state; a failure becomes `error`, never an exception."""
     try:
         status = feed_status(project)
