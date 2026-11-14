@@ -147,6 +147,7 @@ def test_not_open_access_and_not_tdm() -> None:
     assert result.outcome is AttemptOutcome.NOT_AVAILABLE
     assert result.reason == "not-open-access"
     assert result.content is None
+    assert result.licence == "CC BY"
 
 
 def test_tdm_manuscript_is_fetched() -> None:

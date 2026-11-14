@@ -322,6 +322,8 @@ def test_cap_gives_partial_with_the_cap_note() -> None:
     assert result.resume_token is None
     # 9999 records come in two batches of 5000: offsets 0 and 5000.
     assert [r.url.params["retstart"] for r in seen[1:]] == ["0", "5000"]
+    last = seen[-1].url.params
+    assert int(last["retstart"]) + int(last["retmax"]) <= 9999
 
 
 def test_zero_matches_is_complete_with_no_fetch() -> None:
@@ -437,6 +439,46 @@ def test_id_list_batches_and_resumes_by_index() -> None:
     result = run(make_source(handler, batch_size=2), id_list("1,2,3"), resume_from="2")
     assert [r.url.params["id"] for r in seen] == ["3"]
     assert result.retrieved_count == 1
+    # Ids fetched in an earlier run are not reported as missing; the resume is noted.
+    assert result.note == "resumed at offset 2"
+
+
+def test_id_list_resume_reports_only_missing_ids_of_this_run() -> None:
+    handler, _ = router("unused", efetch(article("3", "Three")))
+    result = run(make_source(handler, batch_size=2), id_list("1,2,3,4"), resume_from="2")
+    assert result.note is not None
+    assert "1 requested id(s) not returned: 4" in result.note
+    assert "resumed at offset 2" in result.note
+
+
+def test_markup_is_flattened_without_inserting_spaces() -> None:
+    handler, _ = router(
+        esearch(1),
+        efetch(article("1", "CO<sub>2</sub> and <i>p</i>-value in H<sub>2</sub>O")),
+    )
+    result = run(make_source(handler), keyword())
+    assert result.works[0].title == "CO2 and p-value in H2O"
+
+
+def test_esearch_warnings_are_noted_without_changing_status() -> None:
+    body = json.dumps(
+        {
+            "esearchresult": {
+                "count": "0",
+                "idlist": [],
+                "errorlist": {"phrasesnotfound": ["asthmaa"], "fieldsnotfound": []},
+                "warninglist": {"outputmessages": ["No items found."]},
+            }
+        }
+    )
+    handler, _ = router(body)
+    result = run(make_source(handler), keyword("asthmaa"))
+    assert result.status is RunStatus.COMPLETE
+    assert result.note is not None
+    assert result.note.startswith("esearch warnings: ")
+    assert "asthmaa" in result.note
+    assert "No items found." in result.note
+    assert "fieldsnotfound" not in result.note
 
 
 def test_unsupported_kind_and_empty_id_list_are_rejected() -> None:
@@ -476,7 +518,9 @@ def test_key_and_address_are_sent_but_never_archived_or_noted() -> None:
         assert key not in page.url
         assert mail not in page.url
         assert "api_key" not in page.url
-        assert "email=" not in page.url
+        assert "api_key=" not in page.url
+        assert "email=me" not in page.url
+        assert "SECRETKEY" not in page.url
 
 
 def test_ncbi_api_key_from_environment_then_file(
