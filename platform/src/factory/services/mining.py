@@ -441,7 +441,8 @@ def miner_population(project: Project, name: str, *, include_requested: bool = T
     imports this module.
 
     `include_requested=False` omits the on-demand requested works: what remains is the selector
-    population (layer-filtered, less calibration units): the only set a calibration draws from."""
+    population (layer-filtered, less calibration units), the only set a calibration draws
+    from."""
     _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
     on_demand = use.on_demand and include_requested
