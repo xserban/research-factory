@@ -509,9 +509,39 @@ def _preferred_document(project: Project, work_id: str) -> str | None:
 
 def default_conversion(project: Project, work_id: str) -> ConversionRef | None:
     """The conversion `document_read` serves for `work_id` when no document or conversion is named
-    (plan 2B2 ruling 5), or None when the work has none. Read-only; the caller syncs the index."""
+    (plan 2B2 ruling 5), or None when the work has none. Read-only; the caller syncs the index.
+
+    Rule: a document the researcher prefers for the work (`document_preferences`) wins, whether it
+    belongs to the work or to a work an active (not reverted) merge absorbed into it; otherwise the
+    work's own live documents win; only when it has none do the live documents of the works
+    absorbed into it serve, in the automatic route order."""
     chosen = _default(project, work_id)
+    if chosen is None or _preferred_document(project, work_id) not in (None, chosen.document_id):
+        chosen = _default_with_absorbed(project, work_id, chosen)
     return None if chosen is None else ConversionRef(chosen.document_id, chosen.conversion_id)
+
+
+def _default_with_absorbed(
+    project: Project, work_id: str, own: Conversion | None
+) -> Conversion | None:
+    """`own` (the work's own default) extended by the live documents of its absorbed works."""
+    from factory.services.dedup import active_merges
+
+    absorbed = sorted(
+        {a for merge in active_merges(project) if merge.primary == work_id for a in merge.absorbed}
+    )
+    live = [
+        c for a in absorbed for c in _query(project, "d.work_id = :work", {"work": a}) if c.live
+    ]
+    if not live:
+        return own
+    preferred = _preferred_document(project, work_id)
+    if preferred is not None and any(c.document_id == preferred for c in live):
+        return max(
+            (c for c in live if c.document_id == preferred),
+            key=lambda c: c.conversion_event_id,
+        )
+    return own if own is not None else _automatic(live)
 
 
 def _route_rank(route: Route) -> int:
