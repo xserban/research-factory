@@ -256,6 +256,12 @@ def _build_conversion(project: Project, out: Path) -> None:
     build_conversion(project, out)
 
 
+def _build_search(project: Project, out: Path) -> None:
+    from factory.services.site_search import build_search
+
+    build_search(project, out)
+
+
 def _build_acquisition(project: Project, out: Path) -> None:
     from factory.services.site_quality import build_acquisition
 
@@ -270,7 +276,7 @@ def _build_costs(project: Project, out: Path) -> None:
 
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "flow", "costs"),
-    "Sources": ("feed", "acquisition", "conversion", "queue"),
+    "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
     "Mining": ("miners", "agreement", "steps", "lifecycle"),
     "Findings": ("results", "synthesis", "taxonomy"),
@@ -439,6 +445,17 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_prisma,
+        ),
+        Product(
+            id="search",
+            title="Search and deduplication",
+            group="Sources",
+            description="Each registered query with its runs and the gap between reported and "
+            "retrieved, the records that never became works, every merge with its rule and "
+            "status, and the merges whose absorbed work was screened differently.",
+            entry="index.html",
+            inputs=("query.%", "search.%", "dedup.%", "screening.%"),
+            build=_build_search,
         ),
         Product(
             id="flow",
