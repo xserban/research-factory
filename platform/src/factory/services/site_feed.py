@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""The Daily updates product: the latest feed ranking as a scrollable page, one card per shown
+"""The Daily updates cards: the latest feed ranking as a scrollable page, one card per shown
 item (plan 2026-11-11-feed-hub, step H1).
 
 Invariants:
@@ -104,6 +104,21 @@ feed.querySelectorAll('button[data-act]').forEach(function(b){
 });
 })();
 """
+
+
+def build_feed_pointer(project: Project, out: Path) -> None:
+    """Write `index.html` into `out`: the project's Daily updates now live on the hub page `/feed/`
+    (plan 2026-11-13-hub-feed), so this product is a link to it and holds no card or action. Writes
+    no event."""
+    body = (
+        "<h1>Daily updates</h1><div class=note>The daily updates of every project are on one page "
+        "of the main hub, with a tab for this project: "
+        "<a href='/feed/' target=_top>open the hub page</a>. It is served by "
+        "<code>factory site serve --all</code>; the single-project server does not have it.</div>"
+    )
+    from factory.services.site import page
+
+    (out / "index.html").write_text(page("Daily updates", body, FEED_CSS), encoding="utf-8")
 
 
 def build_feed(project: Project, out: Path) -> None:

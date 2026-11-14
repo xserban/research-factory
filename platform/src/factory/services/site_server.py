@@ -39,13 +39,11 @@ Invariants:
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
-import secrets
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -61,7 +59,15 @@ from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
 from factory.services import runner as runner_service
 from factory.services import site as site_service
-from factory.services import site_portal, work_layers, work_queue
+from factory.services import (
+    site_auth,
+    site_create,
+    site_hub_feed,
+    site_portal,
+    site_settings,
+    work_layers,
+    work_queue,
+)
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -69,7 +75,6 @@ from factory.sources.registry import default_sources
 
 HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 8766
-_LOOPBACK: Final = {"127.0.0.1", "localhost", "[::1]"}
 MAX_BODY: Final = 16 * 1024
 TOKEN_HEADER: Final = "X-Factory-Token"
 _ACTION_PAGES: Final = ("feed", "queue", "explorer")
@@ -179,6 +184,35 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, **result.model_dump(mode="json")}
+
+
+def feed_configure(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Record the feed configuration with these categories as the local human (the Settings page's
+    Accept). The other settings of the current configuration are kept. Refusals write nothing."""
+    categories = body.get("categories")
+    bad: list[ValidationIssue] = []
+    if (
+        not isinstance(categories, list)
+        or not categories
+        or not all(isinstance(c, str) for c in categories)
+    ):
+        bad.append(ValidationIssue("categories", "must be a non-empty list of strings"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(categories, list)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed configure")
+        current = feed_service.current_config(project)
+        kept: dict[str, object] = (
+            {} if current is None else current.model_dump(mode="json", exclude={"config_id"})
+        )
+        event_id = feed_service.configure(project, actor, {**kept, "categories": tuple(categories)})
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "event_id": event_id, "categories": categories}
 
 
 class ResumeRunner:
@@ -364,6 +398,7 @@ def layers_payload(project: Project) -> dict[str, object]:
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
+    "/api/feed/configure": feed_configure,
     "/api/queue/process": queue_process,
     "/api/queue/resume": queue_resume,
     "/api/mine/work": mine_work,
@@ -458,20 +493,32 @@ class Mount(NamedTuple):
     prefix: str
 
 
-def project_token(secret: bytes, slug: str) -> str:
-    """The write token of one project: derived from the server's secret and the slug, so a token
-    read from one project's pages authorises nothing on another's."""
-    return hmac.new(secret, slug.encode(), "sha256").hexdigest()
+def _with_meta(text: str, token: str, prefix: str) -> str:
+    """`text` with the token and API-prefix `<meta>` tags after `<head>` (an action page's)."""
+    meta = _TOKEN_META.format(token) + _API_META.format(prefix)
+    return text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
+
+
+def _scope_of(path: str) -> site_auth.Scope:
+    """The scope a URL path belongs to, read from the path alone (nothing is opened): a project
+    under `/p/<slug>/`, else the hub."""
+    if path.startswith(PROJECT_PREFIX):
+        slug = path[len(PROJECT_PREFIX) :].partition("/")[0]
+        if slug:
+            return site_auth.Scope(slug)
+    return site_auth.Scope(None)
 
 
 def _handler_class(
     resolve: Callable[[str], Mount | None],
-    secret: bytes,
+    auth: site_auth.Authenticator,
     portal: Callable[[str], tuple[int, str, bytes] | None] | None,
-    port_of: Callable[[], int],
+    hub_acts: Mapping[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]] | None = None,
 ) -> type[SimpleHTTPRequestHandler]:
     """The request handler. `resolve` maps a URL path to a `Mount` (None: not a project path);
-    `portal` answers the paths that belong to no project (status, content type, body) or None."""
+    `portal` answers the paths that belong to no project (status, content type, body) or None.
+    Every request, read or write, is first put to `auth.check` (the seam, `site_auth`); the handler
+    decides nothing about hosts, origins or tokens itself."""
 
     class Handler(SimpleHTTPRequestHandler):
         def _deny(self, code: int, message: str) -> None:
@@ -486,10 +533,23 @@ def _handler_class(
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
 
-        def _host_ok(self) -> bool:
-            host = self.headers.get("Host") or ""
-            name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
-            return name in _LOOPBACK
+        def _allowed(self, scope: site_auth.Scope, act: str) -> bool:
+            """Put the request to the seam; True when it may go on (the actor is the human)."""
+            decision = auth.check(
+                site_auth.AuthRequest(
+                    method=self.command,
+                    path=self.path,
+                    host=self.headers.get("Host") or "",
+                    origin=self.headers.get("Origin"),
+                    credential=self.headers.get(TOKEN_HEADER),
+                    scope=scope,
+                    act=act,
+                )
+            )
+            if decision.allowed and decision.actor == "human":
+                return True
+            self._deny(403, "forbidden")
+            return False
 
         def _json(self, code: int, payload: dict[str, object]) -> None:
             body = json.dumps(payload).encode()
@@ -498,12 +558,6 @@ def _handler_class(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-
-        def _origin_ok(self) -> bool:
-            origin = self.headers.get("Origin")
-            if origin is None:
-                return True
-            return origin in {f"http://{name}:{port_of()}" for name in _LOOPBACK}
 
         def _html(self, text: str) -> None:
             body = text.encode()
@@ -526,10 +580,9 @@ def _handler_class(
             return target
 
         def do_GET(self) -> None:
-            if not self._host_ok():
-                self._deny(403, "forbidden")
-                return
             full = self.path.split("?", 1)[0].split("#", 1)[0]
+            if not self._allowed(_scope_of(full), "read"):
+                return
             mount = resolve(self.path)
             if mount is None:
                 answer = None if portal is None else portal(full)
@@ -550,16 +603,21 @@ def _handler_class(
                 return
             slot = mount.slot
             url = mount.rel.split("?", 1)[0].split("#", 1)[0]
+            if url in ("/settings", "/settings/"):
+                self._html(
+                    _with_meta(
+                        site_settings.render_settings(slot.project, slot.slug),
+                        auth.page_credential(site_auth.Scope(slot.slug)),
+                        mount.prefix,
+                    )
+                )
+                return
             page = self._feed_page(url, slot)
             if page is not None:
                 text = page.read_text(encoding="utf-8")
-                meta = _TOKEN_META.format(project_token(secret, slot.slug)) + _API_META.format(
-                    mount.prefix
+                self._html(
+                    _with_meta(text, auth.page_credential(site_auth.Scope(slot.slug)), mount.prefix)
                 )
-                text = (
-                    text.replace("<head>", "<head>" + meta, 1) if "<head>" in text else meta + text
-                )
-                self._html(text)
                 return
             if mount.prefix and url in ("/", "/index.html"):
                 hub = slot.root / "index.html"
@@ -611,17 +669,16 @@ def _handler_class(
 
         def do_POST(self) -> None:
             mount = resolve(self.path)
-            if not self._host_ok() or not self._origin_ok():
-                self._deny(403, "forbidden")
-                return
+            hub_act = (
+                hub_acts.get(self.path.split("?", 1)[0]) if hub_acts and mount is None else None
+            )
             route = None if mount is None else _ROUTES.get(mount.rel.split("?", 1)[0])
-            if mount is None or route is None:
+            if hub_act is None and (mount is None or route is None):
                 self._deny(404, "not found")
                 return
-            slot = mount.slot
-            sent = self.headers.get(TOKEN_HEADER) or ""
-            if not hmac.compare_digest(sent.encode(), project_token(secret, slot.slug).encode()):
-                self._deny(403, "forbidden")
+            slot = None if mount is None else mount.slot
+            act = self.path.split("?", 1)[0] if mount is None else mount.rel.split("?", 1)[0]
+            if not self._allowed(site_auth.Scope(None if slot is None else slot.slug), act):
                 return
             kind = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             if kind != "application/json":
@@ -643,8 +700,13 @@ def _handler_class(
             if not isinstance(body, dict):
                 self._json(400, _issues(ValidationIssue("body", "must be a JSON object")))
                 return
+            if hub_act is not None:
+                code, payload = hub_act(body)
+                self._json(code, payload)
+                return
+            assert slot is not None and route is not None
             project = slot.project
-            if route in (feed_react, mine_work, mine_layer, move_layer):
+            if route in (feed_react, feed_configure, mine_work, mine_layer, move_layer):
                 with slot.write_lock:
                     code, payload = route(project, body)
             elif route is queue_resume:
@@ -667,17 +729,21 @@ def _handler_class(
 
 
 def make_server(
-    project: Project, port: int = DEFAULT_PORT, *, min_gap: float = 300.0, background: bool = True
+    project: Project,
+    port: int = DEFAULT_PORT,
+    *,
+    min_gap: float = 300.0,
+    background: bool = True,
+    authenticator: site_auth.Authenticator | None = None,
 ) -> tuple[ThreadingHTTPServer, Rebuilder]:
     """A server for `<project>/site/` on 127.0.0.1:`port` (0 picks a free port) and its rebuilder
     (started when `background`). The hub page is written first, so the server never starts empty."""
     slot = Slot(project, min_gap=min_gap)
     slot.prepare()
-    secret = secrets.token_bytes(32)
     holder: list[ThreadingHTTPServer] = []
-    handler = _handler_class(
-        lambda path: Mount(slot, path, ""), secret, None, lambda: holder[0].server_address[1]
-    )
+    default = site_auth.LoopbackTokenAuth()
+    default.bind(lambda: holder[0].server_address[1])
+    handler = _handler_class(lambda path: Mount(slot, path, ""), authenticator or default, None)
     httpd = ThreadingHTTPServer((HOST, port), handler)
     holder.append(httpd)
     if background:
@@ -764,8 +830,12 @@ class MainHub:
         background: bool,
         feed: FeedRunner | None = None,
         feed_every: float = FEED_CHECK_EVERY,
+        create: Callable[[object, object, object], site_create.Created] | None = None,
     ) -> None:
         self.feed = feed
+        self._create = create
+        self.auth: site_auth.Authenticator = site_auth.LoopbackTokenAuth()
+        """The seam; `make_main_server` may replace it before serving."""
         self._timer = FeedTimer(feed, every=feed_every) if feed is not None and background else None
         self._root = root
         self._slugs = slugs
@@ -844,8 +914,17 @@ class MainHub:
         """The answer for a path that belongs to no project: (status, content type or, for a
         redirect, the location, body), or None."""
         if path in ("/", "/index.html"):
-            page = site_portal.render_portal(self.rows())
+            page = site_portal.render_portal(
+                self.rows(), create_token=self.hub_token() if self._create else None
+            )
             return 200, "text/html; charset=utf-8", page.encode()
+        if path in ("/feed", "/feed/"):
+            if path == "/feed":
+                return 301, "/feed/", b""
+            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if path == "/api/feed/runner":
+            body = json.dumps(site_hub_feed.runner_payload(self.feed)).encode()
+            return 200, "application/json; charset=utf-8", body
         if path == "/api/projects":
             body = json.dumps(
                 {"projects": [r._asdict() for r in self.rows()]}, ensure_ascii=False
@@ -856,6 +935,60 @@ class MainHub:
             if slug and self.slot(slug) is not None:
                 return 301, f"{PROJECT_PREFIX}{slug}/", b""
         return None
+
+    def hub_token(self) -> str:
+        """The write token of the hub's own acts (`/api/feed/run`, `/api/feed/refetch`)."""
+        return self.auth.page_credential(site_auth.Scope(None))
+
+    def feed_page(self) -> str:
+        """The `/feed/` page, read from every listed project's events at request time."""
+        registry = site_portal.load_registry(self._root)
+        views = []
+        for slug, title in site_portal.listed(self._slugs(), registry):
+            found = self.slot(slug)
+            if found is None:
+                continue
+            views.append(
+                site_hub_feed.collect(
+                    found.project, slug, title, self.auth.page_credential(site_auth.Scope(slug))
+                )
+            )
+        return site_hub_feed.render_feed_page(
+            views, site_hub_feed.runner_payload(self.feed), self.hub_token()
+        )
+
+    def start_feed_run(self, *, refetch: bool) -> tuple[int, dict[str, object]]:
+        """Start one feed run for every project (the hub acts); one at a time."""
+        if self.feed is None:
+            return 503, _issues(ValidationIssue("feed", "the feed runner is off"))
+        if not self.feed.start(refetch=refetch):
+            return 409, _issues(ValidationIssue("feed", "a feed run is already in progress"))
+        return 202, {"ok": True, "started": True, "refetch": refetch}
+
+    def create_project(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """The create-project act (the portal's form): as the local human, through the injected
+        creator (`site_create.create_project`); the new project's hub is written at once."""
+        if self._create is None:
+            return 503, _issues(ValidationIssue("create", "creating projects is off"))
+        try:
+            made = self._create(body.get("slug"), body.get("title"), body.get("profile"))
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        self.slot(made.slug)
+        return 200, {
+            "ok": True,
+            **made.model_dump(mode="json"),
+            "url": f"{PROJECT_PREFIX}{made.slug}/",
+        }
+
+    def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
+        return {
+            "/api/feed/run": lambda _body: self.start_feed_run(refetch=False),
+            "/api/feed/refetch": lambda _body: self.start_feed_run(refetch=True),
+            "/api/projects/create": self.create_project,
+        }
 
     def start_feed(self) -> None:
         """Start the feed timer (a due run now, then every `feed_every` seconds), if any."""
@@ -870,20 +1003,25 @@ class MainHub:
 
 
 def make_main_server(
-    hub: MainHub, port: int = DEFAULT_PORT, *, secret: bytes | None = None
+    hub: MainHub,
+    port: int = DEFAULT_PORT,
+    *,
+    secret: bytes | None = None,
+    authenticator: site_auth.Authenticator | None = None,
 ) -> ThreadingHTTPServer:
     """The main server on 127.0.0.1:`port`: the portal at `/` and each project at `/p/<slug>/`.
     Every scanned project's hub is written before the first request. Each project has its own
-    write token, so a token from one project's pages writes to no other."""
+    write token, so a token from one project's pages writes to no other. `authenticator` replaces
+    the seam (`site_auth`); the default is loopback and per-scope tokens from `secret`."""
+    holder: list[ThreadingHTTPServer] = []
+    if authenticator is None:
+        default = site_auth.LoopbackTokenAuth(secret)
+        default.bind(lambda: holder[0].server_address[1])
+        authenticator = default
+    hub.auth = authenticator
     hub.prepare_all()
     hub.start_feed()
-    holder: list[ThreadingHTTPServer] = []
-    handler = _handler_class(
-        hub.resolve,
-        secret or secrets.token_bytes(32),
-        hub.portal,
-        lambda: holder[0].server_address[1],
-    )
+    handler = _handler_class(hub.resolve, authenticator, hub.portal, hub.acts())
     httpd = ThreadingHTTPServer((HOST, port), handler)
     holder.append(httpd)
     return httpd

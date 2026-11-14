@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """The portal: the root page of the main hub server (plan 2026-11-13-main-hub, part 1).
 
 One server shows every project under the factory root. Projects are found by scanning
@@ -94,8 +95,38 @@ _CSS: Final = (
 )
 
 
-def render_portal(rows: list[PortalRow]) -> str:
-    """The portal page: one card per project linking to its hub under `/p/<slug>/`."""
+_FORM: Final = (
+    "<form id=create-form class=card style='margin-top:20px'><div class=t>New project</div>"
+    "<p class=s>Created as you, like <code>factory init</code>. The slug is the folder name.</p>"
+    "<p><input name=slug placeholder='slug-like-this' required pattern='[a-z0-9]+(-[a-z0-9]+)*' "
+    "maxlength=64> <input name=title placeholder='title (optional)' maxlength=120> "
+    "<select name=profile><option value='exploratory'>exploratory</option>"
+    "<option value='pilot'>pilot</option><option value='systematic'>systematic</option></select> "
+    "<button type=submit disabled>Create</button></p><p class=s id=create-msg></p></form>"
+)
+
+_FORM_SCRIPT: Final = """
+(function(){
+var m=document.querySelector('meta[name=factory-token]'),f=document.getElementById('create-form');
+if(!m||!f||location.protocol==='file:')return;
+var btn=f.querySelector('button'),msg=document.getElementById('create-msg');btn.disabled=false;
+f.addEventListener('submit',function(ev){
+  ev.preventDefault();btn.disabled=true;
+  var body={slug:f.slug.value,title:f.title.value,profile:f.profile.value};
+  fetch('/api/projects/create',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':m.content},body:JSON.stringify(body)})
+  .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
+  .then(function(r){
+    if(r.ok){location.href=r.url;return;}
+    msg.textContent=(r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused';btn.disabled=false;
+  }).catch(function(x){msg.textContent='request failed: '+x;btn.disabled=false;});
+});
+})();
+"""
+
+
+def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> str:
+    """The portal page: one card per project linking to its hub under `/p/<slug>/`. With
+    `create_token` (the hub's write token) it also has the create-project form."""
     cards = []
     for r in rows:
         state = (
@@ -116,12 +147,21 @@ def render_portal(rows: list[PortalRow]) -> str:
             f"<span><b>{r.built}</b> pages</span>{state}</div></a>"
         )
     body = "".join(cards) or "<p class=note>No project found under the factory root.</p>"
+    token_meta = (
+        f"<meta name='factory-token' content='{e(create_token, quote=True)}'>"
+        if create_token
+        else ""
+    )
+    form = _FORM if create_token else ""
+    script = f"<script>{_FORM_SCRIPT}</script>" if create_token else ""
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        + token_meta
+        + "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>Factory projects</title><style>{_CSS}</style></head><body><main>"
-        "<h1>Factory</h1><p class=sub>All projects on this machine. Open one for its hub.</p>"
-        f"<div class=grid>{body}</div>"
+        "<h1>Factory</h1><p class=sub>All projects on this machine. Open one for its hub, or see "
+        "the <a href='/feed/' style='color:var(--acc)'>new papers</a> of all of them.</p>"
+        f"<div class=grid>{body}</div>{form}"
         "<p class=note>Projects are found by scanning the factory root; "
-        "<code>registry.json</code> can give a title or hide one.</p></main></body></html>"
+        f"<code>registry.json</code> can give a title or hide one.</p></main>{script}</body></html>"
     )
