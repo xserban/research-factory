@@ -483,3 +483,41 @@ def test_no_entry_text_in_events_or_blobs(
                 scanned += 1
                 assert planted.encode() not in path.read_bytes(), path
     assert scanned > 0
+
+
+def _plan_flag(monkeypatch: pytest.MonkeyPatch, on: bool) -> None:
+    from types import SimpleNamespace
+
+    from factory.model.protocol import SnowballPlan
+    from factory.services import references
+
+    plan = SnowballPlan(max_backward_rounds=2, max_forward_rounds=1, background_sources=on)
+    protocol = SimpleNamespace(spec=SimpleNamespace(snowball_plan=plan, full_text_screening=None))
+    monkeypatch.setattr(references, "current_protocol", lambda p: protocol)
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_background_works_are_extracted_only_under_the_plan_flag(
+    project: Project,
+    corpus: None,
+    agent: Actor,
+    lookups: Lookups,
+    monkeypatch: pytest.MonkeyPatch,
+    on: bool,
+) -> None:
+    from factory.services import references, snowball
+
+    work = converted_work(project, ENTRIES, BODY)
+    monkeypatch.setattr(references, "included_works", lambda p: [])
+    monkeypatch.setattr(references, "background_works", lambda p: {work: "EX02"})
+    monkeypatch.setattr(snowball, "background_works", lambda p: {work: "EX02"})
+    monkeypatch.setattr(snowball, "included_works", lambda p: [])
+    _plan_flag(monkeypatch, on)
+    summary = _extract(project, agent, lookups, work_ids=[work])
+    if on:
+        assert [r.work_id for r in summary.extractions] == [work] and not summary.skipped
+        sources, _, _ = snowball._scope(project, background=True)
+        assert sources == [work]
+    else:
+        assert [(s.work_id, s.reason) for s in summary.skipped] == [(work, "not-included")]
+        assert not summary.extractions
