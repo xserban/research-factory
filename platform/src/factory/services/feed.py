@@ -27,7 +27,9 @@ Invariants:
   equal payloads; it is recorded. Each shown item records its nearest reference work.
 - `react` and `send` are human acts (`actor`: `human-only`, nothing written). The entry must be
   known (`entry_id`: `unknown`) and shown in the ranking given, by default the latest ranking that
-  showed it (`not-shown`). A reaction records the rank and score shown; several are allowed and
+  showed it. An entry no ranking showed is taken from the full order of the ranking given (the
+  latest by default) with its real rank and score and `beyond_shown` true; in no order it is
+  refused (`not-ranked`). A reaction records the rank and score shown; several are allowed and
   the latest counts. `send` refuses a held entry (`held`) and a second send (`already-sent`); it
   writes the inbox `inbox.link_added` (channel CLI) and `feed.sent` in one batch under one lock.
 - Embedding happens outside `project.writing()`. Inside it the inputs (configuration, known
@@ -46,6 +48,7 @@ import json
 import random
 import re
 import shutil
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -66,6 +69,7 @@ from factory.errors import (
     ValidationIssue,
 )
 from factory.events.envelope import Actor
+from factory.events.reader import read_all
 from factory.index.ranking import corpus_hash
 from factory.model.base import StrictModel
 from factory.model.feed import (
@@ -891,12 +895,47 @@ def feed_run_all(
 # --- reactions and send ---
 
 
+def ranking_order(project: Project, ranking_id: str) -> list[tuple[str, int, float]]:
+    """`(entry_id, rank, score)` of the ranking's order blob, in blob order; empty when the event
+    or the blob cannot be read or an item is malformed."""
+    for event in read_all(project.paths.events_dir, project.catalog):
+        if event.type != "feed.ranked" or event.actor.kind not in ("system", "agent"):
+            continue
+        if event.payload.get("ranking_id") != ranking_id:
+            continue
+        ref = event.payload.get("order_blob")
+        if not isinstance(ref, str):
+            return []
+        try:
+            data = project.blobs.get_json(ref)
+        except (FactoryError, OSError, EOFError, ValueError, zlib.error):
+            return []
+        out: list[tuple[str, int, float]] = []
+        if not isinstance(data, list):
+            return []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            entry, rank, score = item.get("entry_id"), item.get("rank"), item.get("score")
+            if (
+                isinstance(entry, str)
+                and isinstance(rank, int)
+                and isinstance(score, (int, float))
+                and not isinstance(rank, bool)
+            ):
+                out.append((entry, rank, float(score)))
+        return out
+    return []
+
+
 def _shown_in(
     project: Project, entry_id: str, ranking_id: str | None
-) -> tuple[str, int, float, str | None]:
-    """`(ranking_id, rank, score, held_work_id)` of the entry in the ranking asked for, or the
-    latest ranking that showed it. Refuses an unknown entry and one not shown. The caller holds the
-    write lock and has synced."""
+) -> tuple[str, int, float, str | None, bool]:
+    """`(ranking_id, rank, score, held_work_id, beyond_shown)` of the entry in the ranking asked
+    for, or the latest ranking that showed it. An entry no ranking showed falls back to the full
+    order of the ranking asked for (the latest when none is named): its real rank and score, with
+    `beyond_shown` true. Refuses an unknown entry and one in no order (`not-ranked`). The caller
+    holds the write lock and has synced."""
     with project.index.connect() as conn:
         entry = conn.execute(
             text("SELECT held_work_id FROM feed_entries WHERE entry_id = :e"), {"e": entry_id}
@@ -906,14 +945,19 @@ def _shown_in(
         rows = conn.execute(
             text("SELECT ranking_id, shown FROM feed_rankings ORDER BY event_id DESC")
         ).all()
+    held = None if entry[0] is None else str(entry[0])
     for ranking, shown in rows:
         if ranking_id is not None and str(ranking) != ranking_id:
             continue
         for item in json.loads(str(shown)):
             if item["entry_id"] == entry_id:
-                held = None if entry[0] is None else str(entry[0])
-                return str(ranking), int(item["rank"]), float(item["score"]), held
-    raise _refuse("entry_id", "not-shown")
+                return str(ranking), int(item["rank"]), float(item["score"]), held, False
+    wanted = [str(r) for r, _ in rows if ranking_id is None or str(r) == ranking_id]
+    if wanted:
+        for e_id, rank, score in ranking_order(project, wanted[0]):
+            if e_id == entry_id and rank >= 1:
+                return wanted[0], rank, score, held, True
+    raise _refuse("entry_id", "not-ranked")
 
 
 def react(
@@ -924,19 +968,20 @@ def react(
     *,
     ranking_id: str | None = None,
 ) -> str:
-    """Record a reaction (`feed.reacted`) to a shown entry and return its event id. Human only;
-    refused with nothing written for an unknown entry or one not shown in the ranking."""
+    """Record a reaction (`feed.reacted`) to a shown or ranked entry and return its event id.
+    Human only; refused with nothing written for an unknown entry or one in no ranking's order."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
     with project.writing():
         project.index.sync()
-        ranking, rank, score, _ = _shown_in(project, entry_id, ranking_id)
+        ranking, rank, score, _, beyond = _shown_in(project, entry_id, ranking_id)
         payload = FeedReacted(
             entry_id=entry_id,
             reaction=FeedReaction(reaction),
             ranking_id=ranking,
             rank_shown=rank,
             score_shown=score,
+            beyond_shown=beyond,
         )
         event = project.events.make("feed.reacted", payload, actor, refs=(entry_id,))
         project.record([event])
@@ -980,7 +1025,7 @@ def send(
 ) -> str:
     """Send a shown entry to the inbox as its arXiv link and return the inbox item id. Human only.
     The inbox item (channel CLI) and `feed.sent` are written in one batch under one lock, so
-    neither exists without the other. Refused with nothing written for an unknown or unshown
+    neither exists without the other. Refused with nothing written for an unknown or unranked
     entry, a held one (`held`: held at fetch, or the corpus holds the paper at send time) and one
     already sent (`already-sent`)."""
     if actor.kind != "human":
@@ -988,7 +1033,7 @@ def send(
     with project.writing():
         project.index.sync()
         _refuse_actor(project, actor)
-        ranking, _, _, held = _shown_in(project, entry_id, ranking_id)
+        ranking, _, _, held, beyond = _shown_in(project, entry_id, ranking_id)
         if held is not None or _in_corpus_now(project, entry_id):
             raise _refuse("entry_id", "held")
         with project.index.connect() as conn:
@@ -1001,7 +1046,13 @@ def send(
         added, item_id, issues = link_event(project, actor, link, Channel.CLI)
         if added is None or item_id is None:
             raise FactoryValidationError(issues)
-        payload = FeedSent(entry_id=entry_id, ranking_id=ranking, inbox_item_id=item_id, note=note)
+        payload = FeedSent(
+            entry_id=entry_id,
+            ranking_id=ranking,
+            inbox_item_id=item_id,
+            note=note,
+            beyond_shown=beyond,
+        )
         event = project.events.make("feed.sent", payload, actor, refs=(entry_id, item_id))
         project.record([added, event])
     return item_id

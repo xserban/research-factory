@@ -337,22 +337,31 @@ FURTHER_BLOCK: Final = 30
 
 
 def _further_card(item: FeedFurtherItem) -> str:
-    """A read-only card: rank, score, title, authors, abstract and links, no action button (the
-    reaction and add services accept shown entries only)."""
+    """A card of a ranked entry outside the shown set: rank, score, title, authors, abstract,
+    links, reaction state and the same buttons as a shown card (the services record such an action
+    as beyond the shown list)."""
     entry = e(item.entry_id, quote=True)
+    buttons = "".join(
+        f"<button type=button data-act='{act}' disabled>{e(label)}</button>"
+        for act, label in ACTIONS
+    )
+    reaction = e(str(item.reaction)) if item.reaction is not None else "no reaction"
+    added = "<span class='badge added'>added</span>" if item.sent else ""
     return (
         f"<article class='card further' hidden data-entry-id='{entry}'>"
         f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>"
-        f"<span class=badge>rank {item.rank}, not in the shown set</span></div>"
+        f"<span class=badge>rank {item.rank}, not in the shown set</span>{added}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></h3>"
         + (f"<p class=meta>{e(', '.join(item.authors))}</p>" if item.authors else "")
+        + f"<p class=meta>reaction: {reaction}</p>"
         + (
             f"<details><summary>abstract</summary><p>{e(item.abstract)}</p></details>"
             if item.abstract
             else ""
         )
         + f"<p class=meta><a href='https://arxiv.org/abs/{entry}'>abstract page</a> "
-        f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p></article>"
+        f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p>"
+        + f"<div class=acts>{buttons}</div></article>"
     )
 
 
@@ -378,8 +387,8 @@ def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
     first = min(FURTHER_BLOCK, len(ranked.further))
     after = (
         f"<div class=more><button type=button data-more='{FURTHER_BLOCK}'>Show next {first}</button> "
-        "<span class=sub>Further cards give the abstract and links only: a reaction or an add is "
-        "recorded for the shown entries only.</span></div>"
+        "<span class=sub>A reaction or an add on a further card is recorded with its rank and marked "
+        "as beyond the shown list.</span></div>"
     )
     return line, cards + after + cut
 

@@ -136,8 +136,8 @@ def test_default_ranking_is_the_latest_that_showed_the_entry(world: Project, hum
     ("entry", "ranking", "reason"),
     [
         ("2699.99999", None, "unknown"),
-        (UNSHOWN, None, "not-shown"),
-        (OTHER, LATER_RANKING, "not-shown"),
+        (UNSHOWN, None, "not-ranked"),
+        (OTHER, LATER_RANKING, "not-ranked"),
     ],
 )
 def test_react_refuses_unknown_and_not_shown(
@@ -155,7 +155,7 @@ def test_send_refuses_unknown_not_shown_and_held(world: Project, human: Actor) -
     # A held entry is refused even when a ranking lists it (a forged or stale listing).
     _ranking(world, LATER_RANKING, [_shown(HELD, 1, 0.1)])
     before = _count(world)
-    for entry, reason in (("2699.99999", "unknown"), (UNSHOWN, "not-shown"), (HELD, "held")):
+    for entry, reason in (("2699.99999", "unknown"), (UNSHOWN, "not-ranked"), (HELD, "held")):
         with pytest.raises(FactoryValidationError) as caught:
             send(world, human, entry)
         assert _refused(caught) == ("entry_id", reason)
