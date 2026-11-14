@@ -752,7 +752,7 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **Open questions:** fixed windows or recursive halving.
 
 ### IDEA-76 — PubMed in watch cycles, the inbox and seeds
-Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: seeds by PMID and PubMed/PMC inbox links built and reviewed on branch `pmid-seeds` (held unmerged, see IDEA-78); watch window and import admission by PMID not built · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** a `listed_since` window for PubMed (`[edat]`), PubMed and PMC links in the inbox parser, seeds and import admission by PMID.
 **Why:** a biomedical project lives in PMIDs; today a seed or link needs a DOI, arXiv or OpenAlex id.
 **Rigour notes:** a PMID seed is resolved and recorded like the other kinds; held-out withholding covers the PMID.
@@ -764,3 +764,26 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **Why:** (a) widens open full text; (b) controlled vocabulary is the best input to term harvesting.
 **Rigour notes:** (a) licence recorded per attempt; (b) suggestions only, the researcher selects.
 **Open questions:** —
+
+### IDEA-78 — Technique comprehension layer, technique-landscape process and graph of ideas
+Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-37, IDEA-50, slice 3b/3c, plan 2026-11-14-technique-comprehension
+**What:** pilot: a map miner, a contribution miner, stage codebooks seeded from contributions, stage miners that record variants against the codebooks, versioned codebook growth, and a graph of techniques, systems, origins, problems and evidence with lenses. Factory: chained miners (selector over upstream miner rows), codebook-guided miners with open-set proposals, description fields, a teach-back quality regime, shared vocabularies (use status, evidence levels, claimed/observed problems); generic miner templates that every project adapts through a recorded adaptation process (slot axis declared per project: stages here, model components for e.g. chest CT report generation; dry run; per-project checker calibration; lessons proposed back to the templates).
+**Why:** the step miner records sentences, not understanding, and cannot compare variants without a reference; the hypotheses engine needs techniques, origins and problems to combine and transfer.
+**Rigour notes:** interpretation layer, never evidence; automatic teach-back with separated roles, checker calibrated by the researcher; codebook versions accepted by the researcher; departs from decision 82 ruling 1, so a new decision entry is required; factory capabilities built only where the pilot needs them, tests first.
+**Open questions:** trial works; slice 3c storage or new events; grader model; templates extracted after the first adaptation; a second pilot as the second adaptation.
+
+### IDEA-78 — PubMed line: what remains (handover, 2026-11-14)
+Status: open · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depends on: IDEA-22 (merged cb447f2), IDEA-76, decision 124 (proposed), lifting of the testing pause
+**What:** finish the PubMed work started 2026-11-14 so pilot 2 can run on a biomedical topic.
+**State:**
+- *Merged on main (cb447f2, 9be7ad5):* PubMed source (search, probe), PMC JATS route from the `pmc-oa-opendata` bucket, JATS to Markdown with references kept, OA PDF fallback through every OpenAlex OA location. Reviewed (Sonnet), review fixes in; live smoke passed (NCBI search, probe, one PMC article to Markdown with 18 references). **Unit tests never run.** Plan `docs/plans/2026-11-14-pubmed.md`.
+- *Held, unmerged (researcher's ruling: merge only after their tests pass; the agent merges, not the merge agent):*
+  - branch `pmid-seeds` (worktree `.claude/worktrees/pmid-seeds`, head 3d8e1a2, cut from c8738ed): seeds by PMID, held-out PMID withheld only in context (`pmid:<n>`), PubMed/PMC links in the inbox. Reviewed, fixes c6c8b8c. Plan `docs/plans/2026-11-14-pmid-seeds.md`.
+  - branch `gate-tests` (worktree `.claude/worktrees/gate-tests`, head 5a02344, cut from c8738ed): `test_gate_acts_refuse_non_humans.py` (41 gates, agent and system refused, event files byte-identical), `test_gate_floor_table.py` (slice-M table literal), and the slice-M amendment listing six gates missing from the spec (researcher's ruling). Plan `docs/plans/2026-11-14-gate-tests.md`. Expect first-run fixes (assertions not all traced).
+**Next steps, in order:**
+1. Researcher's merge agent lands the other open branches and restarts the MCP server and hub on main (until then the pilot cannot use PubMed); record the commit used for pilot 2 (pilot-2 plan §6.8).
+2. When the researcher lifts the testing pause: rebase `pmid-seeds` and `gate-tests` on main; run in batches, one at a time (/tmp is small): `test_pubmed.py`, `test_registry_pubmed.py`, `test_source_base.py`, `test_fulltext_routes_pmc.py`, `test_fulltext_routes_oa.py`, `test_fulltext_model.py`, `test_mcp_fulltext.py`, `tests/document/test_optional_converters.py` (main); `test_seeds.py`, `test_withholding_resolved_openalex.py`, `test_inbox_links.py`, `test_inbox_service.py`, `test_mcp_protocol.py`, `test_protocol_rules.py` (pmid-seeds); the two gate test files (gate-tests). Compare failures against main (baseline-against-main rule).
+3. Fix failures; merge `pmid-seeds` and `gate-tests`; regenerate `docs/MAP.md`; update IDEA-22, IDEA-76 and this entry.
+4. Researcher confirms decision 124 (source, route order before OA PDF, TDM manuscripts fetched).
+**Parked (not needed for pilot start):** IDEA-75 (date slicing above 9,999), IDEA-76 rest (PubMed watch window, import admission by PMID), IDEA-77 (Europe PMC route, MeSH suggestions in the probe), the review minors under IDEA-22, actor-first coverage for 9 gates whose prerequisite check runs before the actor check (screening/extraction/mine resolve, miner calibration label, hypotheses register and lead decide, experiments freeze-unlock and accept-baseline: needs built worlds), a shared PMCID converter (inbox and PMC route each have one).
+**Rigour notes:** pmid-seeds touches held-out handling (decision 37.9, 123): review the withholding tests before merge.
