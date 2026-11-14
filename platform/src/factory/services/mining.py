@@ -422,7 +422,7 @@ def calibration_sample(project: Project, name: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def miner_population(project: Project, name: str) -> list[str]:
+def miner_population(project: Project, name: str, *, include_requested: bool = True) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
     mined by a production pass, so no resolution can have fixed it).
@@ -438,10 +438,14 @@ def miner_population(project: Project, name: str) -> list[str]:
     scheme, then work id (pending and unknown layers last). Refused on field `miners` when a
     derived layer miner (one projecting dimension zero) lists `layers`: it classifies every work
     and is never layer-filtered. `work_layers` is imported here, not at the top, because it
-    imports this module."""
+    imports this module.
+
+    `include_requested=False` omits the on-demand requested works: what remains is the selector
+    population (layer-filtered, less calibration units): the only set a calibration draws from."""
     _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
-    if not use.layers and not use.on_demand:
+    on_demand = use.on_demand and include_requested
+    if not use.layers and not on_demand:
         return [work for work, _ in population(project, spec.selector) if work not in apart]
     from factory.services.work_layers import (
         layer_dimension,
@@ -465,7 +469,7 @@ def miner_population(project: Project, name: str) -> list[str]:
             )
         wanted = set(use.layers)
         chosen = [w for w in chosen if w in layers and layers[w].layer in wanted]
-    if use.on_demand:
+    if on_demand:
         extra = requested_works(project, name) - set(chosen) - apart
         chosen.extend(w for w in extra if default_conversion(project, w) is not None)
     if use.order == "by-layer":
