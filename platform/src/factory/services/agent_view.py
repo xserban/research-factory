@@ -21,6 +21,8 @@ from factory.services import check as check_service
 from factory.services import coverage as coverage_service
 from factory.services import discovery as discovery_service
 from factory.services import evidence_report as evidence_report_service
+from factory.services import flow_query as flow_query_service
+from factory.services import flow_skipped as flow_skipped_service
 from factory.services import methods as methods_service
 from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
@@ -28,6 +30,7 @@ from factory.services import prisma_update as prisma_update_service
 from factory.services import project as project_service
 from factory.services import trace as trace_service
 from factory.services.context import Project
+from factory.services.flow_ledger import flow_by_source, ledger_reconciles
 from factory.services.withholding import WITHHELD as WITHHELD
 from factory.services.withholding import held_out_tokens, withhold
 from factory.services.xrun_accounting import hidden_acceptances
@@ -156,7 +159,25 @@ def agent_status(project: Project) -> project_service.ProjectStatus:
     return project_service.ProjectStatus.model_validate(withheld(project, data))
 
 
-def prisma_view(project: Project, update: str | None = None) -> JsonValue:
+NOT_YET_NOTICE = "not available yet"
+"""Why a flow listing answers nothing before a screening pass opens (decision 43)."""
+
+
+def by_source_view(project: Project) -> dict[str, JsonValue]:
+    """The PRISMA counts per source group and the reconciliation with the flow, as an agent may
+    read them. Before a screening pass opens the block is withheld: the per-group counts include
+    the held-out part, as the search report's counts do (decision 43)."""
+    if not coverage_service.held_out_visible(project):
+        return {"by_source": None, "reconciles": None, "notice": NOT_YET_NOTICE}
+    return {
+        "by_source": {
+            key: counts.model_dump(mode="json") for key, counts in flow_by_source(project).items()
+        },
+        "reconciles": list(ledger_reconciles(project)),
+    }
+
+
+def prisma_view(project: Project, update: str | None = None, by_source: bool = False) -> JsonValue:
     data: dict[str, JsonValue] = {
         "flow": prisma_service.prisma_flow(project).model_dump(mode="json"),
         "search": prisma_service.search_report(project).model_dump(mode="json"),
@@ -165,7 +186,57 @@ def prisma_view(project: Project, update: str | None = None) -> JsonValue:
         until = None if update == "last" else update
         flow = prisma_update_service.prisma_update(project, until=until)
         data["update"] = flow.model_dump(mode="json")
+    if by_source:
+        data.update(by_source_view(project))
     data = collapsed_import_rows(project, data)
+    return without_record_keys(withheld(project, data, include_work_ids=False))
+
+
+def flow_works_view(
+    project: Project,
+    *,
+    source_group: str | None = None,
+    step: str | None = None,
+    outcome: str | None = None,
+    criterion: str | None = None,
+    cursor: str | None = None,
+    limit: int = flow_query_service.PAGE_LIMIT,
+) -> JsonValue:
+    """One page of the work ledger, as an agent may read it. Withheld entirely before a screening
+    pass opens (decision 43); filters are validated only after that gate, so the answer before a
+    pass says nothing of what exists."""
+    if not coverage_service.held_out_visible(project):
+        return {"items": [], "next_cursor": None, "notice": NOT_YET_NOTICE}
+    page = flow_query_service.flow_works(
+        project,
+        source_group=source_group,
+        step=step,
+        outcome=outcome,
+        criterion=criterion,
+        cursor=cursor,
+        limit=limit,
+    )
+    data: dict[str, JsonValue] = {
+        "items": [row.model_dump(mode="json") for row in page.items],
+        "next_cursor": page.next_cursor,
+    }
+    if not page.items and page.next_cursor is None:
+        data["notice"] = "no work matches these filters"
+    return without_record_keys(withheld(project, data, include_work_ids=False))
+
+
+def flow_skipped_view(project: Project) -> JsonValue:
+    """The skipped raw records and the run gaps, as an agent may read them. Withheld entirely
+    before a screening pass opens: the import runs of the held-out part are among them."""
+    if not coverage_service.held_out_visible(project):
+        return {"skipped": [], "run_gaps": [], "notice": NOT_YET_NOTICE}
+    data: dict[str, JsonValue] = {
+        "skipped": [
+            record.model_dump(mode="json")
+            for record in flow_skipped_service.skipped_records(project)
+        ],
+        "run_gaps": [gap.model_dump(mode="json") for gap in flow_skipped_service.run_gaps(project)],
+    }
     return without_record_keys(withheld(project, data, include_work_ids=False))
 
 

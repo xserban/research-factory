@@ -175,6 +175,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "question_view",
             "document_status",
             "report_search",
+            "flow_works",
+            "flow_skipped",
             "extraction_status",
             "contribution_status",
             "relation_list",

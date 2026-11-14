@@ -1312,17 +1312,21 @@ def build_server(
         return _reply(project, deviate)
 
     @server.tool()
-    def report_prisma(project: str, update: str | None = None) -> dict[str, JsonValue]:
+    def report_prisma(
+        project: str, update: str | None = None, by_source: bool = False
+    ) -> dict[str, JsonValue]:
         """The PRISMA 2020 flow and the PRISMA-S search report, computed from the events.
         `update` adds the update flow of a living review: `last` (since the last snapshot) or a
-        snapshot id (the update that snapshot closed). Refused to a session that has joined a
-        pass: the flow's included, pending and per-criterion exclusion counts derive from the final
-        outcomes (human labels and both passes)."""
+        snapshot id (the update that snapshot closed). `by_source` adds the flow's counts per source
+        group (`by_source`) and the ledger's reconciliation with the flow (`reconciles`, empty when
+        they agree); both are withheld with a notice until a screening pass opens. Refused to a
+        session that has joined a pass: the flow's included, pending and per-criterion exclusion
+        counts derive from the final outcomes (human labels and both passes)."""
 
         def report() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            return agent_view_service.prisma_view(opened, update)
+            return agent_view_service.prisma_view(opened, update, by_source=by_source)
 
         return _reply(project, report, include_work_ids=False)
 
@@ -4750,6 +4754,54 @@ def build_server(
             return agent_view_service.search_view(opened)
 
         return _reply(project, report, include_work_ids=False)
+
+    @server.tool()
+    def flow_works(
+        project: str,
+        source_group: str | None = None,
+        step: str | None = None,
+        outcome: str | None = None,
+        criterion: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """The work ledger: one row per identified record (a canonical work or an absorbed
+        duplicate), with its source group, its title/abstract state and its full-text state. Filter
+        by `source_group` (as `report_prisma(by_source=true)` names them), by `step`
+        (`title-abstract`, `full-text-retrieval` or `full-text`), by that step's `outcome`, and by
+        `criterion` (with `step`, and `outcome` `excluded`). Unknown filters are refused with the
+        field named. One page of `limit` (at most 50); `next_cursor` continues it. Withheld with a
+        notice until a screening pass opens. Read-only. Refused to a session that has joined a
+        pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            return agent_view_service.flow_works_view(
+                opened,
+                source_group=source_group,
+                step=step,
+                outcome=outcome,
+                criterion=criterion,
+                cursor=cursor,
+                limit=limit,
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def flow_skipped(project: str) -> dict[str, JsonValue]:
+        """The raw records that never became works (`untitled`, `duplicate-within-run` or
+        `unparsed`), and each query's runs against the total its source reported (`run_gaps`).
+        Withheld with a notice until a screening pass opens. Read-only. Refused to a session that
+        has joined a pass."""
+
+        def skipped() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            return agent_view_service.flow_skipped_view(opened)
+
+        return _reply(project, skipped, include_work_ids=False)
 
     @server.tool()
     def extraction_status(
