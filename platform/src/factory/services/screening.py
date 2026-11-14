@@ -651,12 +651,20 @@ def _stop_context(
     )
 
 
-def background_works(project: Project, *, stage: ScreeningStage | None = None) -> dict[str, str]:
+def background_works(
+    project: Project,
+    *,
+    stage: ScreeningStage | None = None,
+    criteria: Mapping[str, str | None] | None = None,
+) -> dict[str, str]:
     """The works kept as background, work id to criterion id (IDEA-47): excluded works (at
     `stage`; default title/abstract and, once a plan is declared, full text) whose deciding
     criterion is a criterion of the current protocol with `background` true. Derived on read from
     the recorded decisions; never a verdict (`final_outcomes` is untouched), so a change of
-    protocol re-derives it, and an included or pending work never appears."""
+    protocol re-derives it, and an included or pending work never appears.
+
+    `criteria` is the caller's already-computed `exclusion_criteria(project, stage=stage)`; it
+    needs a `stage` and spares the second `final_outcomes` run. The result is the same."""
     from factory.services.agreement import exclusion_criteria  # circular at import time
 
     protocol = current_protocol(project)
@@ -672,7 +680,12 @@ def background_works(project: Project, *, stage: ScreeningStage | None = None) -
         stages = [stage] if stage in stages else []
     kept: dict[str, str] = {}
     for stage in stages:
-        for work, criterion in exclusion_criteria(project, stage=stage).items():
+        found = (
+            criteria
+            if criteria is not None and stage is not None
+            else exclusion_criteria(project, stage=stage)
+        )
+        for work, criterion in found.items():
             if criterion in flagged:
                 kept.setdefault(work, criterion)
     return kept

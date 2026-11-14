@@ -426,7 +426,9 @@ def prisma_flow(project: Project) -> PrismaFlow:
     unscreened = stop_unscreened(project)
     tolerated = tolerated_unscreened_works(project) - unscreened
     tolerated_pending: list[str] = []
-    kept = background_works(project, stage=ScreeningStage.TITLE_ABSTRACT)
+    kept = background_works(
+        project, stage=ScreeningStage.TITLE_ABSTRACT, criteria=criteria
+    )
     background: dict[str, int] = {}
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
@@ -518,7 +520,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         outcomes = final_outcomes(project, stage=stage)
         criteria = exclusion_criteria(project, stage=stage)
         unresolved = set(cannot_assess_open(project, stage=stage))
-        kept = background_works(project, stage=stage)
+        kept = background_works(project, stage=stage, criteria=criteria)
         for work in eligible:
             if work in unresolved:
                 awaiting += 1
@@ -532,7 +534,12 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
                 if work in kept:
                     background[criterion] = background.get(criterion, 0) + 1
     assessed = included + sum(excluded.values())
+    # Two loads on purpose: `unresolved` (`cannot_assess_open`) reads the queues without absorbed
+    # records, `outcomes` the recorded ones, so an absorbed cannot-assess work is PENDING in
+    # `outcomes` but not awaiting. `pending` is therefore taken by subtraction, which makes
+    # eligible = assessed + awaiting + pending hold by construction; it must not go negative.
     pending = len(eligible) - assessed - awaiting
+    assert pending >= 0, "full-text boxes: assessed + awaiting exceed the eligible works"
     return FullTextBoxes(
         sought=sought,
         not_retrieved=len(missing),
