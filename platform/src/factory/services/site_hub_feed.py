@@ -16,6 +16,9 @@ Invariants:
   add posts to that project's `/p/<slug>/api/feed/...`, so it is recorded in the project of the
   tab. The hub acts (`/api/feed/run`, `/api/feed/refetch`) use the hub token in `<meta>`.
 - A failure reading one project's events turns that tab into an error note, not a failed page.
+- Cards flow in a CSS grid with a Grid / List switch (remembered in localStorage when it works);
+  a card shows the first lines of its abstract, and More expands that card in place (full abstract
+  and the authors). A card without an abstract has no More button.
 - Everything written into the page is escaped; the page has no external resources.
 """
 
@@ -185,6 +188,19 @@ _CSS: Final = (
     ".card.further{border-left-color:var(--mut)}.card.further[hidden]{display:none}"
     ".card.further .rank{color:var(--dim)}"
     ".more{margin:12px 0}.more button{padding:4px 12px}"
+    ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px;margin:10px 0}"
+    "html[data-layout=list] .grid{grid-template-columns:1fr}"
+    "@media(max-width:420px){.grid{grid-template-columns:1fr}}"
+    ".grid>.card{margin:0;display:flex;flex-direction:column;min-width:0}"
+    ".grid>.card.further[hidden]{display:none}"
+    ".card .acts{margin-top:auto;padding-top:8px}"
+    ".abs{color:var(--light);font-size:13px;margin:6px 0;display:-webkit-box;-webkit-line-clamp:3;"
+    "line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}"
+    ".card.open .abs{display:block;overflow:visible;-webkit-line-clamp:unset;line-clamp:unset}"
+    ".card .au{display:none}.card.open .au{display:block}"
+    ".tog{align-self:flex-start;padding:2px 10px;margin:0 0 4px}"
+    ".layout{margin-left:auto;display:flex;gap:6px;align-items:center}"
+    ".layout button.on{border-color:var(--ac);color:var(--ac)}"
 )
 
 _SCRIPT: Final = """
@@ -235,6 +251,21 @@ panels.forEach(function(panel){
     if(!left)btn.hidden=true;else btn.textContent='Show next '+Math.min(step,left);
   });
 });
+document.querySelectorAll('button.tog').forEach(function(b){
+  b.addEventListener('click',function(){
+    var card=b.closest('.card'),open=card.classList.toggle('open');
+    b.setAttribute('aria-expanded',open?'true':'false');b.textContent=open?'Less':'More';
+  });
+});
+var lay=document.querySelectorAll('button[data-layout]');
+function setLayout(v,keep){
+  document.documentElement.setAttribute('data-layout',v);
+  lay.forEach(function(b){b.classList.toggle('on',b.dataset.layout===v);b.setAttribute('aria-pressed',b.dataset.layout===v?'true':'false');});
+  if(keep){try{localStorage.setItem('factory-feed-layout',v);}catch(_){}}
+}
+var saved='grid';try{saved=localStorage.getItem('factory-feed-layout')==='list'?'list':'grid';}catch(_){}
+setLayout(saved,false);
+lay.forEach(function(b){b.addEventListener('click',function(){setLayout(b.dataset.layout,true);});});
 var line=document.getElementById('run-line'),runBtns=document.querySelectorAll('button[data-run]');
 function outcome(s){
   if(s.running)return 'a run is in progress';
@@ -298,6 +329,18 @@ def _status_line(view: ProjectFeed) -> str:
     return "<div class=status>" + "".join(parts) + "</div>"
 
 
+def _abstract_block(abstract: str, authors: str) -> str:
+    """The clamped abstract, the More button and the author list shown only when expanded; empty
+    without an abstract (no button then, and the authors are not shown)."""
+    if not abstract:
+        return ""
+    return (
+        f"<p class=abs>{e(abstract)}</p>"
+        + (f"<p class='meta au'>{e(authors)}</p>" if authors else "")
+        + "<button type=button class=tog aria-expanded=false>More</button>"
+    )
+
+
 def _card(item: object, record: Mapping[str, object] | None) -> str:
     assert isinstance(item, FeedListItem)
     entry = e(item.entry_id, quote=True)
@@ -319,14 +362,9 @@ def _card(item: object, record: Mapping[str, object] | None) -> str:
         f"<article class=card data-entry-id='{entry}'>"
         f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>{badges}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{title}</a></h3>"
-        + (f"<p class=meta>{e(authors)}</p>" if authors else "")
         + f"<p class=meta>nearest core work: {e(nearest) if nearest else 'none nearby'}</p>"
         + f"<p class=meta>reaction: {reaction}</p>"
-        + (
-            f"<details><summary>abstract</summary><p>{e(abstract)}</p></details>"
-            if abstract
-            else ""
-        )
+        + _abstract_block(abstract, authors)
         + f"<p class=meta><a href='https://arxiv.org/abs/{entry}'>abstract page</a> "
         f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p>"
         + f"<div class=acts>{buttons}</div></article>"
@@ -352,21 +390,17 @@ def _further_card(item: FeedFurtherItem) -> str:
         f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>"
         f"<span class=badge>rank {item.rank}, not in the shown set</span>{added}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></h3>"
-        + (f"<p class=meta>{e(', '.join(item.authors))}</p>" if item.authors else "")
         + f"<p class=meta>reaction: {reaction}</p>"
-        + (
-            f"<details><summary>abstract</summary><p>{e(item.abstract)}</p></details>"
-            if item.abstract
-            else ""
-        )
+        + _abstract_block(item.abstract or "", ", ".join(item.authors))
         + f"<p class=meta><a href='https://arxiv.org/abs/{entry}'>abstract page</a> "
         f"<a href='https://arxiv.org/pdf/{entry}'>pdf</a></p>"
         + f"<div class=acts>{buttons}</div></article>"
     )
 
 
-def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
-    """`(count line, further part)`: the count line, the hidden further cards and the Show next button of a panel."""
+def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str, str]:
+    """`(count line, hidden further cards, rest)`: the count line, the hidden further cards (placed
+    in the panel's grid) and the Show next button with the cut note."""
     ranked = view.ranked
     total = ranked.total_ranked if ranked is not None else shown
     window = view.last_fetch
@@ -376,7 +410,7 @@ def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
         + "</p>"
     )
     if ranked is None or not ranked.further:
-        return line, ""
+        return line, "", ""
     cards = "".join(_further_card(i) for i in ranked.further)
     cut = (
         f"<p class=sub>The page lists the first {ranked.cap} ranked entries beyond the shown ones; "
@@ -390,7 +424,7 @@ def _further_html(view: ProjectFeed, shown: int) -> tuple[str, str]:
         "<span class=sub>A reaction or an add on a further card is recorded with its rank and marked "
         "as beyond the shown list.</span></div>"
     )
-    return line, cards + after + cut
+    return line, cards, after + cut
 
 
 def _panel(view: ProjectFeed) -> str:
@@ -412,13 +446,14 @@ def _panel(view: ProjectFeed) -> str:
         )
     records = view.records or {}
     cards = "".join(_card(i, records.get(i.entry_id)) for i in listing.items)
-    count_line, further = _further_html(view, len(listing.items))
+    count_line, further_cards, further_rest = _further_html(view, len(listing.items))
     return (
         head
         + f"<p class=sub>Ranking <code>{e(listing.ranking_id)}</code>.</p>"
         + count_line
-        + (cards or "<p class=sub>The latest ranking shows no items.</p>")
-        + further
+        + (f"<div class=grid>{cards}{further_cards}</div>" if cards or further_cards else "")
+        + ("" if cards else "<p class=sub>The latest ranking shows no items.</p>")
+        + further_rest
         + "</section>"
     )
 
@@ -447,6 +482,13 @@ def render_feed_page(
         "<h1>New papers</h1><p class=sub>One arXiv pull, compared with each project's core works. "
         "A ranking orders; it judges nothing. <a href='/'>All projects</a></p>"
         + bar
+        + (
+            "<div class=layout><span class=sub>Layout</span>"
+            "<button type=button data-layout=grid>Grid</button>"
+            "<button type=button data-layout=list>List</button></div>"
+            if views
+            else ""
+        )
         + (f"<div class=tabs>{tabs}</div>" if views else "")
         + (
             "".join(_panel(v) for v in views)

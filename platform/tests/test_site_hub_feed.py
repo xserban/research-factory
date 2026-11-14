@@ -496,3 +496,89 @@ def test_the_page_says_when_the_cap_cuts(
     demo = _demo_section(_req(port, "GET", "/feed/")[1])
     assert "first 10 ranked entries beyond the shown ones" in demo
     assert "24 more are not listed" in demo
+
+
+# --- grid layout, clamped abstracts, More ---
+
+
+def test_the_page_has_the_grid_css_and_the_layout_switch_with_its_storage_key(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    port, _, _ = served
+    _world(project)
+    page = _req(port, "GET", "/feed/")[1]
+    assert "repeat(auto-fill,minmax(380px,1fr))" in page
+    assert "-webkit-line-clamp:3" in page and "line-clamp:3" in page
+    assert "data-layout=grid" in page and "data-layout=list" in page
+    assert "factory-feed-layout" in page
+    assert "<details" not in _demo_section(page)
+
+
+def test_cards_clamp_the_abstract_with_a_more_button_and_authors_only_when_expanded(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    from tests.test_feed_page import world
+
+    port, _, _ = served
+    world(project, total=100, shown=29)
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    shown = re.findall(r"<article class=card data-entry-id.*?</article>", demo, re.S)
+    further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
+    assert shown and further
+    for card in shown + further:
+        if "class=abs" in card:
+            assert "class=tog aria-expanded=false>More</button>" in card
+        assert "<details" not in card
+        assert card.count("class=meta>") == card.count("<p class=meta>")  # authors only in .au
+    assert all(f.startswith("<article class='card further' hidden") for f in further)
+    assert demo.count("<div class=grid>") == 1
+
+
+def test_abstract_block_hides_authors_in_the_expandable_part_and_is_empty_without_abstract() -> (
+    None
+):
+    block = site_hub_feed._abstract_block("Text <b>", "A. One, B. Two")
+    assert "<p class=abs>Text &lt;b&gt;</p>" in block
+    assert "<p class='meta au'>A. One, B. Two</p>" in block
+    assert block.index("class=abs") < block.index("class='meta au'") < block.index("class=tog")
+    assert site_hub_feed._abstract_block("", "A. One") == ""
+    assert "au'" not in site_hub_feed._abstract_block("Text", "")
+
+
+def test_more_toggles_the_card_and_aria_expanded_in_a_stub_dom() -> None:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    harness = """
+const classes = new Set(); const attrs = {}; const listeners = {};
+const card = {classList: {toggle(c){
+  if(classes.has(c)){classes.delete(c);return false;}
+  classes.add(c);return true;}}};
+const btn = {textContent:'More', closest(){return card;}, setAttribute(k,v){attrs[k]=v;},
+  addEventListener(t,f){listeners[t]=f;}, dataset:{}};
+const store = {};
+global.localStorage = {getItem(k){return store[k]||null;}, setItem(k,v){store[k]=v;}};
+global.location = {hash:''}; global.history = {replaceState(){}};
+global.document = {
+  querySelector(){return null;}, getElementById(){return null;},
+  documentElement: {setAttribute(){}},
+  querySelectorAll(sel){ return sel==='button.tog' ? [btn] : []; }};
+global.fetch = () => Promise.reject(new Error('no'));
+eval(process.argv[1]);
+listeners.click();
+console.log(JSON.stringify([[...classes], attrs['aria-expanded'], btn.textContent]));
+listeners.click();
+console.log(JSON.stringify([[...classes], attrs['aria-expanded'], btn.textContent]));
+"""
+    out = subprocess.run(
+        [node, "-e", harness, site_hub_feed._SCRIPT], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert json.loads(out[0]) == [["open"], "true", "Less"]
+    assert json.loads(out[1]) == [[], "false", "More"]
