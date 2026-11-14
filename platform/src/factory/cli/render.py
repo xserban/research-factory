@@ -86,6 +86,13 @@ from factory.services.watch import CycleSummary, WatchStatus
 from factory.services.xruns import XrunView
 
 
+def _background_lines(background: dict[str, int]) -> list[str]:
+    """The exclusions kept as background (IDEA-47), a subset view under the exclusion rows."""
+    return [
+        f"  - of which kept as background: {n} ({criterion})" for criterion, n in background.items()
+    ]
+
+
 def prisma_markdown(flow: PrismaFlow) -> str:
     """The PRISMA 2020 flow as a Markdown list, one line per box."""
     lines = ["# PRISMA 2020 flow", ""]
@@ -95,12 +102,19 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines.append(f"- duplicates removed: {flow.duplicates_removed}")
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
+    lines += _background_lines(flow.background)
     lines.append(f"- pending: {flow.pending}")
     if flow.stop_rule is not None:
         lines.append(
             f"- of which not screened because of the stop: {flow.not_screened_stop} "
             f"(rule: {flow.stop_rule})"
         )
+    if flow.unscreened_tolerated:
+        lines.append(
+            "- of which left unscreened within the declared tolerance (a technical reason): "
+            f"{flow.unscreened_tolerated}"
+        )
+        lines += [f"  - {work}" for work in flow.unscreened_tolerated_works]
     boxes = flow.full_text
     lines += ["", "## Full-text assessment"]
     lines.append(f"- reports sought: {boxes.sought}")
@@ -111,6 +125,9 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     if boxes.stage_run:
         lines.append(f"- reports assessed for eligibility: {boxes.assessed}")
         lines += [f"- excluded, {criterion}: {n}" for criterion, n in boxes.excluded.items()]
+        lines += _background_lines(boxes.background)
+        if boxes.awaiting_classification:
+            lines.append(f"- awaiting classification: {boxes.awaiting_classification}")
         lines.append(f"- pending at full text: {boxes.pending}")
         lines.append(f"- included at full text: {boxes.included}")
     else:
@@ -120,6 +137,8 @@ def prisma_markdown(flow: PrismaFlow) -> str:
         lines.append(f"- included in the review: {flow.included_in_review}")
     if flow.provisional:
         lines += ["", "The flow is provisional: works are pending."]
+    elif boxes.provisional:
+        lines += ["", "The flow is provisional: reports are pending or awaiting classification."]
     lines.append(f"\nProtocol: {flow.protocol_id or 'none'}")
     return "\n".join(lines) + "\n"
 
@@ -319,22 +338,21 @@ _NEEDS_A_CONVERTER = (FailureReason.NO_CONVERTER, FailureReason.CONVERTER_UNAVAI
 
 
 def convert_lines(summary: ConvertSummary) -> list[str]:
-    """One line per document outcome (document, work, status, reason), then the counts. An
-    `outdated` outcome carries the hint to use `--upgrade`; the count of outdated documents is
-    appended only when it is not zero."""
+    """One line per document outcome (document, work, status, reason), then the counts, every
+    status always named. An `outdated` outcome carries the hint to use `--upgrade`."""
     lines = [
         f"{o.document_id}  {o.work_id}  {o.status}  {_outcome_reason(o)}" for o in summary.outcomes
     ]
-    outdated = f", outdated {summary.outdated}" if summary.outdated else ""
     lines.append(
         f"converted {summary.converted}, unchanged {summary.unchanged}, failed {summary.failed}, "
-        f"raw-missing {summary.raw_missing}, restored {summary.restored}{outdated}"
+        f"raw-missing {summary.raw_missing}, restored {summary.restored}, "
+        f"outdated {summary.outdated}"
     )
     return lines
 
 
 def _outcome_reason(outcome: ConversionOutcome) -> str:
-    if outcome.status == "outdated":
+    if outcome.reason == "other-converter-version":
         return "older converter version; use --upgrade"
     return outcome.reason if outcome.reason else "-"
 

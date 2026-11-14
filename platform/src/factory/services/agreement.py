@@ -20,8 +20,9 @@ people, so an agent reads `agent_agreement`, which leaves them out.
 work, or, at full text, on a `cannot-assess` work (IDEA-49): a single-pass work pass A could not
 assess, or a dual-coded work both passes promote where either could not assess. It is human-only,
 and an MCP-relayed resolution is refused from a session that has joined a pass. An unresolved
-`cannot-assess` work still promotes (it is not PENDING and does not hold the passes open); the
-resolution, when recorded, decides its outcome.
+`cannot-assess` work is awaiting classification at full text: its outcome is PENDING, so it is not
+included (nor served for extraction), yet it does not hold the passes open; the resolution, when
+recorded, decides its outcome. At title/abstract `cannot-assess` still promotes.
 
 `final_outcomes` gives each work of the corpus its outcome: a calibration work takes the human's
 label; any other work takes its resolution, else the agreed outcome, else the single-pass outcome.
@@ -189,6 +190,14 @@ def tolerated_unscreened(screen: _Screen) -> frozenset[str]:
         return frozenset()
     missing = queue - screen.decided[PassLabel.A].keys()
     return missing if tolerance.allows(len(missing), len(queue)) else frozenset()
+
+
+def tolerated_unscreened_works(project: Project) -> frozenset[str]:
+    """The title/abstract pass A works left unscreened within the declared tolerance (IDEA-46),
+    for reports; empty without a protocol, a pass A or a tolerance. Read-only."""
+    project.index.sync()
+    screen = _load(project, TA)
+    return frozenset() if screen is None else tolerated_unscreened(screen)
 
 
 def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = TA) -> Agreement:
@@ -439,20 +448,25 @@ def final_outcomes(project: Project, *, stage: ScreeningStage = TA) -> dict[str,
     work; for any other work its resolution, else the agreed outcome of both passes, else the
     single-pass outcome of pass A. An `unsure` verdict, a disagreement, or a missing decision is
     PENDING. At full text only the promoted works (title/abstract INCLUDED) have an outcome; every
-    other work is PENDING. An absorbed record that would be PENDING is left out: it awaits nothing,
+    other work is PENDING, and so is an unresolved `cannot-assess` work (`cannot_assess_open`): it
+    is awaiting classification until the researcher resolves it (IDEA-49), neither included nor
+    excluded. Title/abstract is unchanged: there `cannot-assess` promotes.
+
+    An absorbed record that would be PENDING is left out: it awaits nothing,
     so read with `.get` any work that may be absorbed."""
     require_pass_stage(stage)
     labels = calibration_labels(project, stage=stage)
     calibration = set(calibration_items(project, stage=stage))
     screen = _load(project, stage, recorded=True)
     population = recorded_population(project, stage)
+    awaiting = set() if screen is None else _cannot_assess_open(screen)
     outcomes: dict[str, Outcome] = {}
     for work in sorted(corpus_work_ids(project)):  # ids only: no work record is parsed
         if work not in population:
             outcomes[work] = Outcome.PENDING
         elif work in calibration:
             outcomes[work] = _label_outcome(labels.get(work))
-        elif screen is None:
+        elif screen is None or work in awaiting:
             outcomes[work] = Outcome.PENDING
         else:
             outcomes[work] = _outcome(screen, work)

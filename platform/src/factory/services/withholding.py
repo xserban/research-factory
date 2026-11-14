@@ -10,12 +10,14 @@ mark the work as a seed (decisions 37 item 9 and 81).
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 
 from pydantic import JsonValue
+from sqlalchemy import bindparam, text
 
-from factory.model.seed import SeedSpec
+from factory.model.seed import SeedSpec, normalize_openalex
 from factory.services import seeds as seeds_service
 from factory.services.context import Project
 from factory.services.seeds import SeedRole
@@ -56,10 +58,12 @@ def _scrub(value: JsonValue, pattern: re.Pattern[str], same_length: bool = False
 def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]:
     """The id, and every identifier as stated or normalised, of each held-out seed.
 
-    `include_work_ids` adds `seed.work_id`, for the seed tools and the probe. Any tool that names
+    `include_work_ids` adds `seed.work_id` and the OpenAlex id (as stored and normalised) of the
+    work the seed resolved to, for the seed tools and the probe (IDEA-19). Any tool that names
     works leaves it out: a work's id is not a seed's identity, and a `[withheld]`
     among `rf:` ids would mark the work as a seed (decisions 37 item 9 and 81)."""
     tokens: set[str] = set()
+    resolved_of: list[str] = []
     for seed in seeds_service.all_seeds(project):
         if seed.role is not SeedRole.HELD_OUT:
             continue
@@ -75,4 +79,28 @@ def held_out_tokens(project: Project, include_work_ids: bool = True) -> set[str]
         tokens.update(value for value in (seed.doi, seed.arxiv, seed.openalex) if value)
         if include_work_ids and seed.work_id:
             tokens.add(seed.work_id)
+            resolved_of.append(seed.work_id)
+    for resolved in _resolved_openalex(project, resolved_of):
+        tokens.update((resolved, normalize_openalex(resolved)))
     return tokens
+
+
+def _resolved_openalex(project: Project, work_ids: list[str]) -> list[str]:
+    """The non-blank OpenAlex ids stored on `work_ids`, read in one query of the `works` table
+    (no provenance is loaded). A work that is absent or has no OpenAlex id adds nothing."""
+    if not work_ids:
+        return []
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT data FROM works WHERE work_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": work_ids},
+        ).all()
+    found: list[str] = []
+    for (data,) in rows:
+        identifiers = json.loads(str(data)).get("identifiers") or {}
+        value = identifiers.get("openalex") if isinstance(identifiers, dict) else None
+        if isinstance(value, str) and value.strip():
+            found.append(value)
+    return found

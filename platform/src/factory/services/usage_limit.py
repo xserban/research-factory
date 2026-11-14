@@ -3,8 +3,9 @@
 A headless `claude -p` session that hits the 5-hour limit prints a notice such as
 `You've hit your 5-hour limit · resets 3pm (Europe/Bucharest)` and exits with status 0, so the
 runner records it `complete`. This module is the one place that tells such a run from a finished
-one. It is a pure read: it parses the run log (through `run_costs.parse_log`, which keeps the short
-texts) and the folded run row, and writes nothing.
+one. It is a pure read: it reads the run log (`read_log`: stream-json through
+`run_costs.parse_log`, which keeps the short texts, and plain-text lines as `live.py` writes them)
+and the folded run row, and writes nothing.
 
 A complete run is limit-stopped when
 - a text of its log matches `LIMIT_PATTERN` (reason `log`), or
@@ -145,6 +146,23 @@ def _reset_at(raw: str | None, finished_at: datetime | None) -> tuple[str | None
     return format_ts(finished_at + FALLBACK_HOLD), True
 
 
+def read_log(lines: list[str]) -> tuple[list[str], bool]:
+    """The texts to scan for the notice and whether the result line is an error. Stream-json lines
+    are read by `run_costs.parse_log`; a line that is not a JSON object is kept as plain text, as
+    `live.py` writes it (the pilot's limit stops are plain text followed by `exit 0`, with no error
+    flag). Stream-json texts come first, then the plain lines, each within
+    `run_costs.TEXT_LIMIT` characters."""
+    log = run_costs.parse_log(lines)
+    plain = [
+        line.strip()
+        for line in lines
+        if line.strip()
+        and not line.strip().startswith("{")
+        and 0 < len(line.strip()) <= run_costs.TEXT_LIMIT
+    ]
+    return [*log.texts, *plain], log.is_error
+
+
 def limit_stop(project: Project, run_id: str, *, stage_pending: bool) -> LimitStop | None:
     """The limit stop of the `complete` run `run_id`, None for any other run or outcome. Read-only
     (see the module docstring)."""
@@ -161,7 +179,7 @@ def limit_stop(project: Project, run_id: str, *, stage_pending: bool) -> LimitSt
     if row is None or row[0] != "complete":
         return None
     log_text, _ = run_costs._log_text(project, run_id, None if row[1] is None else str(row[1]))
-    log = run_costs.parse_log(log_text.splitlines())
+    texts, is_error = read_log(log_text.splitlines())
     served = run_costs._counter_served(project, run_id)
     if served is not None:
         units: int | None = served
@@ -172,11 +190,11 @@ def limit_stop(project: Project, run_id: str, *, stage_pending: bool) -> LimitSt
         units = max(before - sum(json.loads(str(row[3])).values()), 0)
     finished = None if row[4] is None else parse_ts(str(row[4]))
     return detect(
-        log.texts,
+        texts,
         units=units,
         stage_pending=stage_pending,
         finished_at=finished,
-        result_error=log.is_error,
+        result_error=is_error,
     )
 
 
@@ -199,4 +217,5 @@ __all__ = [
     "hold_until",
     "limit_stop",
     "parse_reset",
+    "read_log",
 ]

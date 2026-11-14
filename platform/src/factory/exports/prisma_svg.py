@@ -92,6 +92,10 @@ def _reasons(counts: dict[str, int]) -> list[str]:
     return [_count(name, n) for name, n in counts.items()]
 
 
+def _background(counts: dict[str, int]) -> list[str]:
+    return [f"of which kept as background: {n} ({name})" for name, n in counts.items()]
+
+
 def _render_box(box: _Box) -> list[str]:
     out = [
         f'<rect x="{box.x}" y="{box.y}" width="{BOX_W}" height="{box.height}" '
@@ -122,10 +126,13 @@ def prisma_svg(flow: PrismaFlow) -> str:
     boxes = flow.full_text
     ran = boxes.stage_run
     banner: str | None = None
-    if flow.pending - flow.not_screened_stop:
-        banner = f"Provisional: {flow.pending - flow.not_screened_stop} records pending"
+    open_pending = flow.pending - flow.not_screened_stop - flow.unscreened_tolerated
+    if open_pending:
+        banner = f"Provisional: {open_pending} records pending"
     elif boxes.provisional:
         banner = f"Provisional: {boxes.pending} reports pending"
+        if boxes.awaiting_classification:
+            banner += f", {boxes.awaiting_classification} awaiting classification"
 
     databases = _lines(
         "Records identified from databases",
@@ -138,13 +145,20 @@ def prisma_svg(flow: PrismaFlow) -> str:
     duplicates = _lines(_count("Duplicate records removed", flow.duplicates_removed), [])
     screened = _lines(
         _count("Records screened", flow.screened),
-        []
-        if flow.stop_rule is None
-        else [f"{flow.not_screened_stop} not screened (stopping rule)"],
+        (
+            []
+            if flow.stop_rule is None
+            else [f"{flow.not_screened_stop} not screened (stopping rule)"]
+        )
+        + (
+            [f"{flow.unscreened_tolerated} unscreened (declared tolerance)"]
+            if flow.unscreened_tolerated
+            else []
+        ),
     )
     excluded = _lines(
         _count("Records excluded", flow.excluded_total),
-        _reasons(flow.excluded),
+        _reasons(flow.excluded) + _background(flow.background),
     )
     sought = _lines(_count("Reports sought for retrieval", boxes.sought), [])
     not_retrieved = _lines(
@@ -152,9 +166,15 @@ def prisma_svg(flow: PrismaFlow) -> str:
         _reasons(boxes.not_retrieved_reasons),
     )
     if ran:
-        assessed = _lines(_count("Reports assessed for eligibility", boxes.assessed), [])
+        assessed = _lines(
+            _count("Reports assessed for eligibility", boxes.assessed),
+            [_count("Awaiting classification", boxes.awaiting_classification)]
+            if boxes.awaiting_classification
+            else [],
+        )
         ft_excluded = _lines(
-            _count("Reports excluded", boxes.excluded_total), _reasons(boxes.excluded)
+            _count("Reports excluded", boxes.excluded_total),
+            _reasons(boxes.excluded) + _background(boxes.background),
         )
         final = _lines(
             _count("Studies included in review", boxes.included),

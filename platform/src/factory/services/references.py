@@ -92,6 +92,7 @@ from factory.services.reference_resolve import (
     load_corpus,
     resolve_entries,
 )
+from factory.services.screening import background_works
 from factory.sources.registry import SourceFactory
 
 MAX_PAGE = 100
@@ -197,6 +198,17 @@ def included_works(project: Project) -> list[str]:
     return sorted(w for w, outcome in outcomes.items() if outcome is Outcome.INCLUDED)
 
 
+def _extractable_works(project: Project) -> set[str]:
+    """The included works, plus (when the current protocol's snowball plan has `background_sources`)
+    the works kept as background (IDEA-47), so a backward round can use them."""
+    works = set(included_works(project))
+    protocol = current_protocol(project)
+    plan = None if protocol is None else protocol.spec.snowball_plan
+    if plan is not None and plan.background_sources:
+        works |= set(background_works(project))
+    return works
+
+
 def current_extraction(project: Project, work_id: str) -> str | None:
     """The live extraction of `work_id` if it is pinned to the work's default conversion and was
     made with this parser version; else None."""
@@ -238,7 +250,7 @@ def extract_references(
                 [ValidationIssue("work_ids", f"{w!r}: not a work id") for w in bad]
             )
     project.index.sync()
-    included = set(included_works(project))
+    included = _extractable_works(project)
     skipped: list[Skipped] = []
     scope: list[tuple[str, ConversionRef]] = []
     if work_ids is None:

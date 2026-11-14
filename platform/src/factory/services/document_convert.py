@@ -67,13 +67,16 @@ ConversionStatus = Literal[
     "converted", "unchanged", "outdated", "failed", "raw-missing", "restored"
 ]
 RestoreReason = Literal["version-unavailable", "hash-differs", "store-error"]
-OutcomeReason = FailureReason | RestoreReason
-"""The reason of a `failed` outcome: a conversion failure, or a restore failure."""
+OutdatedReason = Literal["other-converter-version"]
+OutcomeReason = FailureReason | RestoreReason | OutdatedReason
+"""The reason of a `failed` outcome (a conversion failure, or a restore failure), or of an
+`outdated` one (the latest conversion is by another version of this converter; IDEA-48)."""
 
 
 class ConversionOutcome(StrictModel):
     """What happened to one document. `conversion_id` is set only for `converted`; `reason` is
-    the failure reason for `failed` and None otherwise."""
+    the failure reason for `failed`, `other-converter-version` for `outdated`, and None
+    otherwise."""
 
     document_id: str
     work_id: str
@@ -588,7 +591,7 @@ def _decide(
     ):
         return _outcome(doc, "unchanged")
     if not upgrade and converter is not None and version is not None and latest == converter.name:
-        return _outcome(doc, "outdated")
+        return _outcome(doc, "outdated", reason="other-converter-version")
     if not project.library.exists(doc.raw_hash):
         return _outcome(doc, "raw-missing")
     if converter is None:
@@ -721,13 +724,15 @@ def _failed(
     )
 
 
-def _outcome(doc: _Doc, status: ConversionStatus) -> ConversionOutcome:
+def _outcome(
+    doc: _Doc, status: ConversionStatus, *, reason: OutcomeReason | None = None
+) -> ConversionOutcome:
     return ConversionOutcome(
         document_id=doc.document_id,
         work_id=doc.work_id,
         status=status,
         conversion_id=None,
-        reason=None,
+        reason=reason,
     )
 
 

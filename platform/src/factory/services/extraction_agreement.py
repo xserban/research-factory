@@ -83,6 +83,9 @@ from factory.services.extraction import (
     stale_extractions,
     unit_states,
 )
+from factory.services.extraction import (
+    _Ledger as Ledger,
+)
 from factory.services.extraction_verify import VALUE_FIELD
 from factory.services.gates import gate_issues
 from factory.services.passes import shared_refusal
@@ -545,19 +548,29 @@ def _identity(scope: ScopeKey, pack: Pack) -> str:
 
 
 def _load(
-    project: Project, scope: ScopeKey = Scope.EVIDENCE, works: Collection[str] | None = None
+    project: Project,
+    scope: ScopeKey = Scope.EVIDENCE,
+    works: Collection[str] | None = None,
+    ledger: Ledger | None = None,
 ) -> _State | None:
     """`_read_state`, kept for the call when it reads the whole scope. The state is frozen and no
     reader changes its lists; a restricted read is not kept, as its `works` need not hash."""
-    return _whole_state(project, scope) if works is None else _read_state(project, scope, works)
+    if works is None:
+        return _whole_state(project, scope, ledger)
+    return _read_state(project, scope, works, ledger)
 
 
 @memoised
-def _whole_state(project: Project, scope: ScopeKey) -> _State | None:
-    return _read_state(project, scope, None)
+def _whole_state(project: Project, scope: ScopeKey, ledger: Ledger | None = None) -> _State | None:
+    return _read_state(project, scope, None, ledger)
 
 
-def _read_state(project: Project, scope: ScopeKey, works: Collection[str] | None) -> _State | None:
+def _read_state(
+    project: Project,
+    scope: ScopeKey,
+    works: Collection[str] | None,
+    ledger: Ledger | None = None,
+) -> _State | None:
     """The state of `scope`, or None without a ready protocol with a known schema and (for
     evidence) a full-text plan. With `works`, only those works of the population enter: a work's
     pairs, dual membership and settlement depend on that work alone, so the pairs equal the
@@ -572,7 +585,7 @@ def _read_state(project: Project, scope: ScopeKey, works: Collection[str] | None
     if works is not None:
         wanted = set(works)
         population = [w for w in population if w in wanted]
-    filled = filled_imports(project, scope)
+    filled = filled_imports(project, scope, ledger=ledger)
     imported = _imported_finals(project, filled, population, schema, pack)
     population = [w for w in population if w not in filled]
     configs = {label: pass_config(project, label, scope=scope) for label in PassLabel}
@@ -584,7 +597,7 @@ def _read_state(project: Project, scope: ScopeKey, works: Collection[str] | None
             w for w in population if in_dual_sample(b_config.seed, w, schema.dual_extract_sample)
         )
     single = frozenset(population) - dual if b_config is not None else frozenset()
-    states = unit_states(project, scope=scope)
+    states = unit_states(project, scope=scope, ledger=ledger)
     current = {(s.work_id, s.pass_label) for s in states if s.state == "current"}
     blocking = any(
         s.state in ("open", "stale")
@@ -598,7 +611,7 @@ def _read_state(project: Project, scope: ScopeKey, works: Collection[str] | None
         else set()
     )
     rows: dict[tuple[str, PassLabel, str], list[ExtractionRow]] = {}
-    for row in _eligible_rows(project, set(population), scope):
+    for row in _eligible_rows(project, set(population), scope, ledger):
         if row.work_id not in ready or (row.work_id in single and row.pass_label is PassLabel.B):
             continue
         rows.setdefault((row.work_id, row.pass_label, row.row_key), []).append(row)
@@ -671,11 +684,14 @@ def _finals(state: _State) -> list[FinalRow]:
 
 
 def _eligible_rows(
-    project: Project, population: set[str], scope: ScopeKey = Scope.EVIDENCE
+    project: Project,
+    population: set[str],
+    scope: ScopeKey = Scope.EVIDENCE,
+    ledger: Ledger | None = None,
 ) -> list[ExtractionRow]:
     """The rows agreement and final rows may use: live (not superseded), not stale, and of a
     work still in the scope's population. The one place these exclusions are made."""
-    stale = stale_extractions(project, scope=scope)
+    stale = stale_extractions(project, scope=scope, ledger=ledger)
     return [
         row
         for row in live_rows(project, scope=scope)
@@ -895,6 +911,7 @@ def agreement_overall(
     *,
     scope: ScopeKey = Scope.EVIDENCE,
     evidence_overlap: float | None = None,
+    ledger: Ledger | None = None,
 ) -> AgreementOverall:
     """Overall agreement, the dual and single work counts and the row counts. Read-only, needs
     no actor and never raises.
@@ -907,7 +924,7 @@ def agreement_overall(
     is compared. `dual` and `single` are 0 until pass B has opened. It does not check session or
     model independence; `extraction_agreement` does."""
     try:
-        state = _load(project, scope)
+        state = _load(project, scope, ledger=ledger)
     except FactoryValidationError:
         state = None
     if state is None:
@@ -1187,11 +1204,13 @@ def _check_target(
 # --- Final and grouped rows ---
 
 
-def final_rows(project: Project, *, scope: ScopeKey = Scope.EVIDENCE) -> list[FinalRow]:
+def final_rows(
+    project: Project, *, scope: ScopeKey = Scope.EVIDENCE, ledger: Ledger | None = None
+) -> list[FinalRow]:
     """The final rows, by work then row key: agreed and resolved rows of the dual sample and the
     pass A rows of single-extraction works. A row with an unresolved disagreement, and every row
     before pass B has opened, is left out. Read-only; empty without a schema."""
-    state = _load(project, scope)
+    state = _load(project, scope, ledger=ledger)
     return [] if state is None else _finals(state)
 
 

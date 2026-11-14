@@ -90,7 +90,7 @@ def test_agent_cannot_confirm_in_systematic(
     project: Project, imported: str, agent: Actor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     decide_import(project, agent, imported, 1, Decision.PROPOSE_CONFIRM, rationale=WHY)
-    monkeypatch.setattr(import_resolve, "_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
+    monkeypatch.setattr(import_resolve, "indexed_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
     before = len(_decided(project))
     with pytest.raises(FactoryValidationError):
         decide_import(project, second_agent(agent), imported, 1, Decision.CONFIRM, rationale=WHY)

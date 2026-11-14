@@ -59,7 +59,12 @@ from factory.model.fulltext import Route
 from factory.model.inbox import ResolveStatus
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
-from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
+from factory.services.agreement import (
+    Outcome,
+    cannot_assess_open,
+    exclusion_criteria,
+    final_outcomes,
+)
 from factory.services.context import Project
 from factory.services.document_convert import convert_documents
 from factory.services.extraction import abandoned_task_ids, all_scopes, unit_states
@@ -132,6 +137,8 @@ class _Facts:
     converted: frozenset[str]
     extracted: frozenset[str]
     stopped: frozenset[str]
+    awaiting: frozenset[str]
+    """Works with an unresolved full-text cannot-assess, for the researcher's `screen resolve`."""
     mining: dict[str, tuple[str, ...]]
     """Work id -> the listed miners with an open mining need for it."""
 
@@ -150,6 +157,7 @@ def _facts(project: Project) -> _Facts:
             if s.pass_label is PassLabel.A and s.state == "current"
         ),
         stopped=frozenset(stop_unscreened(project)),
+        awaiting=frozenset(cannot_assess_open(project, stage=ScreeningStage.FULL_TEXT)),
         mining=_needs_by_work(project),
     )
 
@@ -173,6 +181,8 @@ def _work_stage(work_id: str, facts: _Facts) -> tuple[Stage, bool, str]:
         return "no-document", True, detail
     if work_id not in facts.converted:
         return "full-text", False, "full text retrieved, not converted"
+    if work_id in facts.awaiting and work_id not in facts.extracted:
+        return "converted", False, "awaiting classification (screen resolve)"
     if work_id not in facts.extracted:
         return "converted", False, "converted, awaiting extraction"
     needed = facts.mining.get(work_id)

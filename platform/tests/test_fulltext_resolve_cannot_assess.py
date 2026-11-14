@@ -1,6 +1,7 @@
 """A human settles a full-text `cannot-assess` work with `screen resolve` (IDEA-49, part 2).
 
-Unresolved, a `cannot-assess` work still promotes (as before); a resolution with a reason decides
+Unresolved, a `cannot-assess` work is awaiting classification (IDEA-49: PENDING, not included,
+not extracted, counted in its own PRISMA box); a resolution with a reason decides
 its outcome, and an exclusion needs an EX criterion. At title/abstract nothing changes.
 """
 
@@ -27,6 +28,8 @@ from factory.services.agreement import (
 )
 from factory.services.calibration import calibration_items, draw_calibration
 from factory.services.context import Project
+from factory.services.extraction import extraction_population
+from factory.services.prisma import full_text_boxes, prisma_flow
 from factory.services.protocol import current_protocol
 from factory.services.screening import open_pass, pass_b_sample
 from factory.sources.registry import SourceFactory
@@ -107,7 +110,7 @@ def test_single_pass_cannot_assess_resolved_to_exclude(
 ) -> None:
     work = passes.single[0]
     _decide_all(project, agent, passes, work)
-    assert final_outcomes(project, stage=FT)[work] is Outcome.INCLUDED  # unresolved: promotes
+    assert final_outcomes(project, stage=FT)[work] is Outcome.PENDING  # unresolved: awaiting
     assert cannot_assess_open(project, stage=FT) == [work]
     assert cannot_assess_open(project, stage=TA) == []
 
@@ -143,7 +146,7 @@ def test_dual_pass_cannot_assess_resolved_to_include(
 ) -> None:
     work = passes.dual[0]
     _decide_all(project, agent, passes, work)
-    assert final_outcomes(project, stage=FT)[work] is Outcome.INCLUDED
+    assert final_outcomes(project, stage=FT)[work] is Outcome.PENDING
     assert cannot_assess_open(project, stage=FT) == [work]
     resolve_disagreement(
         project, human, work, "include", None, "the methods fit", Channel.CLI, stage=FT
@@ -225,3 +228,38 @@ def test_resolve_accepts_a_decomposed_work_named_composed(
     (event,) = _of_type(project, RESOLVED)
     assert event.payload["work_id"] == stored
     assert final_outcomes(project, stage=FT)[stored] is Outcome.EXCLUDED
+
+
+@pytest.mark.parametrize("kind", ["single", "dual"])
+def test_unresolved_cannot_assess_is_awaiting_classification(
+    project: Project, agent: Actor, human: Actor, passes: _Passes, kind: str
+) -> None:
+    work = (passes.single if kind == "single" else passes.dual)[0]
+    _decide_all(project, agent, passes, work)
+    outcomes = final_outcomes(project, stage=FT)
+    assert outcomes[work] is Outcome.PENDING
+    others = [w for w in passes.dual + passes.single if w != work]
+    assert all(outcomes[w] is Outcome.INCLUDED for w in others)
+    assert work not in extraction_population(project)
+    assert set(others) <= set(extraction_population(project))
+
+    boxes = prisma_flow(project).full_text
+    assert boxes.awaiting_classification == 1
+    assert boxes.provisional  # included can still change
+    assert boxes.pending == len(calibration_items(project, stage=FT))  # unlabelled: pending
+    assert boxes.eligible == boxes.assessed + boxes.awaiting_classification + boxes.pending
+    assert boxes.included == len(others)
+    assert boxes.model_dump()["awaiting_classification"] == 1
+
+    resolve_disagreement(project, human, work, "include", None, "fits", Channel.CLI, stage=FT)
+    assert final_outcomes(project, stage=FT)[work] is Outcome.INCLUDED
+    assert work in extraction_population(project)
+    resolved = full_text_boxes(project)
+    assert resolved.awaiting_classification == 0
+    assert resolved.provisional == (resolved.pending > 0)
+    assert "awaiting_classification" not in resolved.model_dump()
+    assert resolved.included == boxes.included + 1
+
+
+def test_title_abstract_cannot_assess_still_promotes(project: Project) -> None:
+    assert cannot_assess_open(project, stage=TA) == []

@@ -49,6 +49,13 @@ LEGEND = (
 )
 
 
+def _with_background(count: int, kept: int) -> str | int:
+    """A criterion's exclusion count, noting those kept as background (IDEA-47)."""
+    if not count:
+        return ""
+    return f"{count} (of which kept as background: {kept})" if kept else count
+
+
 def build_prisma(project: Project, out: Path) -> None:
     from factory.services.site import page
 
@@ -62,7 +69,16 @@ def build_prisma(project: Project, out: Path) -> None:
     for c in criteria:
         ta = flow["excluded"].get(c.id, 0)
         fx = (ft.get("excluded") or {}).get(c.id, 0)
-        rows.append([c.id, c.statement, ta if ta else "", fx if fx else ""])
+        kept_ta = flow.get("background", {}).get(c.id, 0)
+        kept_ft = (ft.get("background") or {}).get(c.id, 0)
+        rows.append(
+            [
+                c.id,
+                c.statement,
+                _with_background(ta, kept_ta),
+                _with_background(fx, kept_ft),
+            ]
+        )
     crit = (
         table(
             [

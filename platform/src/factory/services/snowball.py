@@ -106,7 +106,7 @@ from factory.model.references import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import Work
 from factory.model.work_ids import arxiv_id_from_doi
-from factory.services.agreement import Outcome, final_outcomes
+from factory.services.agreement import Outcome, cannot_assess_open, final_outcomes
 from factory.services.budgets import budget_issues
 from factory.services.calibration import calibration_items
 from factory.services.chase import (
@@ -124,13 +124,14 @@ from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
-from factory.services.gates import _rigor_mode
+from factory.services.gates import indexed_rigor_mode
 from factory.services.progress import track
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import snowball_plan_gaps
 from factory.services.ranking import max_cosine_scores, order_by_score, reference_works
 from factory.services.ranking_model import Embedder, Specter2Embedder
 from factory.services.references import current_extraction, included_works
+from factory.services.screening import background_works
 from factory.services.search import (
     RunSummary,
     corpus_size,
@@ -148,6 +149,8 @@ from factory.sources.registry import SourceFactory, reflist_factory
 
 NOT_EXTRACTED = "not-extracted"
 NO_DOCUMENT = "no-document"
+BACKGROUND_NOT_EXTRACTED = "background-not-extracted"
+"""A work kept as background with a document and no extraction: listed, never blocking."""
 MAX_LISTED = 20
 """Work ids named in one refusal message; the rest are counted."""
 
@@ -734,12 +737,15 @@ def _named(ids: Sequence[str]) -> str:
 
 def _promoted_pending(project: Project) -> set[str]:
     """Ordinary works promoted at title/abstract and pending at full text, when the protocol plans
-    full text screening; else none. Calibration works are left out."""
+    full text screening; else none. Calibration works are left out, and so are the works awaiting
+    classification (an unresolved full-text cannot-assess, IDEA-49): they wait on the researcher's
+    `factory screen resolve`, not on anyone who can screen or convert, so they never block."""
     protocol = current_protocol(project)
     if protocol is None or protocol.spec.full_text_screening is None:
         return set()
     promoted = {w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED}
     calibration = set(calibration_items(project, stage=ScreeningStage.FULL_TEXT))
+    calibration |= set(cannot_assess_open(project, stage=ScreeningStage.FULL_TEXT))
     return {
         w
         for w, o in final_outcomes(project, stage=ScreeningStage.FULL_TEXT).items()
@@ -779,10 +785,14 @@ def _has_document(project: Project, work: str) -> bool:
 
 
 def _scope(
-    project: Project,
+    project: Project, *, background: bool = False
 ) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """(sources, their current extraction ids, unextracted (work, reason)) of the included works;
-    `unextracted` also lists the promoted works with no obtainable document (`NO_DOCUMENT`)."""
+    `unextracted` also lists the promoted works with no obtainable document (`NO_DOCUMENT`).
+
+    With `background` (a backward round under a plan with `background_sources`), the works kept as
+    background join: one with a current extraction is a source; one with a document and none is
+    listed as `BACKGROUND_NOT_EXTRACTED`; one without a document is left out (IDEA-47)."""
     sources: list[str] = []
     extraction_ids: list[str] = []
     unextracted: list[tuple[str, str]] = []
@@ -800,6 +810,14 @@ def _scope(
         for work in sorted(_promoted_pending(project))
         if not _has_document(project, work)
     ]
+    if background:
+        for work in sorted(background_works(project)):
+            rex = current_extraction(project, work)
+            if rex is not None:
+                sources.append(work)
+                extraction_ids.append(rex)
+            elif default_conversion(project, work) is not None or _has_document(project, work):
+                unextracted.append((work, BACKGROUND_NOT_EXTRACTED))
     return sources, extraction_ids, unextracted
 
 
@@ -839,7 +857,7 @@ def plan_gaps(project: Project) -> list[ValidationIssue]:
     protocol = current_protocol(project)
     if protocol is None:
         return []
-    return snowball_plan_gaps(protocol.spec, _rigor_mode(project))
+    return snowball_plan_gaps(protocol.spec, indexed_rigor_mode(project))
 
 
 def plan_round(project: Project, direction: Direction) -> RoundPlan:
@@ -850,12 +868,15 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     project.index.sync()
     protocol = current_protocol(project)
     rule = None if protocol is None else protocol.spec.snowball_plan
-    mode = _rigor_mode(project)
+    mode = indexed_rigor_mode(project)
     previous = [r for r in recorded_rounds(project) if r.direction is direction]
     # A forward round is a chase round, and a standalone forward chase uses up a round as well.
     used = len(previous) if direction is Direction.BACKWARD else len(forward_chase_rounds(project))
     round_no = used + 1
-    sources, extraction_ids, unextracted = _scope(project)
+    sources, extraction_ids, unextracted = _scope(
+        project,
+        background=direction is Direction.BACKWARD and rule is not None and rule.background_sources,
+    )
     refusals: list[ValidationIssue] = []
     notes: list[str] = []
 

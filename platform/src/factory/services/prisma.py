@@ -23,7 +23,8 @@ services; no caller can set one. Counts follow plan 5b ruling 2 and decision #38
 - `excluded` / `included` / `pending`: the final outcome of each canonical work, read from
   `agreement.final_outcomes`, which gives a calibration work its human label. `excluded` is
   broken down by the criterion the work was excluded under; `pending` covers works whose
-  decisions are stale under the current protocol. The report is `provisional` while pending > 0.
+  decisions are stale under the current protocol. The report is `provisional` while
+  pending > 0 (the full-text boxes: while works are pending or awaiting classification).
 
 Invariants, enforced by `PrismaFlow`:
 - sum(identified_databases) + sum(identified_other) - duplicates_removed == screened
@@ -48,14 +49,20 @@ from factory.model.references import Direction, Via
 from factory.model.screening import ScreeningPhase
 from factory.model.search import QueryKind, QueryPurpose, RunStatus
 from factory.model.work import ProvenanceMethod, Work
-from factory.services.agreement import Outcome, exclusion_criteria, final_outcomes
+from factory.services.agreement import (
+    Outcome,
+    cannot_assess_open,
+    exclusion_criteria,
+    final_outcomes,
+    tolerated_unscreened_works,
+)
 from factory.services.context import Project
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
 from factory.services.ranked_queue import stop_rules_text
-from factory.services.screening import screening_stops, stop_unscreened
+from factory.services.screening import background_works, screening_stops, stop_unscreened
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
@@ -128,8 +135,13 @@ class FullTextBoxes(StrictModel):
     full-text decision exists, when `assessed`, `included` and `excluded` are 0 and every eligible
     work is pending.
 
-    Invariants: sought == not_retrieved + eligible; eligible == assessed + pending; assessed ==
-    included + sum(excluded); provisional exactly while pending > 0.
+    `awaiting_classification` counts eligible works with an unresolved `cannot-assess` verdict
+    (IDEA-49): neither included nor excluded until the researcher resolves them; left out of the
+    dump while 0. They are not `pending` (nothing is left to screen) and not `assessed`.
+
+    Invariants: sought == not_retrieved + eligible; eligible == assessed + awaiting_classification
+    + pending; assessed == included + sum(excluded); provisional exactly while pending +
+    awaiting_classification > 0 (an awaiting work can still be included).
     """
 
     sought: int
@@ -143,6 +155,19 @@ class FullTextBoxes(StrictModel):
     included: int
     stage_run: bool
     provisional: bool
+    awaiting_classification: int = 0
+    background: dict[str, int] = Field(default_factory=dict)
+    """Of `excluded`, the works kept as background (IDEA-47), by criterion: a subset view, so
+    included and excluded counts are unchanged. Left out of the dump while empty."""
+
+    @model_serializer(mode="wrap")
+    def _omit_awaiting(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        out: dict[str, Any] = handler(self)
+        if not self.awaiting_classification:
+            out.pop("awaiting_classification", None)
+        if not self.background:
+            out.pop("background", None)
+        return out
 
     @property
     def excluded_total(self) -> int:
@@ -154,12 +179,20 @@ class FullTextBoxes(StrictModel):
             raise ValueError("sought must equal not retrieved plus eligible")
         if sum(self.not_retrieved_reasons.values()) != self.not_retrieved:
             raise ValueError("not-retrieved reasons must count each not-retrieved work once")
-        if self.eligible != self.assessed + self.pending:
-            raise ValueError("eligible must equal assessed plus pending")
+        if self.awaiting_classification < 0:
+            raise ValueError("works awaiting classification cannot be negative")
+        if self.eligible != self.assessed + self.awaiting_classification + self.pending:
+            raise ValueError(
+                "eligible must equal assessed plus awaiting classification plus pending"
+            )
         if self.assessed != self.included + self.excluded_total:
             raise ValueError("assessed must equal included plus excluded")
-        if self.provisional != (self.pending > 0):
-            raise ValueError("full-text boxes are provisional exactly while works are pending")
+        if any(n > self.excluded.get(c, 0) for c, n in self.background.items()):
+            raise ValueError("works kept as background are a subset of the excluded")
+        if self.provisional != (self.pending + self.awaiting_classification > 0):
+            raise ValueError(
+                "full-text boxes are provisional exactly while works are pending or awaiting"
+            )
         if not self.stage_run and self.assessed:
             raise ValueError("a full-text stage that has not run has assessed nothing")
         return self
@@ -213,6 +246,16 @@ class PrismaFlow(StrictModel):
     not_screened_stop: int = 0
     """Pending works that were not screened because the stopping rule stopped serving: a subset of
     `pending`, computed. They do not make the flow provisional."""
+    unscreened_tolerated: int = 0
+    """Pass A works left without a decision within the protocol's declared `unscreened_tolerance`
+    (IDEA-46): a subset of `pending`, disjoint from `not_screened_stop`, computed. They do not make
+    the flow provisional. Left out of the dump, with the works, while 0."""
+    unscreened_tolerated_works: list[str] = Field(default_factory=list)
+    """The works counted in `unscreened_tolerated`, sorted, for the full report."""
+    background: dict[str, int] = Field(default_factory=dict)
+    """Of `excluded`, the works kept as background (IDEA-47), by criterion: a subset view, computed;
+    `included` never counts them and the identities are untouched. Left out of the dump while
+    empty."""
 
     @model_serializer(mode="wrap")
     def _omit_stop(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -220,6 +263,11 @@ class PrismaFlow(StrictModel):
         if self.stop_rule is None:
             out.pop("stop_rule", None)
             out.pop("not_screened_stop", None)
+        if not self.unscreened_tolerated:
+            out.pop("unscreened_tolerated", None)
+            out.pop("unscreened_tolerated_works", None)
+        if not self.background:
+            out.pop("background", None)
         return out
 
     @property
@@ -236,7 +284,17 @@ class PrismaFlow(StrictModel):
             raise ValueError("excluded, pending and included must sum to screened")
         if not 0 <= self.not_screened_stop <= self.pending:
             raise ValueError("works not screened because of the stop are a subset of pending")
-        if self.provisional != (self.pending - self.not_screened_stop > 0):
+        if any(n > self.excluded.get(c, 0) for c, n in self.background.items()):
+            raise ValueError("works kept as background are a subset of the excluded")
+        if len(self.unscreened_tolerated_works) != self.unscreened_tolerated:
+            raise ValueError("the tolerated unscreened works must be as many as their count")
+        if not 0 <= self.not_screened_stop + self.unscreened_tolerated <= self.pending:
+            raise ValueError(
+                "works left unscreened (stop, tolerance) are a disjoint subset of pending"
+            )
+        if self.provisional != (
+            self.pending - self.not_screened_stop - self.unscreened_tolerated > 0
+        ):
             raise ValueError("a flow is provisional exactly while works are pending")
         chased = self.identified_other.get(ProvenanceMethod.CITATION_CHASE.value, 0)
         if self.identified_other_detail and sum(self.identified_other_detail.values()) != chased:
@@ -366,6 +424,10 @@ def prisma_flow(project: Project) -> PrismaFlow:
     excluded: dict[str, int] = {}
     included = pending = not_screened = 0
     unscreened = stop_unscreened(project)
+    tolerated = tolerated_unscreened_works(project) - unscreened
+    tolerated_pending: list[str] = []
+    kept = background_works(project, stage=ScreeningStage.TITLE_ABSTRACT)
+    background: dict[str, int] = {}
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
         if ProvenanceMethod.DATABASE in methods:
@@ -382,9 +444,13 @@ def prisma_flow(project: Project) -> PrismaFlow:
         elif outcome is Outcome.PENDING:
             pending += 1
             not_screened += work.id in unscreened
+            if work.id in tolerated:
+                tolerated_pending.append(work.id)
         else:
             criterion = criteria.get(work.id) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
+            if work.id in kept:
+                background[criterion] = background.get(criterion, 0) + 1
 
     protocol = current_protocol(project)
     boxes = full_text_boxes(project)
@@ -404,10 +470,13 @@ def prisma_flow(project: Project) -> PrismaFlow:
         included=included,
         full_text=boxes,
         included_in_review=boxes.included if boxes.stage_run else None,
-        provisional=pending - not_screened > 0,
+        provisional=pending - not_screened - len(tolerated_pending) > 0,
         protocol_id=None if protocol is None else protocol.protocol_id,
         stop_rule=stop_rules_text(stops) if stops else None,
         not_screened_stop=not_screened,
+        unscreened_tolerated=len(tolerated_pending),
+        unscreened_tolerated_works=sorted(tolerated_pending),
+        background=dict(sorted(background.items())),
     )
 
 
@@ -442,19 +511,28 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
     run = has_full_text_plan(project) and _has_full_text_decision(project)
     excluded: dict[str, int] = {}
     included = 0
+    awaiting = 0
+    background: dict[str, int] = {}
     if run:
         stage = ScreeningStage.FULL_TEXT
         outcomes = final_outcomes(project, stage=stage)
         criteria = exclusion_criteria(project, stage=stage)
+        unresolved = set(cannot_assess_open(project, stage=stage))
+        kept = background_works(project, stage=stage)
         for work in eligible:
+            if work in unresolved:
+                awaiting += 1
+                continue
             outcome = outcomes.get(work, Outcome.PENDING)  # an absorbed record may have none
             if outcome is Outcome.INCLUDED:
                 included += 1
             elif outcome is not Outcome.PENDING:
                 criterion = criteria.get(work) or UNSPECIFIED
                 excluded[criterion] = excluded.get(criterion, 0) + 1
+                if work in kept:
+                    background[criterion] = background.get(criterion, 0) + 1
     assessed = included + sum(excluded.values())
-    pending = len(eligible) - assessed
+    pending = len(eligible) - assessed - awaiting
     return FullTextBoxes(
         sought=sought,
         not_retrieved=len(missing),
@@ -466,7 +544,9 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         pending=pending,
         included=included,
         stage_run=run,
-        provisional=pending > 0,
+        provisional=pending + awaiting > 0,
+        awaiting_classification=awaiting,
+        background=dict(sorted(background.items())),
     )
 
 

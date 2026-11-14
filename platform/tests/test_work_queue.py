@@ -41,6 +41,8 @@ class Reads:
     eligible: list[str] = field(default_factory=list)
     extracted: list[str] = field(default_factory=list)
     stopped: set[str] = field(default_factory=set)
+    awaiting: set[str] = field(default_factory=set)
+    awaiting_reads: int = 0
 
 
 @pytest.fixture
@@ -72,6 +74,11 @@ def reads(monkeypatch: pytest.MonkeyPatch) -> Reads:
     def stop_unscreened(project: Project) -> set[str]:
         return set(state.stopped)
 
+    def cannot_assess_open(project: Project, **_: Any) -> list[str]:
+        state.awaiting_reads += 1
+        return sorted(state.awaiting)
+
+    monkeypatch.setattr(work_queue, "cannot_assess_open", cannot_assess_open)
     monkeypatch.setattr(work_queue, "final_outcomes", final_outcomes)
     monkeypatch.setattr(work_queue, "exclusion_criteria", exclusion_criteria)
     monkeypatch.setattr(work_queue, "fulltext_status", fulltext_status)
@@ -220,3 +227,23 @@ def test_withdrawn_item_is_added_and_stopped(world: Project) -> None:
     item = _only(world)
     assert item.stage == "added"
     assert item.stopped is True
+
+
+def test_unresolved_cannot_assess_work_is_awaiting_classification(
+    world: Project, reads: Reads
+) -> None:
+    _send(world, FIRST, ITEM)
+    _resolve(world, ITEM, "new", WORK)
+    _send(world, SECOND, SECOND_ITEM)
+    _resolve(world, SECOND_ITEM, "new", OTHER_WORK)
+    reads.outcomes = {WORK: Outcome.INCLUDED, OTHER_WORK: Outcome.INCLUDED}
+    reads.fulltext = [
+        WorkFulltext(work_id=w, state="retrieved", documents=["doc"], reasons={})
+        for w in (WORK, OTHER_WORK)
+    ]
+    reads.eligible = [WORK, OTHER_WORK]
+    reads.awaiting = {WORK}
+    details = {i.work_id: i.detail for i in queue(world).items}
+    assert details[WORK] == "awaiting classification (screen resolve)"
+    assert details[OTHER_WORK] == "converted, awaiting extraction"
+    assert reads.awaiting_reads == 1  # the open set is read once per build, not per work

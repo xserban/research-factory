@@ -167,7 +167,7 @@ def test_second_agent_confirm_in_pilot_only(
     # the proposer's own session cannot confirm
     with pytest.raises(FactoryValidationError):
         _decide(project, agent, extraction, 1, Decision.CONFIRM)
-    monkeypatch.setattr(reference_resolve, "_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
+    monkeypatch.setattr(reference_resolve, "indexed_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
     with pytest.raises(FactoryValidationError):
         _decide(project, checker, extraction, 1, Decision.CONFIRM)
     monkeypatch.undo()

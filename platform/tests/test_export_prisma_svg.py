@@ -134,3 +134,34 @@ def test_non_ascii_wraps_wider() -> None:
     f = flow(identified_databases={"日本語" * 20: 500})
     root = ET.fromstring(prisma_svg(f))
     assert len(root.findall(f".//{NS}text")) > 10
+
+
+def test_awaiting_classification_box_prints_and_identities_hold() -> None:
+    import pytest
+
+    from factory.cli.render import prisma_markdown
+
+    boxes = FullTextBoxes(
+        sought=100,
+        not_retrieved=10,
+        not_retrieved_reasons={"unsought": 10},
+        eligible=90,
+        assessed=85,
+        excluded={"C3": 30},
+        pending=0,
+        included=55,
+        stage_run=True,
+        provisional=True,
+        awaiting_classification=5,
+    )
+    f = flow(full_text=boxes)
+    assert "Awaiting classification (n = 5)" in texts(f)
+    assert "Provisional: 0 reports pending, 5 awaiting classification" in texts(f)
+    assert "- awaiting classification: 5" in prisma_markdown(f)
+    assert "awaiting classification." in prisma_markdown(f)  # the provisional note
+    assert "awaiting_classification" not in ran_boxes().model_dump()
+    assert "awaiting classification" not in prisma_markdown(flow(full_text=ran_boxes()))
+    with pytest.raises(ValueError):
+        FullTextBoxes(**{**boxes.model_dump(), "awaiting_classification": 4})
+    with pytest.raises(ValueError, match="pending or awaiting"):
+        FullTextBoxes(**{**boxes.model_dump(), "provisional": False})
