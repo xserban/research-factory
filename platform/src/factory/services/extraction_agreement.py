@@ -89,6 +89,7 @@ from factory.services.extraction import (
 from factory.services.extraction_verify import VALUE_FIELD
 from factory.services.gates import gate_issues
 from factory.services.passes import shared_refusal
+from factory.services.work_ref import resolve_work_id
 
 __all__ = [
     "NON_COMPARABLE_KEYS",
@@ -1105,9 +1106,12 @@ def resolve_extraction(
     other than `value`, or a pass lacking a pack-required field chosen (`choice`: drop the row
     instead); a blank reason (`reason`). A `neither` on `value` drops the whole row.
     Re-resolving a disagreement replaces the earlier choice (last write wins). A contribution
-    resolution carries `pack: contribution`; an evidence one carries none, as before."""
+    resolution carries `pack: contribution`; an evidence one carries none, as before. `work_id`
+    may be any Unicode spelling that composes to a stored id: it is resolved to the stored
+    spelling here, under the lock, so no caller does it."""
     with project.index.exclusive():
         project.index.sync()
+        work_id = resolve_work_id(project, work_id)
         protocol, schema, pack = require_schema(project, scope=scope)
         issues: list[ValidationIssue] = []
         issues.extend(

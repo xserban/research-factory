@@ -202,7 +202,6 @@ from factory.services.search import list_works
 from factory.services.serve_http import serve_http_issues
 from factory.services.server_check import server_check
 from factory.services.server_init import init_server
-from factory.services.work_ref import resolve_synced
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources, status_sources
@@ -2782,7 +2781,7 @@ def mine_resolve_cmd(
         extraction_agreement_service.resolve_extraction(
             project,
             project.human_actor(),
-            resolve_synced(project, work),
+            work,
             row_key,
             field,
             _CHOICES[choice],
@@ -2924,7 +2923,7 @@ def extract_resolve_cmd(
         extraction_agreement_service.resolve_extraction(
             project,
             project.human_actor(),
-            resolve_synced(project, work),
+            work,
             row_key,
             field,
             _CHOICES[choice],

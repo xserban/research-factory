@@ -137,13 +137,9 @@ async def test_mine_resolve_passes_the_stored_spelling(
     stored: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    got: list[str] = []
-
-    def fake(_project: Project, _actor: Actor, work_id: str, *_rest: Any, **_kw: Any) -> str:
-        got.append(work_id)
-        return "evt"
-
-    monkeypatch.setattr(extraction_agreement_service, "resolve_extraction", fake)
+    # The service resolves the spelling itself; the world is too light to reach the write, so
+    # the call refuses later and the spy on the resolver is the proof.
+    seen = _spy(monkeypatch, extraction_agreement_service)
     monkeypatch.setattr("factory.mcp.server._require_pass_opened", lambda *_a, **_k: None)
     server = build_server(settings, clock=clock)
     args = {
@@ -158,6 +154,5 @@ async def test_mine_resolve_passes_the_stored_spelling(
         "skill": "rf-screen",
     }
     async with Client(server) as client:
-        body = _body(await client.call_tool("mine_resolve", args))
-    assert body["ok"] is True, body
-    assert got == [stored]
+        await client.call_tool("mine_resolve", args)
+    assert seen == [(_composed(stored), stored)]
