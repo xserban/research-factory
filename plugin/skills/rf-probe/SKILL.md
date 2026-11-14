@@ -19,7 +19,7 @@ Checks that the question is searchable, using known papers as targets. Source: r
 1. Collect seeds. Ask the researcher for papers they already know are in scope (positive seeds)
    and papers a naive query would catch but they do not want (negative seeds). Aim for three
    positive seeds at minimum and five if possible, and at least one negative seed. Each seed
-   needs a `cite` and an identifier (`doi`, `arxiv` or `openalex`). Sources when memory is thin:
+   needs a `cite` and an identifier (`doi`, `arxiv`, `openalex` or `pmid`). Sources when memory is thin:
    the reference list of the newest review in the area, the researcher's own citations, or the
    "cited by" list of one well-known paper.
    Suggest seeds as lists to tick: positive seeds, negative seeds, and scope rulings (benchmarks,
@@ -66,7 +66,7 @@ Checks that the question is searchable, using known papers as targets. Source: r
   MeSH.
 - PubMed takes no filters: dates go in the query (`2015:2026[dp]`). Record that in the round.
 - The sample is the first relevance page (`top`), not a random sample; say so when judging noise.
-- A seed is testable on PubMed only if it has a PMID (OpenAlex usually supplies one).
+- A seed is testable on PubMed only if it has a PMID (given as `pmid`, or supplied by OpenAlex).
 - A query over 9,999 records cannot be retrieved in one run; split it by `[dp]` before the protocol.
 
 ## Tool arguments
