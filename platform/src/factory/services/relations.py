@@ -50,6 +50,7 @@ from factory.services.extraction import scope_population, stale_extractions
 from factory.services.notices import work_states
 from factory.services.reference_view import reference_view, reference_view_of
 from factory.services.view_corpus import CORPUS_PARAMS, CORPUS_SQL
+from factory.services.work_ref import resolve_work_id
 
 _IDEA = re.compile(IDEA_ID_RE)
 BASIS_KINDS = frozenset({"base-idea", "addition"})
@@ -131,6 +132,16 @@ def propose_relation(project: Project, actor: Actor, proposal: RelationProposal)
         )
     with project.index.exclusive():
         project.index.sync()
+        proposal = proposal.model_copy(
+            update={
+                "source_work": resolve_work_id(project, proposal.source_work, field="source_work"),
+                **(
+                    {}
+                    if _IDEA.fullmatch(proposal.target)
+                    else {"target": resolve_work_id(project, proposal.target, field="target")}
+                ),
+            }
+        )
         issues: list[ValidationIssue] = []
         if proposal.source_work not in set(scope_population(project, Scope.CONTRIBUTION)):
             issues.append(ValidationIssue("source_work", "not-in-population"))
@@ -509,6 +520,9 @@ def list_relations(
     """Live (not superseded) relations whose effective status is in `statuses`, sorted by
     (source, type, target, id), one page of at most `limit` from `offset`; the filter, order and
     page are applied in SQL. `work_id` matches the source or the target."""
+    if work_id is not None:
+        project.index.sync()
+        work_id = resolve_work_id(project, work_id)
     rows = _query(
         project,
         "superseded_by IS NULL AND effective IN (SELECT value FROM json_each(:st)) "

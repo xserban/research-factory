@@ -200,6 +200,7 @@ from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome
 from factory.services.withholding import held_out_tokens, seed_id_tokens
+from factory.services.work_ref import resolve_synced
 from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
@@ -2347,7 +2348,7 @@ def build_server(
             event_id = extraction_agreement_service.resolve_extraction(
                 opened,
                 actor,
-                work_id,
+                resolve_synced(opened, work_id),
                 row_key,
                 field,
                 picked,

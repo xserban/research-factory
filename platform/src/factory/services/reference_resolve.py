@@ -85,6 +85,7 @@ from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.gates import effective_policy, indexed_rigor_mode
 from factory.services.search import get_work, list_works, register_query, run_query
+from factory.services.work_ref import resolve_work_id
 from factory.sources.registry import SourceFactory
 
 LOOKUP_CHUNK = 50
@@ -778,6 +779,8 @@ def decide_reference(
     """
     with project.index.exclusive():
         project.index.sync()
+        if work_id is not None:
+            work_id = resolve_work_id(project, work_id)
         issues: list[ValidationIssue] = []
         if not rationale.strip():
             issues.append(ValidationIssue("rationale", "state the reason for the decision"))

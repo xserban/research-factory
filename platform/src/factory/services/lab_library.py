@@ -52,6 +52,7 @@ from factory.services.fulltext import _Document, _documents, _live, _promoted
 from factory.services.human_channel import require_human_channel
 from factory.services.members import roles_of
 from factory.services.region_adoption import source_readable
+from factory.services.work_ref import resolve_work_id
 
 __all__ = [
     "AdoptionCandidate",
@@ -212,6 +213,7 @@ def adoptable(project: Project, work_id: str) -> list[AdoptionCandidate]:
     """Live documents of `work_id` in other projects that the principal may read and whose bytes
     the lab library holds, in project then event order. An unreadable source is absent."""
     project.index.sync()
+    work_id = resolve_work_id(project, work_id)
     if work_id not in _promoted(project):
         raise _refuse("work_id", "not promoted at title/abstract")
     confirmed = _confirmed_sources(project)
@@ -270,6 +272,8 @@ def adopt(
     library has no verified bytes; a researcher-supplied document comes from an unconfirmed
     source."""
     require_actor(project, actor, Permission.WORK_RUN)
+    project.index.sync()
+    work_id = resolve_work_id(project, work_id)
     source = _open_source(project, source_project)
     doc = _source_document(source, source_doc)
     if doc is None or doc.work_id != work_id or doc.superseded:

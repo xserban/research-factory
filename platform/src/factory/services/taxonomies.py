@@ -52,6 +52,7 @@ from factory.services.context import Project
 from factory.services.extraction import live_rows, stale_extractions
 from factory.services.mining import registered_row
 from factory.services.reference_layers import _scheme as _layer_scheme
+from factory.services.work_ref import resolve_work_ids
 
 # --- results ---------------------------------------------------------------------------------
 
@@ -334,6 +335,8 @@ def propose_change(
         if t not in known
     )
     corpus = _corpus_work_ids(project)
+    project.index.sync()
+    works = tuple(resolve_work_ids(project, works, field="works"))
     issues.extend(
         ValidationIssue(f"works[{i}]", f"{w} is not a corpus work")
         for i, w in enumerate(works)
