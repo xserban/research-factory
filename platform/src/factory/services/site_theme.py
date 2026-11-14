@@ -4,20 +4,22 @@ the explorer.
 Each page keeps its own dark palette in a `:root` block. `LIGHT_CSS` sits after it and overrides the
 same variable names: `:root[data-theme="light"]` applies when the reader chose light, and
 `prefers-color-scheme: light` applies when no choice is saved
-(`:root:not([data-theme="dark"])`, so an explicit dark choice always wins). The dark-only
-decoration (grid background, glows) is switched off in the light block.
+(`:root:not([data-theme])`, so any explicit choice, dark or a named theme, always wins). The
+dark-only decoration (grid background, glows) is switched off in the light block.
 
 `THEME_SCRIPT` goes in `<head>` before the stylesheet: it applies the saved choice before paint and
 wires every `[data-theme-toggle]` button. The choice lives in localStorage under `SAVE_KEY`; the
 storage is wrapped in try/catch, so a blocked store only means the choice is not remembered. Storage
 events keep same-origin frames (the hub and its product iframes) in step.
 
-This module imports nothing from the package, so every page module may import it.
+This module imports only `site_themes` (which imports nothing), so every page module may import it.
 """
 
 from __future__ import annotations
 
 from typing import Final
+
+from factory.services.site_themes import IDS, THEMES, THEMES_CSS
 
 SAVE_KEY: Final = "factory-theme"
 
@@ -55,7 +57,7 @@ LIGHT: Final[dict[str, str]] = {
 }
 
 _ROOT_LIGHT: Final = ':root[data-theme="light"]'
-_ROOT_AUTO: Final = ':root:not([data-theme="dark"])'
+_ROOT_AUTO: Final = ":root:not([data-theme])"
 
 # Dark-only decoration, switched off under each light root.
 _DECOR: Final[tuple[tuple[str, str], ...]] = (
@@ -71,36 +73,52 @@ def _block(root: str) -> str:
 
 
 LIGHT_CSS: Final = (
-    _block(_ROOT_LIGHT) + "@media (prefers-color-scheme: light){" + _block(_ROOT_AUTO) + "}"
+    _block(_ROOT_LIGHT)
+    + "@media (prefers-color-scheme: light){"
+    + _block(_ROOT_AUTO)
+    + "}"
+    + THEMES_CSS
 )
 """The light palette and the decoration switch-off. Append it after a page's own dark `:root`."""
 
+_CHOICES: Final = ("dark", "light", *IDS)
+
 THEME_SCRIPT: Final = (
-    "<script>(function(){var K='" + SAVE_KEY + "',R=document.documentElement;"
-    "function saved(){try{var v=localStorage.getItem(K);return v==='light'||v==='dark'?v:null}"
+    "<script>(function(){var K='" + SAVE_KEY + "',R=document.documentElement,"
+    "OK=" + repr(list(_CHOICES)) + ";"
+    "function saved(){try{var v=localStorage.getItem(K);return OK.indexOf(v)>=0?v:null}"
     "catch(e){return null}}"
-    "function current(){var s=R.getAttribute('data-theme');if(s==='light'||s==='dark')return s;"
-    "return window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}"
-    "function labels(){var t=current()==='light'?'☾ Dark':'☀ Light';"
-    "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){b.textContent=t})}"
+    "function labels(){var v=saved()||'';"
+    "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){b.value=v})}"
     "var s=saved();if(s)R.setAttribute('data-theme',s);"
     "if(window.top!==window.self){var st=document.createElement('style');"
     "st.textContent='[data-theme-toggle],.theme-row{display:none!important}';"
     "document.head.appendChild(st)}"
     "document.addEventListener('DOMContentLoaded',function(){labels();"
     "document.querySelectorAll('[data-theme-toggle]').forEach(function(b){"
-    "b.addEventListener('click',function(){var n=current()==='light'?'dark':'light';"
-    "R.setAttribute('data-theme',n);try{localStorage.setItem(K,n)}catch(e){}labels()})})});"
+    "b.addEventListener('change',function(){var n=b.value;"
+    "if(OK.indexOf(n)>=0){R.setAttribute('data-theme',n);try{localStorage.setItem(K,n)}catch(e){}}"
+    "else{R.removeAttribute('data-theme');try{localStorage.removeItem(K)}catch(e){}}"
+    "labels()})})});"
     "window.addEventListener('storage',function(ev){if(ev.key!==K)return;var v=saved();"
     "if(v)R.setAttribute('data-theme',v);else R.removeAttribute('data-theme');labels()});"
     "})();</script>"
 )
-"""Inline script for `<head>`: applies the saved theme before paint and wires the toggles. A page
-shown inside a frame (a product in the project hub) hides its toggles: the bar of the page that
-frames it holds the one toggle, and the choice reaches the frame through the `storage` event."""
+"""Inline script for `<head>`: applies the saved theme before paint and wires the pickers. Only the
+known choices are accepted, so a tampered stored value is ignored. A page shown inside a frame (a
+product in the project hub) hides its pickers: the bar of the page that frames it holds the one
+picker, and the choice reaches the frame through the `storage` event."""
+
+_OPTIONS: Final = (
+    "<option value=''>System</option><option value='dark'>Dark</option>"
+    "<option value='light'>Light</option>"
+    + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES)
+)
 
 THEME_TOGGLE: Final = (
-    "<button type=button class=theme-toggle data-theme-toggle aria-label='Switch theme' "
-    "title='Switch theme'>☀ Light</button>"
+    "<select class=theme-toggle data-theme-toggle aria-label='Switch theme' title='Switch theme'>"
+    + _OPTIONS
+    + "</select>"
 )
-"""The toggle button for a page header. Its label is set by `THEME_SCRIPT`."""
+"""The theme picker for a page header: system, dark, light and the named themes. Its value is set
+by `THEME_SCRIPT`."""

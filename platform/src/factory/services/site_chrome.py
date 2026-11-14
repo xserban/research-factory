@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Final
 
 from factory.services.site_theme import THEME_SCRIPT, THEME_TOGGLE
+from factory.services.site_themes import THEMES_CSS
 
 HUB_NAV: Final[tuple[tuple[str, str, str], ...]] = (
     ("projects", "Projects", "/"),
@@ -31,7 +32,7 @@ PALETTE_CSS: Final = (
     "--line:#d0d7de;--card:#fff;--acc:#0b63c5;--ok:#1a7f37;--warn:#9a6700}"
     ':root[data-theme="dark"]{color-scheme:dark;--bg:#0d1117;--fg:#d7dde5;--mut:#8b96a5;'
     "--line:#263040;--card:#141b25;--acc:#6cb6ff;--ok:#56d364;--warn:#e3b341}"
-)
+) + THEMES_CSS
 """The portal palette chosen by the toggle (its own `:root` and light media block cover "no choice")."""
 
 BAR_CSS: Final = (
@@ -39,7 +40,7 @@ BAR_CSS: Final = (
     "display:flex;align-items:center;gap:4px;padding:0 16px;height:42px;background:var(--hb-bg);"
     "border-bottom:1px solid var(--hb-line);font:14px/1 system-ui,sans-serif;position:sticky;top:0;z-index:20}"
     ':root[data-theme="light"] .hubbar{--hb-bg:#f6f8fa;--hb-fg:#1f2933;--hb-mut:#616e7c;--hb-line:#d0d7de;--hb-acc:#0b63c5}'
-    '@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .hubbar{--hb-bg:#f6f8fa;--hb-fg:#1f2933;'
+    "@media (prefers-color-scheme:light){:root:not([data-theme]) .hubbar{--hb-bg:#f6f8fa;--hb-fg:#1f2933;"
     "--hb-mut:#616e7c;--hb-line:#d0d7de;--hb-acc:#0b63c5}}"
     ".hubbar b{margin-right:14px;color:var(--hb-fg);letter-spacing:.04em}"
     ".hubbar a{color:var(--hb-mut);text-decoration:none;padding:6px 10px;border-radius:6px}"

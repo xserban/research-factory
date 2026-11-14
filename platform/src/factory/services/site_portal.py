@@ -169,7 +169,7 @@ def render_portal(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         + token_meta
         + "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>Factory projects</title><style>{_CSS}</style></head><body><main>"
+        f"<title>Factory projects</title><style>{_CSS}</style></head><body class=portal><main>"
         "<h1>Factory</h1><p class=sub>All projects on this machine. Open one for its hub.</p>"
         f"{feed_panel}<div class=grid>{body}</div>{form}"
         "<p class=note>Projects are found by scanning the factory root; "

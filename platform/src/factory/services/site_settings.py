@@ -25,6 +25,7 @@ from factory.errors import FactoryError
 from factory.services.context import Project
 from factory.services.feed import current_config
 from factory.services.feed_categories import CategoryProposal, propose_categories
+from factory.services.site_chrome import with_bar
 from factory.services.site_portal import _CSS as PORTAL_CSS
 
 _CSS: Final = (
@@ -127,9 +128,10 @@ def render_settings(project: Project, slug: str) -> str:
         "<p class=sub>Settings are recorded acts, made as the human; this page has no other store. "
         "<a href='/'>All projects</a></p>" + config_html + proposal_html
     )
-    return (
+    return with_bar(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>Settings: {e(slug)}</title><style>{PORTAL_CSS}{_CSS}</style></head>"
-        f"<body><main>{body}</main><script>{_SCRIPT}</script></body></html>"
+        f"<body class=portal><main>{body}</main><script>{_SCRIPT}</script></body></html>",
+        None,
     )

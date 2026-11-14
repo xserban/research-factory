@@ -333,7 +333,7 @@ def render_feed_page(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         f"<meta name='factory-token' content='{e(hub_token, quote=True)}'>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>New papers</title><style>{PORTAL_CSS}{_CSS}</style></head><body><main>{body}</main>"
+        f"<title>New papers</title><style>{PORTAL_CSS}{_CSS}</style></head><body class=portal><main>{body}</main>"
         f"<script>{_SCRIPT}</script></body></html>",
         "feed",
     )

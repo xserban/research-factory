@@ -14,7 +14,7 @@ from factory.services.site_theme import (
 )
 
 LIGHT_ROOT = ':root[data-theme="light"]'
-AUTO_ROOT = ':root:not([data-theme="dark"])'
+AUTO_ROOT = ":root:not([data-theme])"
 
 PALETTE = (
     "#FFFFFF",
@@ -99,11 +99,11 @@ def test_chart_css_reads_theme_variables() -> None:
     assert "#fff" not in CHART_CSS
 
 
-def test_toggle_is_an_accessible_button_wired_by_the_script() -> None:
+def test_toggle_is_an_accessible_picker_wired_by_the_script() -> None:
     assert "data-theme-toggle" in THEME_TOGGLE
     assert "aria-label='Switch theme'" in THEME_TOGGLE
     assert "data-theme-toggle" in THEME_SCRIPT
-    assert "addEventListener('click'" in THEME_SCRIPT
+    assert "addEventListener('change'" in THEME_SCRIPT
     assert f"'{SAVE_KEY}'" in THEME_SCRIPT
 
 
