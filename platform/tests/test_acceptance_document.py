@@ -151,8 +151,8 @@ def test_old_quote_still_verifies_after_new_version(project: Project, corpus: No
     paragraph = _first_paragraph_with(project, first.conversion_id, SENTENCE)
     assert quote_in_element(paragraph.text, SENTENCE)
 
-    # A version bump writes a second conversion of the same document.
-    summary = convert_documents(project, ConverterRegistry([_BumpedConverter()]))
+    # A version bump, asked for with `upgrade` (IDEA-48), writes a second conversion.
+    summary = convert_documents(project, ConverterRegistry([_BumpedConverter()]), upgrade=True)
     assert [o.status for o in summary.outcomes] == ["converted"]
     [_, second_event] = events_of_type(project, "document.converted")
     second = Converted.model_validate(second_event.payload)

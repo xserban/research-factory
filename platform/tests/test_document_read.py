@@ -76,9 +76,10 @@ def _promoted(project: Project) -> list[str]:
     )
 
 
-def _convert(project: Project, version: str = "1.0") -> str | None:
-    """Convert everything in scope with `version`; return the first new conversion id, if any."""
-    summary = convert_documents(project, _registry(version))
+def _convert(project: Project, version: str = "1.0", *, upgrade: bool = False) -> str | None:
+    """Convert everything in scope with `version`; return the first new conversion id, if any.
+    `upgrade` re-converts documents whose latest conversion is an older version (IDEA-48)."""
+    summary = convert_documents(project, _registry(version), upgrade=upgrade)
     converted = [o.conversion_id for o in summary.outcomes if o.conversion_id is not None]
     return converted[0] if converted else None
 
@@ -263,7 +264,7 @@ def test_old_conversion_readable_by_id(project: Project) -> None:
     work = _promoted(project)[0]
     fetched_document(project, work, MD)
     old = _convert(project, "1.0+a")
-    new = _convert(project, "1.0+b")
+    new = _convert(project, "1.0+b", upgrade=True)
     assert old is not None and new is not None
 
     latest = document_read(project, work_id=work)
