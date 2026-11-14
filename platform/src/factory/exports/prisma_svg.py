@@ -92,6 +92,10 @@ def _reasons(counts: dict[str, int]) -> list[str]:
     return [_count(name, n) for name, n in counts.items()]
 
 
+def _background(counts: dict[str, int]) -> list[str]:
+    return [f"of which kept as background: {n} ({name})" for name, n in counts.items()]
+
+
 def _render_box(box: _Box) -> list[str]:
     out = [
         f'<rect x="{box.x}" y="{box.y}" width="{BOX_W}" height="{box.height}" '
@@ -152,7 +156,7 @@ def prisma_svg(flow: PrismaFlow) -> str:
     )
     excluded = _lines(
         _count("Records excluded", flow.excluded_total),
-        _reasons(flow.excluded),
+        _reasons(flow.excluded) + _background(flow.background),
     )
     sought = _lines(_count("Reports sought for retrieval", boxes.sought), [])
     not_retrieved = _lines(
@@ -167,7 +171,8 @@ def prisma_svg(flow: PrismaFlow) -> str:
             else [],
         )
         ft_excluded = _lines(
-            _count("Reports excluded", boxes.excluded_total), _reasons(boxes.excluded)
+            _count("Reports excluded", boxes.excluded_total),
+            _reasons(boxes.excluded) + _background(boxes.background),
         )
         final = _lines(
             _count("Studies included in review", boxes.included),

@@ -61,7 +61,7 @@ from factory.services.fulltext_screening import fulltext_queue
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import current_protocol, registered_deviation, registered_import
 from factory.services.ranked_queue import stop_rules_text
-from factory.services.screening import screening_stops, stop_unscreened
+from factory.services.screening import background_works, screening_stops, stop_unscreened
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
@@ -154,12 +154,17 @@ class FullTextBoxes(StrictModel):
     stage_run: bool
     provisional: bool
     awaiting_classification: int = 0
+    background: dict[str, int] = Field(default_factory=dict)
+    """Of `excluded`, the works kept as background (IDEA-47), by criterion: a subset view, so
+    included and excluded counts are unchanged. Left out of the dump while empty."""
 
     @model_serializer(mode="wrap")
     def _omit_awaiting(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         out: dict[str, Any] = handler(self)
         if not self.awaiting_classification:
             out.pop("awaiting_classification", None)
+        if not self.background:
+            out.pop("background", None)
         return out
 
     @property
@@ -180,6 +185,8 @@ class FullTextBoxes(StrictModel):
             )
         if self.assessed != self.included + self.excluded_total:
             raise ValueError("assessed must equal included plus excluded")
+        if any(n > self.excluded.get(c, 0) for c, n in self.background.items()):
+            raise ValueError("works kept as background are a subset of the excluded")
         if self.provisional != (self.pending > 0):
             raise ValueError("full-text boxes are provisional exactly while works are pending")
         if not self.stage_run and self.assessed:
@@ -241,6 +248,10 @@ class PrismaFlow(StrictModel):
     the flow provisional. Left out of the dump, with the works, while 0."""
     unscreened_tolerated_works: list[str] = Field(default_factory=list)
     """The works counted in `unscreened_tolerated`, sorted, for the full report."""
+    background: dict[str, int] = Field(default_factory=dict)
+    """Of `excluded`, the works kept as background (IDEA-47), by criterion: a subset view, computed;
+    `included` never counts them and the identities are untouched. Left out of the dump while
+    empty."""
 
     @model_serializer(mode="wrap")
     def _omit_stop(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -251,6 +262,8 @@ class PrismaFlow(StrictModel):
         if not self.unscreened_tolerated:
             out.pop("unscreened_tolerated", None)
             out.pop("unscreened_tolerated_works", None)
+        if not self.background:
+            out.pop("background", None)
         return out
 
     @property
@@ -267,6 +280,8 @@ class PrismaFlow(StrictModel):
             raise ValueError("excluded, pending and included must sum to screened")
         if not 0 <= self.not_screened_stop <= self.pending:
             raise ValueError("works not screened because of the stop are a subset of pending")
+        if any(n > self.excluded.get(c, 0) for c, n in self.background.items()):
+            raise ValueError("works kept as background are a subset of the excluded")
         if len(self.unscreened_tolerated_works) != self.unscreened_tolerated:
             raise ValueError("the tolerated unscreened works must be as many as their count")
         if not 0 <= self.not_screened_stop + self.unscreened_tolerated <= self.pending:
@@ -407,6 +422,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
     unscreened = stop_unscreened(project)
     tolerated = tolerated_unscreened_works(project) - unscreened
     tolerated_pending: list[str] = []
+    kept = background_works(project, stage=ScreeningStage.TITLE_ABSTRACT)
+    background: dict[str, int] = {}
     for work in canonical:
         methods = {entry.method for entry in work.provenance}
         if ProvenanceMethod.DATABASE in methods:
@@ -428,6 +445,8 @@ def prisma_flow(project: Project) -> PrismaFlow:
         else:
             criterion = criteria.get(work.id) or UNSPECIFIED
             excluded[criterion] = excluded.get(criterion, 0) + 1
+            if work.id in kept:
+                background[criterion] = background.get(criterion, 0) + 1
 
     protocol = current_protocol(project)
     boxes = full_text_boxes(project)
@@ -453,6 +472,7 @@ def prisma_flow(project: Project) -> PrismaFlow:
         not_screened_stop=not_screened,
         unscreened_tolerated=len(tolerated_pending),
         unscreened_tolerated_works=sorted(tolerated_pending),
+        background=dict(sorted(background.items())),
     )
 
 
@@ -488,11 +508,13 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
     excluded: dict[str, int] = {}
     included = 0
     awaiting = 0
+    background: dict[str, int] = {}
     if run:
         stage = ScreeningStage.FULL_TEXT
         outcomes = final_outcomes(project, stage=stage)
         criteria = exclusion_criteria(project, stage=stage)
         unresolved = set(cannot_assess_open(project, stage=stage))
+        kept = background_works(project, stage=stage)
         for work in eligible:
             if work in unresolved:
                 awaiting += 1
@@ -503,6 +525,8 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
             elif outcome is not Outcome.PENDING:
                 criterion = criteria.get(work) or UNSPECIFIED
                 excluded[criterion] = excluded.get(criterion, 0) + 1
+                if work in kept:
+                    background[criterion] = background.get(criterion, 0) + 1
     assessed = included + sum(excluded.values())
     pending = len(eligible) - assessed - awaiting
     return FullTextBoxes(
@@ -518,6 +542,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
         stage_run=run,
         provisional=pending > 0,
         awaiting_classification=awaiting,
+        background=dict(sorted(background.items())),
     )
 
 

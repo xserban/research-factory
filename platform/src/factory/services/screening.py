@@ -651,6 +651,33 @@ def _stop_context(
     )
 
 
+def background_works(project: Project, *, stage: ScreeningStage | None = None) -> dict[str, str]:
+    """The works kept as background, work id to criterion id (IDEA-47): excluded works (at
+    `stage`; default title/abstract and, once a plan is declared, full text) whose deciding
+    criterion is a criterion of the current protocol with `background` true. Derived on read from
+    the recorded decisions; never a verdict (`final_outcomes` is untouched), so a change of
+    protocol re-derives it, and an included or pending work never appears."""
+    from factory.services.agreement import exclusion_criteria  # circular at import time
+
+    protocol = current_protocol(project)
+    if protocol is None:
+        return {}
+    flagged = {c.id for c in protocol.spec.criteria if c.background}
+    if not flagged:
+        return {}
+    stages = [ScreeningStage.TITLE_ABSTRACT]
+    if protocol.spec.full_text_screening is not None:
+        stages.append(ScreeningStage.FULL_TEXT)
+    if stage is not None:
+        stages = [stage] if stage in stages else []
+    kept: dict[str, str] = {}
+    for stage in stages:
+        for work, criterion in exclusion_criteria(project, stage=stage).items():
+            if criterion in flagged:
+                kept.setdefault(work, criterion)
+    return kept
+
+
 def screening_stops(project: Project, stage: ScreeningStage = TA) -> list[StopStatus]:
     """Every stopping rule the plan declares, evaluated as the events stand; empty while the stage
     is not title/abstract, no protocol declares a rule or no ranking exists. Used by the PRISMA

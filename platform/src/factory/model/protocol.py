@@ -165,6 +165,18 @@ class Criterion(StrictModel):
     priority: int | None = Field(default=None, ge=0)
     examples: CriterionExamples = CriterionExamples()
     note: str = ""
+    background: bool = False
+    """An exclusion whose works are kept as background, not simply dropped (IDEA-47): reported
+    apart in the PRISMA flow and, when the snowball plan says so, usable as backward snowball
+    sources. Never a verdict: such a work stays excluded. Valid on an exclusion only; left out of
+    every dump, so of every hash, while false."""
+
+    @model_serializer(mode="wrap")
+    def _omit_background(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.background:
+            data.pop("background", None)
+        return data
 
     @property
     def kind(self) -> CriterionKind:
@@ -176,6 +188,8 @@ class Criterion(StrictModel):
             raise ValueError("an exclusion needs a priority")
         if self.kind is CriterionKind.INCLUSION and self.priority is not None:
             raise ValueError("an inclusion has no priority")
+        if self.background and self.kind is CriterionKind.INCLUSION:
+            raise ValueError("an inclusion cannot be background")
         return self
 
 
@@ -333,6 +347,9 @@ class SnowballPlan(StrictModel):
     forward_max_per_work: int | None = Field(default=None, ge=1)
     """At most this many citing works are taken per source work of a forward round, ordered by
     similarity to the development seeds (decision 116); the rest are counted, not dropped."""
+    background_sources: bool = False
+    """A backward round also takes the works kept as background (an exclusion criterion with
+    `background` true) as sources (IDEA-47). Left out of every dump while false."""
 
     @model_serializer(mode="wrap")
     def _omit_forward_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -345,6 +362,8 @@ class SnowballPlan(StrictModel):
             data.pop("forward_topic_filter", None)
         if self.forward_max_per_work is None:
             data.pop("forward_max_per_work", None)
+        if not self.background_sources:
+            data.pop("background_sources", None)
         return data
 
 

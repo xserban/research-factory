@@ -131,6 +131,7 @@ from factory.services.protocol_rules import snowball_plan_gaps
 from factory.services.ranking import max_cosine_scores, order_by_score, reference_works
 from factory.services.ranking_model import Embedder, Specter2Embedder
 from factory.services.references import current_extraction, included_works
+from factory.services.screening import background_works
 from factory.services.search import (
     RunSummary,
     corpus_size,
@@ -148,6 +149,8 @@ from factory.sources.registry import SourceFactory, reflist_factory
 
 NOT_EXTRACTED = "not-extracted"
 NO_DOCUMENT = "no-document"
+BACKGROUND_NOT_EXTRACTED = "background-not-extracted"
+"""A work kept as background with a document and no extraction: listed, never blocking."""
 MAX_LISTED = 20
 """Work ids named in one refusal message; the rest are counted."""
 
@@ -779,10 +782,14 @@ def _has_document(project: Project, work: str) -> bool:
 
 
 def _scope(
-    project: Project,
+    project: Project, *, background: bool = False
 ) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """(sources, their current extraction ids, unextracted (work, reason)) of the included works;
-    `unextracted` also lists the promoted works with no obtainable document (`NO_DOCUMENT`)."""
+    `unextracted` also lists the promoted works with no obtainable document (`NO_DOCUMENT`).
+
+    With `background` (a backward round under a plan with `background_sources`), the works kept as
+    background join: one with a current extraction is a source; one with a document and none is
+    listed as `BACKGROUND_NOT_EXTRACTED`; one without a document is left out (IDEA-47)."""
     sources: list[str] = []
     extraction_ids: list[str] = []
     unextracted: list[tuple[str, str]] = []
@@ -800,6 +807,14 @@ def _scope(
         for work in sorted(_promoted_pending(project))
         if not _has_document(project, work)
     ]
+    if background:
+        for work in sorted(background_works(project)):
+            rex = current_extraction(project, work)
+            if rex is not None:
+                sources.append(work)
+                extraction_ids.append(rex)
+            elif default_conversion(project, work) is not None or _has_document(project, work):
+                unextracted.append((work, BACKGROUND_NOT_EXTRACTED))
     return sources, extraction_ids, unextracted
 
 
@@ -855,7 +870,10 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
     # A forward round is a chase round, and a standalone forward chase uses up a round as well.
     used = len(previous) if direction is Direction.BACKWARD else len(forward_chase_rounds(project))
     round_no = used + 1
-    sources, extraction_ids, unextracted = _scope(project)
+    sources, extraction_ids, unextracted = _scope(
+        project,
+        background=direction is Direction.BACKWARD and rule is not None and rule.background_sources,
+    )
     refusals: list[ValidationIssue] = []
     notes: list[str] = []
 

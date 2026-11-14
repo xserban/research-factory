@@ -86,6 +86,13 @@ from factory.services.watch import CycleSummary, WatchStatus
 from factory.services.xruns import XrunView
 
 
+def _background_lines(background: dict[str, int]) -> list[str]:
+    """The exclusions kept as background (IDEA-47), a subset view under the exclusion rows."""
+    return [
+        f"  - of which kept as background: {n} ({criterion})" for criterion, n in background.items()
+    ]
+
+
 def prisma_markdown(flow: PrismaFlow) -> str:
     """The PRISMA 2020 flow as a Markdown list, one line per box."""
     lines = ["# PRISMA 2020 flow", ""]
@@ -95,6 +102,7 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     lines.append(f"- duplicates removed: {flow.duplicates_removed}")
     lines += ["", "## Screening", f"- records screened: {flow.screened}"]
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
+    lines += _background_lines(flow.background)
     lines.append(f"- pending: {flow.pending}")
     if flow.stop_rule is not None:
         lines.append(
@@ -117,6 +125,7 @@ def prisma_markdown(flow: PrismaFlow) -> str:
     if boxes.stage_run:
         lines.append(f"- reports assessed for eligibility: {boxes.assessed}")
         lines += [f"- excluded, {criterion}: {n}" for criterion, n in boxes.excluded.items()]
+        lines += _background_lines(boxes.background)
         if boxes.awaiting_classification:
             lines.append(f"- awaiting classification: {boxes.awaiting_classification}")
         lines.append(f"- pending at full text: {boxes.pending}")
