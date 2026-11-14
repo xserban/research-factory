@@ -40,6 +40,14 @@ def esc(value: object) -> str:
     return html.escape(str(value))
 
 
+class Html(str):
+    """A table cell that is already HTML (built from escaped parts); `table` does not escape it."""
+
+
+def _cell(value: object) -> str:
+    return str(value) if isinstance(value, Html) else esc(value)
+
+
 def bars(
     counter: Counter[str],
     total: int | None = None,
@@ -63,7 +71,7 @@ def bars(
 
 def table(headers: Sequence[str], rows: Iterable[Sequence[object]], css: str = "") -> str:
     head = "".join(f"<th>{esc(h)}</th>" for h in headers)
-    body = "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in row) + "</tr>" for row in rows)
+    body = "".join("<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in row) + "</tr>" for row in rows)
     return f"<table class='{css}'><tr>{head}</tr>{body}</table>"
 
 

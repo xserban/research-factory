@@ -53,6 +53,10 @@ canvas{display:block;width:100%;height:100%}#tl{padding:10px}
 .dot{display:block;height:9px;margin:1px 0;border-radius:3px;cursor:pointer;opacity:.9}.dot:hover{outline:2px solid var(--ink)}
 .axis{display:flex;margin-left:210px;font-size:11px;color:var(--dim)}.axis div{flex:1;min-width:26px;border-left:1px dashed var(--line);padding-left:2px}
 a{color:var(--acc)}.note{padding:8px 12px;color:var(--dim)}
+html.panel header,html.panel #side,html.panel #view,html.panel #chips,html.panel #helpbox{display:none!important}
+html.panel body{height:auto;min-height:100vh}html.panel main{display:block}
+html.panel #detail{display:block;width:100%;border:0;min-height:100vh}html.panel #detail .xbtn{display:none}
+.pnl{margin:0 0 6px;font-size:13px}
 FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <header><h1>Corpus Explorer</h1>
 <input id="q" placeholder="Search title, abstract, quotes…" size="34">
@@ -78,7 +82,7 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function val(w,d){if(d.src==='meta')return w[d.field]||'';const o=w[d.src];return o&&o[d.field]?o[d.field].v:'';}
 function stagesOf(w){return [...new Set(w.stages.map(s=>s.stage))];}
-const FILT={};const H=new URLSearchParams(location.hash.slice(1));let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;
+const FILT={};let H=new URLSearchParams(location.hash.slice(1));let PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;
 for(const f of H.getAll('f')){const i=f.indexOf(':');if(i>0){const k=f.slice(0,i);(FILT[k]=FILT[k]||new Set()).add(f.slice(i+1));}}
 const palette=['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac','#1f77b4','#d62728','#2ca02c','#9467bd'];
 const colorMap={};function colorOf(v){if(!(v in colorMap))colorMap[v]=palette[Object.keys(colorMap).length%palette.length];return colorMap[v];}
@@ -129,9 +133,10 @@ function actionsHtml(w){const P=DATA.project||'PROJECT';const cmds=['factory --p
  const row=c=>`<div style="display:flex;gap:6px;margin:3px 0"><code style="flex:1;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12px">${esc(c)}</code><button onclick="navigator.clipboard.writeText(this.dataset.c)" data-c="${esc(c)}">Copy</button></div>`;
  return `<h3>What you can do</h3><div class="dim" style="font-size:12px">Open the original or its conversion, or run a command in a terminal.</div><div style="margin:4px 0"><a href="../conversion/doc/${esc(w.slug)}.html" target="_blank">Conversion inspector</a> · <a href="../wiki/works/${esc(w.slug)}.md" target="_blank">Wiki note</a></div>${cmds.map(row).join('')}`;}
 function cit(w){const o=OUT[w.slug]||[],i=INN[w.slug]||[];const L=(l)=>l.map(s=>`<div><a href="#" onclick="openWork(W[BYS['${s}']]);return false">${esc(W[BYS[s]].title)}</a> <span class="dim">${esc(W[BYS[s]].published)}</span></div>`).join('')||'<div class="dim">none found yet</div>';return `<h3>Citations within the corpus</h3><div class="dim">Reference lists extracted for ${DATA.refs_done} of ${W.length} papers so far.</div><b>Cites</b>${L(o)}<b>Cited by</b>${L(i)}`;}
+function panelHead(w){if(!PANEL)return '';const u=location.pathname+'#open='+encodeURIComponent(w.slug);return `<p class="pnl"><a href="${esc(u)}" target="_top">Open in the explorer</a> <span class="lybadge">${esc(w.layer||'unlayered')}</span></p>`;}
 function openWork(w){sel=w;const d=$('#detail');d.classList.add('open');
  const row=(o)=>Object.keys(o).map(k=>`<div><b>${esc(k)}</b>: ${esc(o[k].v)}${o[k].q&&o[k].q!==o[k].v?`<div class="q">“${esc(o[k].q)}” <span class="dim">${esc(o[k].a)}</span></div>`:''}</div>`).join('');
- d.innerHTML=`<button onclick="document.querySelector('#detail').classList.remove('open')" style="float:right">×</button><h2>${esc(w.title)}</h2>
+ d.innerHTML=`<button class="xbtn" onclick="document.querySelector('#detail').classList.remove('open')" style="float:right">×</button>${panelHead(w)}<h2>${esc(w.title)}</h2>
  <div class="dim">${esc(w.authors.join(', '))} · ${esc(w.published)} · ${esc(w.venue)}${w.cited_by!=null?' · cited by '+w.cited_by:''}</div>
  ${layerBadge(w)}
  <p>${docLink(w)} · ${paperLink(w)}</p>
@@ -229,6 +234,8 @@ document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{vie
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
 gs.onchange=()=>{grp=gs.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
 $('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
+addEventListener('keydown',e=>{if(e.key==='Escape'&&PANEL&&parent!==window)parent.postMessage('rfp-close',location.origin);});
+addEventListener('hashchange',()=>{H=new URLSearchParams(location.hash.slice(1));PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);const o=H.get('open');if(o&&BYS[o]!==undefined)openWork(W[BYS[o]]);});
 </script></body></html>
 """
 

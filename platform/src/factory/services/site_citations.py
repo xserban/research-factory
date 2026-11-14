@@ -9,12 +9,13 @@ in the work record (OpenAlex), shown beside the in-corpus count and never merged
 
 from __future__ import annotations
 
+import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 
-from factory.services.citations import CitationReport, citation_report
+from factory.services.citations import Candidate, CitationReport, WorkCitations, citation_report
 from factory.services.context import Project
-from factory.services.site_widgets import REPORT_CSS, note, section, table
+from factory.services.site_widgets import REPORT_CSS, Html, esc, note, section, table
 
 TOP = 50
 
@@ -23,23 +24,58 @@ def _count(value: int | None) -> str:
     return "unknown" if value is None else str(value)
 
 
-def render_citations(report: CitationReport) -> str:
-    """The page body for a report."""
+def _title(w: WorkCitations, slugs: dict[str, str]) -> Html:
+    """A work's title: a link that opens the paper panel when the work is in the explorer."""
+    if w.work_id in slugs:
+        href = esc(f"../explorer/index.html#open={urllib.parse.quote(slugs[w.work_id], safe='')}")
+        return Html(f"<a href='{href}'>{esc(w.title)}</a>")
+    return Html(esc(w.title))
+
+
+def _cited_title(c: Candidate) -> Html:
+    """A cited item's title, linked to its DOI or arXiv page when it has one."""
+    href = ""
+    if c.dois:
+        href = "https://doi.org/" + urllib.parse.quote(c.dois[0], safe="/")
+    elif c.arxivs:
+        href = "https://arxiv.org/abs/" + urllib.parse.quote(c.arxivs[0], safe="/")
+    if not href:
+        return Html(esc(c.title))
+    return Html(f"<a href='{esc(href)}' target=_blank rel=noopener>{esc(c.title)}</a>")
+
+
+def render_citations(report: CitationReport, slugs: dict[str, str] | None = None) -> str:
+    """The page body for a report. `slugs` maps the ids of the works that are in the explorer to
+    their explorer slug; only those titles link to the paper panel."""
+    slugs = slugs or {}
     ranked = sorted(
         (w for w in report.works if w.cited_by),
         key=lambda w: (-(w.cited_by or 0), w.title, w.work_id),
     )
     rows = [
-        [w.title, w.year or "", _count(w.cited_by), _count(w.self_cited_by), _count(w.external)]
+        [
+            _title(w, slugs),
+            w.year or "",
+            _count(w.cited_by),
+            _count(w.self_cited_by),
+            _count(w.external),
+        ]
         for w in ranked[:TOP]
     ]
     rated = sorted(
         (w for w in ranked if w.per_year is not None),
         key=lambda w: (-(w.per_year or 0), w.title, w.work_id),
     )
-    rate_rows = [[w.title, w.year or "", f"{w.per_year:.2f}", w.cited_by] for w in rated[:TOP]]
+    rate_rows = [
+        [_title(w, slugs), w.year or "", f"{w.per_year:.2f}", w.cited_by] for w in rated[:TOP]
+    ]
     cand_rows = [
-        [c.title, c.year or "", c.citing_count, c.dois[0] if c.dois else (c.arxivs or ("",))[0]]
+        [
+            _cited_title(c),
+            c.year or "",
+            c.citing_count,
+            c.dois[0] if c.dois else (c.arxivs or ("",))[0],
+        ]
         for c in report.candidates[:TOP]
     ]
     unknown = report.extractions == 0
@@ -82,8 +118,10 @@ def render_citations(report: CitationReport) -> str:
 
 def build_citations(project: Project, out: Path) -> None:
     from factory.services.site import page
+    from factory.services.site_corpus import corpus_payload
 
     report = citation_report(project, as_of_year=datetime.now(UTC).year)
+    slugs = {str(w["id"]): str(w["slug"]) for w in corpus_payload(project)["works"]}
     (out / "index.html").write_text(
-        page("Citations", render_citations(report), REPORT_CSS), encoding="utf-8"
+        page("Citations", render_citations(report, slugs), REPORT_CSS), encoding="utf-8"
     )
