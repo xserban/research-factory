@@ -6,6 +6,7 @@ Invariants:
 - Pure string functions: nothing is read or written here, no model is called.
 - The bar's own styles are self-contained (`--hb-*` variables set per theme), so the same bar sits
   on a portal-style page and on a `site.page` product page without either palette's variables.
+- The bar is a div (not a header) so a page's `header` rules never reach it.
 - A page that already carries `THEME_SCRIPT` is not given a second script, and the toggle row of
   `site.page` is removed: the bar's toggle is the only one.
 - Every label and link is a fixed constant of this module: nothing from outside is written into the
@@ -45,19 +46,35 @@ BAR_CSS: Final = (
     ".hubbar b{margin-right:14px;color:var(--hb-fg);letter-spacing:.04em}"
     ".hubbar a{color:var(--hb-mut);text-decoration:none;padding:6px 10px;border-radius:6px}"
     ".hubbar a:hover{color:var(--hb-fg)}.hubbar a[aria-current]{color:var(--hb-acc);background:rgba(127,127,127,.12)}"
+    ".hubbar .crumb{color:var(--hb-mut);margin:0 10px}.hubbar .ro{color:var(--hb-mut);font-size:12px;letter-spacing:.06em;margin-left:8px}"
+    ".hubbar .ro b{color:var(--hb-acc);margin:0}.hubbar{flex:none}"
     ".hubbar .sp{flex:1}.hubbar .theme-toggle{background:none;border:1px solid var(--hb-line);color:var(--hb-fg);"
     "border-radius:6px;padding:4px 10px;font:inherit;cursor:pointer}"
     ".hubbar~.theme-row{display:none}"
 )
 
 
-def hub_bar(active: str | None) -> str:
-    """The bar: the Factory name, a tab per main-hub page (`active` marks one) and the toggle."""
+_HIDE_TABS: Final = (
+    "<script>if(location.pathname.indexOf('/p/')!==0)"
+    "document.querySelectorAll('.hubbar a').forEach(function(a){a.hidden=true})</script>"
+)
+"""For a bar inside a project hub: its tabs point at main-hub pages, so they are hidden when the
+hub is served alone (the single-project server has no such pages)."""
+
+
+def hub_bar(active: str | None, *, context: str = "", main_hub_only: bool = False) -> str:
+    """The bar: the Factory name, a tab per main-hub page (`active` marks one), an optional
+    `context` (trusted HTML from the caller: a project's name and status) and the picker. It is a
+    div, so a page's own `header` rules never reach it."""
     tabs = "".join(
         f"<a href='{href}'{' aria-current=' + chr(39) + 'page' + chr(39) if ident == active else ''}>{label}</a>"
         for ident, label, href in HUB_NAV
     )
-    return f"<header class=hubbar><b>FACTORY</b>{tabs}<span class=sp></span>{THEME_TOGGLE}</header>"
+    return (
+        f"<div class=hubbar role=banner><b>FACTORY</b>{tabs}"
+        f"{context}<span class=sp></span>{THEME_TOGGLE}</div>"
+        + (_HIDE_TABS if main_hub_only else "")
+    )
 
 
 def with_bar(doc: str, active: str | None) -> str:

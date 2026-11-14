@@ -248,7 +248,6 @@ THEMES: Final[tuple[Theme, ...]] = (
                 "text-transform:uppercase;letter-spacing:.14em",
             ),
             (".hubbar a[aria-current]", "background:var(--ac);color:#000;border-radius:999px"),
-            ("header", "border-bottom:6px solid var(--ac)"),
             ("nav a.i.on", "background:var(--ac);color:#000;border-radius:0 999px 999px 0"),
         ),
     ),

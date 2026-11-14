@@ -136,7 +136,19 @@ def test_template_markers_are_all_replaced(project: Project) -> None:
             assert marker not in html, (name, marker)
 
 
-def test_hub_header_holds_the_toggle(project: Project) -> None:
+def test_hub_bar_holds_the_picker(project: Project) -> None:
     html = _hub(project)
-    header = html.split("</header>", 1)[0]
-    assert "data-theme-toggle" in header
+    assert "class=hubbar" in html
+    bar = html.split("<div class=shell>", 1)[0]
+    assert "data-theme-toggle" in bar
+    assert "<header" not in html
+
+
+def test_project_hub_has_the_main_hub_bar_with_its_context_and_a_filter_in_the_sidebar(
+    project: Project,
+) -> None:
+    html = _hub(project)
+    assert "href='/' aria-current='page'" in html
+    assert "// demo" in html and "EVENTS" in html
+    nav = html.split("<nav>", 1)[1].split("</nav>", 1)[0]
+    assert "id=q" in nav

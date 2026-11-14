@@ -38,6 +38,7 @@ from sqlalchemy import text
 from factory.model.base import StrictModel
 from factory.services.context import Project
 from factory.services.site_charts import CHART_CSS, activity
+from factory.services.site_chrome import BAR_CSS, hub_bar
 from factory.services.site_theme import LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
 
 SITE_DIR: Final = "site"
@@ -696,15 +697,8 @@ def page(title: str, body: str, css: str = "") -> str:
 
 _HUB_CSS: Final = (
     "body{display:flex;flex-direction:column;height:100vh;overflow:hidden;max-width:none;padding:0}"
-    "header{display:flex;align-items:center;gap:14px;height:44px;padding:0 16px;flex:none;"
-    "border-bottom:1px solid var(--mut);background:var(--dk);font-size:12px;"
-    "letter-spacing:.06em}"
-    "header .logo{width:14px;height:14px;background:var(--ac);box-shadow:0 0 10px var(--ac);"
-    "flex:none}header b{letter-spacing:.14em;text-transform:uppercase}"
-    "header .crumb{color:var(--dim)}header .sp{flex:1}header .ro{color:var(--dim)}"
-    "header .ro b{color:var(--ac);letter-spacing:.06em}"
-    "header input{width:220px}"
     ".shell{display:flex;flex:1;min-height:0}"
+    "nav input{width:calc(100% - 28px);margin:10px 14px 0;box-sizing:border-box}"
     "nav{width:268px;flex:none;overflow:auto;border-right:1px solid var(--mut);"
     "background:var(--navbg);padding:6px 0 24px}"
     "nav h3{margin:16px 14px 4px;font-size:10.5px;font-weight:600;letter-spacing:.16em;"
@@ -746,7 +740,7 @@ _HUB_CSS: Final = (
     "font-size:13.5px;line-height:1.6}.guide b{color:var(--fg)}"
     ".hint{color:var(--dim);font:12px var(--mono);margin:8px 0 0}.hint code{background:var(--dk);"
     "padding:1px 6px;border:1px solid var(--mut);color:var(--ac)}"
-    "@media (max-width:760px){nav{width:190px}header input{width:110px}.st{min-width:110px}}"
+    "@media (max-width:760px){nav{width:190px}.st{min-width:110px}}"
 )
 
 _HUB_JS: Final = """
@@ -919,12 +913,15 @@ def render_hub(
     doc = (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"{THEME_SCRIPT}<title>{slug}</title><style>{THEME_CSS}{_HUB_CSS}{CHART_CSS}{LIGHT_CSS}</style></head><body>"
-        f"<header><span class=logo></span><b>Factory</b><span class=crumb>// {slug}</span>"
-        f"<span class=sp></span><span class=ro>{ready} &middot; EVENTS <b>{num.get('events', 0):,}</b>"
-        " &middot; <b id=live>SNAPSHOT</b></span>"
-        f"{THEME_TOGGLE}<input id=q placeholder='filter modules'></header>"
-        f"<div class=shell><nav>{''.join(nav)}</nav><main>"
+        f"{THEME_SCRIPT}<title>{slug}</title><style>{THEME_CSS}{_HUB_CSS}{CHART_CSS}{LIGHT_CSS}{BAR_CSS}</style></head><body>"
+        + hub_bar(
+            "projects",
+            context=f"<span class=crumb>// {slug}</span>"
+            f"<span class=ro>{ready} &middot; EVENTS <b>{num.get('events', 0):,}</b>"
+            " &middot; <b id=live>SNAPSHOT</b></span>",
+            main_hub_only=True,
+        )
+        + f"<div class=shell><nav><input id=q placeholder='filter modules'>{''.join(nav)}</nav><main>"
         "<iframe id=frame style='display:none' title='product'></iframe>"
         "<div id=home><div class=wrap><h1>Control room</h1>"
         "<div class=guide><b>Where to start.</b> <b>Explorer</b> to browse the papers and open "

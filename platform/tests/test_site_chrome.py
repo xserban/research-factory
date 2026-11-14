@@ -65,3 +65,21 @@ def test_palette_follows_the_toggle_and_the_system_preference() -> None:
 def test_bar_escapes_nothing_it_was_not_given_and_keeps_labels_plain() -> None:
     bar = site_chrome.hub_bar("projects")
     assert "<script" not in bar
+
+
+def test_bar_is_a_div_so_page_header_rules_do_not_reach_it() -> None:
+    bar = site_chrome.hub_bar("projects")
+    assert bar.startswith("<div class=hubbar")
+    assert "<header" not in bar
+
+
+def test_bar_can_carry_a_context_after_the_tabs() -> None:
+    bar = site_chrome.hub_bar("projects", context="<span class=crumb>// demo</span>")
+    assert "<span class=crumb>// demo</span>" in bar
+    assert bar.index("Capabilities") < bar.index("// demo") < bar.index("data-theme-toggle")
+
+
+def test_project_variant_hides_the_tabs_unless_served_by_the_main_hub() -> None:
+    bar = site_chrome.hub_bar("projects", main_hub_only=True)
+    assert "location.pathname.indexOf('/p/')" in bar
+    assert "location.pathname.indexOf('/p/')" not in site_chrome.hub_bar("projects")
