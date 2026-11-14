@@ -304,6 +304,17 @@ class AuditSampled(StrictModel):
     top_up_of: str | None = Field(default=None, pattern=AUDIT_ID_RE)
     """The audit this sample tops up (living review); absent on every other audit."""
 
+    @model_validator(mode="after")
+    def _counts_match_sample(self) -> Self:
+        """The stratum counts describe the drawn sample; the sample is a subset of the population."""
+        if len(set(self.work_ids)) != len(self.work_ids):
+            raise ValueError("work_ids must not repeat a work")
+        if self.exclusions + self.inclusions != len(self.work_ids):
+            raise ValueError("exclusions + inclusions must equal the number of sampled works")
+        if len(self.work_ids) > self.population:
+            raise ValueError("the sample cannot be larger than the population")
+        return self
+
 
 class AuditLabelled(StrictModel):
     audit_id: str = Field(pattern=AUDIT_ID_RE)
