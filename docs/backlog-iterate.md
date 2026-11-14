@@ -238,15 +238,38 @@ Minor review findings parked during the v1 build, to address when iterating from
 - teams-D: the plugin skills do not yet mention `ledger_view`, `budget_status` or `reported_usage`.
 
 ## Branch `low-hanging` review minors (2026-11-14)
-- `services/gates.py` `_rigor_mode` is private but imported by four modules; a public name (without the index sync of `rigor_mode`) would be cleaner. `services/seeds.py` and `services/project_stage.py` keep their own copies (they differ).
-- `cli/render.py`: the `outdated` count is appended to the convert summary only when non-zero, so the line format varies.
-- `ConvertOutcome` `outdated` has no reason field; the "use --upgrade" hint exists only in the CLI renderer.
-- `runner._recorded_exploratory` reads the whole event log on each resume.
+All four fixed on `low-hanging-2` (merged dbe3d01): `indexed_rigor_mode` public in `gates.py` (eff9963, 67b1338); the convert summary always shows `outdated N` and an outdated outcome carries its reason (15d20ca). `runner._recorded_exploratory` reading the whole log on resume stays open (moved to the list below).
 
 ## Branch `low-hanging-2` review minors (2026-11-14)
+Fixed on `low-hanging-4` (138f304, 2032db3, 9df6cb4, c15dff5): `background_works(criteria=)` reuses the computed criteria; `full_text_boxes` states why it loads twice; `snowball._scope` order documented (no hash over `sources`); the explorer's cited-by tooltip states how many reference lists were extracted. The `usage_limit` and feed lines below stand as written.
 - Explorer `cited_in_corpus`: None vs 0 is decided project-wide (any reference extraction exists), not per work; a work whose citers were never extracted shows 0.
 - `prisma_flow` and `full_text_boxes` call `exclusion_criteria` and then `background_works`, which re-runs `final_outcomes` (double cost).
 - `snowball._scope` appends background sources after the included ones (each group sorted, not the whole list); check any hash taken over `sources`.
 - `full_text_boxes` takes `unresolved` from the non-recorded `_load` and outcomes from the recorded one; the identity holds only because `pending` is computed by subtraction.
-- Pre-existing, seen in the IDEA-19 review: `feed_run` and other default-flag tools withhold a held-out seed's stated arXiv id or DOI in their output, so a feed entry that is a held-out seed shows `[withheld]`; decide whether tools that list papers should use `include_work_ids=False` (decision 37 item 9).
+- `runner._recorded_exploratory` reads the whole event log on each resume (from the `low-hanging` review).
+- Ruled 2026-11-14 (researcher: feed shows ids) and built on `low-hanging-3` (f59a24d: feed tools scrub only seed ids, `withholding.seed_id_tokens`; reviewed). Pre-existing, seen in the IDEA-19 review: `feed_run` and other default-flag tools withhold a held-out seed's stated arXiv id or DOI in their output, so a feed entry that is a held-out seed shows `[withheld]`; decide whether tools that list papers should use `include_work_ids=False` (decision 37 item 9).
 - `usage_limit` rule 1 reads plain log lines; a log that echoes the prompt or quotes the limit phrase in plain text would be a false positive (not seen in 100 normal pilot logs).
+
+## Branch `low-hanging-3` review minors (2026-11-14)
+- On an unhosted project an agent still holds `protocol:change` (`services/access.py` `AGENT_PROPOSES_ONLY` applies only when hosted), so it could declare a miner use exploratory through `protocol_amend` itself; the amendment is recorded under the agent with its reason. The same holds for every protocol change; the pilot is unhosted.
+- A use declared exploratory keeps its mark after its version passes calibration (and `evidence` stays refused) until the researcher amends it away; nothing prompts that.
+- `runner.started.exploratory` is fixed at start while task marks are read at serve time; an amendment during a run makes them differ (cosmetic).
+- `services/miners.py` `_candidates`: the `default_conversion` fallback is close to dead code now that requested works are excluded.
+- Test helper `mine_pass` declares the use exploratory (a protocol amendment) when the miner is uncalibrated; a test that asserts protocol versions after `mine_pass` would see one more.
+
+## Reviews of merged, unreviewed work (2026-11-14, branch `low-hanging-4`)
+- IDEA-66: `agreement._as_stored` and `screening._as_stored` return the id unchanged when several works share its NFC form, so the caller says "unknown" instead of "matches several works"; `stored_spelling` would give the right refusal.
+- IDEA-66: `resolve_work_id` checks the whole `works` table (merged works included), `document_read` the outcome keys, `screen resolve` the resolvable set; an id matching a merged and a live work is ambiguous in some paths only.
+- IDEA-66: several resolutions read the index before `project.writing()`; negligible with one writer.
+- IDEA-68: the evidence-pack (non-miner) agreement also takes the new unit rule, and units on enum, quote and anchor key cells leave report group keys (`_normalised`, `cell_key`); not stored, but groups may merge.
+- IDEA-68: a numeric field marked `TEXT_IN_QUOTE` would lose its unit comparison (none today).
+- IDEA-69 (2): `mining/score.py` docstring says agent rows with no gold entry count as extra, but `unmatched` iterates gold works only.
+- IDEA-69 (2): `MineStatus.agreement` changed meaning (aligned to all rows) under the same name in MCP `mine_status` output.
+- IDEA-69 (2) tests missing: `overall_all_rows` withheld while a unit is open; `mine status` lines with both rates; a test pinning that the calibration gate ignores the all-rows rate; a work mined by one pass adds no slot.
+- IDEA-51: `exploratory` is not settable from a `miner add` file (by design: it is a protocol declaration); the docstring should say so.
+- IDEA-48 (`document/linenumbers.py`): when anything is dropped the text is rebuilt from blocks, so runs of blank lines collapse and blank lines inside code blocks go; offsets stay consistent (anchors come after, version bumped).
+- IDEA-48: any run of 5 or more bare 1 to 4 digit paragraphs counting up is dropped, wherever it is (five year paragraphs 2019 to 2023, a numbered listing, a one-number-per-paragraph table); the warning gives counts, not the paragraphs. A value ceiling, or a run starting at 1 or after a page break, would narrow it.
+- IDEA-48: `conversion_coverage.content_words` drops every all-digit token and splits "3.14" into "3" and "14", so loss of numeric table cells is not measured; say so in the docstring or add a numeric-token recall.
+- `low-hanging-4` review: the guard test `test_mcp_work_params_guard.py` sees only top-level parameters whose name contains `work`; ids in `target` or nested in structured parameters are not checked by it.
+- `low-hanging-4`: the overlap tokeniser now splits hyphens and percent signs, so a Jaccard ratio can differ from the earlier one ("top-1 accuracy of 91%" vs "91% top-1 accuracy": 0.75 to 0.80); overlap is off by default.
+- `low-hanging-4` verified 2026-11-14 against `low-hanging-3` on 115 test files (both sides `-n 3`, temporaries on disk, 180 s per test): 4 failures fixed, none added. Two branch-only failures pass alone on both sides (`test_acceptance_miners::test_vision_result_miner_end_to_end`, 105 s alone, timed out under load; `test_mcp_decisions::test_suggest_scrubs_a_held_out_seed_without_a_signal_and_views_scrub_it`, flaky in parallel runs). Failing on both sides, not touched: `test_miner_kinds::test_title_kind_accepts_exact_and_rejects_unknown` and `test_acceptance_extraction::test_earlier_acceptance_suites_unchanged`.

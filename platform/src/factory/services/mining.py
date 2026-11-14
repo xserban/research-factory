@@ -422,7 +422,7 @@ def calibration_sample(project: Project, name: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
-def miner_population(project: Project, name: str) -> list[str]:
+def miner_population(project: Project, name: str, *, include_requested: bool = True) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
     mined by a production pass, so no resolution can have fixed it).
@@ -438,10 +438,15 @@ def miner_population(project: Project, name: str) -> list[str]:
     scheme, then work id (pending and unknown layers last). Refused on field `miners` when a
     derived layer miner (one projecting dimension zero) lists `layers`: it classifies every work
     and is never layer-filtered. `work_layers` is imported here, not at the top, because it
-    imports this module."""
+    imports this module.
+
+    `include_requested=False` omits the on-demand requested works: what remains is the selector
+    population (layer-filtered, less calibration units), the only set a calibration draws
+    from."""
     _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
-    if not use.layers and not use.on_demand:
+    on_demand = use.on_demand and include_requested
+    if not use.layers and not on_demand:
         return [work for work, _ in population(project, spec.selector) if work not in apart]
     from factory.services.work_layers import (
         layer_dimension,
@@ -465,7 +470,7 @@ def miner_population(project: Project, name: str) -> list[str]:
             )
         wanted = set(use.layers)
         chosen = [w for w in chosen if w in layers and layers[w].layer in wanted]
-    if use.on_demand:
+    if on_demand:
         extra = requested_works(project, name) - set(chosen) - apart
         chosen.extend(w for w in extra if default_conversion(project, w) is not None)
     if use.order == "by-layer":
@@ -603,9 +608,21 @@ def _kind_note(kind: object) -> str:
     return "free text"
 
 
+def use_is_exploratory(project: Project, name: str, version: int) -> bool:
+    """True when the current protocol lists `(name, version)` with `exploratory` declared (a
+    protocol amendment; IDEA-69). Read-only; False when the protocol or the use is absent."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return False
+    return any(
+        u.exploratory for u in protocol.spec.miners or () if (u.name, u.version) == (name, version)
+    )
+
+
 def _require_calibrated(project: Project, name: str, version: int) -> None:
     """Refuse (field `calibration`) a production pass of a version whose calibration has not
-    passed. The message names the version and the exploratory way; no threshold is named."""
+    passed. The message names the version and the way out: a protocol amendment declaring the
+    miner use exploratory, with a reason; no threshold is named."""
     from factory.services.miners import MinerState, miner_state  # it imports this module
 
     state = miner_state(project, name, version)
@@ -616,8 +633,9 @@ def _require_calibrated(project: Project, name: str, version: int) -> None:
             ValidationIssue(
                 "calibration",
                 f"miner {name} version {version} has no passed calibration (state: {state.value}); "
-                "draw and pass one first, or run the pass exploratory (exploratory=true, no "
-                "quality claim)",
+                "draw and pass one first, or have the researcher amend the protocol "
+                "(`factory protocol amend --file amendment.json`, a reason in the file) to declare "
+                'the miner use `"exploratory": true` (no quality claim)',
             )
         ]
     )
@@ -631,7 +649,6 @@ def mine_next(
     label: PassLabel,
     *,
     calibration: bool = False,
-    exploratory: bool = False,
 ) -> ExtractNext:
     """Serve the next task of pass `label` of the listed miner `(name, version)`: `next_unit` with
     the miner's scope and a content hook that adds the miner, its digest, the anchors its selector
@@ -647,19 +664,16 @@ def mine_next(
 
     A production call (no `calibration`) is refused on field `calibration` unless the version's
     calibration has passed (IDEA-69 (3)): mining first consumes the units a calibration would be
-    drawn from. `exploratory=True` runs it anyway, with no quality claim; the task content carries
-    `exploratory`, so the mark is on the task and no event type or field changes. `exploratory`
-    with `calibration` is refused on field `exploratory`.
+    drawn from. A use the protocol declares `exploratory` (an amendment with a reason) runs anyway,
+    with no quality claim; the task content carries `exploratory`, so the mark is on the task and
+    no event type or field changes.
 
     Refused, with nothing written, on field `miners` until the protocol lists that registered
     version, and as `next_unit` refuses otherwise."""
-    _, _, spec = require_listed(project, name, version)
+    _, use, spec = require_listed(project, name, version)
     require_not_retired(project, name, version)
     calibration_id: str | None = None
-    if calibration and exploratory:
-        raise FactoryValidationError(
-            [ValidationIssue("exploratory", "a calibration pass is not an exploratory run")]
-        )
+    exploratory = use.exploratory and not calibration
     if calibration:
         from factory.services.miner_independence import require_calibration_pass
 
@@ -803,6 +817,8 @@ class MineStatus(StrictModel):
     imported_dual: int = 0
     imported_single: int = 0
     """Imported rows in use, split by whether the source had two agreeing, independent passes."""
+    exploratory: bool = False
+    """The protocol declares this use exploratory (IDEA-69): no quality claim on its rows."""
 
 
 def mine_status(
@@ -879,6 +895,7 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
                 agreement_aligned=None if overall is None else overall.overall,
                 imported_dual=0 if split is None else split.imported_dual,
                 imported_single=0 if split is None else split.imported_single,
+                exploratory=use.exploratory,
             )
         )
     return out

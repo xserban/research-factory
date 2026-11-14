@@ -33,6 +33,7 @@ from factory.services.miners import CalibrationRow, _registered, calibration_by_
 from factory.services.mining import require_listed
 from factory.services.protocol import miner_extraction_schema
 from factory.services.search import list_works
+from factory.services.work_ref import resolve_work_id
 
 __all__ = ["LABEL_GATE", "calibration_frozen", "calibration_labels", "label_miner_calibration"]
 
@@ -94,6 +95,7 @@ def label_miner_calibration(
     with project.index.exclusive():
         project.index.sync()
         require_human_channel(project, actor, channel, "audit-label")
+        work_id = resolve_work_id(project, work_id)
         calibration = calibration_by_id(project, calibration_id)
         if calibration is None:
             raise FactoryValidationError(

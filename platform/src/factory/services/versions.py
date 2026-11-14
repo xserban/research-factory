@@ -43,6 +43,7 @@ from factory.services.status_lookup import (
     openalex_batches,
     run_batches,
 )
+from factory.services.work_ref import resolve_work_id
 from factory.sources.registry import SourceFactory
 
 _ARXIV_ROUTES = (Route.ARXIV_HTML.value, Route.ARXIV_SOURCE.value)
@@ -361,6 +362,7 @@ def prefer_document(
     """
     with project.index.exclusive():
         project.index.sync()
+        work_id = resolve_work_id(project, work_id)
         issues: list[ValidationIssue] = []
         if actor.kind != "human":
             issues.append(ValidationIssue("actor", "a preferred document is chosen by a human"))

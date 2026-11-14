@@ -31,7 +31,7 @@ from typing import Protocol
 
 from factory.model.extraction import StoredField
 from factory.packs import Pack
-from factory.services.extraction_agreement import same_field
+from factory.services.extraction_agreement import check_overlap_threshold, same_field
 
 
 class ScoredRow(Protocol):
@@ -85,7 +85,8 @@ def score(
     agent rows of a unit with no gold entry count as extra. `verified` and `submitted` give the
     verification rate (None leaves it None). With `evidence_overlap` (a threshold, off by default),
     a free-quote field also agrees when the two quotes rest on the same evidence (IDEA-52); the
-    threshold is recorded in the result."""
+    threshold is recorded in the result; one outside `0 < t <= 1` is refused."""
+    check_overlap_threshold(evidence_overlap)
     names = _compared(pack)
     gold_rows = sum(len(rows) for rows in gold.values())
     agent_rows = sum(len(rows) for rows in agent.values())

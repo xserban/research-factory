@@ -596,12 +596,16 @@ def miner_calibration_lines(report: MinerCalibrationReport) -> list[str]:
     return lines
 
 
+_EXPLORATORY_MARK = " (exploratory, declared)"
+
+
 def mine_status_lines(status: list[MineStatus]) -> list[str]:
     """One line per listed miner: its units by state, rows and agreement."""
     if not status:
         return ["no listed miners"]
     return [
-        f"{m.name} version {m.version}: units {m.units} (closed {m.closed}, open {m.open}, "
+        f"{m.name} version {m.version}{_EXPLORATORY_MARK if m.exploratory else ''}: "
+        f"units {m.units} (closed {m.closed}, open {m.open}, "
         f"stale {m.stale}), rows {m.rows}, agreement {_rate(m.agreement)} over all rows "
         f"({_rate(m.agreement_aligned)} over aligned rows)"
         + (

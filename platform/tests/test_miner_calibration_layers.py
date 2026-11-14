@@ -18,7 +18,7 @@ from factory.services.mining import miner_population, population, register_miner
 from factory.services.protocol import amend_protocol, current_protocol
 from factory.services.reference_layers import record_scheme
 from factory.services.taxonomies import register_taxonomy
-from factory.services.work_layers import move_layer
+from factory.services.work_layers import move_layer, request_mining
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.miner_helpers import VISION_NAME, method_vision, use
 
@@ -33,7 +33,12 @@ def _scheme() -> LayerSchemeRecorded:
 
 
 def _list_with_layers(
-    project: Project, agent: Actor, human: Actor, world: list[str], layers: tuple[str, ...]
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    world: list[str],
+    layers: tuple[str, ...],
+    on_demand: bool = False,
 ) -> list[str]:
     """Half the works (every second) are core, the rest applied; the miner lists `layers`."""
     record_scheme(project, human, _scheme())
@@ -63,7 +68,7 @@ def _list_with_layers(
     miners = (
         *(current.spec.miners or ()),
         use(layer_miner),
-        use(spec, layers=layers),
+        use(spec, layers=layers, on_demand=on_demand),
     )
     amend_protocol(
         project,
@@ -105,3 +110,15 @@ def test_without_layers_the_draw_is_the_base_population(
     base = {w for w, _ in population(project, method_vision().selector)}
     drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=7)
     assert drawn.population == len(base)
+
+
+def test_requested_works_are_never_calibration_candidates(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    ordered = _list_with_layers(project, agent, human, world, ("core",), on_demand=True)
+    outside = ordered[1]  # an applied work, outside the use's layers
+    request_mining(project, human, works=[outside], miners=[VISION_NAME])
+    assert outside in miner_population(project, VISION_NAME)  # production still serves it
+    drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=3)
+    assert outside not in {u.work_id for u in drawn.units}
+    assert drawn.population == len(ordered[::2])

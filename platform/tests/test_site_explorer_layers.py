@@ -36,3 +36,7 @@ def test_the_page_has_a_layer_facet_ordered_and_a_badge_without_server_calls() -
     assert "layerBadge(w)" in PAGE
     # the existing hash form f=key:value reaches the layer dimension through DIMS
     assert "H.getAll('f')" in PAGE
+
+
+def test_cited_in_corpus_tooltip_states_the_extracted_denominator() -> None:
+    assert "Counts only works whose reference lists were extracted ('+DATA.refs_done+' of '" in PAGE

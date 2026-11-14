@@ -91,7 +91,8 @@ def test_a_resolved_work_leaves_the_queue_and_nothing_blocks(
 ) -> None:
     work = passes.single[0]
     _decide_all(project, agent, passes, work)
-    assert final_outcomes(project, stage=FT)[work] is Outcome.INCLUDED  # unresolved: promotes
+    # unresolved: awaiting classification, pending (IDEA-49, decision 121)
+    assert final_outcomes(project, stage=FT)[work] is Outcome.PENDING
     resolve_disagreement(project, human, work, "exclude", "EX01", "slides", Channel.CLI, stage=FT)
     assert cannot_assess_queue(project, stage=FT) == []
     assert cannot_assess_counts(project)["full-text"] == 0

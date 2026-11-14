@@ -2543,6 +2543,8 @@ def miner_add_cmd(
         typer.echo(f"{verb[1]} in the protocol{extra}")
     else:
         typer.echo("already listed in the protocol")
+    for note in added.notes:
+        typer.echo(f"note: {note}")
     typer.echo(f"page: {added.page} (main hub: {added.hub_page})")
 
 

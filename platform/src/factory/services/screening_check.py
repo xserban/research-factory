@@ -64,6 +64,7 @@ from factory.services.screening import live_decisions
 from factory.services.search import list_works
 from factory.services.seeds import SeedRole, all_seeds
 from factory.services.stages import require_pass_stage
+from factory.services.work_ref import resolve_work_id
 
 TA = ScreeningStage.TITLE_ABSTRACT
 _T = TypeVar("_T")
@@ -339,6 +340,7 @@ def check_label(
     with project.writing():
         project.index.sync()
         require_human_channel(project, actor, channel, "audit-label")
+        work_id = resolve_work_id(project, work_id)
         issues = audit_core.human_gate(
             project, actor, channel, noun="screening-label", gate_id="screening.audit_label"
         )
@@ -398,6 +400,7 @@ def add_tuning_example(
     with project.writing():
         project.index.sync()
         require_human_channel(project, actor, channel, "audit-label")
+        work_id = resolve_work_id(project, work_id)
         issues = audit_core.human_gate(
             project, actor, channel, noun="screening-label", gate_id="screening.audit_label"
         )

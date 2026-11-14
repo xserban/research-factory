@@ -14,13 +14,14 @@ from factory.model.screening import PassLabel
 from factory.quality.stats import draw_uniform
 from factory.services.context import Project
 from factory.services.miners import calibration_of, draw_miner_calibration, retire_miner
-from factory.services.mining import mine_next, mine_record, population
+from factory.services.mining import mine_record, population
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.miner_helpers import (
     SESSION_M1,
     VISION_NAME,
     list_miner,
     method_vision,
+    mine_exploratory,
     mine_row,
     miner_actor,
 )
@@ -74,7 +75,7 @@ def test_units_exclude_production_mined_units(
     worker = miner_actor(SESSION_M1, "claude-opus-5-5")
     mined = []
     for _ in range(3):
-        batch = mine_next(project, worker, VISION_NAME, 1, PassLabel.A, exploratory=True).batch
+        batch = mine_exploratory(project, worker, VISION_NAME, 1, PassLabel.A).batch
         assert batch is not None
         mine_record(project, worker, batch.task_id, [mine_row()], finish=True)
         mined.append(batch.records[0]["work_id"])

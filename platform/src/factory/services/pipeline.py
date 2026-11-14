@@ -92,10 +92,6 @@ class PipelineStage(StrictModel):
     applies: bool
     reason: str
     """Why the stage applies or not, in plain words."""
-    exploratory_only: bool = False
-    """True for a listed miner whose version has no passed calibration: the pipeline skips it
-    (`applies` false), and it can only be run by hand with the exploratory opt-in (IDEA-69 (3));
-    `pending` is then counted all the same."""
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -162,11 +158,9 @@ def _applies(project: Project, key: str) -> tuple[bool, str]:
     return True, "the protocol declares the schema"
 
 
-def _stage(
-    project: Project, key: str, applies: bool, reason: str, exploratory_only: bool = False
-) -> PipelineStage:
+def _stage(project: Project, key: str, applies: bool, reason: str) -> PipelineStage:
     spec = runner.STAGES.get(key, runner.MINE_SPEC)
-    count = stage_pending(project, key) if applies or exploratory_only else 0
+    count = stage_pending(project, key) if applies else 0
     label = _LABELS.get(key, f"Miner {key[len(runner.MINE_PREFIX) :]}")
     return PipelineStage(
         key=key,
@@ -178,17 +172,17 @@ def _stage(
         pending=count,
         applies=applies,
         reason=reason,
-        exploratory_only=exploratory_only,
     )
 
 
-def _miner_stages(project: Project) -> list[tuple[str, bool, str, bool]]:
-    """One `(key, applies, reason, exploratory_only)` per registered miner name, by name: the
-    version listed in the protocol applies when its calibration has passed; a listed version
-    without a passed calibration does not apply (the runner would refuse it; IDEA-69 (3)), so a
-    pipeline skips it instead of stopping there, and it is marked `exploratory_only` for a run by
-    hand with the exploratory opt-in. Unlisted: not applicable."""
+def _miner_stages(project: Project) -> list[tuple[str, bool, str]]:
+    """One `(key, applies, reason)` per registered miner name, by name: the version listed in the
+    protocol applies when its calibration has passed or the protocol declares the use exploratory
+    (a protocol amendment with a reason; IDEA-69); a listed version otherwise does not apply (the
+    runner would refuse it), so a pipeline skips it instead of stopping there. Unlisted: not
+    applicable."""
     from factory.services.miners import MinerState, miner_state  # miners imports the mining stack
+    from factory.services.mining import use_is_exploratory
 
     names: set[str] = set()
     listed: dict[str, int] = {}
@@ -196,37 +190,38 @@ def _miner_stages(project: Project) -> list[tuple[str, bool, str, bool]]:
         names.add(entry.name)
         if entry.listed:
             listed[entry.name] = entry.version
-    plan: list[tuple[str, bool, str, bool]] = []
+    plan: list[tuple[str, bool, str]] = []
     for name in sorted(names):
         key = f"{runner.MINE_PREFIX}{name}"
         version = listed.get(name)
         if version is None:
-            plan.append((key, False, "the miner is not listed in the protocol", False))
+            plan.append((key, False, "the miner is not listed in the protocol"))
             continue
         state = miner_state(project, name, version)
-        if state is not MinerState.CALIBRATED:
+        if state is MinerState.CALIBRATED:
+            plan.append((key, True, "the protocol lists the miner"))
+        elif use_is_exploratory(project, name, version):
+            plan.append((key, True, "the protocol declares the miner use exploratory"))
+        else:
             plan.append(
                 (
                     key,
                     False,
                     f"version {version} has no passed calibration (state: {state.value}); "
-                    "calibrate it, or run it exploratory from the queue",
-                    True,
+                    "calibrate it, or have the researcher amend the protocol to declare the use "
+                    "exploratory",
                 )
             )
-            continue
-        plan.append((key, True, "the protocol lists the miner", False))
     return plan
 
 
 def stages(project: Project) -> list[PipelineStage]:
     """Every stage of the pipeline in order with its pending count and whether it applies. A
-    stage that does not apply has pending 0 and the reason, except an `exploratory_only` miner,
-    whose pending is counted. Read-only."""
+    stage that does not apply has pending 0 and the reason. Read-only."""
     project.index.sync()
-    plan: list[tuple[str, bool, str, bool]] = []
+    plan: list[tuple[str, bool, str]] = []
     for key in _ORDER:
-        plan.append((key, *_applies(project, key), False))
+        plan.append((key, *_applies(project, key)))
         if key == "extract":
             plan.extend(_miner_stages(project))
     return [_stage(project, *row) for row in plan]
