@@ -184,6 +184,7 @@ Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required
 ### IDEA-22 — PubMed search and PMC full-text route
 Status: built (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124; not reviewed, tests not run) · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
 **What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
+**Review minors parked (2026-11-14):** `PubmedBookArticle` records not parsed; in-run dedup by work id can merge distinct DOI-less PMIDs with identical title, authors and year (key it on PMID); non-numeric `resume_from` raises a bare `ValueError`; long terms go by GET (NCBI recommends POST); OA PDF all-fail reason is the first candidate with a `pdf_url`, not always the best location.
 
 ### IDEA-23 — Consistency check of copied results
 Status: built (services/copied_check.py, commit 99754a1; plan EQ task 7; not reviewed) · Added: 2026-11-03 · Slice: after slice 2 · Depends on: copied-result flag
