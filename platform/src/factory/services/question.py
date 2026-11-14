@@ -27,6 +27,7 @@ from factory.model.question import (
 )
 from factory.services.context import Project
 from factory.services.decision_binding import bind
+from factory.services.gates import _rigor_mode
 
 
 class QuestionResult(StrictModel):
@@ -236,15 +237,6 @@ def _version(row: Row[Any]) -> QuestionVersion:
 def _goal_count(project: Project) -> int:
     with project.index.connect() as conn:
         return int(conn.execute(sql_text("SELECT COUNT(*) FROM goals")).scalar_one())
-
-
-def _rigor_mode(project: Project) -> RigorMode:
-    with project.index.connect() as conn:
-        value = conn.execute(
-            sql_text("SELECT rigor_mode FROM project WHERE slug = :slug"),
-            {"slug": project.paths.slug},
-        ).scalar_one()
-    return RigorMode(str(value))
 
 
 def _rigor_issues(spec: QuestionSpec, mode: RigorMode) -> list[ValidationIssue]:

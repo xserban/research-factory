@@ -124,6 +124,7 @@ from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
+from factory.services.gates import _rigor_mode
 from factory.services.progress import track
 from factory.services.protocol import current_protocol, search_authorization
 from factory.services.protocol_rules import snowball_plan_gaps
@@ -723,15 +724,6 @@ def snowball_queries(candidates: Sequence[RoundCandidate]) -> list[QuerySpec]:
 
 
 # --- Plan ---
-
-
-def _rigor_mode(project: Project) -> RigorMode:
-    with project.index.connect() as conn:
-        value = conn.execute(
-            text("SELECT rigor_mode FROM project WHERE slug = :slug"),
-            {"slug": project.paths.slug},
-        ).scalar_one()
-    return RigorMode(str(value))
 
 
 def _named(ids: Sequence[str]) -> str:
