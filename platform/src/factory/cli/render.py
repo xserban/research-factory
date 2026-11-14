@@ -117,6 +117,7 @@ def prisma_markdown(flow: PrismaFlow) -> str:
         lines += [f"  - {work}" for work in flow.unscreened_tolerated_works]
     boxes = flow.full_text
     lines += ["", "## Full-text assessment"]
+    lines.append(f"- promoted, not yet sought: {boxes.not_sought}")
     lines.append(f"- reports sought: {boxes.sought}")
     lines.append(f"- reports not retrieved: {boxes.not_retrieved}")
     lines += [f"  - {reason}: {n}" for reason, n in boxes.not_retrieved_reasons.items()]
@@ -156,6 +157,7 @@ def update_markdown(flow: UpdateFlow) -> str:
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")
     lines.append(f"- full-text reports sought: {flow.full_text.sought}")
+    lines.append(f"- promoted, not yet sought: {flow.full_text.not_sought}")
     lines += ["", "## Included", f"- included in this update: {flow.included}"]
     lines.append(f"- total included now: {flow.total_included}")
     if flow.changed_previous:

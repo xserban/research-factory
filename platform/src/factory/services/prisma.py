@@ -66,7 +66,6 @@ from factory.services.screening import background_works, screening_stops, stop_u
 from factory.services.search import RunSummary
 from factory.services.snowball import query_yields, recorded_rounds
 
-UNSOUGHT = "unsought"
 UNCONVERTED = "unconverted"
 UNSPECIFIED = "unspecified"
 """The exclusion bucket for an excluded work that cites no criterion (not expected to occur)."""
@@ -124,11 +123,13 @@ CHASE_UNATTRIBUTED = "unattributed"
 class FullTextBoxes(StrictModel):
     """The full-text boxes of the flow (spec acceptance 13), all derived from events.
 
-    `sought` is the works promoted at title/abstract; `not_retrieved` those with no converted live
-    document (plan 2C ruling 3); `eligible` the rest. `not_retrieved_reasons` counts each
-    not-retrieved work once, under the `"<route>: <reason>"` of its latest attempt (event order),
-    `unsought` (no attempt) or `unconverted` (a live document with no conversion: run
-    `factory document convert`), so its values sum to `not_retrieved`. `failed_attempts_by_route`
+    The promoted works split into `not_sought` (no full-text attempt of any route yet) and `sought`
+    (PRISMA 2020: reports sought for retrieval). Of the sought, `not_retrieved` are those with no
+    converted live document (plan 2C ruling 3) and `eligible` the rest. `not_retrieved_reasons`
+    counts each not-retrieved work once, under the `"<route>: <reason>"` of its latest attempt
+    (event order) or `unconverted` (a live document with no conversion: run
+    `factory document convert`), so its values sum to `not_retrieved`; never-attempted works are
+    `not_sought`, not a reason. `failed_attempts_by_route`
     counts attempts, not works: the latest reason of every route that failed for those works.
 
     `stage_run` is a display switch: False while the protocol declares no full-text plan or no
@@ -139,11 +140,15 @@ class FullTextBoxes(StrictModel):
     (IDEA-49): neither included nor excluded until the researcher resolves them; left out of the
     dump while 0. They are not `pending` (nothing is left to screen) and not `assessed`.
 
-    Invariants: sought == not_retrieved + eligible; eligible == assessed + awaiting_classification
-    + pending; assessed == included + sum(excluded); provisional exactly while pending +
-    awaiting_classification > 0 (an awaiting work can still be included).
+    Invariants: promoted == not_sought + sought; sought == not_retrieved + eligible;
+    eligible == assessed + awaiting_classification + pending; assessed == included + sum(excluded);
+    provisional exactly while pending + awaiting_classification > 0 (an awaiting work can still
+    be included).
     """
 
+    not_sought: int = 0
+    """Promoted works with no full-text attempt yet; reported apart from `sought`, not as a
+    PRISMA box."""
     sought: int
     not_retrieved: int
     not_retrieved_reasons: dict[str, int]
@@ -505,7 +510,10 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
     queue = fulltext_queue(project)
     keep = None if only is None else set(only)
     eligible = [e.work_id for e in queue.eligible if keep is None or e.work_id in keep]
-    missing = [w for w in queue.not_retrieved if keep is None or w in keep]
+    absent = [w for w in queue.not_retrieved if keep is None or w in keep]
+    unsought = {e.work_id for e in fulltext_status(project).works if e.state == "unsought"}
+    missing = [w for w in absent if w not in unsought]
+    not_sought = len(absent) - len(missing)
     sought = len(eligible) + len(missing)
     reasons, attempts = _not_retrieved_reasons(project, set(missing))
     run = has_full_text_plan(project) and _has_full_text_decision(project)
@@ -534,6 +542,7 @@ def full_text_boxes(project: Project, *, only: Collection[str] | None = None) ->
     assessed = included + sum(excluded.values())
     pending = len(eligible) - assessed - awaiting
     return FullTextBoxes(
+        not_sought=not_sought,
         sought=sought,
         not_retrieved=len(missing),
         not_retrieved_reasons=reasons,
@@ -568,8 +577,8 @@ def _has_full_text_decision(project: Project) -> bool:
 def _not_retrieved_reasons(
     project: Project, missing: set[str]
 ) -> tuple[dict[str, int], dict[str, int]]:
-    """(reasons, attempts) over the not-retrieved works: each work once under its latest attempt,
-    and the latest failed-attempt reason of every route."""
+    """(reasons, attempts) over the sought, not-retrieved works: each work once under its latest
+    attempt, and the latest failed-attempt reason of every route."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text("SELECT work_id, route, outcome, reason FROM fulltext_attempts ORDER BY event_id")
@@ -582,9 +591,7 @@ def _not_retrieved_reasons(
     for entry in fulltext_status(project).works:
         if entry.work_id not in missing:
             continue
-        if entry.state == "unsought":
-            key = UNSOUGHT
-        elif entry.state == "retrieved":
+        if entry.state == "retrieved":
             key = UNCONVERTED
         else:
             key = latest[entry.work_id]

@@ -32,8 +32,8 @@ def test_boxes_sum_and_are_derived(
     queue = fulltext_queue(project)
     outcomes = final_outcomes(project, stage=FT)
     assert boxes.stage_run is True
-    assert boxes.sought == len(promoted_works(project))
-    assert boxes.not_retrieved == 3 == len(queue.not_retrieved)
+    assert boxes.not_sought + boxes.sought == len(promoted_works(project))
+    assert boxes.not_sought + boxes.not_retrieved == len(queue.not_retrieved)
     assert boxes.eligible == len(world.eligible)
     assert boxes.sought == boxes.not_retrieved + boxes.eligible
     assert boxes.eligible == boxes.assessed + boxes.pending
@@ -58,8 +58,9 @@ def test_not_retrieved_has_route_reasons(
     assert boxes.not_retrieved_reasons == {
         "oa-pdf: paywalled": 1,  # the latest attempt of the one failed work
         "unconverted": 1,
-        "unsought": 1,
     }
+    assert boxes.not_sought == 1  # promoted, never attempted: not a "not retrieved" reason
+    assert boxes.sought == boxes.eligible + boxes.not_retrieved
     assert sum(boxes.not_retrieved_reasons.values()) == boxes.not_retrieved
     # Attempts, not works: the failed work has one latest reason per route.
     assert boxes.failed_attempts_by_route == {
@@ -212,6 +213,7 @@ def test_methods_mentions_full_text_plan(
     assert "planned dual-coded share: 1.000" in body
     assert "audit fraction" in body
     boxes = report.prisma.full_text
+    assert f"{boxes.not_sought} promoted works were not yet sought" in body
     assert f"{boxes.sought} sought" in body and f"{boxes.not_retrieved} not retrieved" in body
 
 
