@@ -306,7 +306,7 @@ class AuditSampled(StrictModel):
 
     @model_validator(mode="after")
     def _counts_match_sample(self) -> Self:
-        """The stratum counts describe the drawn sample; the sample is a subset of the population."""
+        """The counts describe the drawn sample, a subset of the population."""
         if len(set(self.work_ids)) != len(self.work_ids):
             raise ValueError("work_ids must not repeat a work")
         if self.exclusions + self.inclusions != len(self.work_ids):
