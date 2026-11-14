@@ -286,14 +286,19 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
     """Start the headless runner for one stage as the local human; returns (status, body)."""
     stage = body.get("stage")
     cap = body.get("unit_cap", runner_service.DEFAULT_UNIT_CAP)
+    exploratory = body.get("exploratory", False)
     bad: list[ValidationIssue] = []
     if not isinstance(stage, str) or not (stage == "all" or runner_service.is_stage_key(stage)):
         bad.append(ValidationIssue("stage", "must be all or one of " + runner_service.stage_keys()))
     if isinstance(cap, bool) or not isinstance(cap, int):
         bad.append(ValidationIssue("unit_cap", "must be an integer"))
+    if not isinstance(exploratory, bool):
+        bad.append(ValidationIssue("exploratory", "must be true or false"))
+    elif exploratory and stage == "all":
+        bad.append(ValidationIssue("exploratory", "applies to one mine stage, not all"))
     if bad:
         return 400, _issues(*bad)
-    assert isinstance(stage, str) and isinstance(cap, int)
+    assert isinstance(stage, str) and isinstance(cap, int) and isinstance(exploratory, bool)
     try:
         authorize_command(project, project.principal, "cli:queue process")
     except FactoryValidationError as exc:
@@ -304,7 +309,7 @@ def queue_process(project: Project, body: dict[str, Any]) -> tuple[int, dict[str
         if stage == "all":
             pipeline_id = pipeline_service.start_pipeline(project, unit_cap=cap)
             return 200, {"ok": True, "pipeline_id": pipeline_id, "stage": stage, "unit_cap": cap}
-        run_id = runner_service.start_run(project, stage, unit_cap=cap)
+        run_id = runner_service.start_run(project, stage, unit_cap=cap, exploratory=exploratory)
     except FactoryValidationError as exc:
         return 400, _issues(*exc.issues)
     except FactoryError as exc:
