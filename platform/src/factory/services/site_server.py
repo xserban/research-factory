@@ -44,6 +44,7 @@ Invariants:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -770,6 +771,8 @@ PORTAL_FEED_ITEMS: Final = 5
 """How many New papers entries the portal page lists; the feed page has them all."""
 PROJECT_PREFIX: Final = "/p/"
 FEED_CHECK_EVERY: Final = 1800.0
+WARM_EVERY: Final = 5.0
+"""Seconds between the background reads that keep the feed views of `site_hub_feed.collect` warm."""
 """Seconds between the timer's looks at whether the feed is due (a run is due once per
 `interval_days`, so most looks do nothing)."""
 
@@ -861,6 +864,22 @@ class MainHub:
         self._background = background
         self._slots: dict[str, Slot] = {}
         self._lock = threading.Lock()
+        self._warm_stop = threading.Event()
+        self._warm_every = WARM_EVERY
+
+    def start_warmer(self) -> None:
+        """Read every project's feed view now and again every `WARM_EVERY` seconds, so the first
+        page view after a start or after new events is served from `collect`'s cache instead of
+        paying the read of the whole log. A read that fails is skipped; nothing is written."""
+
+        def loop() -> None:
+            while True:
+                with contextlib.suppress(Exception):  # a background read never takes the hub down
+                    self.feed_views()
+                if self._warm_stop.wait(self._warm_every):
+                    return
+
+        threading.Thread(target=loop, name="feed-warm", daemon=True).start()
 
     def slot(self, slug: str) -> Slot | None:
         """The slot of a scanned project (None for an unknown slug), opened and prepared once."""
@@ -1086,6 +1105,7 @@ class MainHub:
             self._timer.start()
 
     def stop(self) -> None:
+        self._warm_stop.set()
         if self._timer is not None:
             self._timer.stop()
         for found in list(self._slots.values()):
@@ -1111,6 +1131,8 @@ def make_main_server(
     hub.auth = authenticator
     hub.prepare_all()
     hub.start_feed()
+    if hub._background:
+        hub.start_warmer()
     handler = _handler_class(hub.resolve, authenticator, hub.portal, hub.acts())
     httpd = ThreadingHTTPServer((HOST, port), handler)
     holder.append(httpd)
