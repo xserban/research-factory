@@ -13,8 +13,10 @@ sent to NCBI but never reach an archived URL or a note.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import ClassVar
@@ -38,6 +40,8 @@ from factory.sources.base import (
     BUDGET_STOP_NOTE,
     PageSink,
     RawPage,
+    SampledRecord,
+    SampleKind,
     SearchResult,
     SourceError,
     budget_spent,
@@ -169,6 +173,19 @@ def _subjects(citation: ElementTree.Element) -> list[str]:
 def _requested_pmids(text: str) -> list[str]:
     """The distinct PMIDs named in an id_list query, in the order given (comma or whitespace)."""
     return list(dict.fromkeys(part for part in re.split(r"[,\s]+", text) if part))
+
+
+def _identifiers(article: ElementTree.Element) -> Identifiers:
+    """The PMID, DOI and PMC id of one `PubmedArticle`."""
+    article_ids = {
+        (el.get("IdType") or ""): (el.text or "").strip()
+        for el in article.findall("PubmedData/ArticleIdList/ArticleId")
+    }
+    return Identifiers(
+        pmid=_text(article.find("MedlineCitation/PMID")),
+        doi=article_ids.get("doi") or None,
+        pmcid=article_ids.get("pmc") or None,
+    )
 
 
 def _articles(body: str) -> list[ElementTree.Element]:
@@ -372,6 +389,107 @@ class PubmedSource:
                 note += "; source count differs"
         return result(RunStatus.COMPLETE, note)
 
+    def count(self, spec: QuerySpec, *, archive: PageSink) -> int | None:
+        """PubMed's own total for a keyword query, from one esearch that carries no records."""
+        self._require_keyword(spec)
+        payload = self._probe_search(
+            {"term": spec.text, "rettype": "count", "retmode": "json"}, ordinal=0, archive=archive
+        )
+        count = str(payload.get("count", ""))
+        return int(count) if count.isdigit() else None
+
+    def matching(self, ids: Sequence[str], spec: QuerySpec, *, archive: PageSink) -> set[str]:
+        """Which of `ids` (PMIDs) the query retrieves, measured in chunks of `_BATCH`.
+
+        Each chunk is one esearch of `(<query>) AND (<pmid>[uid] OR ...)`. Ids that are not all
+        digits cannot be PMIDs and are ignored. Returned in the form given.
+        """
+        self._require_keyword(spec)
+        candidates = [i for i in ids if i.isascii() and i.isdigit()]
+        found: set[str] = set()
+        for start in range(0, len(candidates), _BATCH):
+            chunk = candidates[start : start + _BATCH]
+            clause = " OR ".join(f"{pmid}[uid]" for pmid in chunk)
+            payload = self._probe_search(
+                {
+                    "term": f"({spec.text}) AND ({clause})",
+                    "retmax": len(chunk),
+                    "retmode": "json",
+                },
+                ordinal=start // _BATCH,
+                archive=archive,
+            )
+            listed = payload.get("idlist")
+            if isinstance(listed, list):
+                returned = {str(i) for i in listed}
+                found.update(pmid for pmid in chunk if pmid in returned)
+        return found
+
+    def sample(
+        self, spec: QuerySpec, size: int, *, archive: PageSink
+    ) -> tuple[SampleKind, list[SampledRecord]]:
+        """The first `size` records by relevance. E-utilities has no random sample, so the kind
+        is `top`: the titles show the best matches, which flatters the query."""
+        self._require_keyword(spec)
+        payload = self._probe_search(
+            {"term": spec.text, "sort": "relevance", "retmax": size, "retmode": "json"},
+            ordinal=0,
+            archive=archive,
+        )
+        listed = payload.get("idlist")
+        pmids = [str(i) for i in listed][:size] if isinstance(listed, list) else []
+        if not pmids:
+            return "top", []
+        body = self._probe_get(
+            _EFETCH,
+            {"id": ",".join(pmids), "retmode": "xml"},
+            ordinal=1,
+            archive=archive,
+        )
+        records: list[SampledRecord] = []
+        for article in _articles(body):
+            title = _text(article.find("MedlineCitation/Article/ArticleTitle"))
+            if title:
+                records.append(SampledRecord(title=title, identifiers=_identifiers(article)))
+        return "top", records
+
+    @staticmethod
+    def _require_keyword(spec: QuerySpec) -> None:
+        if spec.kind is not QueryKind.KEYWORD:
+            raise ValueError(f"pubmed probes take keyword queries, not {spec.kind.value}")
+
+    def _probe_get(
+        self, url: str, extra: dict[str, str | int], *, ordinal: int, archive: PageSink
+    ) -> str:
+        """One archived probe request, returning the body. The response is archived before it
+        is parsed; transport failures become `SourceError` with key and address redacted."""
+        try:
+            response = self._http.get(url, self._params(**extra))
+        except httpx.HTTPError as exc:
+            raise SourceError(self._redact(f"{type(exc).__name__}: {exc}")) from exc
+        archive(
+            RawPage(
+                ordinal=ordinal,
+                body=response.text,
+                url=self._redact(str(response.url)),
+                fetched_at=self._clock.now(),
+            )
+        )
+        return response.text
+
+    def _probe_search(
+        self, extra: dict[str, str | int], *, ordinal: int, archive: PageSink
+    ) -> dict[str, object]:
+        """One archived esearch, returning its `esearchresult` object."""
+        body = self._probe_get(_ESEARCH, extra, ordinal=ordinal, archive=archive)
+        try:
+            payload = json.loads(body).get("esearchresult")
+        except (ValueError, AttributeError) as exc:
+            raise SourceError(f"pubmed esearch returned unparseable JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise SourceError("pubmed esearch returned no esearchresult")
+        return payload
+
     @staticmethod
     def _esearch_result(response: httpx.Response) -> tuple[int, dict[str, str | int]]:
         """The reported count and the history handle of an archived esearch response."""
@@ -417,11 +535,8 @@ class PubmedSource:
         }
         journal = meta.find("Journal")
         issue = journal.find("JournalIssue") if journal is not None else None
-        article_ids = {
-            (el.get("IdType") or ""): (el.text or "").strip()
-            for el in article.findall("PubmedData/ArticleIdList/ArticleId")
-        }
-        pmid = _text(citation.find("PMID"))
+        identifiers = _identifiers(article)
+        pmid = identifiers.pmid
 
         return Work.build(
             title=title,
@@ -431,11 +546,7 @@ class PubmedSource:
                 (_TYPES[t] for t in sorted(pub_types) if t in _TYPES), WorkType.JOURNAL_ARTICLE
             ),
             authors=_authors(meta),
-            identifiers=Identifiers(
-                pmid=pmid,
-                doi=article_ids.get("doi") or None,
-                pmcid=article_ids.get("pmc") or None,
-            ),
+            identifiers=identifiers,
             venue=Venue(
                 name=_text(journal.find("Title")) if journal is not None else None,
                 volume=_text(issue.find("Volume")) if issue is not None else None,

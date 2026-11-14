@@ -243,7 +243,8 @@ def probe_key(source: str, work: Work) -> str | None:
     that. For OpenAlex it is the work id; a work resolved elsewhere has none, so it falls back to
     `doi:<normalised doi>`, the record's DOI or else the DataCite DOI of its arXiv id (which
     OpenAlex indexes). A DOI that would break OpenAlex's filter syntax (`,` or `|`) gives no key.
-    Other sources have no probe key, so None.
+    For PubMed it is the PMID, or None for a work without one. Other sources have no probe key,
+    so None.
     """
     if source == "arxiv":
         if work.identifiers.arxiv:
@@ -251,6 +252,8 @@ def probe_key(source: str, work: Work) -> str | None:
         if work.identifiers.doi:
             return arxiv_id_from_doi(work.identifiers.doi)
         return None
+    if source == "pubmed":
+        return work.identifiers.pmid or None
     if source == "openalex":
         if work.identifiers.openalex:
             return work.identifiers.openalex

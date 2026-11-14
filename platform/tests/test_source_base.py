@@ -294,6 +294,17 @@ def test_probe_key_bridges_datacite_doi_to_arxiv(prov: Provenance) -> None:
     assert probe_key("pubmed", direct) is None
 
 
+def test_probe_key_for_pubmed_is_the_pmid(prov: Provenance) -> None:
+    from factory.model.work import Identifiers
+    from factory.sources.base import probe_key
+
+    with_pmid = Work.build(title="P", provenance=[prov], identifiers=Identifiers(pmid="123"))
+    without = Work.build(title="Q", provenance=[prov], identifiers=Identifiers(doi="10.1/x"))
+
+    assert probe_key("pubmed", with_pmid) == "123"
+    assert probe_key("pubmed", without) is None
+
+
 def test_probe_key_for_openalex_is_the_work_id(prov: Provenance) -> None:
     from factory.model.work import Identifiers
     from factory.sources.base import probe_key

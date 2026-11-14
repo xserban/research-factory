@@ -493,3 +493,106 @@ def test_ncbi_api_key_from_environment_then_file(
 
     monkeypatch.setenv("FACTORY_NCBI_API_KEY", " envkey ")
     assert ncbi_api_key() == "envkey"
+
+
+# --- probe: count, matching, sample ------------------------------------------------------
+
+
+def _search_ids(ids: list[str], count: int | None = None) -> str:
+    return json.dumps(
+        {"esearchresult": {"count": str(len(ids) if count is None else count), "idlist": ids}}
+    )
+
+
+def test_probe_count_sends_a_count_esearch() -> None:
+    handler, seen = router(_search_ids([], count=4321))
+    pages: list[RawPage] = []
+
+    def sink(page: RawPage) -> str:
+        pages.append(page)
+        return blob_for(page.ordinal)
+
+    source = make_source(handler, api_key="SECRETKEY", mailto="me@example.org")
+    assert source.count(keyword("asthma[MeSH]"), archive=sink) == 4321
+    query = dict(seen[0].url.params)
+    assert seen[0].url.path.endswith("esearch.fcgi")
+    assert query["term"] == "asthma[MeSH]"
+    assert query["rettype"] == "count"
+    assert query["retmode"] == "json"
+    assert query["db"] == "pubmed"
+    assert len(pages) == 1
+    assert "SECRETKEY" not in pages[0].url and "me@example.org" not in pages[0].url
+
+
+def test_probe_count_is_none_when_absent() -> None:
+    handler, _ = router(json.dumps({"esearchresult": {}}))
+    assert make_source(handler).count(keyword(), archive=_archive) is None
+
+
+def test_probe_refuses_other_kinds() -> None:
+    handler, _ = router("unused")
+    source = make_source(handler)
+    with pytest.raises(ValueError, match="keyword queries"):
+        source.count(id_list("1"), archive=_archive)
+    with pytest.raises(ValueError, match="keyword queries"):
+        source.matching(["1"], id_list("1"), archive=_archive)
+    with pytest.raises(ValueError, match="keyword queries"):
+        source.sample(id_list("1"), 5, archive=_archive)
+
+
+def test_probe_matching_chunks_and_ignores_non_numeric_ids() -> None:
+    given = [str(1000 + n) for n in range(250)] + ["PMC123", "10.1/x", ""]
+    terms: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        terms.append(params)
+        listed = [p.split("[")[0] for p in params["term"].split("AND (")[1].split(" OR ")]
+        keep = [i for i in listed if int(i) % 2 == 0]
+        return httpx.Response(200, text=_search_ids(keep))
+
+    found = make_source(handler).matching(given, keyword("asthma[MeSH]"), archive=_archive)
+
+    assert found == {i for i in given[:250] if int(i) % 2 == 0}
+    assert len(terms) == 2  # 250 numeric ids, 200 per request
+    assert terms[0]["term"].startswith("(asthma[MeSH]) AND (1000[uid] OR 1001[uid]")
+    assert terms[0]["term"].endswith("[uid])")
+    assert int(terms[0]["retmax"]) >= 200
+    assert all("PMC123" not in t["term"] for t in terms)
+
+
+def test_probe_matching_with_no_numeric_ids_sends_nothing() -> None:
+    handler, seen = router("unused")
+    assert make_source(handler).matching(["PMC1"], keyword(), archive=_archive) == set()
+    assert seen == []
+
+
+def test_probe_sample_is_top_by_relevance_with_parsed_identifiers() -> None:
+    with_ids = article("11", "Sampled <i>title</i>")
+    handler, seen = router(_search_ids(["11", "12"], count=900), efetch(with_ids, article("12")))
+    kind, records = make_source(handler).sample(keyword(), 2, archive=_archive)
+
+    assert kind == "top"
+    assert [r.title for r in records] == ["Sampled title", "A trial of things"]
+    assert records[0].identifiers.pmid == "11"
+    assert records[0].identifiers.doi == "10.1000/Test.11"
+    assert records[0].identifiers.pmcid == "PMC11"
+    search, fetch = dict(seen[0].url.params), dict(seen[1].url.params)
+    assert search["sort"] == "relevance" and search["retmax"] == "2"
+    assert fetch["id"] == "11,12"
+
+
+def test_probe_sample_with_no_hits_makes_no_fetch() -> None:
+    handler, seen = router(_search_ids([], count=0), efetch())
+    assert make_source(handler).sample(keyword(), 5, archive=_archive) == ("top", [])
+    assert len(seen) == 1
+
+
+def test_probe_transport_failure_is_a_source_error_without_secrets() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom me@example.org", request=request)
+
+    source = make_source(handler, mailto="me@example.org")
+    with pytest.raises(SourceError) as info:
+        source.count(keyword(), archive=_archive)
+    assert "me@example.org" not in str(info.value)
