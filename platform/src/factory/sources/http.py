@@ -21,6 +21,8 @@ HOST_INTERVALS: Mapping[str, float] = {
     "arxiv.org": 3.0,
     "api.openalex.org": 0.1,
     "api.crossref.org": 0.2,
+    # NCBI allows 3 requests/s without a key; the keyed 10/s interval (0.11 s) is not used yet.
+    "eutils.ncbi.nlm.nih.gov": 0.34,
 }
 
 # arXiv's limit is per IP across both hosts, so they share one throttle clock. Each key maps to
