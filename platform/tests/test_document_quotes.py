@@ -114,3 +114,23 @@ def test_escape_tolerance_does_not_loosen_the_match() -> None:
     assert not quote_in_element(markdown, "The team\\ size was 5.")  # backslash before a space
     assert not quote_in_element(markdown, "THE TEAM_SIZE")  # still case-sensitive
     assert quote_in_element("a \\q b", "a \\q b")  # a backslash before a letter is literal
+
+
+def test_literal_backslash_inside_code_is_dropped_too_accepted_behaviour() -> None:
+    # The block text is flattened, so code and math tokens get the same rule as text: a quote
+    # "a_b" verifies against the code span `a\_b`. Accepted (a small false accept, never a reject).
+    assert quote_in_element("Use `a\\_b` here.", "a_b")
+    assert quote_in_element("Use `a\\_b` here.", "a\\_b")
+    assert quote_in_element("Use $a\\_b$ here.", "a_b")
+
+
+def test_trailing_backslash_in_the_quote_is_kept() -> None:
+    assert not quote_in_element("The team size was 5.", "The team size was 5.\\")
+    assert quote_in_element("a b\\\\", "a b\\\\")
+
+
+def test_backslash_before_space_letter_or_digit_stays() -> None:
+    assert not quote_in_element("a q b", "a \\q b")
+    assert not quote_in_element("a 1 b", "a \\1 b")
+    assert not quote_in_element("a  b", "a \\ b")
+    assert quote_in_element("a \\1 b", "a \\1 b")

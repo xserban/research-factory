@@ -11,6 +11,8 @@ serves them as stored, while the parsed block text has them removed. `quote_in_e
 removes, on the quote and on the block text alike, a backslash that precedes an ASCII punctuation
 character (the CommonMark escapable set), and nothing else: a backslash before a letter, digit or
 space stays. Both sides get the same rule, so it can only accept more quotes, never fewer.
+Known limit: block text is flattened, so a literal backslash inside a code span or math is also
+dropped (quote `a_b` verifies against code `a\\_b`); accepted as a small false accept.
 """
 
 import re

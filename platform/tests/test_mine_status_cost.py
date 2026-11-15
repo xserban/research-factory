@@ -94,3 +94,21 @@ def test_updates_view_syncs_the_index_once(mined: Project, monkeypatch: pytest.M
     syncs = _counting(monkeypatch, Index, "_sync")
     assert updates_view(mined) == expected
     assert len(syncs) == 1
+
+
+def test_updates_mined_equals_the_per_reader_path(mined: Project, world: list[str]) -> None:
+    """The shared-ledger `_mined` equals the earlier path where each reader built its own ledger."""
+    from factory.model.extraction import MinerScope
+    from factory.services.call_memo import entering
+    from factory.services.extraction_agreement import final_rows_restricted
+    from factory.services.mining import registered_miners
+    from factory.services.updates import _mined
+
+    previous = {}
+    for name in sorted({m.name for m in registered_miners(mined)}):
+        rows = final_rows_restricted(mined, set(world), scope=MinerScope(name))
+        if rows:
+            previous[name] = {r.work_id for r in rows}
+    with entering():
+        assert _mined(mined, set(world)) == previous
+    assert previous
