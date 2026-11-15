@@ -840,3 +840,17 @@ Status: new · Added: 2026-11-15 · Slice: — · Depends on: —
 **Why:** verbatim quoting is the core evidence rule; agents should never have to avoid a span because of rendering.
 **Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
 **Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).
+
+### IDEA-87 — Export papers to a notebook tool (NotebookLM, Open Notebook)
+Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: —
+**What:** a command that writes the current converted Markdown of a chosen set of works (a layer, a list of work ids, the works of a taxonomy category) as files for upload to NotebookLM, or pushes them through the REST API of a self-hosted Open Notebook (lfnovo/open-notebook, MIT). One file per work, header with work id, title and conversion id, so an answer read there can be traced back by hand.
+**Why:** the researcher wants to chat with the papers now; a one-way export costs little. NotebookLM (consumer subscription) has no public API as far as known (unverified; the Enterprise API runs through Google Cloud).
+**Rigour notes:** exploratory only: answers given in those tools are not records, their citations point to the tool's copy, not to factory anchors. Papers leave the machine (NotebookLM); the export lists what was sent. Open Notebook calls models itself, so it runs beside the factory, never inside it.
+**Open questions:** NotebookLM source limits per notebook (plan-dependent); whether to include appendices; Open Notebook API version.
+
+### IDEA-88 — Chat with the papers inside the factory, with verified citations
+Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: decision 116 (local embedding model), IDEA-85 (quote escapes)
+**What:** Claude answers questions over the corpus through MCP tools: (1) first the mined rows (taxonomies, miners: a checked semantic index with quotes), (2) then search over anchored paragraphs, keyword (SQLite FTS5, no model) and by meaning (local embeddings, one vector per anchored paragraph, a rebuildable projection keyed by the weights' tree hash, as decision 116), (3) Claude reads the paragraphs found and answers with anchors and verbatim quotes checked by `quote_in_element`. Optional: a chat saved as notes (events) that can become ideas or graph material. Ideas taken from Open Notebook: per-source context choice (full, summary, excluded), saved notes, hybrid search.
+**Why:** NotebookLM-like use without losing traceability; search only proposes candidates, Claude reads and decides (search ranks, never judges).
+**Rigour notes:** embedding model chosen by evaluation, not by name. Free test set from the technique miners (2026-11-16 run): each category definition is a query, the anchored quotes mined for it are the paragraphs a good search finds. Candidates: EmbeddingGemma (300M, 2k tokens, Gemma licence) or EmbeddingGemma 2 (Apache 2.0, 8k tokens; details to verify on the model card), SPECTER2 (already in decision 116, but trained on title and abstract, likely weak for paragraphs), keyword only as baseline.
+**Open questions:** is FTS5 plus Claude's own synonyms enough to start; recorded chats or not; interface (hub page with Claude, or MCP only); how answers enter the idea graph.
