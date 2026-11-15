@@ -168,6 +168,8 @@ Relation types `reuses`, `corrects`, `re-invents` and a basis that is a miner ro
 4. `other` cross-references dropped as categories (one entry, one category).
 5. No examples in taxonomy v1.
 6. Relations and graph deferred to a later phase.
+7. Techniques that the codebooks list in two stages (about 8 pairs, e.g. PW-07 and RV-20, DA-16 and RV-32, PW-22 and RV-22) stay two categories in version 1, separated by when in the pipeline the step runs and what it acts on (mutual exclude cues). This departs from A3.3 (one entry, several codebooks); version 2 merges them once calibration shows how often both fire.
+8. Category definitions are generic rewrites of each codebook entry (definition, include and exclude cues), written by agents from the full entry; the first drafts, written from truncated entries, were discarded.
 
 ### C8. Build order and gates
 
