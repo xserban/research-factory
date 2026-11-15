@@ -29,7 +29,7 @@ Invariants:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -185,16 +185,18 @@ def _rows(project: Project, import_id: str) -> list[_Row]:
     ]
 
 
-def _route(work: Work) -> tuple[str, str] | None:
+def _route(work: Work, available: Collection[str] | None = None) -> tuple[str, str] | None:
     """(query family, id) naming a stored work, or None when no source query can name it.
 
-    Precedence: OpenAlex id, PMID (a PubMed `id_list`), arXiv id, DOI."""
+    Precedence: OpenAlex id, PMID (a PubMed `id_list`), arXiv id, DOI. A PMID is skipped when
+    `available` (the registered source names) lacks `pubmed`, so the next identifier names the
+    work rather than the admission being refused for an unknown source."""
     ident = work.identifiers
     arxiv = ident.arxiv or (arxiv_id_from_doi(ident.doi) if ident.doi else None)
     route: tuple[str, str] | None = None
     if ident.openalex:
         route = "openalex", ident.openalex
-    elif ident.pmid:
+    elif ident.pmid and (available is None or "pubmed" in available):
         route = "pmid", ident.pmid
     elif arxiv:
         route = "arxiv", arxiv
@@ -205,7 +207,7 @@ def _route(work: Work) -> tuple[str, str] | None:
     return route
 
 
-def _plan(project: Project, import_id: str) -> _Plan:
+def _plan(project: Project, import_id: str, available: Collection[str] | None = None) -> _Plan:
     project.index.sync()
     corpus = {w.id for w in list_works(project)}
     corpus |= {a for m in active_merges(project) if m.primary in corpus for a in m.absorbed}
@@ -222,7 +224,7 @@ def _plan(project: Project, import_id: str) -> _Plan:
                 already += 1
                 continue
             work = None if row.no_source_record else get_work(project, row.work_id)
-            route = None if work is None else _route(work)
+            route = None if work is None else _route(work, available)
         if route is None:
             if not row.titled:
                 unadmittable += 1
@@ -339,7 +341,7 @@ def admit_import(
         if gaps and indexed_rigor_mode(project) is not RigorMode.EXPLORATORY:
             issues += gaps
             gaps = []
-        plan = _plan(project, import_id)
+        plan = _plan(project, import_id, adapters)
         if done and not plan.specs and not issues:
             issues.append(ValidationIssue("import_id", _nothing_left(plan.unadmittable)))
         for spec in plan.specs:

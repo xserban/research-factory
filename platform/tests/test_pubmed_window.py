@@ -77,3 +77,15 @@ def test_registering_refuses_listed_since_on_an_id_list(project: Project) -> Non
         filters={"listed_since": "2026-01-05"},
     )
     assert _issues(project, spec)
+
+
+def test_a_watch_window_spec_of_a_pubmed_keyword_query_is_accepted(project: Project) -> None:
+    """The watch builds `window_spec` (planned query plus `listed_since`); PubMed registers it."""
+    from factory.living.window import window_spec
+    from factory.model.protocol import PlannedQuery
+
+    planned = PlannedQuery(source="pubmed", kind=QueryKind.KEYWORD, text="asthma[MeSH]")
+    spec = window_spec(planned, date(2026, 1, 5))
+    assert spec.filters == {"listed_since": "2026-01-05"}
+    assert "pubmed" in window_filter_sources()
+    assert _issues(project, spec) == []

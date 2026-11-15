@@ -9,11 +9,16 @@ Invariants:
 - The slice terms are `(<parent text>) AND ("YYYY/MM/DD"[dp] : "YYYY/MM/DD"[dp])`, sent verbatim
   by the adapter, so each slice is an ordinary recorded search with its own archived pages and
   its own reported count (R-03, R-23).
-- Slices of one split are disjoint and cover [1000/01/01, 3000/12/31], so a difference between
-  the sum of the slice counts and the unsplit count can only be records PubMed holds without a
-  `[dp]` date, or an index that moved between requests; the report states the difference.
+- Slices of one split are windows over [1000/01/01, 3000/12/31] that do not overlap as dates,
+  but `[dp]` matches a record's print or its electronic date, so a record may fall in two slices
+  (a December e-publication with a next-year print date). How `[dp]` treats a record dated by
+  month or year only, at day level, is not verified here. The slice total is therefore a sanity
+  check against the unsplit count, not proof of coverage; the report states the difference.
+- A rerun may cut a window finer (PubMed grew); the older, coarser slice stays registered. The
+  report counts the finest registered slices only, and lists the superseded ones as overlaps.
 - A day above the cap cannot be split further: it stays a slice, runs partial with the
-  `esearch-cap` note, and is flagged `over_cap`.
+  `esearch-cap` note, and is flagged `over_cap`. A rerun does not repeat such a run (it has no
+  resume token); the report marks it `capped`.
 - The parent/children relation is not stored. A child's text names its parent's text, so
   `slice_report` derives the relation from the registered queries; no event type is added.
 - Planning counts are archived as blobs (hashes returned) but written as no event: the
@@ -31,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
+from pydantic import Field
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -85,15 +91,6 @@ class Window:
     start: date
     end: date
     unit: str  # "range" | "year" | "month" | "day"
-
-
-def _is_year(w: Window) -> bool:
-    return w.start == date(w.start.year, 1, 1) and w.end == date(w.start.year, 12, 31)
-
-
-def _is_month(w: Window) -> bool:
-    last = calendar.monthrange(w.start.year, w.start.month)[1]
-    return w.start.day == 1 and w.end == date(w.start.year, w.start.month, last)
 
 
 def finer(window: Window) -> list[Window]:
@@ -206,9 +203,15 @@ class SliceReport(StrictModel):
     slice_retrieved_total: int
     difference: int | None
     note: str | None
+    overlaps: list[SliceOverlap] = Field(default_factory=list)
 
 
 class ChildRow(StrictModel):
+    """`counted` is false for a slice whose window holds finer registered slices (the plan was
+    cut again after PubMed grew): it is left out of the totals. `capped` marks a partial run
+    with the cap note and no resume token: a day above the cap, or an open end, which no further
+    cut can bring under it."""
+
     query_id: str
     start: date
     end: date
@@ -216,6 +219,15 @@ class ChildRow(StrictModel):
     reported_count: int | None
     retrieved_count: int | None
     over_cap: bool
+    counted: bool = True
+    capped: bool = False
+
+
+class SliceOverlap(StrictModel):
+    """A registered slice and the finer registered slices inside its window."""
+
+    coarse_query_id: str
+    finer_query_ids: list[str]
 
 
 SliceReport.model_rebuild()
@@ -226,7 +238,8 @@ def slice_report(project: Project, parent_query_id: str) -> SliceReport:
 
     The relation is derived: a child is a registered PubMed keyword search whose text is
     `slice_term` of the parent's text. The difference (slice total minus unsplit count) is
-    stated, never hidden (R-23); a slice with no finished run counts as nothing so far.
+    stated, never hidden (R-23); a slice with no finished run counts as nothing so far. The total
+    is a sanity check, not proof of coverage: `[dp]` can place one record in two slices.
     """
     project.index.sync()
     with project.index.connect() as conn:
@@ -273,18 +286,44 @@ def slice_report(project: Project, parent_query_id: str) -> SliceReport:
             reported_count=reported,
             retrieved_count=None if run is None else run["retrieved_count"],
             over_cap=reported is not None and reported > CAP,
+            capped=run is not None and _is_capped(run),
         )
     children = [seen[key] for key in sorted(seen)]
-    reported_total = sum(c.reported_count or 0 for c in children)
-    retrieved_total = sum(c.retrieved_count or 0 for c in children)
+    # A slice that holds finer registered slices was superseded by a later, finer cut: count the
+    # finest coverage only, and say so.
+    overlaps: list[SliceOverlap] = []
+    superseded: set[str] = set()
+    for coarse in children:
+        inside = [
+            f.query_id
+            for f in children
+            if f is not coarse and coarse.start <= f.start and f.end <= coarse.end
+        ]
+        if inside:
+            superseded.add(coarse.query_id)
+            overlaps.append(SliceOverlap(coarse_query_id=coarse.query_id, finer_query_ids=inside))
+    children = [c.model_copy(update={"counted": c.query_id not in superseded}) for c in children]
+    counted = [c for c in children if c.counted]
+    reported_total = sum(c.reported_count or 0 for c in counted)
+    retrieved_total = sum(c.retrieved_count or 0 for c in counted)
     difference = None if parent_reported is None else reported_total - int(parent_reported)
-    note = None
-    if difference:
-        note = (
-            f"slice counts total {reported_total} against {parent_reported} for the unsplit "
-            f"query (difference {difference:+d}): records without a [dp] date, or an index that "
-            "moved between requests"
+    parts: list[str] = []
+    if overlaps:
+        parts.append(
+            f"{len(overlaps)} slice(s) overlap finer slices registered later and are left out of "
+            "the totals (the plan was cut again after PubMed's counts grew)"
         )
+    if difference:
+        parts.append(
+            f"slice counts total {reported_total} against {parent_reported} for the unsplit "
+            f"query (difference {difference:+d}): records without a [dp] date, a record counted "
+            "in two slices because [dp] matches the print or the electronic date, or an index "
+            "that moved between requests"
+        )
+    capped = sum(1 for c in counted if c.capped)
+    if capped:
+        parts.append(f"{capped} slice(s) capped, cannot be cut further")
+    note = "; ".join(parts) or None
     return SliceReport(
         parent_query_id=parent_query_id,
         parent_reported=None if parent_reported is None else int(parent_reported),
@@ -293,6 +332,17 @@ def slice_report(project: Project, parent_query_id: str) -> SliceReport:
         slice_retrieved_total=retrieved_total,
         difference=difference,
         note=note,
+        overlaps=overlaps,
+    )
+
+
+def _is_capped(run: Mapping[str, Any]) -> bool:
+    note = run.get("note")
+    return (
+        run["status"] == RunStatus.PARTIAL.value
+        and note is not None
+        and "esearch-cap" in str(note)
+        and not run.get("resume_token")
     )
 
 
@@ -302,7 +352,8 @@ def _latest_runs(conn: Connection) -> dict[str, Mapping[str, Any]]:
     for row in (
         conn.execute(
             text(
-                "SELECT query_id, status, reported_count, retrieved_count, started_at, run_id "
+                "SELECT query_id, status, reported_count, retrieved_count, started_at, run_id, "
+                "note, resume_token "
                 "FROM runs ORDER BY started_at, run_id"
             )
         )
@@ -430,9 +481,11 @@ def run_slices(
         )
     runs: list[RunSummary] = []
     for slice_query in ids:
-        status, run_id, token = _last_run(project, slice_query)
+        status, run_id, token, note = _last_run(project, slice_query)
         if status == RunStatus.COMPLETE.value:
             continue
+        if status == RunStatus.PARTIAL.value and not token and "esearch-cap" in (note or ""):
+            continue  # capped: a day above the cap or an open end, a rerun cannot get further
         resume = run_id if status == RunStatus.PARTIAL.value and token else None
         runs.append(
             run_query(project, slice_query, sources=sources, actor=actor, resume_run=resume)
@@ -465,13 +518,17 @@ def _registered(project: Project, term: str) -> str | None:
     return None if row is None else str(row[0])
 
 
-def _last_run(project: Project, query_id: str) -> tuple[str | None, str | None, str | None]:
+def _last_run(
+    project: Project, query_id: str
+) -> tuple[str | None, str | None, str | None, str | None]:
     with project.index.connect() as conn:
         row = conn.execute(
             text(
-                "SELECT status, run_id, resume_token FROM runs WHERE query_id = :q "
+                "SELECT status, run_id, resume_token, note FROM runs WHERE query_id = :q "
                 "ORDER BY started_at DESC, run_id DESC"
             ),
             {"q": query_id},
         ).first()
-    return (None, None, None) if row is None else (str(row[0]), str(row[1]), row[2])
+    if row is None:
+        return (None, None, None, None)
+    return (str(row[0]), str(row[1]), row[2], None if row[3] is None else str(row[3]))

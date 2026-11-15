@@ -250,3 +250,83 @@ def test_a_count_difference_is_stated(explore_project: Project) -> None:
     assert summary.report.difference == -1
     assert summary.report.note is not None and "-1" in summary.report.note
     assert slice_report(explore_project, parent).difference == -1
+
+
+def _live_world(counts: dict[str, int]) -> dict[str, SourceFactory]:
+    """A PubMed whose counts the test changes between runs: `asthma`, `y2020`, `d2020-01-05`,
+    month counts by `m2020-MM`, and `y2021`."""
+    pmids = iter(range(1, 10_000))
+
+    def count_for(term: str) -> int:
+        if term == "asthma":
+            return counts["asthma"]
+        parsed = parse_slice(term)
+        assert parsed is not None
+        _, start, end = parsed
+        if start == date(2020, 1, 5) == end:
+            return counts.get("d2020-01-05", 0)
+        if (start.month, start.day, end.month, end.day) == (1, 1, 12, 31):
+            return counts.get(f"y{start.year}", 0)
+        if start.year == 2020 and start.day == 1 and end.day >= 28 and start.month == end.month:
+            return counts.get(f"m2020-{start.month:02d}", 0)
+        return 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("esearch.fcgi"):
+            return httpx.Response(200, text=esearch(count_for(request.url.params["term"])))
+        n = int(request.url.params["retmax"])
+        body = efetch(*[article(str(p), f"Title {p}") for p in (next(pmids) for _ in range(n))])
+        return httpx.Response(200, text=body)
+
+    source = make_source(handler)
+    factory = SourceFactory(
+        PubmedSource.kinds,
+        lambda _s, _c: source,
+        probe_kinds=frozenset({QueryKind.KEYWORD}),
+        window_filter=True,
+    )
+    return {"pubmed": factory}
+
+
+@pytest.mark.usefixtures("small_cap")
+def test_a_year_later_split_into_months_is_not_counted_twice(explore_project: Project) -> None:
+    counts = {"asthma": 11, "y2020": 10, "y2021": 1}
+    sources = _live_world(counts)
+    parent = _parent(explore_project, sources)
+    run_query(explore_project, parent, sources=sources)
+    actor = explore_project.human_actor()
+    first = run_slices(explore_project, actor, parent, sources=sources, first_year=2020)
+    assert first.report.slice_reported_total == 11 and first.report.overlaps == []
+
+    # PubMed grew: the year is now over the cap and is re-planned as months.
+    counts.update({"asthma": 13, "y2020": 12, "y2021": 1})
+    counts.update({f"m2020-{m:02d}": 3 for m in range(1, 5)})
+    run_query(explore_project, parent, sources=sources)
+    again = run_slices(explore_project, actor, parent, sources=sources, first_year=2020)
+    report = again.report
+    assert len(report.children) == 6  # old year, four months, 2021
+    assert report.parent_reported == 13
+    assert report.slice_reported_total == 13 and report.difference == 0
+    [overlap] = report.overlaps
+    year = next(
+        c for c in report.children if (c.start, c.end) == (date(2020, 1, 1), date(2020, 12, 31))
+    )
+    assert overlap.coarse_query_id == year.query_id and not year.counted
+    assert len(overlap.finer_query_ids) == 4
+    assert report.note is not None and "overlap" in report.note
+
+
+@pytest.mark.usefixtures("small_cap")
+def test_a_capped_day_is_not_run_again_and_is_reported_capped(explore_project: Project) -> None:
+    counts = {"asthma": 30, "y2020": 30, "m2020-01": 30, "d2020-01-05": 12}
+    sources = _live_world(counts)
+    parent = _parent(explore_project, sources)
+    run_query(explore_project, parent, sources=sources)
+    actor = explore_project.human_actor()
+    first = run_slices(explore_project, actor, parent, sources=sources, first_year=2020)
+    assert len(first.runs) == 1 and first.runs[0].status is RunStatus.PARTIAL
+    again = run_slices(explore_project, actor, parent, sources=sources, first_year=2020)
+    assert again.runs == []
+    [child] = again.report.children
+    assert child.over_cap and child.capped
+    assert again.report.note is not None and "capped, cannot be cut further" in again.report.note
