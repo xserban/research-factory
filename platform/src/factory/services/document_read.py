@@ -251,7 +251,8 @@ def _gate(
     kind = None if label is None else task_kind(ScreeningStage.FULL_TEXT, label)
     if label is None:
         extracting = _extraction_pass(project, session)
-        kind = None if extracting is None else kinds_for(extracting[0])[extracting[1]]
+        # every miner of a session shares one label, hence one task kind (decision 129)
+        kind = None if not extracting else kinds_for(extracting[0][0])[extracting[0][1]]
     if kind is None:
         kind = _appraisal_kind(project, session)
     if kind is None:
@@ -289,12 +290,12 @@ def _held_selection(
 ) -> frozenset[str]:
     """The anchor ids a miner task held (or completed) by `session` selected for `work_id` at
     `conversion_id`, from the task content (ids only). Refused on `selected` when there is none."""
-    extracting = None if session is None else _extraction_pass(project, session)
-    if session is None or extracting is None:
+    extracting = [] if session is None else _extraction_pass(project, session)
+    if session is None or not extracting:
         raise FactoryValidationError(
             [ValidationIssue("selected", "this session holds no miner task")]
         )
-    kind = kinds_for(extracting[0])[extracting[1]]
+    kind = kinds_for(extracting[0][0])[extracting[0][1]]
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
@@ -303,6 +304,8 @@ def _held_selection(
             ),
             {"kind": kind, "s": session},
         ).all()
+    # the latest matching task of each miner the session joined; the selection is their union
+    selected: dict[str, frozenset[str]] = {}
     for (blob,) in rows:
         content = project.blobs.get_json(str(blob))
         if not isinstance(content, dict):
@@ -310,6 +313,7 @@ def _held_selection(
         anchor_ids = content.get("anchors")
         if not isinstance(anchor_ids, list):
             continue
+        miner = str(content.get("miner"))
         records = content.get("records")
         for record in records if isinstance(records, list) else []:
             if (
@@ -317,7 +321,10 @@ def _held_selection(
                 and _same_work(record.get("work_id"), work_id)
                 and record.get("conversion_id") == conversion_id
             ):
-                return frozenset(str(a) for a in anchor_ids)
+                selected.setdefault(miner, frozenset(str(a) for a in anchor_ids))
+                break
+    if selected:
+        return frozenset().union(*selected.values())
     raise FactoryValidationError(
         [
             ValidationIssue(
@@ -350,14 +357,18 @@ def _appraisal_kind(project: Project, session: str) -> str | None:
     return None if row is None else str(row[0])
 
 
-def _extraction_pass(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None:
-    """The (scope, pass) of the extraction pass the session joined, if any."""
+def _extraction_pass(project: Project, session: str) -> list[tuple[ScopeKey, PassLabel]]:
+    """The (scope, pass) of every extraction pass the session joined, by scope; empty when none.
+    Several only for miners of one label (decision 129)."""
     with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
+        rows = conn.execute(
+            text(
+                "SELECT scope, pass_label FROM extraction_sessions WHERE session = :s "
+                "ORDER BY scope"
+            ),
             {"s": session},
-        ).first()
-    return None if row is None else (scope_from_value(str(row[0])), PassLabel(str(row[1])))
+        ).all()
+    return [(scope_from_value(str(s)), PassLabel(str(p))) for s, p in rows]
 
 
 def _held_pins(project: Project, session: str, kind: str, work_id: str) -> list[tuple[str, str]]:
