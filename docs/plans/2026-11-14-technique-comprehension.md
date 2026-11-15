@@ -146,7 +146,7 @@ The notes, codebooks and CSVs are registered once as files (`factory files regis
 - `evidence`: enum `independent-test`, `own-ablation`, `own-comparison`, `asserted-only`, `reported-failure` (A6);
 - `parameters`: quote, optional.
 Each enum attribute needs its own anchored quote (registered-miner rule). Change: `derive_miner(..., attributes=())` appends attribute fields after the derived ones; registration re-derives with the attributes the spec declares (fields beyond `category`, `quote`, `described_as`), so a spec without attributes derives byte-identical to today. Attributes are never key fields, never named like a derived field, kinds enum, quote, number or integer only, never required. CLI: `factory taxonomy derive --attributes <json>`.
-Selector: included-ft, protocol use `layers: [core]`, exploratory until calibrated; two passes (B on the protocol sample); procedure `rf-taxonomy`.
+Selector: included-ft, protocol use `layers: [core]`, exploratory until calibrated; two passes (B on the protocol sample); procedure `rf-taxonomy`. Agreement: `taxonomy_agreement` measures the category only; `status` and `evidence` are compared fields and appear in the generic per-field agreement (`extraction_agreement`, hub agreement page). Attributes are forbidden on `not-stated` rows (derived conditional), and the derived task text says when to give them.
 
 ### C4. Hub (small change)
 
