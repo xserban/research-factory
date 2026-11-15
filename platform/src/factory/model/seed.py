@@ -1,7 +1,7 @@
 """Seeds: works the review must find (positive) or must not contain (negative), by identifier.
 
 A seed is named by the person or agent that states it; the platform only looks it up. Its
-identity keys (normalised DOI, arXiv id, OpenAlex id) are what duplicates are checked against,
+identity keys (normalised DOI, arXiv id, OpenAlex id, PMID) are what duplicates are checked against,
 so the same paper given in two forms is one seed. Written by `factory.services.seeds`, folded by
 `factory.index.seeds`.
 """
@@ -9,14 +9,26 @@ so the same paper given in two forms is one seed. Written by `factory.services.s
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self
 
-from pydantic import Field, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from factory.model.base import StrictModel
 from factory.model.identity import DecisionId
 from factory.model.work import RUN_ID_RE, ProvenanceMethod
-from factory.model.work_ids import WORK_ID_RE, arxiv_id_from_doi, normalize_arxiv, normalize_doi
+from factory.model.work_ids import (
+    WORK_ID_RE,
+    arxiv_id_from_doi,
+    normalize_arxiv,
+    normalize_doi,
+    normalize_pmid,
+)
 
 SEED_ID_RE = r"^(SEED|NEG)\d{2,}$"
 POSITIVE_SEED_ID_RE = r"^SEED\d{2,}$"
@@ -45,13 +57,30 @@ class SeedSpec(StrictModel):
     doi: str | None = None
     arxiv: str | None = None
     openalex: str | None = None
+    pmid: str | None = None
     why: str = ""
+
+    @field_validator("pmid")
+    @classmethod
+    def _normal_pmid(cls, value: str | None) -> str | None:
+        """A blank pmid is None, as a blank doi is tolerated; otherwise it is normalised."""
+        return None if value is None or not value.strip() else normalize_pmid(value)
 
     @model_validator(mode="after")
     def _has_identifier(self) -> Self:
-        if not any(value and value.strip() for value in (self.doi, self.arxiv, self.openalex)):
-            raise ValueError("give at least one of doi, arxiv or openalex")
+        given = (self.doi, self.arxiv, self.openalex, self.pmid)
+        if not any(value and value.strip() for value in given):
+            raise ValueError("give at least one of doi, arxiv, openalex or pmid")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_pmid(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """`pmid` is left out of every dump while None, so seed events written before it existed
+        (and the blobs and hashes over them) read and dump as they were."""
+        data: dict[str, Any] = handler(self)
+        if data.get("pmid") is None:
+            data.pop("pmid", None)
+        return data
 
     def identity_keys(self) -> dict[str, str]:
         """Normalised identifiers by field name. A DOI that is an arXiv DOI also keys its arXiv id.
@@ -69,6 +98,8 @@ class SeedSpec(StrictModel):
             keys["doi"] = normalize_doi(self.doi)
         if self.openalex and self.openalex.strip():
             keys["openalex"] = normalize_openalex(self.openalex)
+        if self.pmid and self.pmid.strip():
+            keys["pmid"] = normalize_pmid(self.pmid)
         return keys
 
 

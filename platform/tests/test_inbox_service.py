@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+import httpx
 import pytest
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all
+from factory.inbox.links import IdentifierKind
 from factory.model.inbox import Basis, ResolveStatus
 from factory.model.screening import Channel, PassLabel
+from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
 from factory.model.work import ProvenanceMethod
 from factory.services import inbox as inbox_service
 from factory.services.calibration import is_pass_session
@@ -22,12 +26,15 @@ from factory.services.inbox import (
     add_links,
     inbox_sessions,
     list_items,
+    lookup_query,
     resolve_links,
     withdraw_link,
 )
 from factory.services.protocol import record_deviation
 from factory.services.screening import join_pass
 from factory.services.search import get_work
+from factory.sources.base import SearchResult
+from factory.sources.registry import SourceFactory
 from tests.helpers import SourcesFor, _setup, ready_protocol
 from tests.inbox_helpers import (
     KNOWLEDGE,
@@ -388,3 +395,139 @@ def test_item_closed_mid_resolve_reports_the_written_run(
     [run_started] = _events(project, "search.run_started")
     assert run_started.payload["run_id"] == outcome.run_id
     assert _events(project, "inbox.link_resolved") == []
+
+
+# --- PubMed and PMC links (plan pmid-seeds) ---
+
+
+class _FakePubmed:
+    """A pubmed adapter that records the spec it was asked for and finds nothing."""
+
+    name = "pubmed"
+    kinds = frozenset({QueryKind.KEYWORD, QueryKind.ID_LIST})
+    window_filter = False
+
+    def __init__(self, specs: list[QuerySpec]) -> None:
+        self._specs = specs
+
+    def run(self, spec: QuerySpec, **_kw: Any) -> SearchResult:
+        self._specs.append(spec)
+        return SearchResult(
+            source="pubmed",
+            query_sent=spec.text,
+            reported_count=0,
+            works=[],
+            pages=1,
+            status=RunStatus.COMPLETE,
+        )
+
+
+def _pubmed_sources(specs: list[QuerySpec]) -> dict[str, SourceFactory]:
+    return {
+        "pubmed": SourceFactory(
+            _FakePubmed.kinds,
+            lambda _s, _c: _FakePubmed(specs),
+        )
+    }
+
+
+def _idconv(records: list[dict[str, str]], urls: list[str]) -> Any:
+    def fetch(url: str) -> httpx.Response:
+        urls.append(url)
+        return httpx.Response(
+            200, content=json.dumps({"status": "ok", "records": records}).encode()
+        )
+
+    return fetch
+
+
+def _resolve_with(
+    project: Project, human: Actor, sources: dict[str, SourceFactory], fetch: Any = None
+) -> list[Any]:
+    return resolve_links(project, human, sources=sources, page_fetch=fetch)
+
+
+def test_lookup_query_for_a_pmid_is_pubmed_id_list() -> None:
+    spec = lookup_query(IdentifierKind.PMID, "31452104")
+    assert (spec.source, spec.kind, spec.text, spec.purpose) == (
+        "pubmed",
+        QueryKind.ID_LIST,
+        "31452104",
+        QueryPurpose.SUPPLIED,
+    )
+
+
+def test_pmid_link_resolves_through_pubmed(explore_project: Project, human: Actor) -> None:
+    capture(explore_project, human, "https://pubmed.ncbi.nlm.nih.gov/31452104/")
+    specs: list[QuerySpec] = []
+    [outcome] = _resolve_with(explore_project, human, _pubmed_sources(specs))
+    assert outcome.status is ResolveStatus.NOT_FOUND
+    assert [(s.source, s.kind, s.text) for s in specs] == [
+        ("pubmed", QueryKind.ID_LIST, "31452104")
+    ]
+    [registered] = _events(explore_project, "query.registered")
+    assert registered.payload["spec"]["purpose"] == "supplied"
+
+
+def test_pmcid_converts_to_pmid(explore_project: Project, human: Actor) -> None:
+    capture(explore_project, human, "PMC6700123")
+    specs: list[QuerySpec] = []
+    urls: list[str] = []
+    fetch = _idconv([{"pmcid": "PMC6700123", "pmid": "31452104", "doi": "10.1/x"}], urls)
+    [outcome] = _resolve_with(explore_project, human, _pubmed_sources(specs), fetch)
+    assert outcome.status is ResolveStatus.NOT_FOUND
+    assert [(s.source, s.text) for s in specs] == [("pubmed", "31452104")]
+    assert urls == [
+        "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/?ids=PMC6700123&format=json"
+    ]
+
+
+def test_pmcid_without_pmid_uses_the_doi(explore_project: Project, human: Actor) -> None:
+    capture(explore_project, human, "PMC6700123")
+    keyed = Keyed(openalex={"doi:10.2000/s1": [link_item(1)]})
+    fetch = _idconv([{"pmcid": "PMC6700123", "doi": "10.2000/S1"}], [])
+    [outcome] = resolve_links(explore_project, human, sources=keyed.sources(), page_fetch=fetch)
+    assert outcome.status is ResolveStatus.NEW
+
+
+def test_pmcid_converting_to_nothing_stays_open(explore_project: Project, human: Actor) -> None:
+    [item_id] = capture(explore_project, human, "PMC6700123")
+    fetch = _idconv([{"pmcid": "PMC6700123", "status": "error"}], [])
+    [outcome] = _resolve_with(explore_project, human, raising_sources(), fetch)
+    assert outcome.status is None
+    assert [i.reason for i in outcome.issues] == ["pmcid-not-converted"]
+    assert _events(explore_project, "inbox.link_resolved") == []
+    assert list_items(explore_project).items[0].item_id == item_id
+
+
+def test_pmcid_converter_reply_is_archived(
+    explore_project: Project, human: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture(explore_project, human, "PMC6700123")
+    body = json.dumps({"records": [{"pmcid": "PMC6700123", "pmid": "31452104"}]}).encode()
+
+    def fetch(_url: str) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    stored: list[bytes] = []
+    real_put = explore_project.library.put
+
+    def spy(data: bytes) -> str:
+        stored.append(data)
+        return real_put(data)
+
+    monkeypatch.setattr(explore_project.library, "put", spy)
+    _resolve_with(explore_project, human, _pubmed_sources([]), fetch)
+    assert body in stored
+
+
+def test_work_keys_include_the_normalised_pmid() -> None:
+    from factory.model.work import Identifiers, Work
+    from factory.services.inbox import _work_keys
+
+    work = Work.model_construct(
+        id="rf:x-12345678", identifiers=Identifiers(openalex="W1", pmid="0031452104")
+    )
+    keys = _work_keys(work)
+    assert "pmid:31452104" in keys
+    assert "openalex:W1" in keys

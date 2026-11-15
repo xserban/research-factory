@@ -723,7 +723,7 @@ def build_server(
         skill: str,
         decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
-        """Add seeds by identifier (doi, arxiv or openalex) and look each one up. Each seed is
+        """Add seeds by identifier (doi, arxiv, openalex or pmid) and look each one up. Each seed is
         written or rejected on its own; rejections name the item by index and field.
         `decision_ids` are the selected `seeds` decisions the batch implements; pilot and
         systematic projects refuse the whole call without one. A failed binding (no id, an

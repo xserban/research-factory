@@ -25,6 +25,7 @@ _ARXIV_URL = re.compile(
 _QUERY_OR_FRAGMENT = re.compile(r"[?#].*$")
 _ARXIV_SCHEME = re.compile(r"^arxiv:", re.IGNORECASE)
 _PDF_SUFFIX = re.compile(r"\.pdf$", re.IGNORECASE)
+_PMID_PREFIX_RE = re.compile(r"^pmid\s*:\s*", re.IGNORECASE)
 # DataCite mints a DOI for every arXiv preprint. OpenAlex returns that DOI where the arXiv
 # adapter returns the bare id, so without this the same preprint arrives as two works.
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(?P<id>.+)$", re.IGNORECASE)
@@ -156,3 +157,26 @@ def work_id(
     digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:8]
     surname = _surname(authors[0]) if authors else "anon"
     return f"rf:{surname}{year or ''}-{_title_slug(title)}-{digest}"
+
+
+def normalize_pmid(value: str) -> str:
+    """The bare PMID: stripped, a `PMID:` or `pmid:` prefix and leading zeros removed (a PMID is
+    a positive integer). Raises ValueError unless the rest is ASCII digits, not all zero."""
+    stripped = _PMID_PREFIX_RE.sub("", value.strip()).strip()
+    if not (stripped.isascii() and stripped.isdigit()):
+        raise ValueError("pmid must be digits only, optionally prefixed `PMID:`")
+    bare = stripped.lstrip("0")
+    if not bare:
+        raise ValueError("pmid must be a positive integer")
+    return bare
+
+
+def work_pmid_key(value: str | None) -> str | None:
+    """The normalised PMID of a work's stored identifier, or None when absent or malformed.
+    The one way the work side is compared with a seed's `pmid` key."""
+    if not value or not value.strip():
+        return None
+    try:
+        return normalize_pmid(value)
+    except ValueError:
+        return None

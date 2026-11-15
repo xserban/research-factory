@@ -763,7 +763,7 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **Open questions:** fixed windows or recursive halving.
 
 ### IDEA-76 — PubMed in watch cycles, the inbox and seeds
-Status: seeds by PMID and PubMed/PMC inbox links built and reviewed on branch `pmid-seeds` (held unmerged, see IDEA-79); watch window and import admission by PMID not built · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; merged into main (see IDEA-79); watch window and import admission by PMID not built · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** a `listed_since` window for PubMed (`[edat]`), PubMed and PMC links in the inbox parser, seeds and import admission by PMID.
 **Why:** a biomedical project lives in PMIDs; today a seed or link needs a DOI, arXiv or OpenAlex id.
 **Rigour notes:** a PMID seed is resolved and recorded like the other kinds; held-out withholding covers the PMID.

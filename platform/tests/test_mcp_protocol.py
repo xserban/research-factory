@@ -542,3 +542,25 @@ async def test_search_run_admits_an_unplanned_query_only_under_a_current_deviati
         },
     )
     assert _fields(stale) == ["deviation_id"]
+
+
+@pytest.mark.anyio
+async def test_seed_add_accepts_a_pmid_and_refuses_a_bad_one(
+    settings: Settings, project: Project, clock: FixedClock, mock_sources: Any, agent: Actor
+) -> None:
+    record_pilot_question(project, agent)
+    body = await _call(
+        settings,
+        clock,
+        dict(mock_sources()),
+        "seed_add",
+        {
+            "project": "demo",
+            "seeds": [{"kind": "positive", "cite": "Doe 2020", "pmid": "PMID: x1"}],
+            "decision_ids": bind_ids(project, agent, DecisionLevel.SEEDS),
+            **AGENT,
+        },
+    )
+    rejected = body["data"]["rejected"]
+    assert [r["index"] for r in rejected] == [0]
+    assert body["data"]["written"] == []
