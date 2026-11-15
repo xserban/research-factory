@@ -135,16 +135,24 @@ def cycles(project: Project) -> list[CycleView]:
 
 
 def search_baselines(project: Project) -> dict[str, date]:
-    """Per source, the date (start) of the latest complete run of a planned query (purpose
-    `search`) that belongs to no watch cycle: when the source's searches last completed outside
-    watch cycles. A source with no such run is absent."""
+    """Per source, the date by which every one of its searches had last completed outside watch
+    cycles: for each `search` query of the source, the start of its latest complete run that
+    belongs to no watch cycle, and then the earliest of those dates. A source with no such run
+    is absent.
+
+    The earliest, not the latest: one query re-run by hand, or a query whose text was amended
+    since (its new spec has no run yet), must not move the anchor past what the others covered.
+    Erring early only widens the first window; the incremental dedup absorbs the overlap."""
     project.index.sync()
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT q.source, MAX(r.started_at) FROM runs r JOIN queries q "
-                "ON q.query_id = r.query_id WHERE r.status = 'complete' AND q.purpose = 'search' "
-                "AND r.run_id NOT IN (SELECT run_id FROM watch_cycle_runs) GROUP BY q.source"
+                "SELECT source, MIN(last_started) FROM ("
+                "SELECT q.source AS source, MAX(r.started_at) AS last_started FROM runs r "
+                "JOIN queries q ON q.query_id = r.query_id WHERE r.status = 'complete' "
+                "AND q.purpose = 'search' "
+                "AND r.run_id NOT IN (SELECT run_id FROM watch_cycle_runs) "
+                "GROUP BY q.query_id) GROUP BY source"
             )
         ).all()
     return {str(source): parse_ts(str(started)).date() for source, started in rows}

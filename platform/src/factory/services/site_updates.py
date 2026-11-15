@@ -38,7 +38,7 @@ from factory.services.updates import (
     updates_view,
 )
 
-_ROUTES: Final = ("all", "inbox", "feed", "watch", "chase", "other")
+_ROUTES: Final = ("all", "inbox", "feed", "watch", "chase", "search", "other")
 _CSS: Final = (
     "table{border-collapse:collapse;margin:8px 0;max-width:100%}td,th{border:1px solid var(--mut);padding:4px 10px;"
     "text-align:left;vertical-align:top}th{color:var(--dim);font-weight:600}"
@@ -200,8 +200,8 @@ def _growth(view: UpdatesView) -> str:
         for i, p in enumerate(view.growth)
     )
     table = (
-        "<table><tr><th>version</th><th>snapshot</th><th>recorded</th><th>included in the corpus</th>"
-        f"<th>identified</th><th>screened</th><th>included</th><th>identified by route</th></tr>{rows}</table>"
+        "<table><tr><th>version</th><th>snapshot</th><th>recorded</th><th>studies included</th>"
+        f"<th>identified</th><th>screened</th><th>passed title/abstract</th><th>identified by route</th></tr>{rows}</table>"
     )
     return f"<div class=box><b>Growth</b>{_svg(view.growth)}<p class=msg>Update flow of each snapshot.</p>{table}</div>"
 
