@@ -1265,10 +1265,15 @@ def settled_rows(
 
 
 def final_rows_restricted(
-    project: Project, works: Collection[str], *, scope: ScopeKey = Scope.EVIDENCE
+    project: Project,
+    works: Collection[str],
+    *,
+    scope: ScopeKey = Scope.EVIDENCE,
+    ledger: Ledger | None = None,
 ) -> list[FinalRow]:
-    """`final_rows` of the given works only; equal to the filter of `final_rows` by work."""
-    state = _load(project, scope, works)
+    """`final_rows` of the given works only; equal to the filter of `final_rows` by work.
+    A read-only caller may pass one `scope_ledger` so the state's readers do not each build one."""
+    state = _load(project, scope, works, ledger)
     return [] if state is None else _finals(state)
 
 

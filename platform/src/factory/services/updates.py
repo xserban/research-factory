@@ -39,6 +39,7 @@ from factory.model.extraction import MinerScope
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.dedup import active_merges
+from factory.services.extraction import scope_ledger
 from factory.services.extraction_agreement import final_rows_restricted
 from factory.services.flow_ledger import LedgerRow, flow_ledger
 from factory.services.mining import registered_miners
@@ -126,7 +127,7 @@ class UpdatesView(StrictModel):
 def updates_view(project: Project) -> UpdatesView:
     """The whole updates page as data. Writes nothing (the index sync is the projector's read).
     Runs in one `call_memo` scope, so the per-miner reads share the population derivations."""
-    with entering():
+    with project.index.snapshot(), entering():
         return _view(project)
 
 
@@ -330,7 +331,10 @@ def _mined(project: Project, works: set[str]) -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for name in sorted({m.name for m in registered_miners(project)}):
         try:
-            rows = final_rows_restricted(project, works, scope=MinerScope(name))
+            scope = MinerScope(name)
+            rows = final_rows_restricted(
+                project, works, scope=scope, ledger=scope_ledger(project, scope)
+            )
         except FactoryValidationError:
             continue
         if rows:

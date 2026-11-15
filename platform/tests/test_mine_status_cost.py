@@ -69,3 +69,28 @@ def test_mine_status_inside_a_write_hold_still_answers(mined: Project) -> None:
     expected = mine_status(mined)
     with mined.index.exclusive():
         assert mine_status(mined) == expected
+
+
+def test_updates_mined_reads_one_ledger_per_miner(
+    mined: Project, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import extraction
+    from factory.services.call_memo import entering
+    from factory.services.updates import _mined
+
+    with entering():
+        expected = _mined(mined, set(world))
+    assert expected  # the fixture's miner has final rows
+    ledgers = _counting(monkeypatch, extraction, "_ledger")
+    with entering():
+        assert _mined(mined, set(world)) == expected
+    assert len(ledgers) == 1  # one miner, one ledger
+
+
+def test_updates_view_syncs_the_index_once(mined: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    from factory.services.updates import updates_view
+
+    expected = updates_view(mined)
+    syncs = _counting(monkeypatch, Index, "_sync")
+    assert updates_view(mined) == expected
+    assert len(syncs) == 1

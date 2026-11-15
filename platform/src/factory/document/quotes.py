@@ -71,7 +71,7 @@ def quote_in_element(element_markdown: str, quote: str) -> bool:
 
 
 def _unescape(text: str) -> str:
-    """Remove a backslash before ASCII punctuation (the Markdown escape); see the module docstring."""
+    """Remove a backslash before ASCII punctuation (the Markdown escape); see the module doc."""
     return _ESCAPE.sub(r"\1", text)
 
 
