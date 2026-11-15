@@ -838,8 +838,8 @@ def mine_status(
     project: Project, *, session: str | None = None, with_agreement: bool = True
 ) -> list[MineStatus]:
     """The status of every miner the current protocol lists, by name. A session that joined a miner
-    pass sees the miners it joined only, and only the units of its own pass; `with_agreement` False leaves
-    the agreement out (agent views carry no rate).
+    pass sees the miners it joined only, and only the units of its own pass; `with_agreement`
+    False leaves the agreement out (agent views carry no rate).
 
     Read-only: it syncs the index once and reads the rest under a snapshot, in one memo scope, so
     the per-miner reads neither sync again nor refold the screening outcomes (the pilot paid
