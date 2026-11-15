@@ -28,7 +28,9 @@ Mapping (LaTeXML class to Markdown):
   `Float <n>: text`, placed directly above its content. Only the float's own caption is used: a
   caption inside a nested float belongs to that float. The label is the caption's `ltx_tag`
   digits; else the tag itself when it is a plain word such as `(a)`; else a running count of
-  captions of that kind. Images (`img`, `picture`, `svg`, `ltx_graphics`) are dropped.
+  captions of that kind. Images (`img`, `picture`, `ltx_graphics`) and the graphics of an `svg`
+  are dropped; the text of an `svg`'s top-level `foreignObject`s is kept as paragraphs (an SVG
+  of under 15 words is dropped).
 - `ltx_bibliography` gives `## References` and one paragraph per `ltx_bibitem`.
 - An `a.ltx_ref` inside an `ltx_cite` whose `href` is `#<id>` of an `ltx_bibitem` becomes
   `[text](#b<k>)`, where `k` is the 1-based ordinal of that bibitem among all `ltx_bibitem`s in
@@ -59,7 +61,11 @@ from lxml import etree
 
 from factory.document.normalise import escape_cell
 
-CONVERTER_VERSION = "1.2"
+# History: 1.3 reads the text of an SVG's `foreignObject`s (tcolorbox/tikz boxes), which 1.2 dropped
+# with the whole `svg`; the version string a conversion records is this plus the lxml version (and,
+# from the anchoring version 2 on, `+anchors<n>`), so a 1.3 conversion is a new record.
+CONVERTER_VERSION = "1.3"
+_MIN_SVG_WORDS = 15
 
 _SECTION_LEVELS = {"ltx_section": 2, "ltx_appendix": 2, "ltx_subsection": 3, "ltx_subsubsection": 4}
 _SKIP_TAGS = frozenset(
@@ -70,7 +76,6 @@ _SKIP_TAGS = frozenset(
         "nav",
         "img",
         "picture",
-        "svg",
         "video",
         "audio",
         "object",
@@ -302,6 +307,8 @@ def _is_inline_like(child: etree._Element) -> bool:
         return False
     if child.tag == "math" and child.get("display") == "block":
         return False
+    if child.tag == "svg":
+        return False
     return (
         child.tag in _INLINE_TAGS
         or child.tag in {"math", "br"}
@@ -334,6 +341,9 @@ class _Walker:
     def block(self, el: etree._Element) -> None:
         classes = _classes(el)
         if el.tag in _SKIP_TAGS or classes & _SKIP_CLASSES:
+            return
+        if el.tag == "svg":
+            self._svg(el)
             return
         if "ltx_title_document" in classes:
             self._heading(1, el)
@@ -378,6 +388,32 @@ class _Walker:
             self._para(self._inline(el))
             return
         self._container(el)
+
+    def _svg(self, svg: etree._Element) -> None:
+        """Graphics are dropped; the text of the top-level `foreignObject`s is kept.
+
+        The foreignObjects of one SVG go through the container path in document order, so a box
+        reads as consecutive paragraphs. An SVG with fewer than `_MIN_SVG_WORDS` words in all
+        (diagram labels) is dropped. A nested `svg` inside a foreignObject is handled by the
+        container walk; one outside any foreignObject is searched here, so no text is read twice.
+        """
+        mark, notes = len(self.out), len(self._scopes[-1])
+        for fo in self._foreign_objects(svg):
+            self._container(fo)
+        added = self.out[mark:]
+        if sum(len(block.split()) for block in added) < _MIN_SVG_WORDS:
+            del self.out[mark:]
+            del self._scopes[-1][notes:]
+
+    def _foreign_objects(self, el: etree._Element) -> list[etree._Element]:
+        """Top-level `foreignObject` descendants of `el` in document order (not nested ones)."""
+        found: list[etree._Element] = []
+        for child in _children(el):
+            if str(child.tag).lower() == "foreignobject":
+                found.append(child)
+            else:
+                found.extend(self._foreign_objects(child))
+        return found
 
     def _container(self, el: etree._Element, skip: etree._Element | None = None) -> None:
         """Keep every piece of text in `el`, grouping running text into paragraphs.
@@ -522,6 +558,14 @@ class _Walker:
         self, child: etree._Element, parts: list[str], exclude: frozenset[str]
     ) -> None:
         """Append one child's inline text to `parts`; its tail is the caller's job."""
+        if child.tag == "svg":
+            # Inside running text an SVG cannot be a block: its text joins the paragraph.
+            scratch = _Walker(_bib_ordinals=self._bib_ordinals)
+            scratch._svg(child)
+            text = _collapse(" ".join(scratch.out))
+            if text:
+                parts.append(f" {text} ")
+            return
         if _skipped(child, exclude):
             return
         classes = _classes(child)

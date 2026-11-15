@@ -235,3 +235,43 @@ def test_equation_text_keeps_source_order() -> None:
     markdown = _markdown(_fixture("latexml_tails.html"))
     eqword = markdown.index("EQWORD")
     assert eqword < markdown.index("$$E=mc$$") < markdown.index("EQPOST")
+
+
+SVGBOX = (FIXTURES / "latexml_svgbox.html").read_bytes()
+
+
+def test_svg_foreignobject_text_is_kept_in_order() -> None:
+    markdown = _markdown(SVGBOX)
+    order = [
+        "Before the box.",
+        "Our main contributions are",
+        "First contribution of the work.",
+        "Second contribution of the work.",
+        "Closing line of the box",
+        "After the box.",
+    ]
+    positions = [markdown.index(piece) for piece in order]
+    assert positions == sorted(positions)
+
+
+def test_small_label_svg_is_dropped() -> None:
+    assert "x axis label" not in _markdown(SVGBOX)
+
+
+def test_nested_svg_text_is_not_duplicated() -> None:
+    markdown = _markdown(SVGBOX)
+    assert markdown.count("Inner nested box text") == 1
+    assert markdown.count("Our main contributions") == 1
+
+
+def test_svg_fixture_has_valid_manifest_and_fixed_point() -> None:
+    first = convert(LatexmlHtmlConverter(), SVGBOX, "text/html")
+    second = convert(LatexmlHtmlConverter(), SVGBOX, "text/html")
+    assert first.markdown_hash == second.markdown_hash
+    assert first.manifest.anchors
+
+
+def test_version_names_svg_reading_and_composes_with_anchoring() -> None:
+    result = convert(LatexmlHtmlConverter(), SVGBOX, "text/html")
+    assert result.converter_version.startswith("1.3+lxml")
+    assert result.converter_version.endswith("+anchors2")

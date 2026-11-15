@@ -31,8 +31,8 @@ def test_math_alttext_is_unchanged_by_the_new_escapes() -> None:
     assert "$a_1 * b_2$" in md
 
 
-def test_converter_version_is_1_2() -> None:
-    assert CONVERTER_VERSION == "1.2"
+def test_converter_version_is_1_3() -> None:
+    assert CONVERTER_VERSION == "1.3"
 
 
 def test_quote_with_asterisk_verifies_against_converted_paragraph() -> None:
