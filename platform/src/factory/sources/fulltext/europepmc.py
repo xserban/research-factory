@@ -15,8 +15,8 @@ articles NCBI's bucket does not; the article is fetched only when Europe PMC rep
 kept as received with `application/jats+xml`, so the same pandoc JATS converter applies. Europe PMC
 has no article versions: `source_version` is `EPMC:PMC<n>`, so a changed body under the same
 version reads as a changed source (decision 46), never as a silent new version. The raw search
-reply is the archived `metadata`. The politeness client is the shared one; no contact address or
-key is sent.
+reply is the archived `metadata`. The route is built on its own politeness client under the
+generic client name (`generic_http`), never the shared one, so no contact address or key is sent.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -31,6 +32,7 @@ import httpx
 
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.model.work import Work
+from factory.model.work_ids import normalize_doi, normalize_pmid
 from factory.sources.fulltext.base import RouteResult, not_retrieved, transport_failure
 from factory.sources.http import PoliteClient
 
@@ -60,6 +62,27 @@ def _query(work: Work) -> str | None:
     if ids.doi:
         return 'DOI:"' + ids.doi.replace('"', "") + '"'
     return None
+
+
+def _norm(value: object, normaliser: Callable[[str], str]) -> str | None:
+    if isinstance(value, str):
+        try:
+            return normaliser(value) or None
+        except ValueError:
+            return None
+    return None
+
+
+def _is_work(row: dict[str, Any], work: Work, pmc: str | None) -> bool:
+    """True when the hit is the work's article: the PMCID when the lookup was by PMCID, else the
+    PMID or DOI equals the work's (normalised)."""
+    if pmc is not None:
+        return _pmc_number(row.get("pmcid")) == pmc
+    pmid = _norm(work.identifiers.pmid, normalize_pmid)
+    doi = _norm(work.identifiers.doi, normalize_doi)
+    return (pmid is not None and _norm(row.get("pmid"), normalize_pmid) == pmid) or (
+        doi is not None and _norm(row.get("doi"), normalize_doi) == doi
+    )
 
 
 def _results(body: bytes) -> list[dict[str, Any]]:
@@ -116,8 +139,10 @@ class EuropePmcJatsRoute:
         if version is not None and pinned is None:
             return not_retrieved(self.route, AttemptOutcome.NOT_AVAILABLE, "no-version")
         query = _query(work)
+        pmc = _pmc_number(work.identifiers.pmcid)
         if pinned:
             query = f"PMCID:PMC{pinned.group(1)}"
+            pmc = pinned.group(1)
         if query is None:
             return not_retrieved(self.route, AttemptOutcome.NOT_AVAILABLE, "no-identifier")
         params: dict[str, str | int] = {
@@ -131,7 +156,9 @@ class EuropePmcJatsRoute:
             return failure or transport_failure(self.route)
         meta = reply.content
         rows = _results(meta)
-        row = next((r for r in rows if _pmc_number(r.get("pmcid"))), None)
+        row = next(
+            (r for r in rows if _pmc_number(r.get("pmcid")) and _is_work(r, work, pmc)), None
+        )
         if row is None:
             return not_retrieved(
                 self.route, AttemptOutcome.NOT_AVAILABLE, "not-in-europepmc", metadata=meta

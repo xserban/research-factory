@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-import httpx
+from collections.abc import Mapping
+from pathlib import Path
 
+import httpx
+import pytest
+
+from factory.config import Settings
 from factory.model.fulltext import AttemptOutcome, Route
 from factory.model.work import Identifiers, Provenance, Work
 from factory.sources.fulltext.europepmc import EuropePmcJatsRoute
+from factory.sources.fulltext.registry import default_routes
 from factory.sources.http import PoliteClient
 from tests.helpers import SESSION, T0
 
@@ -81,14 +87,14 @@ def test_no_contact_address_or_key_is_sent() -> None:
 
 
 def test_pmid_query_when_no_pmcid() -> None:
-    r, log = route()
+    r, log = route(search=hit(pmid="9"))
     result = r.fetch(work(pmid="9"))
     assert result.outcome is AttemptOutcome.RETRIEVED
     assert log[0].url.params["query"] == "EXT_ID:9 AND SRC:MED"
 
 
 def test_doi_query_when_nothing_else() -> None:
-    r, log = route()
+    r, log = route(search=hit(doi="10.1/x"))
     r.fetch(work(doi="10.1/x"))
     assert log[0].url.params["query"] == 'DOI:"10.1/x"'
 
@@ -185,3 +191,70 @@ def test_foreign_version_is_refused() -> None:
     result = r.fetch(work(pmcid="PMC123"), version="PMC123.1")
     assert result.reason == "no-version"
     assert log == []
+
+
+def _rows(*rows: Mapping[str, object]) -> dict[str, object]:
+    return {"hitCount": len(rows), "resultList": {"result": list(rows)}}
+
+
+def test_doi_lookup_skips_a_preprint_hit_and_takes_the_matching_one() -> None:
+    preprint = {"pmcid": "PMC1", "doi": "10.1/preprint", "isOpenAccess": "Y"}
+    published = {"pmcid": "PMC2", "doi": "10.1/X", "isOpenAccess": "Y", "license": "cc by"}
+    r, log = route(search=_rows(preprint, published))
+    result = r.fetch(work(doi="https://doi.org/10.1/x"))
+    assert result.outcome is AttemptOutcome.RETRIEVED
+    assert result.source_version == "EPMC:PMC2"
+    assert log[1].url.path.endswith("/PMC2/fullTextXML")
+
+
+def test_pmid_lookup_matches_a_normalised_pmid() -> None:
+    other = {"pmcid": "PMC1", "pmid": "10", "isOpenAccess": "Y"}
+    own = {"pmcid": "PMC2", "pmid": "0009", "isOpenAccess": "Y"}
+    r, _ = route(search=_rows(other, own))
+    assert r.fetch(work(pmid="9")).source_version == "EPMC:PMC2"
+
+
+def test_no_matching_hit_is_not_found_not_an_error() -> None:
+    row = {"pmcid": "PMC1", "doi": "10.1/other", "isOpenAccess": "Y"}
+    r, log = route(search=_rows(row))
+    result = r.fetch(work(doi="10.1/x"))
+    assert result.outcome is AttemptOutcome.NOT_AVAILABLE
+    assert result.reason == "not-in-europepmc"
+    assert len(log) == 1
+
+
+def test_pmcid_lookup_accepts_the_hit_with_that_pmcid() -> None:
+    other = {"pmcid": "PMC1", "isOpenAccess": "Y"}
+    own = {"pmcid": "PMC123", "isOpenAccess": "Y"}
+    r, _ = route(search=_rows(other, own))
+    assert r.fetch(work(pmcid="PMC123")).source_version == "EPMC:PMC123"
+
+
+def test_registry_route_never_sends_the_configured_address(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    address = "someone@example.org"
+    log: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        log.append(request)
+        if request.url.path.endswith("/search"):
+            return httpx.Response(200, json=hit(doi="10.1/x"))
+        return httpx.Response(200, content=XML)
+
+    real_client = httpx.Client
+
+    def fake_client(**kwargs: object) -> httpx.Client:
+        kwargs.pop("event_hooks", None)
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "Client", fake_client)
+    settings = Settings(root=tmp_path, user="obd", mailto=address)
+    europepmc = default_routes(settings)[Route.EUROPEPMC_JATS]
+    result = europepmc.fetch(work(doi="10.1/x"))
+    assert result.outcome is AttemptOutcome.RETRIEVED
+    assert len(log) == 2
+    for request in log:
+        assert request.url.host == "www.ebi.ac.uk"
+        text = str(request.url) + repr(list(request.headers.items()))
+        assert address not in text and "example.org" not in text and "mailto" not in text
