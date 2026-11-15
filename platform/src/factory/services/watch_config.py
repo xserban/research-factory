@@ -1,7 +1,8 @@
 """Save the weekly watch settings as a protocol amendment (plan updates-page, T1).
 
 Invariants: human actors only; every named source is an included source of the current protocol;
-the plan is windowed (`window` mode, `full_replay_every` 52) and closes a week after each cycle
+the plan is windowed (`window` mode, `full_replay_every` None: a full
+replay only on the researcher's request) and closes a week after each cycle
 (`snapshot_every` 1); any other field of an existing plan (notices, budgets) is kept. A refusal,
 including an unchanged plan, writes nothing.
 """
@@ -18,7 +19,6 @@ from factory.services import protocol as protocol_service
 from factory.services.context import Project
 
 OVERLAP_DAYS = 7
-FULL_REPLAY_EVERY = 52
 
 
 def configure_watch(
@@ -66,7 +66,7 @@ def configure_watch(
                     interval_days=interval_days,
                     mode="window",
                     overlap_days=OVERLAP_DAYS,
-                    full_replay_every=FULL_REPLAY_EVERY,
+                    full_replay_every=None,
                 )
                 for name in names
             ),

@@ -88,7 +88,7 @@ def test_records_amendment_with_plan(
     assert plan.snapshot_every == 1 and plan.until == until
     (source,) = plan.sources
     assert (source.source, source.interval_days, source.mode) == ("openalex", 7, "window")
-    assert source.overlap_days == 7 and source.full_replay_every == 52
+    assert source.overlap_days == 7 and source.full_replay_every is None
 
 
 def test_unchanged_is_refused(

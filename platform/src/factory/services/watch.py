@@ -83,6 +83,10 @@ class SourceStatus(StrictModel):
     window_start: date | None
     full_replay_next: bool
     consecutive_failures: int
+    last_full_replay: date | None = None
+    """Start date of the last complete full replay in a watch cycle (None: none yet)."""
+    windows_since_full_replay: int = 0
+    """Complete window cycles of the source since that replay (all of them when None)."""
 
 
 class WatchStatus(StrictModel):
@@ -130,11 +134,28 @@ def cycles(project: Project) -> list[CycleView]:
     return views
 
 
+def search_baselines(project: Project) -> dict[str, date]:
+    """Per source, the date (start) of the latest complete run of a planned query (purpose
+    `search`) that belongs to no watch cycle: when the source's searches last completed outside
+    watch cycles. A source with no such run is absent."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT q.source, MAX(r.started_at) FROM runs r JOIN queries q "
+                "ON q.query_id = r.query_id WHERE r.status = 'complete' AND q.purpose = 'search' "
+                "AND r.run_id NOT IN (SELECT run_id FROM watch_cycle_runs) GROUP BY q.source"
+            )
+        ).all()
+    return {str(source): parse_ts(str(started)).date() for source, started in rows}
+
+
 def watch_status(project: Project) -> WatchStatus:
     """Per source: last cycle, next due, mode, window start and failures; the open cycle."""
     current = current_protocol(project)
     plan = None if current is None else current.spec.watch_plan
     views = cycles(project)
+    baselines = search_baselines(project)
     open_cycle = next((v.cycle_id for v in views if v.status is CycleStatus.OPEN), None)
     if current is None or plan is None:
         return WatchStatus(
@@ -150,7 +171,12 @@ def watch_status(project: Project) -> WatchStatus:
     for item in plan.sources:
         finished = [v for v in views if item.source in v.sources and v.finished_at is not None]
         last = max(finished, key=lambda v: v.finished_at or now, default=None)
-        full = is_full_replay(item, views)
+        baseline = baselines.get(item.source)
+        full = is_full_replay(item, views, baseline)
+        complete = sorted(
+            (v for v in views if item.source in v.complete_sources), key=lambda v: v.started_at
+        )
+        replays = [v for v in complete if item.source in v.full_replay_sources]
         statuses.append(
             SourceStatus(
                 source=item.source,
@@ -160,9 +186,13 @@ def watch_status(project: Project) -> WatchStatus:
                 last_finished_at=None if last is None else last.finished_at,
                 next_due=next_due(item, views),
                 due=item.source in due,
-                window_start=None if full else window_start(item, views),
+                window_start=None if full else window_start(item, views, baseline),
                 full_replay_next=full,
                 consecutive_failures=consecutive_failures(item.source, views),
+                last_full_replay=replays[-1].started_at.date() if replays else None,
+                windows_since_full_replay=len(
+                    [v for v in complete if not replays or v.started_at > replays[-1].started_at]
+                ),
             )
         )
     return WatchStatus(
@@ -184,6 +214,7 @@ def watch_run(
     trigger: CycleTrigger,
     actor: Actor | None = None,
     force: bool = False,
+    full_replay: bool = False,
     after_runs: Sequence[CycleHook] = (),
 ) -> CycleSummary | None:
     """Run the due watch cycle of the project; None, with nothing written, when none is due.
@@ -192,9 +223,16 @@ def watch_run(
     source has no adapter in `sources`, or when the protocol gate refuses a planned query.
     `force` runs every planned source whether or not it is due. An open cycle is resumed, never
     doubled: queries whose run in the cycle completed are skipped, the others run again.
+    `full_replay` makes every source of a new cycle run as a full replay; only the researcher
+    decides one, so it is refused (nothing written) unless `actor` is human. It does not change a
+    cycle already open.
     """
+    if full_replay and (actor is None or actor.kind != "human"):
+        raise FactoryValidationError(
+            [ValidationIssue("full_replay", "only a human requests a full replay")]
+        )
     with _watch_lock(project):
-        opened = _open_or_resume(project, sources, trigger, actor, force)
+        opened = _open_or_resume(project, sources, trigger, actor, force, full_replay)
         if opened is None:
             return None
         cycle_id, members, planned = opened
@@ -251,6 +289,7 @@ def _open_or_resume(
     trigger: CycleTrigger,
     actor: Actor | None,
     force: bool,
+    full_replay: bool = False,
 ) -> tuple[str, tuple[CycleSource, ...], tuple[PlannedQuery, ...]] | None:
     """Decide, and write `watch.cycle_started` when a new cycle opens, in one critical section."""
     with project.index.exclusive():
@@ -297,7 +336,12 @@ def _open_or_resume(
         require_for(project, actor or project.system_actor(), REQUESTS_SEARCH)
 
         by_name = {item.source: item for item in plan.sources}
-        chosen = tuple(_cycle_source(by_name[name], views) for name in due if name in by_name)
+        baselines = search_baselines(project)
+        chosen = tuple(
+            _cycle_source(by_name[name], views, baselines.get(name), full_replay)
+            for name in due
+            if name in by_name
+        )
         cycle_id = project.ids.new("wcy")
         started = WatchCycleStarted(
             cycle_id=cycle_id,
@@ -308,7 +352,7 @@ def _open_or_resume(
         )
         who = actor or project.system_actor()
         input_blob = (
-            project.blobs.put_json({"force": force, "trigger": trigger})
+            project.blobs.put_json({"force": force, "trigger": trigger, "full_replay": full_replay})
             if who.kind == "agent"
             else None
         )
@@ -326,14 +370,20 @@ def _open_or_resume(
         return cycle_id, chosen, planned
 
 
-def _cycle_source(item: WatchSource, views: Sequence[CycleView]) -> CycleSource:
-    """How the source runs this cycle: a full replay, or a window from its last complete cycle."""
-    if is_full_replay(item, views):
+def _cycle_source(
+    item: WatchSource,
+    views: Sequence[CycleView],
+    baseline: date | None = None,
+    requested: bool = False,
+) -> CycleSource:
+    """How the source runs this cycle: a full replay, or a window from its last complete cycle
+    (or, with none, from the baseline)."""
+    if is_full_replay(item, views, baseline, requested):
         return CycleSource(source=item.source, mode=item.mode, window_start=None, full_replay=True)
     return CycleSource(
         source=item.source,
         mode="window",
-        window_start=window_start(item, views),
+        window_start=window_start(item, views, baseline),
         full_replay=False,
     )
 

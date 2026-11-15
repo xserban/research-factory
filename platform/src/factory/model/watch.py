@@ -32,19 +32,17 @@ class CycleStatus(StrEnum):
 
 
 class WatchSource(StrictModel):
-    """How often one included source is re-run, and whether it is replayed in full or windowed."""
+    """How often one included source is re-run, and whether it is replayed in full or windowed.
+
+    In window mode `full_replay_every` may be None: a full replay then runs only when the
+    researcher asks for one (decision 127).
+    """
 
     source: str
     interval_days: int = Field(ge=1)
     mode: Literal["full", "window"] = "full"
     overlap_days: int = Field(default=7, ge=1)
     full_replay_every: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def _window_needs_replay(self) -> Self:
-        if self.mode == "window" and self.full_replay_every is None:
-            raise ValueError("a window source must declare full_replay_every")
-        return self
 
 
 class WatchPlan(StrictModel):

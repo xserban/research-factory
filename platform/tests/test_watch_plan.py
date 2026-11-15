@@ -106,9 +106,9 @@ def test_watch_plan_keeps_s_hash_and_press(
     assert search_authorization(project, planned, deviation_id=None) == []
 
 
-def test_window_requires_full_replay_every() -> None:
-    with pytest.raises(ValidationError):
-        WatchSource(source="arxiv", interval_days=7, mode="window")
+def test_window_may_omit_full_replay_every() -> None:
+    none = WatchSource(source="arxiv", interval_days=7, mode="window")
+    assert none.full_replay_every is None
     ok = WatchSource(source="arxiv", interval_days=7, mode="window", full_replay_every=4)
     assert ok.overlap_days == 7
 

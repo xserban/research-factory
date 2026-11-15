@@ -4142,6 +4142,7 @@ def _watch_one(
     force: bool,
     human: bool,
     skip_unplanned: bool,
+    full_replay: bool = False,
 ) -> tuple[int, dict[str, object], list[str]]:
     """Run, or preview, one project's cycle. Returns its exit code, JSON and text lines."""
     try:
@@ -4161,6 +4162,7 @@ def _watch_one(
             trigger="human" if human else "scheduler",
             actor=project.human_actor() if human else None,
             force=force,
+            full_replay=full_replay,
             after_runs=DEFAULT_HOOKS,
         )
     except FactoryValidationError as exc:
@@ -4195,6 +4197,13 @@ def watch_run_cmd(
     human: Annotated[
         bool, typer.Option("--human", help="Record the cycle as a human's, not the scheduler's.")
     ] = False,
+    full_replay: Annotated[
+        bool,
+        typer.Option(
+            "--full-replay",
+            help="Replay every source in full this cycle (needs --human; never automatic).",
+        ),
+    ] = False,
     as_json: Annotated[
         bool, typer.Option("--json", help="Print one JSON object per project.")
     ] = False,
@@ -4205,7 +4214,13 @@ def watch_run_cmd(
     exit_code = 0
     for slug in slugs:
         code, data, lines = _watch_one(
-            state, slug, dry_run=dry_run, force=not due, human=human, skip_unplanned=all_projects
+            state,
+            slug,
+            dry_run=dry_run,
+            force=not due,
+            human=human,
+            skip_unplanned=all_projects,
+            full_replay=full_replay,
         )
         exit_code = max(exit_code, code)
         if as_json:
