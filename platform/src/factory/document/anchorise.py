@@ -35,8 +35,9 @@ the rules are versioned and `anchorise(markdown, version=1)` reproduces the old 
   preceded by a sentence end, followed by a capital letter or opening quote or bracket, each part
   of at least `_MIN_ENTRY` characters) is split into one entry `[n] A`, `[n+1] B`, ... A marker
   is refused after an abbreviation (`Vol.`, `Ed.`, `pp.`, `No.`, ...) or a single letter, and
-  when its label is already used in the bibliography; an item of a list that continues with
-  another item is never split (its inline numbers are not a run). Anything else stays one entry.
+  when its label is already used in the bibliography or leads any entry of the section (so an
+  item of an ordered list that continues is never split: the next item holds that label).
+  Anything else stays one entry.
   Re-anchoring is idempotent: the version 2 output is a fixed point.
 """
 
@@ -93,7 +94,6 @@ class _Block:
     level: int = 0
     text: str = ""
     caption: list[list[str]] = field(default_factory=list)
-    more_items: bool = False  # a list item that is followed by another item of its list
 
 
 def stamp_version(converter_version: str, anchor_version: int = ANCHOR_VERSION) -> str:
@@ -123,9 +123,10 @@ def anchorise(markdown: str, *, version: int = ANCHOR_VERSION) -> str:
     blocks = _attach_captions(_blocks(lines, regions, lists=version >= 2))
     title = _title_index(blocks)
     numbering = _Numbering(split_entries=version >= 2)
+    labels = _section_labels(blocks)
     out: list[str] = []
     for index, block in enumerate(blocks):
-        out.extend(numbering.emit(block, title=index == title))
+        out.extend(numbering.emit(block, title=index == title, section_labels=labels[index]))
     return "\n\n".join(out) + "\n" if out else ""
 
 
@@ -261,10 +262,7 @@ def _blocks(lines: list[str], regions: list[list[str]], *, lists: bool) -> list[
         if lists and token.type in ("bullet_list_open", "ordered_list_open"):
             items = _list_items(tokens, index)
             if items is not None:
-                last = len(items) - 1
-                blocks.extend(
-                    _Block("paragraph", [text], more_items=i < last) for i, text in enumerate(items)
-                )
+                blocks.extend(_Block("paragraph", [text]) for text in items)
                 continue
         if token.type == "heading_open":
             inline = tokens[index + 1]
@@ -422,6 +420,28 @@ def _attach_captions(blocks: list[_Block]) -> list[_Block]:
     return [block for index, block in enumerate(blocks) if index not in removed]
 
 
+def _section_labels(blocks: list[_Block]) -> list[frozenset[int]]:
+    """For each block, the leading `[n]` labels of every paragraph in its section (the blocks
+    up to the next heading). An inline number whose label leads any paragraph of the section is
+    never split off, which keeps the output a fixed point: a split cannot depend on whether a
+    later entry was a list item or a paragraph."""
+    result: list[frozenset[int]] = []
+    start = 0
+    while start < len(blocks):
+        end = start + 1
+        while end < len(blocks) and blocks[end].kind != "heading":
+            end += 1
+        found = frozenset(
+            int(lead.group(1))
+            for block in blocks[start:end]
+            if block.kind == "paragraph"
+            and (lead := _LEAD_LABEL.match(" ".join(line.strip() for line in block.lines)))
+        )
+        result.extend([found] * (end - start))
+        start = end
+    return result
+
+
 def _title_index(blocks: list[_Block]) -> int | None:
     """The index of the document title: the only minimum-depth heading, unnumbered, with deeper
     headings present. None if there is no title."""
@@ -490,7 +510,9 @@ class _Numbering:
         self.tables = 0
         self.equations = 0
 
-    def emit(self, block: _Block, *, title: bool) -> list[str]:
+    def emit(
+        self, block: _Block, *, title: bool, section_labels: frozenset[int] = frozenset()
+    ) -> list[str]:
         """The output blocks (each a string of lines) for one source block."""
         if block.kind == "page":
             self.pages += 1
@@ -500,8 +522,8 @@ class _Numbering:
         if block.kind == "paragraph":
             if self.in_bibliography:
                 text = " ".join(line.strip() for line in block.lines)
-                if self.split_entries and not block.more_items:
-                    entries = _split_entries(text, frozenset(self.labels))
+                if self.split_entries:
+                    entries = _split_entries(text, frozenset(self.labels) | section_labels)
                     if entries is not None:
                         self._take_labels(entries)
                         return [self._paragraph([entry]) for entry in entries]

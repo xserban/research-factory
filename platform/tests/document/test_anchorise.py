@@ -343,6 +343,17 @@ def test_a_list_item_followed_by_another_item_is_not_split() -> None:
     assert _bib(md)[1].startswith("[2] Smith")
 
 
+def test_a_kept_list_item_stays_kept_when_re_anchored() -> None:
+    """Fixed point: once the list items are paragraphs, a second pass must not split the first
+    one (the next entry still holds label 2)."""
+    md = (
+        "# R\n\n# References\n\n1. Guan, Y. et al. Drug repurposing (2025). "
+        "2. Penades, J. et al. AI Cell (2025).\n2. Smith, A. A second real entry (2020).\n"
+    )
+    once = anchorise(md)
+    assert anchorise(once) == once
+
+
 def test_a_label_already_used_is_not_repeated() -> None:
     md = (
         "# R\n\n# References\n\n[2] Smith, A. A second real entry (2020).\n\n"
