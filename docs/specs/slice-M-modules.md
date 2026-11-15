@@ -24,6 +24,7 @@ Read with the other slice specs accepted the same day (3d, 4a, 4b, 5, 6, 7a, 7b)
 | `writing.release` | agent | agent | agent, after the audit is labelled | human (reviewer of record) | 7b ruling 13 (its draft name `draft-released`) |
 | `writing.audit_label`, `manuscript.audit_label` | human | human | human | human | 7b rulings 12, 17 |
 | `manuscript.citation_confirm` | agent_audit | human | agent_audit(0.1, 20) | human | 7b ruling 17 (as `reference.link_confirm`) |
+| `dedup.version_pair`, `cards.import`, `inbox.prioritise`, `regions.link`, `regions.adopt`, `curation.decide` | human | human | human | human | gate registry (code); added to this table 2026-11-14 by the researcher's ruling, pinned by `tests/test_gate_floor_table.py` |
 
    Slice 6's critic review is a quality regime (independent agent session), not a gate. Slice 6 sets its gate policies through `gate_policies`, not through a `hypothesis_plan.gate_policy` field (see slice-6 reconciliation). Slice 5 adds a role dimension to `GateSpec` (`required_role`: `maintainer` for every human decision gate above and for protocol change and PRESS confirmation, `owner` for membership and budgets); `TEAM_GATES` is computed from the registry, not a hand-written table.
 5. **Identifiers.** The mining import id is `mim_<ULID>` (it was `imp_`, which slice 3d uses for library imports).
