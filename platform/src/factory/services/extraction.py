@@ -15,18 +15,18 @@ schema and pin; the stale task is never served again and nothing in the log is e
 
 A session joins one extraction pass, with one exception (decision 129): it may join the same pass
 label of several miner scopes, so one reading of a work serves several miners. It is refused from
-the other pass, from a model that already serves the other pass of the scope joined, from a
-session that joined any screening pass, and from a session that relayed a human label over MCP (it could read an answer key). A refusal raises
-FactoryValidationError and writes nothing.
+the other pass, from a model that already serves the other pass of the scope joined, from a session
+that joined any screening pass, and from a session that relayed a human label over MCP (it could
+read an answer key). A refusal raises FactoryValidationError and writes nothing.
 
 Every pass, task, row, closing and read belongs to one scope (slice 3b ruling 6): `evidence`
 (`extraction_schema`, tasks `extract_a`/`extract_b`) or `contribution` (`contribution_schema`,
 tasks `contrib_a`/`contrib_b`, population G1's `included_works`). Each scope keeps its own passes,
 seeds, units, pins and staleness; every read defaults to evidence, and a session joins at most one
 pass across evidence and contribution (ruling 2), or one label of several miners; a model is
-independent only within a scope, since agreement compares A with B inside one scope (decision 37). Evidence events leave `pack` null (their
-payloads now hold `"pack": null`, and rows `"cited": null`, which replay as before); contribution
-events carry `pack = contribution`. A contribution row is also stale when it cites a reference
+independent only within a scope, since agreement compares A with B inside one scope (decision 37).
+Evidence events leave `pack` null (their payloads now hold `"pack": null`, and rows
+`"cited": null`, which replay as before); contribution events carry `pack = contribution`. A contribution row is also stale when it cites a reference
 extraction that is no longer its work's current G1 extraction; its unit is stale (reason
 `references`) when that extraction was replaced after the task that closed the unit was created.
 
