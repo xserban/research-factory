@@ -756,7 +756,7 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-71, the hypot
 **Open questions:** how a belt change is recorded (a hypothesis amendment with a reason, or a new event); what counts as a novel prediction (registered before the test, with the date); whether a study's protocol amendments count as belt changes.
 
 ### IDEA-75 — PubMed date slicing above the 9,999 cap
-Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_slice`, CLI `search slice`; tests offline, run one file at a time; not reviewed, not merged; decision row proposed, number to be fixed at merge) · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_slice`, CLI `search slice`; tests offline, run one file at a time; review: one Sonnet review, 1 Important fixed in 89a128b1; not merged; decision row proposed, number to be fixed at merge) · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** the adapter splits a PubMed query whose count exceeds 9,999 into `[dp]` windows and retrieves each, so the run is complete rather than partial.
 **Why:** broad biomedical queries routinely exceed the E-utilities ceiling.
 **Rigour notes:** each window is archived and counted; the sum of window counts is reported against the unsplit count, and a difference is noted (R-23).
@@ -764,22 +764,22 @@ Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_sl
 **Rulings (agent, 2026-11-15, branch `pubmed-rest`; decision 124 item 2 stands, the split is now arithmetic the agent calls):**
 1. Not the adapter: a service (`services/pubmed_slices.py`) plans and runs; the adapter still records a capped query partial with `esearch-cap`.
 2. Recursive by calendar unit, not halving: a window over the cap is cut into years, a year into months, a month into days; a day over the cap stays a slice, runs partial with the cap note and is flagged `over_cap`. Only oversized windows are cut.
-3. First cut: before `first_year` (default 1900, one range), one slice per year to the clock's year, after that year (one range, to 3000). The two open ends are never cut. Disjoint, so the sum of slice counts equals the unsplit count unless records lack a `[dp]` date.
+3. First cut: before `first_year` (default 1900, one range), one slice per year to the clock's year, after that year (one range, to 3000). The two open ends are never cut. Date windows do not overlap, but `[dp]` matches the print or the electronic date, so a record can fall in two slices; the sum is a sanity check, not proof of coverage (month-only and year-only `[dp]` at day level: unverified).
 4. Counts come from one `esearch` count per candidate slice (PubMed's own number); planning writes no event, its pages are archived as blobs. The authoritative counts are those of the recorded slice runs (R-03, R-23).
 5. Each non-empty slice is a registered and run `search` with the term `(<parent text>) AND ("YYYY/MM/DD"[dp] : "YYYY/MM/DD"[dp])`, verbatim. Empty slices are counted, not run.
 6. The parent/children relation is derived from the texts (`slice_report`); no new event type. The report states slice total against the unsplit count and any difference.
-7. A slice is not a planned query: pilot and systematic projects need `deviation_id` (the ordinary gate is unchanged). Re-running continues: completed slices are left, partial runs resume.
+7. A slice is not a planned query: pilot and systematic projects need `deviation_id` (the ordinary gate is unchanged). Re-running continues: completed slices are left, partial runs resume, capped runs (`esearch-cap`, no resume token) are not repeated and are reported capped. A rerun that cuts a window finer leaves the old coarse slice registered; the report counts the finest slices only and lists the overlap.
 8. Parent must be a pubmed keyword `search` without filters, with an unsplit count over the cap; otherwise refused.
 
 ### IDEA-76 — PubMed in watch cycles, the inbox and seeds
-Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; merged into main (see IDEA-79); watch window (`listed_since` as `[edat]`) and import admission by PMID built on branch `pubmed-rest`, tested offline, not reviewed, not merged · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; merged into main (see IDEA-79); watch window (`listed_since` as `[edat]`) and import admission by PMID built on branch `pubmed-rest`, tested offline, review: one Sonnet review, 1 Important fixed in 89a128b1; not merged · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** a `listed_since` window for PubMed (`[edat]`), PubMed and PMC links in the inbox parser, seeds and import admission by PMID.
 **Why:** a biomedical project lives in PMIDs; today a seed or link needs a DOI, arXiv or OpenAlex id.
 **Rigour notes:** a PMID seed is resolved and recorded like the other kinds; held-out withholding covers the PMID.
 **Open questions:** whether the seed model takes `pmid` as a fourth key or resolves through OpenAlex.
 **Rulings, rest (agent, 2026-11-15, branch `pubmed-rest`):**
 1. Watch window: `PubmedSource.window_filter` is true; `filters["listed_since"]` (YYYY-MM-DD) is sent as `(<text>) AND ("YYYY/MM/DD"[edat] : "3000"[edat])`, PubMed's entry date, a listing date and never a publication date (R-21). Keyword queries only; the recorded `query_sent` is the clause as sent. Count, match and sample probes use the same term. No other filter is accepted (`register_query` refuses it, an id_list with any filter too).
-2. Import admission: a record whose resolved work has a PMID and no OpenAlex id is named by a PubMed `id_list` (own family `pmid`, comma separator). Precedence: OpenAlex id, PMID, arXiv id, DOI. Records resolved only through DOI keep the DOI route.
+2. Import admission: a record whose resolved work has a PMID and no OpenAlex id is named by a PubMed `id_list` (own family `pmid`, comma separator). Precedence: OpenAlex id, PMID, arXiv id, DOI; the PMID is skipped when `pubmed` is not a registered source. Records resolved only through DOI keep the DOI route.
 
 ### IDEA-77 — Europe PMC as a second JATS route; MeSH suggestions in the probe
 Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
