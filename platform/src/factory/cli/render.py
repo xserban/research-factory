@@ -889,6 +889,10 @@ def watch_status_lines(slug: str, status: WatchStatus) -> list[str]:
             f"  {s.source}: {s.mode}, every {s.interval_days} d, {due}{window}{replay}, "
             f"{s.consecutive_failures} consecutive failures"
         )
+        lines.append(
+            f"    last full run: {s.last_full_replay or 'none in the watch'}; "
+            f"{s.windows_since_full_replay} weekly window(s) since"
+        )
     return lines
 
 

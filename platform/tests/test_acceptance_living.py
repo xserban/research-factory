@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import pytest
-from pydantic import ValidationError
 
 from factory.clock import FixedClock
 from factory.config import Settings
@@ -266,8 +265,8 @@ def test_ac02_readiness(living: Living) -> None:
     assert REQUIRED in _pairs(_check(living_spec, RigorMode.PILOT).gaps)
     exploratory = _check(living_spec, RigorMode.EXPLORATORY)
     assert "watch_plan" not in [i.field for i in exploratory.errors + exploratory.gaps]
-    with pytest.raises(ValidationError):
-        WatchSource(source="openalex", interval_days=7, mode="window")  # no full_replay_every
+    # A window source may omit full_replay_every (decision 128: full replays only on request).
+    assert WatchSource(source="openalex", interval_days=7, mode="window").full_replay_every is None
     # The adapter has no listing-date filter here (the world declared one by monkeypatch only
     # while it was built): a window plan is refused and nothing is written.
     project = living.project
