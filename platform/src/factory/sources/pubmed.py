@@ -180,6 +180,17 @@ def _requested_pmids(text: str) -> list[str]:
     return list(dict.fromkeys(normalize_pmid(token) for token in tokens))
 
 
+def entry_date_term(text: str, since: date) -> str:
+    """`text` restricted to records that entered PubMed on or after `since` (`[edat]`, open end)."""
+    return f'({text}) AND ("{since:%Y/%m/%d}"[edat] : "3000"[edat])'
+
+
+def search_term(spec: QuerySpec) -> str:
+    """The keyword term as sent: the text, with `listed_since` as an entry-date clause."""
+    since = spec.filters.get("listed_since")
+    return spec.text if since is None else entry_date_term(spec.text, date.fromisoformat(since))
+
+
 def _identifiers(article: ElementTree.Element) -> Identifiers:
     """The PMID, DOI and PMC id of one `PubmedArticle`."""
     article_ids = {
@@ -206,7 +217,9 @@ class PubmedSource:
 
     name: str = "pubmed"
     kinds: frozenset[QueryKind] = frozenset({QueryKind.KEYWORD, QueryKind.ID_LIST})
-    window_filter: ClassVar[bool] = False
+    window_filter: ClassVar[bool] = True
+    """Honours `filters["listed_since"]` (YYYY-MM-DD) as an open-ended `[edat]` clause: the date
+    the record entered PubMed, a listing date and never a publication date (R-21)."""
 
     def __init__(
         self,
@@ -265,7 +278,9 @@ class PubmedSource:
             raise ValueError("an id_list query must name at least one PMID")
 
         method = _METHODS.get(spec.purpose, ProvenanceMethod.DATABASE)
-        query_sent = ",".join(ids) if is_ids else spec.text
+        query_sent = ",".join(ids) if is_ids else search_term(spec)
+        if resume_from and not (resume_from.isascii() and resume_from.isdigit()):
+            raise ValueError(f"resume_from must be a non-negative offset, not {resume_from!r}")
         start = int(resume_from) if resume_from else 0
         start_at = start
         works: list[Work] = []
@@ -302,7 +317,7 @@ class PubmedSource:
             try:
                 response = self._http.get(
                     _ESEARCH,
-                    self._params(term=spec.text, usehistory="y", retmode="json", retmax=0),
+                    self._params(term=query_sent, usehistory="y", retmode="json", retmax=0),
                 )
             except httpx.HTTPError as exc:
                 return result(
@@ -410,7 +425,9 @@ class PubmedSource:
         """PubMed's own total for a keyword query, from one esearch that carries no records."""
         self._require_keyword(spec)
         payload = self._probe_search(
-            {"term": spec.text, "rettype": "count", "retmode": "json"}, ordinal=0, archive=archive
+            {"term": search_term(spec), "rettype": "count", "retmode": "json"},
+            ordinal=0,
+            archive=archive,
         )
         count = str(payload.get("count", ""))
         return int(count) if count.isdigit() else None
@@ -429,7 +446,7 @@ class PubmedSource:
             clause = " OR ".join(f"{pmid}[uid]" for pmid in chunk)
             payload = self._probe_search(
                 {
-                    "term": f"({spec.text}) AND ({clause})",
+                    "term": f"({search_term(spec)}) AND ({clause})",
                     "retmax": len(chunk),
                     "retmode": "json",
                 },
@@ -449,7 +466,7 @@ class PubmedSource:
         is `top`: the titles show the best matches, which flatters the query."""
         self._require_keyword(spec)
         payload = self._probe_search(
-            {"term": spec.text, "sort": "relevance", "retmax": size, "retmode": "json"},
+            {"term": search_term(spec), "sort": "relevance", "retmax": size, "retmode": "json"},
             ordinal=0,
             archive=archive,
         )

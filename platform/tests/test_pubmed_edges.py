@@ -231,3 +231,12 @@ def test_persistent_5xx_on_esearch_fails_with_token_zero() -> None:
     result = run(PubmedSource(http, clock=FixedClock(T0)), keyword())
     assert result.status is RunStatus.FAILED
     assert result.resume_token == "0"
+
+
+def test_a_non_numeric_resume_token_is_refused_before_any_request() -> None:
+    handler, seen = router(esearch(1), efetch(article("1")))
+    with pytest.raises(ValueError, match="non-negative offset"):
+        run(make_source(handler), keyword(), resume_from="abc")
+    with pytest.raises(ValueError, match="non-negative offset"):
+        run(make_source(handler), keyword(), resume_from="-3")
+    assert seen == []

@@ -4,8 +4,9 @@
 (`import.admission_planned`) before any query is registered, then registers and runs each query
 as an `import`-purpose search naming the import (`register_query(..., import_id=...)`). Records
 resolved to a work some source returned go to OpenAlex (`openalex:` then `doi:` filters) or arXiv
-(`id_list`); every other titled record goes to the offline `importlist` source, which builds a
-work from the stored fields. A record whose work is already in the corpus needs no query.
+(`id_list`) or PubMed (PMID `id_list`); every other titled record goes to the offline `importlist`
+source, which builds a work from the stored fields. A record whose work is already in the corpus
+needs no query.
 
 Invariants:
 - Validation precedes every write. An admission is refused, writing nothing, when the import's
@@ -73,15 +74,16 @@ from factory.sources.importlist import ImportlistEntry
 from factory.sources.registry import SourceFactory, importlist_factory
 
 _PLANNED = "import.admission_planned"
-_PREFIX = {"openalex": "openalex:", "doi": "doi:", "arxiv": "", IMPORTLIST: ""}
-_SEPARATOR = {"openalex": "|", "doi": "|", "arxiv": ",", IMPORTLIST: ","}
+_PREFIX = {"openalex": "openalex:", "doi": "doi:", "arxiv": "", "pmid": "", IMPORTLIST: ""}
+_SEPARATOR = {"openalex": "|", "doi": "|", "arxiv": ",", "pmid": ",", IMPORTLIST: ","}
 _SOURCE_KIND: dict[str, tuple[str, QueryKind]] = {
     "openalex": ("openalex", QueryKind.FILTER),
     "doi": ("openalex", QueryKind.FILTER),
     "arxiv": ("arxiv", QueryKind.ID_LIST),
+    "pmid": ("pubmed", QueryKind.ID_LIST),
     IMPORTLIST: (IMPORTLIST, QueryKind.ID_LIST),
 }
-_ORDER = ("openalex", "doi", "arxiv", IMPORTLIST)
+_ORDER = ("openalex", "doi", "arxiv", "pmid", IMPORTLIST)
 
 
 class AdmissionSummary(StrictModel):
@@ -184,12 +186,16 @@ def _rows(project: Project, import_id: str) -> list[_Row]:
 
 
 def _route(work: Work) -> tuple[str, str] | None:
-    """(query family, id) naming a stored work, or None when no source query can name it."""
+    """(query family, id) naming a stored work, or None when no source query can name it.
+
+    Precedence: OpenAlex id, PMID (a PubMed `id_list`), arXiv id, DOI."""
     ident = work.identifiers
     arxiv = ident.arxiv or (arxiv_id_from_doi(ident.doi) if ident.doi else None)
     route: tuple[str, str] | None = None
     if ident.openalex:
         route = "openalex", ident.openalex
+    elif ident.pmid:
+        route = "pmid", ident.pmid
     elif arxiv:
         route = "arxiv", arxiv
     elif ident.doi and not any(sep in ident.doi for sep in "|,"):

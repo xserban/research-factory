@@ -162,7 +162,7 @@ def test_interval_is_registered() -> None:
 def test_class_attributes() -> None:
     assert PubmedSource.name == "pubmed"
     assert PubmedSource.kinds == {QueryKind.KEYWORD, QueryKind.ID_LIST}
-    assert PubmedSource.window_filter is False
+    assert PubmedSource.window_filter is True
 
 
 def test_keyword_two_phase_request_shape() -> None:
