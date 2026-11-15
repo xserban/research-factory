@@ -788,3 +788,10 @@ Status: open · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depen
 4. Researcher confirms decision 124 (source, route order before OA PDF, TDM manuscripts fetched).
 **Parked (not needed for pilot start):** IDEA-75 (date slicing above 9,999), IDEA-76 rest (PubMed watch window, import admission by PMID), IDEA-77 (Europe PMC route, MeSH suggestions in the probe), the review minors under IDEA-22, actor-first coverage for 9 gates whose prerequisite check runs before the actor check (screening/extraction/mine resolve, miner calibration label, hypotheses register and lead decide, experiments freeze-unlock and accept-baseline: needs built worlds), a shared PMCID converter (inbox and PMC route each have one).
 **Rigour notes:** pmid-seeds touches held-out handling (decision 37.9, 123): review the withholding tests before merge.
+
+### IDEA-80 — Philosophy-of-science names for factory objects
+Status: new · Added: 2026-11-14 · Slice: — · Depends on: `docs/naming-glossary.md`, a decision entry per adopted name
+**What:** adopt the display names proposed in `docs/naming-glossary.md` (exemplars, anomalies, hard core and protective belt, conjectures, severe tests, assay, …) in the hub, skills and documentation. Objects only; role names (miner, screener, builder) stay plain.
+**Why:** a shared vocabulary that states what each object is for in the logic of inquiry, not only in the pipeline.
+**Rigour notes:** event types, tables and MCP tool names keep their identifiers (the event log is append-only; renaming would need permanent projector aliases); names used in *Decided* entries change only through a new decision.
+**Open questions:** whether *programmes* fits regions; whether Bacon's Idols become an audit finding field (a schema change, not a rename).
