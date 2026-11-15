@@ -13,8 +13,9 @@ task pins a document that is no longer the work's current one; a served task is 
 schema it served differs from the current one. A stale unit gets a new task under the current
 schema and pin; the stale task is never served again and nothing in the log is edited.
 
-A session joins one extraction pass. It is refused from the other pass, from a model that already
-serves the other pass, from a session that joined any screening pass, and from a session that
+A session joins one extraction pass, with one exception (decision 129): it may join the same pass
+label of several miner scopes, so one reading of a work serves several miners. It is refused from
+the other pass, from a model that already serves the other pass of the scope joined, from a session that joined any screening pass, and from a session that
 relayed a human label over MCP (it could read an answer key). A refusal raises
 FactoryValidationError and writes nothing.
 
@@ -22,7 +23,7 @@ Every pass, task, row, closing and read belongs to one scope (slice 3b ruling 6)
 (`extraction_schema`, tasks `extract_a`/`extract_b`) or `contribution` (`contribution_schema`,
 tasks `contrib_a`/`contrib_b`, population G1's `included_works`). Each scope keeps its own passes,
 seeds, units, pins and staleness; every read defaults to evidence, and a session joins at most one
-pass across both scopes (ruling 2); a model is independent only within a scope, since agreement
+pass across evidence and contribution (ruling 2), or one label of several miners; a model is independent only within a scope, since agreement
 compares A with B inside one scope (decision 37). Evidence events leave `pack` null (their
 payloads now hold `"pack": null`, and rows `"cited": null`, which replay as before); contribution
 events carry `pack = contribution`. A contribution row is also stale when it cites a reference
@@ -492,8 +493,8 @@ def is_extraction_session(project: Project, session: str) -> bool:
 def session_scope(project: Project, session: str) -> ScopeKey | None:
     """The scope of the extraction pass the session joined; None when it joined none."""
     project.index.sync()
-    joined = _joined(project, session)
-    return None if joined is None else joined[0]
+    joined = sorted(_joined(project, session), key=lambda j: j[0].value)
+    return joined[0][0] if joined else None
 
 
 def unit_pin(
@@ -547,14 +548,15 @@ def _kind_tasks(
     return found
 
 
-def _joined(project: Project, session: str) -> tuple[ScopeKey, PassLabel] | None:
-    """The (scope, pass) the session joined, if any (one per session, ruling 2)."""
+def _joined(project: Project, session: str) -> frozenset[tuple[ScopeKey, PassLabel]]:
+    """The (scope, pass) joins of the session. One, except that a session of a production miner
+    pass may hold the same label of several miner scopes (decision 129)."""
     with project.index.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             text("SELECT scope, pass_label FROM extraction_sessions WHERE session = :s"),
             {"s": session},
-        ).one_or_none()
-    return None if row is None else (scope_from_value(str(row[0])), PassLabel(str(row[1])))
+        ).all()
+    return frozenset((scope_from_value(str(s)), PassLabel(str(p))) for s, p in rows)
 
 
 def _pass_models(project: Project, label: PassLabel, scope: ScopeKey) -> set[str]:
@@ -615,7 +617,7 @@ def _check_join(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
         )
     joined = _joined(project, actor.session)
-    if joined == (scope, label):
+    if (scope, label) in joined:
         return False
     if _is_label_session(project, actor.session) or relayed_extraction_label(
         project, actor.session
@@ -639,15 +641,38 @@ def _check_join(
         raise FactoryValidationError(
             [ValidationIssue("session", "this session appraised works and cannot extract")]
         )
-    if joined is not None:
+    if joined and not _may_add_miner(project, actor, joined, label, scope, calibration):
+        first = min(joined, key=lambda j: (j[0].value, j[1].value))
         raise FactoryValidationError(
-            [ValidationIssue("pass", f"this session already extracts {_scoped_name(*joined)}")]
+            [ValidationIssue("pass", f"this session already extracts {_scoped_name(*first)}")]
         )
     other = _other(label)
     if not calibration and actor.model in _pass_models(project, other, scope):
         raise FactoryValidationError(
             [ValidationIssue("model", f"{_scoped_name(scope, other)} already uses this model")]
         )
+    return True
+
+
+def _may_add_miner(
+    project: Project,
+    actor: Actor,
+    joined: frozenset[tuple[ScopeKey, PassLabel]],
+    label: PassLabel,
+    scope: ScopeKey,
+    calibration: bool,
+) -> bool:
+    """Whether a session that already joined `joined` may also join `label` of `scope`
+    (decision 129): only when the new scope and every joined one is a miner, every join has this
+    label, the new join is not a calibration pass, and no joined miner served calibration tasks
+    for this session. A calibration session joins nothing else; nothing else joins calibration."""
+    if calibration or not isinstance(scope, MinerScope):
+        return False
+    for other, other_label in joined:
+        if not isinstance(other, MinerScope) or other_label is not label:
+            return False
+        if actor.session in calibration_sessions_of(project, other):
+            return False
     return True
 
 
@@ -1248,7 +1273,7 @@ def _record(
                     )
                 ]
             )
-        if _joined(project, actor.session) != (unit.scope, unit.label):
+        if (unit.scope, unit.label) not in _joined(project, actor.session):
             raise FactoryValidationError(
                 [
                     ValidationIssue(

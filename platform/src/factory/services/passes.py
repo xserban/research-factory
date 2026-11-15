@@ -1,7 +1,8 @@
 """Pass membership and the independence rule, written once (slice M ruling 21, decision 55).
 
 A session joins a screening pass (table `pass_sessions`, one row per session and stage) or an
-extraction pass (table `extraction_sessions`, one row per session). Surfaces ask this module
+extraction pass (table `extraction_sessions`, one row per session and scope: a session of a
+production miner pass may hold one label of several miners, decision 129). Surfaces ask this module
 whether a session belongs to a pass, never the tables.
 
 The users of a screening pass, U(P), are its human screeners and the principals of its agents
@@ -13,7 +14,7 @@ Invariants:
 - A human act relayed over MCP is refused to a session in any pass of any module (decision 55):
   `require_not_pass_session` takes no module.
 - `shared_refusal` is pure: each module collects its own evidence of joins (screening and
-  extraction both read the log, as the projection keeps one join per session), and the decision
+  extraction both read the log), and the decision
   is this one function. Its texts are the texts of the modules before the merge.
 - `users` is given to `shared_refusal` for a hosted project only: an unhosted project keeps the
   slice-1 rule, so one researcher can run both agent passes.
