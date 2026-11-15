@@ -835,14 +835,14 @@ Status: new · Added: 2026-11-15 · Slice: 5 · Depends on: decisions 106 to 112
 **Open questions:** who the first second person is and which role they hold; whether the server and hosting side (single writer, signed commits) is wanted before teams of scientists work in one project.
 
 ### IDEA-85 — Quotes with Markdown escapes fail verification
-Status: built, not reviewed (branch `fix-85-86`; `quote_in_element` removes a backslash before ASCII punctuation on the quote and on each block text, nothing else; tests in `test_document_quotes`; past-rejection count not done) · Added: 2026-11-15 · Slice: — · Depends on: —
+Status: reviewed: one Sonnet review, no Important findings; minors addressed in 800feda0 (branch `fix-85-86`; `quote_in_element` removes a backslash before ASCII punctuation on the quote and on each block text, nothing else; tests in `test_document_quotes`; past-rejection count not done) · Added: 2026-11-15 · Slice: — · Depends on: —
 **What:** `document_read` serves segment text with Markdown escapes as stored (`team\_size`), while `quote_in_element` (`document/quotes.py:51`) compares the quote with the parsed block text, where markdown-it has removed the escape (`team_size`). A quote copied verbatim from what the agent read fails as `quote-not-in-anchor`. Found in the technique-miner dry run (EvoSci, 2026-11-15); the agent had to choose a quote without the token. Fix: apply the same unescaping to the needle in `normalise_quote` (backslash before ASCII punctuation), or serve unescaped text; either way one rule on both sides.
 **Why:** verbatim quoting is the core evidence rule; agents should never have to avoid a span because of rendering.
 **Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
 **Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).
 
 ### IDEA-86 — Updates page: per-miner ledger and index reads once per call
-Status: built, not reviewed (branch `fix-85-86`; not timed on the pilot) · Added: 2026-11-15 · Slice: — · Depends on: decision 127, IDEA-70
+Status: reviewed: one Sonnet review, no Important findings; minors addressed in 800feda0 (branch `fix-85-86`; not timed on the pilot) · Added: 2026-11-15 · Slice: — · Depends on: decision 127, IDEA-70
 **What:** `updates_view` now runs under one `Index.snapshot()` (one sync) and `_mined` reads one `scope_ledger` per miner and passes it to `final_rows_restricted` (new `ledger=` argument), instead of each reader inside `_read_state` building its own ledger (about 3 per miner) and syncing the index again. Output is unchanged. Tests: `test_mine_status_cost` (one ledger per miner, one sync per call).
 **Rigour notes:** read-only; nothing cached across calls. As for `mine status`, writers wait on the shared lock for the length of the call.
 **Remaining:** `flow_ledger` still folds the whole corpus once per call when additions exist; no timing taken.
