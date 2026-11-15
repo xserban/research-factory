@@ -69,12 +69,14 @@ REASONS = {
     "no-version": "the PMC open bucket lists no version of this article",
     "not-open-access": "the article is not in the PMC open-access subset or text-mining set",
     "no-body": "the PMC XML has no article body",
+    "not-in-europepmc": "Europe PMC has no record with a PubMed Central id for this work",
     "not-a-pdf": "the address returned something that is not a PDF",
 }
 ROUTE_HELP = {
     "arxiv-html": "arXiv's HTML rendering of the paper",
     "arxiv-source": "arXiv's LaTeX source of the paper",
     "pmc-jats": "the article XML (JATS) from the PubMed Central open bucket",
+    "europepmc-jats": "the article XML (JATS) from Europe PMC",
     "oa-pdf": "an open-access PDF listed by OpenAlex",
     "researcher-supplied": "a file the researcher supplies",
 }
