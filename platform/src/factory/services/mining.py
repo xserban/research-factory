@@ -510,6 +510,11 @@ DERIVED_INSTRUCTIONS = (
     "label limit; a not-stated or not-applicable row stands alone in its dimension. Never compute "
     "or convert a value. Follow skill rf-taxonomy."
 )
+DERIVED_ATTRIBUTE_SENTENCE = (
+    " Attribute fields beyond the category are optional: give one only when the text states it, "
+    "with its own anchor and verbatim quote; leave it out otherwise, and never on a not-stated "
+    "or not-applicable row."
+)
 MAX_EXAMPLES = 3
 """Most examples served per category."""
 
@@ -705,8 +710,15 @@ def mine_next(
         anchors = selected_anchors(conversion_manifest(proj, conversion), spec.selector)
         instructions = MINE_INSTRUCTIONS
         if spec.taxonomy is not None:
+            from factory.mining.derive import DERIVED_FIELD_NAMES
+
             instructions = (
                 DERIVED_INSTRUCTIONS
+                + (
+                    DERIVED_ATTRIBUTE_SENTENCE
+                    if any(f.name not in DERIVED_FIELD_NAMES for f in spec.fields)
+                    else ""
+                )
                 + "\n\n"
                 + derived_task_text(proj, spec, base.records[0]["work_id"])
             )

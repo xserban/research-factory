@@ -46,6 +46,7 @@ class DerivedMiner:
     version: int
     counts: dict[str, int]
     page: bool  # the Miners product has a page for it
+    dimensions: tuple[str, ...]  # the dimensions the miner projects; other dimensions are not mined
 
 
 def category_counts(rows: Iterable[tuple[str, str]]) -> dict[str, int]:
@@ -56,20 +57,42 @@ def category_counts(rows: Iterable[tuple[str, str]]) -> dict[str, int]:
     return {value: len(works) for value, works in seen.items()}
 
 
-def derived_counts(project: Project, miner: str) -> dict[str, int]:
-    """Category counts from the live, non-stale pass-A rows of `miner` (calibration rows apart)."""
+def derived_counts(project: Project, miner: str, version: int | None = None) -> dict[str, int]:
+    """Category counts from the live, non-stale pass-A rows of `miner` (calibration rows apart).
+    When the miner is listed in the protocol, only works in its current population count, so rows
+    of works no longer in it are left out."""
     stale = stale_extractions(project, scope=MinerScope(miner))
+    keep: set[str] | None = None
+    if version is not None and miner in {s.name for s in mining_service.mine_status(project)}:
+        keep = set(mining_service.miner_population(project, miner))
     pairs = [
         (row.work_id, str(row.fields[CATEGORY_FIELD].value))
         for row in live_rows(project, PassLabel.A, scope=MinerScope(miner))
-        if row.extraction_id not in stale and CATEGORY_FIELD in row.fields
+        if row.extraction_id not in stale
+        and CATEGORY_FIELD in row.fields
+        and (keep is None or row.work_id in keep)
     ]
     return category_counts(pairs)
 
 
+def _registration_order(project: Project, event_ids: list[str]) -> dict[str, tuple[str, str]]:
+    """`(ts, id)` of each registration event, the key that orders registrations."""
+    if not event_ids:
+        return {}
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text("SELECT id, ts FROM events WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": event_ids},
+        ).all()
+    return {str(i): (str(t), str(i)) for i, t in found}
+
+
 def derived_miner(project: Project, name: str, version: int) -> DerivedMiner | None:
-    """The latest non-retired miner version whose spec references taxonomy `(name, version)`."""
-    best: MinerSpec | None = None
+    """The latest registered non-retired miner version whose spec references taxonomy
+    `(name, version)`: latest by registration event order, not by name."""
+    candidates: list[tuple[MinerSpec, str]] = []
     for row in mining_service.registered_miners(project):
         if row.retired:
             continue
@@ -78,13 +101,19 @@ def derived_miner(project: Project, name: str, version: int) -> DerivedMiner | N
             continue
         if (spec.taxonomy.name, spec.taxonomy.version) != (name, version):
             continue
-        if best is None or (spec.name, spec.version) > (best.name, best.version):
-            best = spec
-    if best is None:
+        candidates.append((spec, row.event_id))
+    if not candidates:
         return None
+    order = _registration_order(project, [e for _, e in candidates])
+    best = max(candidates, key=lambda c: order.get(c[1], ("", c[1])))[0]
+    assert best.taxonomy is not None
     listed = {s.name for s in mining_service.mine_status(project)}
     return DerivedMiner(
-        best.name, best.version, derived_counts(project, best.name), best.name in listed
+        best.name,
+        best.version,
+        derived_counts(project, best.name, best.version),
+        best.name in listed,
+        tuple(best.taxonomy.dimensions),
     )
 
 
@@ -115,11 +144,18 @@ def _list(items: Iterable[str]) -> str:
     return "<ul>" + "".join(f"<li>{esc(i)}</li>" for i in items) + "</ul>" if items else "none"
 
 
-def _category_block(dim: Dimension, cat: Category, counts: dict[str, int] | None) -> str:
+def _category_block(
+    dim: Dimension, cat: Category, counts: dict[str, int] | None, mined: bool = True
+) -> str:
     head = f"<h4 id='{esc(full_id(dim.id, cat.id))}'>{esc(cat.id)} — {esc(cat.name)}</h4>"
     rows: list[list[object]] = [["definition", cat.definition]]
     if counts is not None:
-        rows.append(["works with a current row", counts.get(full_id(dim.id, cat.id), 0)])
+        rows.append(
+            [
+                "works with a current row",
+                counts.get(full_id(dim.id, cat.id), 0) if mined else "not mined",
+            ]
+        )
     rows.append(["include cues", Html(_list(cat.include_cues))])
     rows.append(["exclude cues", Html(_list(cat.exclude_cues))])
     if cat.examples:
@@ -202,9 +238,17 @@ def render_version(
                 ["residuals", ", ".join(dim.residuals) or "none"],
             ],
         )
+        mined = miner is not None and dim.id in miner.dimensions
         cats = "".join(
-            _category_block(dim, c, None if miner is None else miner.counts) for c in dim.categories
+            _category_block(dim, c, None if miner is None else miner.counts, mined)
+            for c in dim.categories
         )
+        if miner is not None and mined:
+            residual = ", ".join(
+                f"{r} {miner.counts.get(full_id(dim.id, r), 0)}" for r in dim.residuals
+            )
+            if residual:
+                cats += f"<p class=dim>Residuals (works): {esc(residual)}.</p>"
         if not dim.categories and dim.layer_scheme is not None:
             cats = note(f"Categories come from layer scheme version {dim.layer_scheme}.")
         body += section(f"{dim.title} ({dim.id})", info + cats)

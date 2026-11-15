@@ -54,7 +54,9 @@ def test_a_registered_taxonomy_is_listed_with_a_page_and_a_diff(
     write_registered(project, tmp_path, site.page)
     latest = (tmp_path / "t-site.html").read_text(encoding="utf-8")
     assert "no derived miner yet" in latest.lower()
-    assert "Changes from version 1 to 2" in latest and "tech/gan" in latest
+    start = latest.index("Changes from version 1 to 2")
+    diff_table = latest[start : latest.index("</table>", start)]
+    assert "<td>added</td>" in diff_table and "tech/gan" in diff_table
     assert "a &lt;b&gt; quote" in latest and "../explorer/index.html#open=w1" in latest
     first = (tmp_path / "t-site-v1.html").read_text(encoding="utf-8")
     assert "Changes from version" not in first
@@ -70,12 +72,37 @@ def test_a_derived_miner_shows_counts_and_links_its_page() -> None:
         _spec(1, ("rl", "llm")),
         versions=[1],
         latest=1,
-        miner=DerivedMiner("m-site", 1, {"tech/rl": 2}, page=True),
+        miner=DerivedMiner(
+            "m-site", 1, {"tech/rl": 2, "tech/other": 1}, page=True, dimensions=("tech",)
+        ),
         previous=None,
         open_proposals=0,
     )
     assert "../miners/m-site.html" in body
     assert "works with a current row" in body and "<td>2</td>" in body and "<td>0</td>" in body
+    assert "Residuals (works): other 1, not-stated 0" in body
+
+
+def test_a_dimension_the_miner_does_not_project_is_not_mined() -> None:
+    spec = _spec(1, ("rl",))
+    two = TaxonomySpec(
+        name=spec.name,
+        version=1,
+        dimensions=(
+            *spec.dimensions,
+            Dimension("aim", "Aim", "Which aim?", "single", (Category("x", "X", "Def of x."),)),
+        ),
+    )
+    body = render_version(
+        two,
+        versions=[1],
+        latest=1,
+        miner=DerivedMiner("m-site", 1, {"tech/rl": 2}, page=False, dimensions=("tech",)),
+        previous=None,
+        open_proposals=0,
+    )
+    assert "not mined" in body and body.count("not mined") == 1
+    assert "Residuals (works): other 0" in body and body.count("Residuals (works)") == 1
 
 
 def test_many_taxonomies_render(project: Project, human: Actor, tmp_path: Path) -> None:

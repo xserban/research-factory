@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from factory.cli.main import app
 from factory.config import Settings
+from factory.document.anchors import AnchorKind
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.mining.derive import derive_miner
@@ -31,7 +32,7 @@ from factory.mining.spec import (
 )
 from factory.mining.taxonomy import Category, Dimension, TaxonomySpec, taxonomy_to_json
 from factory.mining.validate import validate_miner
-from factory.packs.model import UnitFamily
+from factory.packs.model import Conditional, UnitFamily
 from factory.services.context import Project
 from factory.services.mining import register_miner
 from factory.services.taxonomies import register_taxonomy
@@ -66,9 +67,7 @@ def _derive(**over: object) -> MinerSpec:
         ("stage",),
         name="m-attr",
         version=1,
-        selector=SELECTOR,
-        regime=MinerRegime(),
-        **over,  # type: ignore[arg-type]
+        **{"selector": SELECTOR, "regime": MinerRegime(), **over},  # type: ignore[arg-type]
     )
 
 
@@ -105,6 +104,14 @@ def test_invalid_attributes_are_refused(attributes: tuple[MinerField, ...]) -> N
         _derive(attributes=attributes)
 
 
+def test_attributes_are_forbidden_on_an_absence_row() -> None:
+    spec = _derive(attributes=(SCALE, YEAR))
+    absent = ("stage/not-stated",)
+    for name in ("scale", "year"):
+        assert Conditional(name, "category", absent, "forbidden") in spec.conditionals
+    assert not any(c.field in ("scale", "year") for c in _derive().conditionals)
+
+
 def _register(project: Project, agent: Actor, human: Actor, spec: MinerSpec) -> str:
     register_taxonomy(project, human, taxonomy_to_json(TAXONOMY))
     return register_miner(project, agent, spec_to_json(spec)).name
@@ -128,7 +135,7 @@ def test_a_tampered_attribute_list_is_still_validated(
     required = replace(required, fields=(*required.fields[:3], replace(SCALE, required=True)))
     with pytest.raises(FactoryValidationError) as raised:
         register_miner(project, agent, spec_to_json(required))
-    assert raised.value.issues[0].field == "spec.taxonomy"
+    assert any(issue.field == "spec.taxonomy" for issue in raised.value.issues)
 
 
 def _field_json(field: MinerField) -> dict[str, object]:
@@ -152,9 +159,14 @@ def test_cli_attributes_round_trip(
     args += ["--dimension", "stage"]
     result = RUNNER.invoke(app, [*args, "--attributes", str(path)], env=_env(settings.root))
     assert result.exit_code == 0, result.stderr
-    assert spec_from_json(json.loads(result.stdout)) == _derive(attributes=(SCALE, YEAR))
+    selector = Selector(
+        Population.INCLUDED_FT, elements=(AnchorKind.PARAGRAPH,), heading_patterns=()
+    )
+    assert spec_from_json(json.loads(result.stdout)) == _derive(
+        attributes=(SCALE, YEAR), selector=selector
+    )
     plain = RUNNER.invoke(app, args, env=_env(settings.root))
-    assert spec_from_json(json.loads(plain.stdout)) == _derive()
+    assert spec_from_json(json.loads(plain.stdout)) == _derive(selector=selector)
 
 
 def test_cli_refuses_invalid_attributes(

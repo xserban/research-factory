@@ -22,6 +22,9 @@ Invariants:
   `category`, `quote` and `described_as`. An attribute is optional (never `required`), is not named
   like a derived field, repeats no name, and is an enum, quote, number or integer field. Attributes
   are never row key or anchor fields. With none, the spec is exactly the one without the argument.
+- A `not-stated` or `not-applicable` row carries no attribute value: each attribute is forbidden
+  (a `Conditional` like the one on `described_as`) when `category` is an absence value. Without
+  attributes no such conditional is added.
 - `absence_values` are the `not-stated` and `not-applicable` residuals of the chosen dimensions.
 - `derive_miner` raises `ValueError` for an unknown or repeated dimension, for no dimension, or
   for a dimension zero without `layer_ids`, or for an invalid attribute. Meaning is checked by
@@ -174,6 +177,11 @@ def derive_miner(
         forbidden = tuple(values)
     if forbidden:
         conditionals.append(Conditional("described_as", "category", forbidden, "forbidden"))
+    if absent:
+        conditionals.extend(
+            Conditional(attribute.name, "category", tuple(absent), "forbidden")
+            for attribute in attributes
+        )
     digest = taxonomy_digest(taxonomy)
     ids = tuple(d.id for d in chosen)
     return MinerSpec(
