@@ -13,21 +13,21 @@ Invariants:
   those left out.
 - The order blob is read as written; an unreadable or empty one leaves the shown items as the
   whole ranking (`total_ranked == total_shown`, no further entries).
-- The reaction and add services refuse an entry not in `shown` (`entry_id: not-shown`); further
-  entries therefore carry text only.
+- The reaction and add services accept a further entry and record it as beyond the shown list;
+  each further item carries its latest reaction and send state, read with the totals in one pass
+  over the reaction and send rows (no event-log scan).
 """
 
 from __future__ import annotations
 
-import zlib
 from collections.abc import Mapping
 
 from sqlalchemy import text
 
-from factory.errors import FactoryError
-from factory.events.reader import read_all
 from factory.model.base import StrictModel
+from factory.model.feed import FeedReaction
 from factory.services.context import Project
+from factory.services.feed import ranking_order as _order
 from factory.services.feed_read import feed_list
 from factory.services.site_feed import _authors_list, _entry_records, _text
 
@@ -43,6 +43,10 @@ class FeedFurtherItem(StrictModel):
     title: str | None
     authors: tuple[str, ...]
     abstract: str | None
+    reaction: FeedReaction | None = None
+    sent: bool = False
+    inbox_item_id: str | None = None
+    submitted: str | None = None
 
 
 class FeedRankedPage(StrictModel):
@@ -55,39 +59,6 @@ class FeedRankedPage(StrictModel):
     further: tuple[FeedFurtherItem, ...]
     cut: int
     cap: int
-
-
-def _order(project: Project, ranking_id: str) -> list[tuple[str, int, float]]:
-    """`(entry_id, rank, score)` of the ranking's order blob, in blob order; empty when the event
-    or the blob cannot be read or an item is malformed."""
-    for event in read_all(project.paths.events_dir, project.catalog):
-        if event.type != "feed.ranked" or event.actor.kind not in ("system", "agent"):
-            continue
-        if event.payload.get("ranking_id") != ranking_id:
-            continue
-        ref = event.payload.get("order_blob")
-        if not isinstance(ref, str):
-            return []
-        try:
-            data = project.blobs.get_json(ref)
-        except (FactoryError, OSError, EOFError, ValueError, zlib.error):
-            return []
-        out: list[tuple[str, int, float]] = []
-        if not isinstance(data, list):
-            return []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            entry, rank, score = item.get("entry_id"), item.get("rank"), item.get("score")
-            if (
-                isinstance(entry, str)
-                and isinstance(rank, int)
-                and isinstance(score, (int, float))
-                and not isinstance(rank, bool)
-            ):
-                out.append((entry, rank, float(score)))
-        return out
-    return []
 
 
 def feed_ranked_page(
@@ -113,6 +84,16 @@ def feed_ranked_page(
             titles[str(e)] = str(t)
             if h is not None:
                 held.add(str(e))
+        reactions = {
+            str(e): FeedReaction(str(r))
+            for e, r in conn.execute(
+                text("SELECT entry_id, reaction FROM feed_reactions ORDER BY event_id")
+            ).all()
+        }
+        sends = {
+            str(e): str(i)
+            for e, i in conn.execute(text("SELECT entry_id, inbox_item_id FROM feed_sends")).all()
+        }
     shown = {i.entry_id for i in listing.items}
     order = [o for o in _order(project, listing.ranking_id) if o[0] not in held]
     ranked_ids = {o[0] for o in order} | shown
@@ -126,6 +107,10 @@ def feed_ranked_page(
             title=titles.get(entry),
             authors=_authors_list(recs.get(entry)),
             abstract=_text(recs.get(entry), "abstract") or None,
+            submitted=_text(recs.get(entry), "submitted") or None,
+            reaction=reactions.get(entry),
+            sent=entry in sends,
+            inbox_item_id=sends.get(entry),
         )
         for entry, rank, score in further_all[:cap]
     )

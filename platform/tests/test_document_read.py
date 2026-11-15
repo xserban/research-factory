@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
+from factory.document.anchorise import stamp_version
 from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.document.converter import convert
 from factory.document.registry import ConverterRegistry
@@ -271,9 +272,9 @@ def test_old_conversion_readable_by_id(project: Project) -> None:
     first = document_read(project, work_id=work, conversion_id=old)
 
     assert latest.conversion_id == new
-    assert latest.converter_version == "1.0+b"
+    assert latest.converter_version == stamp_version("1.0+b")
     assert first.conversion_id == old
-    assert first.converter_version == "1.0+a"
+    assert first.converter_version == stamp_version("1.0+a")
     direct = convert(PassThroughConverter("1.0+a"), MD, "text/html")
     assert _manifest(project, old) == direct.manifest
     assert [s.anchor for s in first.segments] == [

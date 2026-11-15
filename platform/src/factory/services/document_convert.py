@@ -41,6 +41,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
+from factory.document.anchorise import split_version, stamp_version
 from factory.document.anchors import AnchorKind
 from factory.document.converter import (
     ConversionResult,
@@ -252,15 +253,16 @@ def _restore_one(
 ) -> ConversionOutcome:
     """Reconvert one damaged conversion and store its blobs only if they reproduce its hashes."""
     converter = registry.named(record.converter, record.media_type)
-    version = _version_or_none(converter) if converter is not None else None
-    if converter is None or version != record.converter_version:
+    base, anchor_version = split_version(record.converter_version)
+    version = _own_version_or_none(converter) if converter is not None else None
+    if converter is None or version != base:
         return _restore_outcome(record, "failed", "version-unavailable")
     try:
         raw = project.library.get(record.raw_hash)
     except (BlobNotFoundError, BlobIntegrityError, OSError):
         return _restore_outcome(record, "raw-missing")
     try:
-        result = convert(converter, raw, record.media_type)
+        result = convert(converter, raw, record.media_type, anchor_version=anchor_version)
     except ConverterUnavailable:
         return _restore_outcome(record, "failed", FailureReason.CONVERTER_UNAVAILABLE)
     except Exception:
@@ -606,7 +608,16 @@ def _decide(
 
 
 def _version_or_none(converter: Converter) -> str | None:
-    """The converter's version, or None if its tool is unavailable."""
+    """The version `convert` would record for this converter (its own version stamped with the
+    current anchoring version), or None if its tool is unavailable."""
+    try:
+        return stamp_version(converter.version())
+    except ConverterUnavailable:
+        return None
+
+
+def _own_version_or_none(converter: Converter) -> str | None:
+    """The converter's own version, without the anchoring stamp, or None if unavailable."""
     try:
         return converter.version()
     except ConverterUnavailable:

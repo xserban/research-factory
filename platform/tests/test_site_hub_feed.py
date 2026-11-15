@@ -17,7 +17,7 @@ import pytest
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.reader import read_all
-from factory.services import site_server
+from factory.services import site_hub_feed, site_server
 from factory.services.context import Project, list_projects, open_project
 from factory.services.feed import FeedRunAll
 from factory.services.project import init_project
@@ -440,12 +440,44 @@ def test_the_page_counts_shown_of_ranked_and_hides_further_cards_read_only(
     further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
     assert len(further) == 70  # ranks 30..99; rank 100 is the shown exploration pick
     assert "rank 30, not in the shown set" in further[0]
-    assert all("data-act" not in f and "<button" not in f for f in further)
+    assert all(f.count("data-act=") == len(site_hub_feed.ACTIONS) for f in further)
+    assert all("reaction: no reaction" in f for f in further)
     assert "data-more='30'" in demo and "Show next 30" in demo
-    assert "abstract and links only" in demo
+    assert "marked as beyond the shown list" in demo
     assert "Abstract 30 &lt;b&gt;x&lt;/b&gt;" in further[0]
     shown = re.findall(r"<article class=card data-entry-id", demo)
     assert len(shown) == 30
+
+
+def test_a_further_card_shows_its_reaction_and_added_state(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    from factory.events.reader import read_all as _read
+    from factory.model.feed import FeedReaction
+    from factory.services.feed import react, send
+    from tests.test_feed_page import _eid, world
+
+    port, _, _ = served
+    world(project, total=40, shown=5)
+    react(project, project.human_actor(), _eid(10), FeedReaction.LIKE)
+    send(project, project.human_actor(), _eid(11))
+    assert any(
+        e.payload.get("beyond_shown") for e in _read(project.paths.events_dir, project.catalog)
+    )
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    cards = {
+        m.group(1): m.group(0)
+        for m in re.finditer(
+            r"<article class='card further' hidden data-entry-id='([^']*)'[^>]*>.*?</article>",
+            demo,
+            re.S,
+        )
+    }
+    assert "reaction: like" in cards[_eid(10)] and "badge added" not in cards[_eid(10)]
+    assert "badge added" in cards[_eid(11)]
+    assert "reaction: no reaction" in cards[_eid(12)]
 
 
 def test_the_page_says_when_the_cap_cuts(
@@ -464,3 +496,147 @@ def test_the_page_says_when_the_cap_cuts(
     demo = _demo_section(_req(port, "GET", "/feed/")[1])
     assert "first 10 ranked entries beyond the shown ones" in demo
     assert "24 more are not listed" in demo
+
+
+# --- grid layout, clamped abstracts, More ---
+
+
+def test_the_page_has_the_grid_css_and_the_layout_switch_with_its_storage_key(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    port, _, _ = served
+    _world(project)
+    page = _req(port, "GET", "/feed/")[1]
+    assert "repeat(auto-fill,minmax(380px,1fr))" in page
+    assert "-webkit-line-clamp:3" in page and "line-clamp:3" in page
+    assert "data-layout=grid" in page and "data-layout=list" in page
+    assert "factory-feed-layout" in page
+    assert "<details" not in _demo_section(page)
+
+
+def test_cards_clamp_the_abstract_with_a_more_button_and_authors_only_when_expanded(
+    served: tuple[int, site_server.MainHub, Scripted],
+    project: Project,
+    stub_titles: None,  # noqa: F811
+) -> None:
+    from tests.test_feed_page import world
+
+    port, _, _ = served
+    world(project, total=100, shown=29)
+    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    shown = re.findall(r"<article class=card data-entry-id.*?</article>", demo, re.S)
+    further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
+    assert shown and further
+    for card in shown + further:
+        if "class=abs" in card:
+            assert "class=tog aria-expanded=false>More</button>" in card
+        assert "<details" not in card
+        assert card.count("class=meta>") == card.count("<p class=meta>")  # authors only in .au
+    assert all(f.startswith("<article class='card further' hidden") for f in further)
+    assert demo.count("<div class=grid>") == 1
+
+
+def test_abstract_block_hides_authors_in_the_expandable_part_and_is_empty_without_abstract() -> (
+    None
+):
+    block = site_hub_feed._abstract_block("Text <b>", "A. One, B. Two")
+    assert "<p class=abs>Text &lt;b&gt;</p>" in block
+    assert "<p class='meta au'>A. One, B. Two</p>" in block
+    assert block.index("class=abs") < block.index("class='meta au'") < block.index("class=tog")
+    assert site_hub_feed._abstract_block("", "A. One") == ""
+    assert "au'" not in site_hub_feed._abstract_block("Text", "")
+
+
+def test_more_toggles_the_card_and_aria_expanded_in_a_stub_dom() -> None:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    harness = """
+const classes = new Set(); const attrs = {}; const listeners = {};
+const card = {classList: {toggle(c){
+  if(classes.has(c)){classes.delete(c);return false;}
+  classes.add(c);return true;}}};
+const btn = {textContent:'More', closest(){return card;}, setAttribute(k,v){attrs[k]=v;},
+  addEventListener(t,f){listeners[t]=f;}, dataset:{}};
+const store = {};
+global.localStorage = {getItem(k){return store[k]||null;}, setItem(k,v){store[k]=v;}};
+global.location = {hash:''}; global.history = {replaceState(){}};
+global.document = {
+  querySelector(){return null;}, getElementById(){return null;},
+  documentElement: {setAttribute(){}},
+  querySelectorAll(sel){ return sel==='button.tog' ? [btn] : []; }};
+global.fetch = () => Promise.reject(new Error('no'));
+eval(process.argv[1]);
+listeners.click();
+console.log(JSON.stringify([[...classes], attrs['aria-expanded'], btn.textContent]));
+listeners.click();
+console.log(JSON.stringify([[...classes], attrs['aria-expanded'], btn.textContent]));
+"""
+    out = subprocess.run(
+        [node, "-e", harness, site_hub_feed._SCRIPT], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert json.loads(out[0]) == [["open"], "true", "Less"]
+    assert json.loads(out[1]) == [[], "false", "More"]
+
+
+def test_cards_carry_rank_and_submission_date_and_the_page_has_an_order_switch() -> None:
+    from factory.services.feed_page import FeedFurtherItem
+    from factory.services.site_hub_feed import _SCRIPT, _further_card
+
+    card = _further_card(
+        FeedFurtherItem(
+            entry_id="2501.00001",
+            rank=7,
+            score=0.5,
+            title="T",
+            authors=("A",),
+            abstract="abs",
+            submitted="2025-01-02T00:00:00",
+        )
+    )
+    assert "data-rank='7'" in card
+    assert "data-sub='2025-01-02'" in card
+    assert "<span class=meta>2025-01-02</span>" in card
+    undated = _further_card(
+        FeedFurtherItem(
+            entry_id="2501.00002", rank=8, score=0.4, title="U", authors=(), abstract=None
+        )
+    )
+    assert "data-sub=''" in undated
+    assert "feed-order" in _SCRIPT
+    assert "factory-feed-order" in _SCRIPT
+
+
+def test_the_order_comparator_sorts_by_rank_or_date_with_undated_last() -> None:
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from factory.services.site_hub_feed import _SCRIPT
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed")
+    m = re.search(r"function cmpBy\(mode\)\{.*?\n  return mode==='old'.*?\};\}", _SCRIPT, re.S)
+    assert m
+    cards = [
+        {"dataset": {"sub": "2025-01-02", "rank": "1"}, "n": "a"},
+        {"dataset": {"sub": "", "rank": "2"}, "n": "b"},
+        {"dataset": {"sub": "2025-03-01", "rank": "3"}, "n": "c"},
+    ]
+    out = {}
+    for mode in ("rank", "new", "old"):
+        run = f"{json.dumps(cards)}.sort(cmpBy('{mode}')).map(c=>c.n)"
+        js = f"{m.group(0)}console.log(JSON.stringify({run}))"
+        out[mode] = json.loads(
+            subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout
+        )
+    assert out == {"rank": ["a", "b", "c"], "new": ["c", "a", "b"], "old": ["a", "c", "b"]}

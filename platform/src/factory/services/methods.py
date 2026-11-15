@@ -57,6 +57,7 @@ from factory.services.gate_status import GateStatusRow, notable_rows
 from factory.services.grey import declared_sources, grey_paragraph, reported_counts
 from factory.services.imports import library_import_only
 from factory.services.prisma import (
+    NOT_RUN_BOXES,
     UNCONVERTED,
     PrismaFlow,
     has_full_text_plan,
@@ -951,6 +952,9 @@ def _full_text(report: MethodsReport) -> str:
         if boxes.not_retrieved_reasons.get(UNCONVERTED)
         else ""
     )
+    not_sought = (
+        "" if boxes == NOT_RUN_BOXES else f"{boxes.not_sought} promoted works were not yet sought. "
+    )
     awaiting = (
         f"{boxes.awaiting_classification} awaiting classification, "
         if boxes.awaiting_classification
@@ -966,8 +970,9 @@ def _full_text(report: MethodsReport) -> str:
         f"Full-text screening. Screening passes: {report.full_text_passes}; planned dual-coded "
         f"share: {_fmt(report.full_text_dual_sample)}; kappa floor "
         f"{_fmt(report.full_text_kappa_floor)}; audit fraction {fraction} with a minimum of "
-        f"{report.full_text_audit_minimum}. Of {boxes.sought} sought, {boxes.not_retrieved} not "
-        f"retrieved (reasons: {reasons or NONE_RECORDED}).{hint} {state} Agreement between passes "
+        f"{report.full_text_audit_minimum}. {not_sought}Of {boxes.sought} sought, "
+        f"{boxes.not_retrieved} not retrieved "
+        f"(reasons: {reasons or NONE_RECORDED}).{hint} {state} Agreement between passes "
         f"(Cohen's kappa): {_fmt(report.full_text_kappa)}. Full-text sessions: "
         f"{report.full_text_sessions}; models (as reported by the agent): "
         f"{_list(report.full_text_models)}."

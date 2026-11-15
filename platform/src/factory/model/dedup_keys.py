@@ -38,10 +38,12 @@ def identifier_keys(ids: Identifiers) -> list[tuple[str, str]]:
 
 
 def first_surname(work: Work) -> str:
-    """The normalised last token of the first author's name, or "" without one."""
-    if not work.authors:
+    """The normalised last token of the first author's name, or "" without one (also when the
+    name normalises to nothing, e.g. punctuation only)."""
+    if not work.authors or not work.authors[0].name:
         return ""
-    return normalize_title(work.authors[0].name).split()[-1] if work.authors[0].name else ""
+    tokens = normalize_title(work.authors[0].name).split()
+    return tokens[-1] if tokens else ""
 
 
 def title_bucket_key(work: Work) -> tuple[int | None, str, str]:

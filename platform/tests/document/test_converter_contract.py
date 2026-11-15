@@ -62,7 +62,7 @@ def test_convert_anchorises_and_hashes() -> None:
     expected = "sha256:" + hashlib.sha256(result.markdown.encode("utf-8")).hexdigest()
     assert result.markdown_hash == expected
     assert result.converter == "stub"
-    assert result.converter_version == "1.0+stub"
+    assert result.converter_version == "1.0+stub+anchors2"
     assert result.warnings == ("table t3: ragged rows padded",)
 
 

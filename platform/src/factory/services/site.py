@@ -151,6 +151,12 @@ def _build_prisma(project: Project, out: Path) -> None:
     build_prisma(project, out)
 
 
+def _build_flow(project: Project, out: Path) -> None:
+    from factory.services.site_flow import build_flow
+
+    build_flow(project, out)
+
+
 def _build_bibliography(project: Project, out: Path) -> None:
     from factory.services.site_bibliography import build_bibliography
 
@@ -250,6 +256,12 @@ def _build_conversion(project: Project, out: Path) -> None:
     build_conversion(project, out)
 
 
+def _build_search(project: Project, out: Path) -> None:
+    from factory.services.site_search import build_search
+
+    build_search(project, out)
+
+
 def _build_acquisition(project: Project, out: Path) -> None:
     from factory.services.site_quality import build_acquisition
 
@@ -263,16 +275,40 @@ def _build_costs(project: Project, out: Path) -> None:
 
 
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
-    "Overview": ("dashboard", "prisma", "costs"),
-    "Sources": ("feed", "acquisition", "conversion", "queue"),
+    "Overview": ("dashboard", "prisma", "flow", "documents", "costs"),
+    "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
-    "Mining": ("miners", "agreement", "steps", "lifecycle"),
+    "Mining": ("miners", "agreement", "steps", "lifecycle", "runs"),
     "Findings": ("results", "synthesis", "taxonomy"),
 }
 """The project hub's sidebar, in the order the work happens: each group and its products. (The factory-wide pages, the
 backlog and the capabilities, are on the main hub, `site_chrome.HUB_NAV`.)"""
 _GROUP: Final = {pid: g for g, ids in LAYOUT.items() for pid in ids}
 _ORDER: Final = {pid: n for n, pid in enumerate(i for ids in LAYOUT.values() for i in ids)}
+
+
+def _build_documents(project: Project, out: Path) -> None:
+    from factory.services.site_documents import build_documents
+
+    build_documents(project, out)
+
+
+def _documents_stamp(project: Project) -> str:
+    from factory.services.site_documents import documents_stamp
+
+    return documents_stamp(project)
+
+
+def _build_runs(project: Project, out: Path) -> None:
+    from factory.services.site_runs import build_runs
+
+    build_runs(project, out)
+
+
+def _runs_stamp(project: Project) -> str:
+    from factory.services.site_runs import runs_stamp
+
+    return runs_stamp(project)
 
 
 def products() -> list[Product]:
@@ -433,6 +469,52 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=CORPUS_EVENTS,
             build=_build_prisma,
+        ),
+        Product(
+            id="search",
+            title="Search and deduplication",
+            group="Sources",
+            description="Each registered query with its runs and the gap between reported and "
+            "retrieved, the records that never became works, every merge with its rule and "
+            "status, and the merges whose absorbed work was screened differently.",
+            entry="index.html",
+            inputs=(*CORPUS_EVENTS, "calibration.%"),
+            build=_build_search,
+        ),
+        Product(
+            id="flow",
+            title="Flow explorer",
+            group="Overview",
+            description="The PRISMA flow by source, every identified record with the step it "
+            "reached, a trail of what happened to each work, and the records that never became "
+            "works.",
+            entry="index.html",
+            inputs=(*CORPUS_EVENTS, "extraction.%", "reference.%"),
+            build=_build_flow,
+        ),
+        Product(
+            id="documents",
+            title="Study documents",
+            group="Overview",
+            description="The study's own files registered with their hash (plan, protocol "
+            "documents, validation reports), by kind, with versions and whether each changed "
+            "since registration.",
+            entry="index.html",
+            inputs=("file.%",),
+            build=_build_documents,
+            stamp=_documents_stamp,
+        ),
+        Product(
+            id="runs",
+            title="Runs",
+            group="Mining",
+            description="The agent-run files under ops/ (prompts, screener scripts, logs) by "
+            "folder and batch prefix, with counts, dates and sizes, and whether a run or task id "
+            "an event names appears in a file name; the others are flagged unlinked.",
+            entry="index.html",
+            inputs=("runner.%", "task.%"),
+            build=_build_runs,
+            stamp=_runs_stamp,
         ),
         Product(
             id="bibliography",
@@ -685,15 +767,15 @@ THEME_CSS: Final = (
 )
 
 
-def page(title: str, body: str, css: str = "") -> str:
+def page(title: str, body: str, css: str = "", *, head: str = "", body_class: str = "") -> str:
     """A themed standalone page for a product that has no page of its own."""
     return with_panel(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
+        f"{head}{THEME_SCRIPT}<title>{html.escape(title)}</title><style>{THEME_CSS}"
         f"body{{padding:20px 24px;max-width:{CONTAINER_WIDTH};margin:0 auto}}.theme-row{{display:flex;justify-content:flex-end;margin:0 0 6px}}"
         f"{css}{LIGHT_CSS}</style></head>"
-        f"<body><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
+        f"<body{f' class={body_class}' if body_class else ''}><div class=theme-row>{THEME_TOGGLE}</div>{body}</body></html>"
     )
 
 

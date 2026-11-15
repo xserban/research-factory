@@ -90,7 +90,10 @@ def test_update_flow_identities(ready: Project, agent: Actor, human: Actor) -> N
     # snapshot, and their outcomes are the cumulative flow's over those works.
     assert len(new) == update.screened
     assert update.total_included == prisma_flow(ready).included == 1
-    assert update.full_text.sought == update.included == 1 and not update.full_text.stage_run
+    assert (
+        update.full_text.sought + update.full_text.not_sought == update.included == 1
+        and not update.full_text.stage_run
+    )
 
 
 def test_duplicate_of_earlier_work_counted_in_update_duplicates(
