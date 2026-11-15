@@ -9,6 +9,7 @@ that is being mined makes it stale all the time.
 Invariants:
 - Read-only for the browser except these allow-listed acts (decision 119). Project acts:
   `POST /api/feed/react`, `POST /api/feed/add`, `POST /api/feed/configure`,
+  `POST /api/watch/configure` and `POST /api/living/snapshot` (the Updates page),
   `POST /api/queue/process` (starts the headless runner, which records its own system events),
   `POST /api/queue/resume` (plan restart-and-costs, R3) and the researcher's layer acts
   (IDEA-50): `POST /api/mine/work` (`work_id`, optional `reason`), `POST /api/mine/layer`
@@ -50,6 +51,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -79,6 +81,8 @@ from factory.services import (
     work_layers,
     work_queue,
 )
+from factory.services import snapshots as snapshots_service
+from factory.services import watch_config as watch_config_service
 from factory.services.access import authorize_command
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
@@ -224,6 +228,59 @@ def feed_configure(project: Project, body: dict[str, Any]) -> tuple[int, dict[st
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, "event_id": event_id, "categories": categories}
+
+
+def watch_configure(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Save the weekly watch settings as a protocol amendment by the local human (the Updates
+    page). `sources` (non-empty list), `interval_days` (int >= 1), `until` (ISO date or null),
+    optional `reason`. Refusals write nothing."""
+    sources = body.get("sources")
+    interval = body.get("interval_days")
+    until_text = body.get("until")
+    reason = body.get("reason", "Weekly watch settings saved from the Updates page")
+    bad: list[ValidationIssue] = []
+    if not isinstance(sources, list) or not sources or not all(isinstance(s, str) for s in sources):
+        bad.append(ValidationIssue("sources", "must be a non-empty list of strings"))
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+        bad.append(ValidationIssue("interval_days", "must be an integer of at least 1"))
+    until: date | None = None
+    if until_text is not None:
+        try:
+            if not isinstance(until_text, str):
+                raise ValueError("not a string")
+            until = date.fromisoformat(until_text)
+        except ValueError:
+            bad.append(ValidationIssue("until", "must be an ISO date (YYYY-MM-DD) or null"))
+    if not isinstance(reason, str) or not reason.strip():
+        bad.append(ValidationIssue("reason", "must be a non-empty string"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(sources, list) and isinstance(interval, int) and isinstance(reason, str)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:protocol amend")
+        protocol_id = watch_config_service.configure_watch(
+            project, actor, sources=sources, interval_days=interval, until=until, reason=reason
+        )
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "protocol_id": protocol_id}
+
+
+def living_snapshot(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Close the week now: a human snapshot, as the local human (the Updates page)."""
+    del body
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:living snapshot")
+        recorded = snapshots_service.snapshot(project, actor, trigger="human")
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "snapshot_id": recorded.snapshot_id}
 
 
 class ResumeRunner:
@@ -410,6 +467,8 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
     "/api/feed/configure": feed_configure,
+    "/api/watch/configure": watch_configure,
+    "/api/living/snapshot": living_snapshot,
     "/api/queue/process": queue_process,
     "/api/queue/resume": queue_resume,
     "/api/mine/work": mine_work,
