@@ -171,6 +171,12 @@ def _subjects(citation: ElementTree.Element) -> list[str]:
     return [term for term in terms if term]
 
 
+def _mesh_descriptors(article: ElementTree.Element) -> tuple[str, ...]:
+    """The distinct MeSH descriptor names of one `PubmedArticle`, in record order."""
+    nodes = article.findall("MedlineCitation/MeshHeadingList/MeshHeading/DescriptorName")
+    return tuple(dict.fromkeys(name for name in (_text(n) for n in nodes) if name))
+
+
 def _requested_pmids(text: str) -> list[str]:
     """The distinct, normalised PMIDs named in an id_list query, in the order given (comma or
     whitespace). `PMID:` prefixes and leading zeros are removed, so the ids match what efetch
@@ -484,7 +490,13 @@ class PubmedSource:
         for article in _articles(body):
             title = _text(article.find("MedlineCitation/Article/ArticleTitle"))
             if title:
-                records.append(SampledRecord(title=title, identifiers=_identifiers(article)))
+                records.append(
+                    SampledRecord(
+                        title=title,
+                        identifiers=_identifiers(article),
+                        mesh=_mesh_descriptors(article),
+                    )
+                )
         return "top", records
 
     @staticmethod

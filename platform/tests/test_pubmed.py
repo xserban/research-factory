@@ -626,6 +626,18 @@ def test_probe_sample_is_top_by_relevance_with_parsed_identifiers() -> None:
     assert fetch["id"] == "11,12"
 
 
+def test_probe_sample_carries_mesh_descriptors_not_keywords() -> None:
+    with_mesh = article("11").replace(
+        "<DescriptorName>Humans</DescriptorName></MeshHeading>",
+        "<DescriptorName>Humans</DescriptorName></MeshHeading>"
+        "<MeshHeading><DescriptorName>Stroke</DescriptorName>"
+        "<QualifierName>therapy</QualifierName></MeshHeading>",
+    )
+    handler, _ = router(_search_ids(["11"], count=1), efetch(with_mesh))
+    _, records = make_source(handler).sample(keyword(), 1, archive=_archive)
+    assert records[0].mesh == ("Humans", "Stroke")  # "testing" is a keyword, not MeSH
+
+
 def test_probe_sample_with_no_hits_makes_no_fetch() -> None:
     handler, seen = router(_search_ids([], count=0), efetch())
     assert make_source(handler).sample(keyword(), 5, archive=_archive) == ("top", [])

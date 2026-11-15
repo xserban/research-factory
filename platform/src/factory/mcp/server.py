@@ -854,8 +854,9 @@ def build_server(
         arXiv takes only filters={"listed_since": "YYYY-MM-DD"}. The first probe of a pilot or
         systematic project draws the hold-out split. Each measured query also returns `sample`
         titles (default 20, 0 for none) to judge noise: a seeded random sample from OpenAlex, the
-        first page by relevance from arXiv (`sample_kind` says
-        which). Samples are not corpus records and drop any held-out seed's work. `decision_ids`
+        first page by relevance from arXiv and PubMed (`sample_kind` says
+        which). A PubMed sample also returns `mesh_suggestions`, the MeSH descriptors of the
+        sampled records with counts: suggestions only, never applied to a query. Samples are not corpus records and drop any held-out seed's work. `decision_ids`
         are the selected `probe` decisions this round implements; pilot and systematic projects
         refuse a probe without one."""
 
