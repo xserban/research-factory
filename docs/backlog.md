@@ -805,3 +805,17 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: `docs/naming-gloss
 **Why:** a shared vocabulary that states what each object is for in the logic of inquiry, not only in the pipeline.
 **Rigour notes:** event types, tables and MCP tool names keep their identifiers (the event log is append-only; renaming would need permanent projector aliases); names used in *Decided* entries change only through a new decision.
 **Open questions:** whether *programmes* fits regions; whether Bacon's Idols become an audit finding field (a schema change, not a rename).
+
+### IDEA-81 — Researcher hints at capture: layer, notes for miners, and an origin tag
+Status: new · Added: 2026-11-15 · Slice: 4a/4c · Depends on: the link inbox (slice 4a), the daily feed (slice 4c), m-layer and taxonomy `t-agentic-layer`, the reference-layer scheme v3
+**What:** (1) `inbox_add` (and one-click add from the feed) takes optional structured hints from the human: a layer or ring from the current scheme (e.g. `benchmark`), a taxonomy category, and notes addressed to the miners. (2) Every work that entered through the inbox or the feed carries a computed origin tag (`inbox`, `feed`, with the channel), filterable in the hub explorer and in miner selectors. (3) Miners receive the human's hint as context after screening, and m-layer reports its agreement with the hints as a free calibration signal.
+**Why:** the researcher often knows at capture what a paper is (2026-11-15: a benchmark that clearly fits a layer); typing it once saves a miner pass and gives gold labels for m-layer.
+**Rigour notes:** screeners never see the origin or the hints (blinding, slice 4a); the origin tag is derived from events, never typed; a hint is the researcher's label with actor and time, not a miner row, and a miner given the hint must not be scored against that same hint.
+**Open questions:** whether miners see hints at all (anchoring) or only the agreement report uses them; whether a hint naming a scheme version goes stale when the scheme changes.
+
+### IDEA-82 — Merged works in shared-mining imports
+Status: new · Added: 2026-11-15 · Slice: — · Depends on: branch `fix-docread-merge` (`document_owners`)
+**What:** `services/shared_mining.py` `_unit_items` takes `work = conversion.work_id`, the absorbed owner when the conversion belongs to a work merged into another, and checks it against the importer's mined and calibration sets; if those hold canonical ids, an already-mined or calibration work can be imported again. Map the owner to its canonical work before the checks.
+**Why:** found by the review of the document_read merge fix (2026-11-15); same canonical-versus-absorbed mismatch.
+**Rigour notes:** calibration works must never be imported (the exclusion protects the calibration set).
+**Open questions:** which ids `importer.mined` and `importer.calibration` hold (not traced).
