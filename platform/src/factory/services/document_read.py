@@ -182,7 +182,7 @@ def document_read(
         )
 
     return DocumentPage(
-        work_id=conversion.work_id,
+        work_id=work_id,
         document_id=conversion.document_id,
         conversion_id=conversion.conversion_id,
         route=conversion.route,
@@ -401,9 +401,10 @@ def promoted_works(project: Project) -> frozenset[str]:
     return _promoted(project)
 
 
-def _owners(project: Project, work_id: str) -> frozenset[str]:
+def document_owners(project: Project, work_id: str) -> frozenset[str]:
     """The works whose documents count as `work_id`'s: the work and every work an active merge
-    absorbed into it (reverted merges are ignored), as `default_conversion` already counts them."""
+    absorbed into it (reverted merges are ignored), as `default_conversion` already counts them.
+    Read-only; the caller syncs the index."""
     from factory.services.dedup import absorbed_by_primary
 
     return frozenset((work_id, *absorbed_by_primary(project).get(work_id, ())))
@@ -418,7 +419,7 @@ def _select(
             raise FactoryValidationError(
                 [ValidationIssue("conversion_id", f"{conversion_id}: unknown conversion")]
             )
-        if conversion.work_id not in _owners(project, work_id):
+        if conversion.work_id not in document_owners(project, work_id):
             raise FactoryValidationError(
                 [
                     ValidationIssue(
@@ -438,7 +439,7 @@ def _select(
 
     if document_id is not None:
         owner = _document_work(project, document_id)
-        if owner not in _owners(project, work_id):
+        if owner not in document_owners(project, work_id):
             raise FactoryValidationError(
                 [ValidationIssue("document_id", f"{document_id}: not a document of {work_id}")]
             )

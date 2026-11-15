@@ -68,3 +68,10 @@ def test_conversion_of_a_work_outside_the_merge_is_refused(
     assert other is not None
     with pytest.raises(FactoryValidationError):
         document_read(project, work_id=canonical, conversion_id=other.conversion_id)
+
+
+def test_page_names_the_work_asked_for(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    canonical, _, _ = _merged(project, agent, human, mock_sources)
+    assert document_read(project, work_id=canonical).work_id == canonical
