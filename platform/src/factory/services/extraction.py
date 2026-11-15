@@ -25,10 +25,11 @@ tasks `contrib_a`/`contrib_b`, population G1's `included_works`). Each scope kee
 seeds, units, pins and staleness; every read defaults to evidence, and a session joins at most one
 pass across evidence and contribution (ruling 2), or one label of several miners; a model is
 independent only within a scope, since agreement compares A with B inside one scope (decision 37).
-Evidence events leave `pack` null (their payloads now hold `"pack": null`, and rows
-`"cited": null`, which replay as before); contribution events carry `pack = contribution`. A contribution row is also stale when it cites a reference
-extraction that is no longer its work's current G1 extraction; its unit is stale (reason
-`references`) when that extraction was replaced after the task that closed the unit was created.
+Evidence events leave `pack` null (their payloads now hold `"pack": null`, and rows `"cited":
+null`, which replay as before); contribution events carry `pack = contribution`. A contribution row
+is also stale when it cites a reference extraction that is no longer its work's current G1
+extraction; its unit is stale (reason `references`) when that extraction was replaced after the
+task that closed the unit was created.
 
 Invariants:
 - Nothing is queued until the protocol is ready and declares an extraction schema of a known pack
