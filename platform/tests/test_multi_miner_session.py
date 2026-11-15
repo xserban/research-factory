@@ -1,5 +1,5 @@
 """A session may join one pass label of several miners (decision 129); everything else stays
-refused. No event shape changes: one `extraction.pass_joined` event per join."""
+refused. One `extraction.pass_joined` event per join; it carries `calibration` (default False)."""
 
 # ruff: noqa: F811
 from dataclasses import replace
@@ -192,6 +192,27 @@ def test_nothing_joins_a_calibration_after_a_production_miner(
         mine_next(project, producer, VISION_NAME, 1, A, calibration=True)
     _refused(raised, "pass")
     assert _joins(project, S1) == [(OTHER, "A")]
+
+
+def test_a_calibration_join_that_served_nothing_still_joins_nothing_else(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _calibration_setup(project, agent, human)
+    idle = miner_actor(S2, SONNET)
+    # the join is written, but no task is claimed (nothing left to claim)
+    monkeypatch.setattr("factory.services.extraction.claim_next", lambda *a, **k: None)
+    assert mine_next(project, idle, VISION_NAME, 1, A, calibration=True).batch is None
+    monkeypatch.undo()
+    assert _joins(project, S2) == [(VISION_NAME, "A")]
+    declare_exploratory(project, OTHER, 1)
+    with pytest.raises(FactoryValidationError) as raised:
+        mine_next(project, idle, OTHER, 1, A)
+    _refused(raised, "pass")
+    assert _joins(project, S2) == [(VISION_NAME, "A")]
 
 
 def test_resume_lists_each_join(

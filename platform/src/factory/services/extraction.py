@@ -665,16 +665,28 @@ def _may_add_miner(
 ) -> bool:
     """Whether a session that already joined `joined` may also join `label` of `scope`
     (decision 129): only when the new scope and every joined one is a miner, every join has this
-    label, the new join is not a calibration pass, and no joined miner served calibration tasks
-    for this session. A calibration session joins nothing else; nothing else joins calibration."""
+    label, the new join is not a calibration pass, and no existing join was a calibration join
+    (recorded on the join, so a calibration session that was served nothing is covered) and no
+    joined miner served calibration tasks for this session. A calibration session joins nothing
+    else; nothing else joins calibration."""
     if calibration or not isinstance(scope, MinerScope):
         return False
     for other, other_label in joined:
         if not isinstance(other, MinerScope) or other_label is not label:
             return False
-        if actor.session in calibration_sessions_of(project, other):
-            return False
-    return True
+    if _calibration_joined(project, actor.session):
+        return False
+    return not any(actor.session in calibration_sessions_of(project, o) for o, _ in joined)
+
+
+def _calibration_joined(project: Project, session: str) -> bool:
+    """Whether any join of the session was made for a calibration pass."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM extraction_sessions WHERE session = :s AND calibration = 1"),
+            {"s": session},
+        ).first()
+    return row is not None
 
 
 def _pack_tag(scope: ScopeKey) -> str | None:
@@ -689,14 +701,16 @@ def _input(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) ->
     return project.blobs.put_json(value) if actor.kind == "agent" else None
 
 
-def _join_event(project: Project, actor: Actor, label: PassLabel, scope: ScopeKey) -> Event:
+def _join_event(
+    project: Project, actor: Actor, label: PassLabel, scope: ScopeKey, *, calibration: bool = False
+) -> Event:
     model = actor.model
     if model is None:
         raise FactoryValidationError(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
         )
     payload = ExtractionPassJoined(
-        pass_label=label, session=actor.session, model=model, pack=_pack_tag(scope)
+        pass_label=label, session=actor.session, model=model, pack=_pack_tag(scope), calibration=calibration
     )
     return project.events.make(
         "extraction.pass_joined", payload, actor, input_blob=_input(project, actor, label, scope)
@@ -787,7 +801,9 @@ def next_unit(
                 )
             )
         if needs_join:
-            events.append(_join_event(project, actor, label, scope))
+            events.append(
+                _join_event(project, actor, label, scope, calibration=calibration_id is not None)
+            )
         if (
             calibration_id is not None
         ):  # a unit closed once is never mined for the calibration again

@@ -225,6 +225,8 @@ class ExtractionPassJoined(StrictModel):
     session: str = Field(min_length=1)
     model: str = Field(min_length=1)
     pack: str | None = None
+    calibration: bool = False
+    """The join served a miner's calibration pass; events written before it replay as False."""
 
 
 MarkerCheck = Literal["matched", "mismatch", "absent"]
