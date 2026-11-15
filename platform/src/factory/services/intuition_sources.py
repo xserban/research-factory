@@ -83,11 +83,13 @@ def _verify_quote(
     if not _is_corpus_work(project, source.work_id):
         issues.append(ValidationIssue(f"{where}.work_id", WORK_UNKNOWN))
         return None
+    from factory.services.document_read import document_owners  # document_read is heavier
+
     conversion = conversion_of(project, source.conversion_id)
     if conversion is None:
         issues.append(ValidationIssue(f"{where}.conversion_id", CONVERSION_UNKNOWN))
         return None
-    if conversion.work_id != source.work_id:
+    if conversion.work_id not in document_owners(project, source.work_id):
         issues.append(ValidationIssue(f"{where}.conversion_id", CONVERSION_NOT_OF_WORK))
         return None
     if document_superseded(project, conversion.document_id):
