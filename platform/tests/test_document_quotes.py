@@ -100,3 +100,17 @@ def test_soft_break_within_one_paragraph_still_matches() -> None:
 def test_element_blocks_lists_each_block_separately() -> None:
     assert element_blocks("# Title\n\nPara one.") == ["Title", "Para one."]
     assert element_blocks(TABLE) == ["a", "b", "1", "2"]
+
+
+def test_quote_with_markdown_escapes_as_served_is_found() -> None:
+    markdown = "The team\\_size was 5 and a\\*b, see \\[1\\]."
+    assert quote_in_element(markdown, "The team\\_size was 5 and a\\*b, see \\[1\\].")
+    assert quote_in_element(markdown, "team_size was 5 and a*b, see [1].")  # unescaped form too
+
+
+def test_escape_tolerance_does_not_loosen_the_match() -> None:
+    markdown = "The team\\_size was 5."
+    assert not quote_in_element(markdown, "The team size was 5.")  # a different character
+    assert not quote_in_element(markdown, "The team\\ size was 5.")  # backslash before a space
+    assert not quote_in_element(markdown, "THE TEAM_SIZE")  # still case-sensitive
+    assert quote_in_element("a \\q b", "a \\q b")  # a backslash before a letter is literal

@@ -5,8 +5,15 @@ text of one block of the element. Blocks and table cells are never joined, so a 
 them. Normalisation is NFKC (folding ligatures and no-break spaces), removal of soft hyphens and
 zero-width characters, and collapse of every whitespace run to one space. Case is preserved: the
 check is case-sensitive.
+
+Escape rule. The converter stores Markdown backslash escapes (`team\\_size`) and `document_read`
+serves them as stored, while the parsed block text has them removed. `quote_in_element` therefore
+removes, on the quote and on the block text alike, a backslash that precedes an ASCII punctuation
+character (the CommonMark escapable set), and nothing else: a backslash before a letter, digit or
+space stays. Both sides get the same rule, so it can only accept more quotes, never fewer.
 """
 
+import re
 import unicodedata
 from collections.abc import Iterable
 
@@ -24,6 +31,7 @@ _INVISIBLE = frozenset(
         "\N{ZERO WIDTH NO-BREAK SPACE}",
     }
 )
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _LINE_BREAKS = frozenset({"softbreak", "hardbreak"})
 
 
@@ -54,10 +62,17 @@ def quote_in_element(element_markdown: str, quote: str) -> bool:
     A quote never spans two blocks: table cells and paragraphs are matched separately. A soft
     break inside a block is a space, so a quote across the line break of one paragraph matches.
     """
-    needle = normalise_quote(quote)
+    needle = normalise_quote(_unescape(quote))
     if not needle:
         return False
-    return any(needle in normalise_quote(block) for block in element_blocks(element_markdown))
+    return any(
+        needle in normalise_quote(_unescape(block)) for block in element_blocks(element_markdown)
+    )
+
+
+def _unescape(text: str) -> str:
+    """Remove a backslash before ASCII punctuation (the Markdown escape); see the module docstring."""
+    return _ESCAPE.sub(r"\1", text)
 
 
 def _block_text(token: Token) -> str:
