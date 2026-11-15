@@ -10,7 +10,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Protocol
 
-from factory.document.anchorise import anchorise
+from factory.document.anchorise import ANCHOR_VERSION, anchorise, stamp_version
 from factory.document.anchors import Manifest, parse_manifest
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 
@@ -24,7 +24,8 @@ class ConversionResult:
     """One converted document.
 
     `markdown` is canonical (anchorised). `markdown_hash` is `sha256:<hex>` of its UTF-8 bytes.
-    `converter_version` is the converter's own version joined with its tool version.
+    `converter_version` is the converter's own version joined with its tool version, then the
+    anchoring version (`stamp_version`): a change of anchoring rules is a new version.
     `warnings` are the converter's non-fatal findings, in the order it reported them.
     """
 
@@ -52,7 +53,9 @@ class Converter(Protocol):
     def to_markdown(self, raw: bytes, media_type: str) -> tuple[str, tuple[str, ...]]: ...
 
 
-def convert(converter: Converter, raw: bytes, media_type: str) -> ConversionResult:
+def convert(
+    converter: Converter, raw: bytes, media_type: str, *, anchor_version: int = ANCHOR_VERSION
+) -> ConversionResult:
     """Convert `raw` with `converter` and return the canonical result.
 
     Raises `FactoryValidationError` on field `media_type` if the converter does not accept it, and
@@ -65,7 +68,7 @@ def convert(converter: Converter, raw: bytes, media_type: str) -> ConversionResu
         )
     version = converter.version()
     markdown, warnings = converter.to_markdown(raw, media_type)
-    canonical = anchorise(markdown)
+    canonical = anchorise(markdown, version=anchor_version)
     manifest = parse_manifest(canonical)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return ConversionResult(
@@ -73,6 +76,6 @@ def convert(converter: Converter, raw: bytes, media_type: str) -> ConversionResu
         manifest=manifest,
         markdown_hash=f"sha256:{digest}",
         converter=converter.name,
-        converter_version=version,
+        converter_version=stamp_version(version, anchor_version),
         warnings=tuple(warnings),
     )

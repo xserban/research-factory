@@ -169,6 +169,7 @@ from factory.services import protocol as protocol_service
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
+from factory.services import reanchor as reanchor_service
 from factory.services import reference_layers as layers_service
 from factory.services import reference_resolve as reference_resolve_service
 from factory.services import references as references_service
@@ -3848,6 +3849,34 @@ def document_convert_cmd(
             document_ids=document,
             override=converter is not None,
             upgrade=upgrade,
+        )
+    for line in render.convert_lines(summary):
+        typer.echo(line)
+
+
+@document_app.command("reanchor")
+def document_reanchor_cmd(
+    ctx: typer.Context,
+    converter: Annotated[
+        str | None,
+        typer.Option("--converter", help="Only documents whose latest conversion is by this one."),
+    ] = None,
+    document: Annotated[
+        list[str] | None,
+        typer.Option("--document", help="A live document; repeat for several."),
+    ] = None,
+) -> None:
+    """Re-anchor the latest conversions under the current anchoring rules, as the researcher.
+
+    Recomputes anchors from the stored Markdown, without the converter, and records a NEW
+    conversion per document (converter version plus `+anchors<n>`); the old conversion is kept
+    and the new one becomes the one read. A document already at the current rules is unchanged.
+    """
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        summary = reanchor_service.reanchor_conversions(
+            project, converter=converter, document_ids=document
         )
     for line in render.convert_lines(summary):
         typer.echo(line)

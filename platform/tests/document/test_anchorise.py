@@ -2,6 +2,8 @@
 
 import string
 
+import pytest
+
 from factory.document.anchorise import _APPENDIX_LETTER, _APPENDIX_SUB, anchorise
 from factory.document.anchors import AnchorKind, parse_manifest
 
@@ -202,13 +204,13 @@ def test_existing_anchors_replaced() -> None:
     assert 's9"' not in out and "p7" not in out and "s1.p5" not in out
 
 
-def test_list_and_blockquote_left_unanchored() -> None:
+def test_list_items_anchored_blockquote_and_code_left_alone() -> None:
     out = anchorise(LIST_DOC)
-    assert _ids(LIST_DOC) == ["s1", "s1.p1"]
-    assert "- one\n- two" in out
+    assert _ids(LIST_DOC) == ["s1", "s1.p1", "s1.p2", "s1.p3"]
+    assert '<a id="s1.p1"></a>\none\n' in out and '<a id="s1.p2"></a>\ntwo\n' in out
     assert "> quoted" in out
     assert "```\ncode\n```" in out
-    assert parse_manifest(out).get("s1.p1") is not None
+    assert parse_manifest(out).get("s1.p3") is not None
 
 
 def test_ragged_table_left_unanchored() -> None:
@@ -249,3 +251,84 @@ def test_idempotent() -> None:
 def test_parse_manifest_never_raises_over_samples() -> None:
     for sample in SAMPLES:
         parse_manifest(anchorise(sample))
+
+
+def test_version_1_leaves_lists_unanchored() -> None:
+    out = anchorise(LIST_DOC, version=1)
+    assert "- one\n- two" in out
+    assert [a.id for a in parse_manifest(out).anchors] == ["s1", "s1.p1"]
+    assert anchorise(out, version=1) == out
+
+
+def test_unknown_version_refused() -> None:
+    with pytest.raises(ValueError):
+        anchorise("x\n", version=3)
+
+
+def test_nested_items_belong_to_the_parent_and_ordered_items_keep_numbers() -> None:
+    md = "# 1 A\n\n- parent\n  - child\n\n3. third\n4. fourth\n"
+    m = parse_manifest(anchorise(md))
+    assert [(a.id, a.text) for a in m.anchors[1:]] == [
+        ("s1.p1", "parent child"),
+        ("s1.p2", "[3] third"),
+        ("s1.p3", "[4] fourth"),
+    ]
+
+
+def test_list_with_code_stays_unanchored() -> None:
+    md = "# 1 A\n\n- a\n\n  ```\n  x\n  ```\n- b\n"
+    assert _ids(md) == ["s1"]
+
+
+def test_bibliography_list_items_become_entries() -> None:
+    md = (
+        "# 1 A\n\nText.\n\n# References\n\n"
+        "1. Smith, J. A paper title (2020).\n2. Jones, K. Other (2021).\n"
+    )
+    m = parse_manifest(anchorise(md))
+    entries = [a for a in m.anchors if a.kind is AnchorKind.BIBLIOGRAPHY_ENTRY]
+    assert [(a.id, a.text) for a in entries] == [
+        ("b1", "[1] Smith, J. A paper title (2020)."),
+        ("b2", "[2] Jones, K. Other (2021)."),
+    ]
+
+
+RUN = (
+    "# 1 A\n\n# References\n\n1. Guan, Y. et al. Drug repurposing (2025). "
+    "2. Penades, J. R. et al. AI mirrors Cell 188(23), 6654-6665 (2025). "
+    "3. Third, A. Something long enough (2020).\n"
+)
+
+
+def test_inline_numbered_run_is_split() -> None:
+    out = anchorise(RUN)
+    texts = [a.text for a in parse_manifest(out).anchors if a.id.startswith("b")]
+    assert [t[:4] for t in texts] == ["[1] ", "[2] ", "[3] "]
+    assert texts[1].startswith("[2] Penades")
+    assert anchorise(out) == out
+
+
+def test_run_with_gap_or_short_part_is_not_split() -> None:
+    gap = RUN.replace("2. Penades", "5. Penades")
+    assert [a.id for a in parse_manifest(anchorise(gap)).anchors if a.id.startswith("b")] == ["b1"]
+    short = "# R\n\n# References\n\n1. Guan, Y. et al. Drug repurposing (2025). 2. Tiny.\n"
+    assert [a.id for a in parse_manifest(anchorise(short)).anchors if a.id.startswith("b")] == [
+        "b1"
+    ]
+
+
+def test_split_continues_the_count() -> None:
+    md = (
+        "# R\n\n# References\n\n[4] Guan, Y. et al. Drug repurposing (2025). "
+        "5. Penades, J. et al. AI Cell (2025).\n"
+    )
+    texts = [a.text for a in parse_manifest(anchorise(md)).anchors if a.id.startswith("b")]
+    assert [t[:3] for t in texts] == ["[4]", "[5]"]
+
+
+@pytest.mark.parametrize("sample", [*SAMPLES, RUN])
+def test_stripping_and_reanchoring_reproduces_each_version(sample: str) -> None:
+    """A stored blob is a fixed point of the rules it was made under (re-anchor soundness)."""
+    for version in (1, 2):
+        stored = anchorise(sample, version=version)
+        assert anchorise(stored, version=version) == stored

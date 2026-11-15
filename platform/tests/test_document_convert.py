@@ -156,7 +156,7 @@ def test_upgrade_reconverts_an_older_version_and_keeps_the_old(
         Converted.model_validate(e.payload).converter_version
         for e in events_of_type(project, "document.converted")
     ]
-    assert versions == ["1.0+a", "1.0+b"]
+    assert versions == ["1.0+a+anchors2", "1.0+b+anchors2"]
 
 
 def test_current_version_is_unchanged_with_or_without_upgrade(
@@ -185,7 +185,7 @@ def test_version_bump_writes_second_conversion(project: Project, corpus: None) -
         Converted.model_validate(e.payload).converter_version
         for e in events_of_type(project, "document.converted")
     ]
-    assert versions == ["1.0+a", "1.0+b"]
+    assert versions == ["1.0+a+anchors2", "1.0+b+anchors2"]
 
 
 def test_version_bump_keeps_the_old_conversion_referenced(project: Project, corpus: None) -> None:
@@ -489,7 +489,7 @@ def test_status_reports_latest_conversion_and_failure(project: Project, corpus: 
     [entry] = document_status(project).documents
     assert entry.converted is True
     assert entry.converter == direct.converter
-    assert entry.converter_version == "1.0+stub"
+    assert entry.converter_version == "1.0+stub+anchors2"
     assert entry.counts == {
         kind.value: sum(1 for a in direct.manifest.anchors if a.kind is kind) for kind in AnchorKind
     }
