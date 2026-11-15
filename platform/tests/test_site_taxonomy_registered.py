@@ -38,8 +38,10 @@ def _spec(version: int, ids: tuple[str, ...], name: str = "t-site") -> TaxonomyS
 
 def test_no_registered_taxonomy_renders_a_note(project: Project, tmp_path: Path) -> None:
     assert "No taxonomy is registered yet" in render_index(project)
-    write_registered(project, tmp_path, site.page)
-    assert list(tmp_path.iterdir()) == []
+    out = tmp_path / "site-out"
+    out.mkdir()
+    write_registered(project, out, site.page)
+    assert list(out.iterdir()) == []
 
 
 def test_a_registered_taxonomy_is_listed_with_a_page_and_a_diff(
