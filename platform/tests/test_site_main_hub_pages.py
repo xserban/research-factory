@@ -66,10 +66,10 @@ def test_the_project_sidebar_groups_by_what_the_reader_is_doing() -> None:
     for p in site.products():
         by_group.setdefault(p.group, []).append(p.id)
     assert list(by_group) == ["Overview", "Sources", "Corpus", "Mining", "Findings"]
-    assert by_group["Overview"] == ["dashboard", "prisma", "costs"]
-    assert by_group["Sources"] == ["feed", "acquisition", "conversion", "queue"]
+    assert by_group["Overview"] == ["dashboard", "prisma", "flow", "documents", "costs"]
+    assert by_group["Sources"] == ["search", "feed", "acquisition", "conversion", "queue"]
     assert by_group["Corpus"] == ["explorer", "bibliography", "citations", "layers", "wiki"]
-    assert by_group["Mining"] == ["miners", "agreement", "steps", "lifecycle"]
+    assert by_group["Mining"] == ["miners", "agreement", "steps", "lifecycle", "runs"]
     assert by_group["Findings"] == ["results", "synthesis", "taxonomy"]
     # every product is in exactly one group
     assert sorted(i for ids in by_group.values() for i in ids) == sorted(
