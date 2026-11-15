@@ -856,8 +856,9 @@ def build_server(
         titles (default 20, 0 for none) to judge noise: a seeded random sample from OpenAlex, the
         first page by relevance from arXiv and PubMed (`sample_kind` says
         which). A PubMed sample also returns `mesh_suggestions`, the MeSH descriptors of the
-        sampled records with counts: suggestions only, never applied to a query. Samples are not corpus records and drop any held-out seed's work. `decision_ids`
-        are the selected `probe` decisions this round implements; pilot and systematic projects
+        sampled records with counts: suggestions only, never applied to a query. Samples are not
+        corpus records and drop any held-out seed's work. `decision_ids` are the selected `probe`
+        decisions this round implements; pilot and systematic projects
         refuse a probe without one."""
 
         def probe() -> JsonValue:
@@ -1730,13 +1731,13 @@ def build_server(
         limit: int = 20,
     ) -> dict[str, JsonValue]:
         """Fetch full text for promoted works. Routes are tried in order (arxiv-html, arxiv-source,
-        pmc-jats, europepmc-jats, oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes
-        to try instead, all of them, without stopping. `work_ids` defaults to the promoted works
-        that have no document and no attempt yet, so a work whose routes all failed is retried
-        only by `refresh` (every promoted work), `routes`, or by naming it in `work_ids`.
-        `limit` caps the works processed; more `work_ids` than `limit` are refused. Returns each
-        work's attempts and
-        documents, and `remaining`, the promoted works still without a document. A researcher's
+        pmc-jats, europepmc-jats, oa-pdf) and each work stops at its first retrieved attempt.
+        `routes` names routes to try instead, all of them, without stopping.
+        `work_ids` defaults to the promoted works that have no document and no attempt yet, so a
+        work whose routes all failed is retried only by `refresh` (every promoted work),
+        `routes`, or by naming it in `work_ids`. `limit` caps the works processed; more
+        `work_ids` than `limit` are refused. Returns each work's attempts and documents, and
+        `remaining`, the promoted works still without a document. A researcher's
         PDF is imported by the researcher, never fetched. Refused to a session that has joined a
         pass."""
 

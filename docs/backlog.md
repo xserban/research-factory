@@ -782,11 +782,12 @@ Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; mer
 2. Import admission: a record whose resolved work has a PMID and no OpenAlex id is named by a PubMed `id_list` (own family `pmid`, comma separator). Precedence: OpenAlex id, PMID, arXiv id, DOI. Records resolved only through DOI keep the DOI route.
 
 ### IDEA-77 — Europe PMC as a second JATS route; MeSH suggestions in the probe
-Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: built on branch `europepmc` (cut from `pubmed-rest`): route `europepmc-jats` (sources/fulltext/europepmc.py) and `mesh_suggestions` in the probe report (services/mesh_suggestions.py); tests offline, run one file at a time; not reviewed, not merged; decision row proposed, number to be fixed at merge · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** (a) Europe PMC full-text XML for articles NCBI's bucket does not serve; (b) the probe suggests MeSH descriptors harvested from the seeds' PubMed records as tick items.
 **Why:** (a) widens open full text; (b) controlled vocabulary is the best input to term harvesting.
 **Rigour notes:** (a) licence recorded per attempt; (b) suggestions only, the researcher selects.
-**Open questions:** —
+**Open questions:** none open; see the rulings.
+**Rulings (agent, 2026-11-15, branch `europepmc`):** (a) Route `europepmc-jats`, quality `structured-xml`, tried after `pmc-jats` and before `oa-pdf` (an added enum member and a longer `ROUTE_ORDER`; no new event type). It asks Europe PMC's search once (`PMCID:`, else `EXT_ID: AND SRC:MED`, else `DOI:`; `resultType=core`) for the PMCID, `isOpenAccess` and `license`, then GETs `PMC<n>/fullTextXML`; the XML is stored as received with `application/jats+xml`, so the pandoc JATS converter applies unchanged. Fetched only when `isOpenAccess` is `Y`; the licence is recorded also when refused. Europe PMC has no article versions, so `source_version` is `EPMC:PMC<n>` and a changed body reads as a changed source (decision 46). Same polite client, no key, no contact address. (b) PubMed sample records now carry their MeSH descriptors (author keywords excluded); the probe report gains `mesh_suggestions` (descriptor, records, sampled), counted from the sample, ordered by count then name, with check tags and descriptors already in the query text left out. It is report-only: not applied to a query, not stored in `probe.measured` (no event change), and the sample is the top by relevance, so the counts favour the query's own matches. Seeds' PubMed records are not fetched for this: the suggestions come from the probe sample only.
 
 ### IDEA-78 — Technique comprehension layer, technique-landscape process and graph of ideas
 Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-37, IDEA-50, slice 3b/3c, plan 2026-11-14-technique-comprehension

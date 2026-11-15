@@ -161,7 +161,9 @@ async def test_mcp_unknown_route_rejected(
         "errors": [
             {
                 "field": "routes.0",
-                "reason": "must be one of: arxiv-html, arxiv-source, pmc-jats, europepmc-jats, oa-pdf",
+                "reason": (
+                    "must be one of: arxiv-html, arxiv-source, pmc-jats, europepmc-jats, oa-pdf"
+                ),
             }
         ],
     }

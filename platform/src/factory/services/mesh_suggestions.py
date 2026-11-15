@@ -46,7 +46,7 @@ CHECK_TAGS: frozenset[str] = frozenset(
 def mesh_suggestions(
     sampled: Iterable[Sequence[str]], query_text: str, *, limit: int = DEFAULT_LIMIT
 ) -> tuple[MeshSuggestion, ...]:
-    """The MeSH descriptors of `sampled` (one sequence of descriptors per record), most common first.
+    """The MeSH descriptors of `sampled` (one tuple per record), most common first.
 
     `sampled` counts only records that carry at least one heading in `MeshSuggestion.sampled`. A
     descriptor repeated inside one record counts once. Descriptors whose text occurs in
