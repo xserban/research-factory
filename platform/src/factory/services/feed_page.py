@@ -46,6 +46,7 @@ class FeedFurtherItem(StrictModel):
     reaction: FeedReaction | None = None
     sent: bool = False
     inbox_item_id: str | None = None
+    submitted: str | None = None
 
 
 class FeedRankedPage(StrictModel):
@@ -106,6 +107,7 @@ def feed_ranked_page(
             title=titles.get(entry),
             authors=_authors_list(recs.get(entry)),
             abstract=_text(recs.get(entry), "abstract") or None,
+            submitted=_text(recs.get(entry), "submitted") or None,
             reaction=reactions.get(entry),
             sent=entry in sends,
             inbox_item_id=sends.get(entry),

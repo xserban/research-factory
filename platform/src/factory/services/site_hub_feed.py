@@ -266,6 +266,24 @@ function setLayout(v,keep){
 var saved='grid';try{saved=localStorage.getItem('factory-feed-layout')==='list'?'list':'grid';}catch(_){}
 setLayout(saved,false);
 lay.forEach(function(b){b.addEventListener('click',function(){setLayout(b.dataset.layout,true);});});
+var ord=document.getElementById('feed-order');
+function cmpBy(mode){return function(a,b){
+  var da=a.dataset.sub||'',db=b.dataset.sub||'',ra=+a.dataset.rank,rb=+b.dataset.rank;
+  if(mode==='rank'||da===db)return ra-rb;
+  if(!da||!db)return da?-1:1;
+  return mode==='old'?(da<db?-1:1):(da<db?1:-1);};}
+function setOrder(mode,keep){
+  document.querySelectorAll('.grid').forEach(function(g){
+    var all=[].slice.call(g.querySelectorAll('.card')),f=cmpBy(mode);
+    var shown=all.filter(function(c){return !c.classList.contains('further');}).sort(f);
+    var more=all.filter(function(c){return c.classList.contains('further');}).sort(f);
+    shown.concat(more).forEach(function(c){g.appendChild(c);});});
+  if(ord)ord.value=mode;
+  if(keep){try{localStorage.setItem('factory-feed-order',mode);}catch(_){}}
+}
+if(ord){var so='rank';try{so=localStorage.getItem('factory-feed-order')||'rank';}catch(_){}
+  if(so!=='new'&&so!=='old')so='rank';
+  setOrder(so,false);ord.addEventListener('change',function(){setOrder(ord.value,true);});}
 var line=document.getElementById('run-line'),runBtns=document.querySelectorAll('button[data-run]');
 function outcome(s){
   if(s.running)return 'a run is in progress';
@@ -341,6 +359,11 @@ def _abstract_block(abstract: str, authors: str) -> str:
     )
 
 
+def _date_tag(sub: str) -> str:
+    """The submission date of a card (empty when the entry has none)."""
+    return f"<span class=meta>{sub}</span> " if sub else ""
+
+
 def _card(item: object, record: Mapping[str, object] | None) -> str:
     assert isinstance(item, FeedListItem)
     entry = e(item.entry_id, quote=True)
@@ -353,14 +376,16 @@ def _card(item: object, record: Mapping[str, object] | None) -> str:
     authors = _authors(record)
     nearest = item.nearest_reference_title or item.nearest_reference
     abstract = _text(record, "abstract")
+    sub = e(_text(record, "submitted")[:10], quote=True)
     buttons = "".join(
         f"<button type=button data-act='{act}' disabled>{e(label)}</button>"
         for act, label in ACTIONS
     )
     reaction = e(str(item.reaction)) if item.reaction is not None else "no reaction"
     return (
-        f"<article class=card data-entry-id='{entry}'>"
-        f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>{badges}</div>"
+        f"<article class=card data-entry-id='{entry}' data-rank='{item.rank}' data-sub='{sub}'>"
+        f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>{badges}"
+        f"{_date_tag(sub)}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{title}</a></h3>"
         + f"<p class=meta>nearest core work: {e(nearest) if nearest else 'none nearby'}</p>"
         + f"<p class=meta>reaction: {reaction}</p>"
@@ -385,9 +410,10 @@ def _further_card(item: FeedFurtherItem) -> str:
     )
     reaction = e(str(item.reaction)) if item.reaction is not None else "no reaction"
     added = "<span class='badge added'>added</span>" if item.sent else ""
+    sub = e((item.submitted or "")[:10], quote=True)
     return (
-        f"<article class='card further' hidden data-entry-id='{entry}'>"
-        f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>"
+        f"<article class='card further' hidden data-entry-id='{entry}' data-rank='{item.rank}' data-sub='{sub}'>"
+        f"<div><span class=rank>#{item.rank}</span><span class=score>{item.score:.3f}</span>{_date_tag(sub)}"
         f"<span class=badge>rank {item.rank}, not in the shown set</span>{added}</div>"
         f"<h3><a href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></h3>"
         + f"<p class=meta>reaction: {reaction}</p>"
@@ -485,7 +511,10 @@ def render_feed_page(
         + (
             "<div class=layout><span class=sub>Layout</span>"
             "<button type=button data-layout=grid>Grid</button>"
-            "<button type=button data-layout=list>List</button></div>"
+            "<button type=button data-layout=list>List</button>"
+            "<span class=sub>Order</span><select id=feed-order aria-label='Order of the cards'>"
+            "<option value=rank>Rank</option><option value=new>Date, newest first</option>"
+            "<option value=old>Date, oldest first</option></select></div>"
             if views
             else ""
         )
