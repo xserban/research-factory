@@ -11,15 +11,34 @@ Numbering:
   heading takes the next ordinal under its parent heading. A repeated id takes `.k` (k >= 2).
 - Paragraphs directly under a heading named in `BIBLIOGRAPHY_HEADINGS` (number stripped, case
   folded) are bibliography entries `b1`, `b2`, ... numbered document-wide; they consume no
-  section paragraph numbers. Lists in such a section stay unanchored.
+  section paragraph numbers.
 - Paragraphs before the first heading belong to `s0`. Paragraphs are numbered per section from 1.
 - Tables are `t<n>`, display equations `e<n>`, figure captions `f<n>.cap` (number from the text,
   then the next free number), and page breaks `p<n>` (the n-th form feed).
 - A paragraph starting `Table <n>` next to a table is that table's caption: it moves below the
   table and gets no anchor. Figure captions do not consume paragraph numbers.
-- Lists, blockquotes, code fences and rule lines are left unanchored and do not break numbering.
+- Blockquotes, code fences and rule lines are left unanchored and do not break numbering.
   An element is anchored only if `<a id>` followed by it parses as that element, so the manifest
   check accepts every anchor the output contains.
+
+Anchoring versions (`ANCHOR_VERSION`). A conversion's stored anchors are fixed at conversion, so
+the rules are versioned and `anchorise(markdown, version=1)` reproduces the old output exactly.
+- Version 1: lists stay unanchored (their text is invisible to `document read`).
+- Version 2 (current): each top-level list item becomes one paragraph, anchored as a paragraph of
+  the current section (or a bibliography entry `b<n>` in a bibliography section), in document
+  order. Nested sub-lists belong to their parent item: the item's inline text and that of its
+  sub-items are joined by single spaces into one line. A bullet loses its marker; an ordered item
+  is written `[n] text`, n counted from the list's start, which the reference parser reads as a
+  label. A list holding anything else (code, table, quotation, rule, or text that would not parse
+  as a plain paragraph) stays unanchored as in version 1. In a bibliography section, an entry
+  `[n] A ... 2. B ... 3. C ...` whose inline numbers continue n by exactly one each time (marker
+  preceded by a sentence end, followed by a capital letter or opening quote or bracket, each part
+  of at least `_MIN_ENTRY` characters) is split into one entry `[n] A`, `[n+1] B`, ... A marker
+  is refused after an abbreviation (`Vol.`, `Ed.`, `pp.`, `No.`, ...) or a single letter, and
+  when its label is already used in the bibliography or leads any entry of the section (so an
+  item of an ordered list that continues is never split: the next item holds that label).
+  Anything else stays one entry.
+  Re-anchoring is idempotent: the version 2 output is a fixed point.
 """
 
 import re
@@ -47,6 +66,21 @@ _TABLE_CAPTION = re.compile(r"Table\s+\d+", re.IGNORECASE)
 BIBLIOGRAPHY_HEADINGS = frozenset(
     {"references", "bibliography", "literature cited", "works cited", "reference list"}
 )
+ANCHOR_VERSION = 2
+"""The current anchoring version; see the module docstring."""
+_VERSION_SUFFIX = re.compile(r"\+anchors(\d+)$")
+_MIN_ENTRY = 15
+_LEAD_LABEL = re.compile(r"\[(\d{1,4})\]\s+")
+_INLINE_NUMBER = re.compile(
+    r"(?<=[.)\]\u201d\"'])\s+(\d{1,4})\.\s+(?=[A-Z\u00c0-\u00de\[\u201c\"(])"
+)
+_NO_SPLIT_BEFORE = re.compile(
+    r"(?:^|[\s(\[])(?:vols?|parts?|pt|eds?|nos?|pp?|figs?|chap|ch|sec|suppl|art|iss|ser"
+    r"|[A-Za-z\u00c0-\u00ff])\.?\s*$",
+    re.IGNORECASE,
+)
+"""The text before an inline number must not end in an abbreviation (`Vol.`, `Ed.`, `pp.`) or a
+single letter (an initial), where the number is a volume or page, not a list marker."""
 _PROBE = '<a id="x"></a>'
 _KINDS = {"paragraph_open": "paragraph", "heading_open": "heading", "table_open": "table"}
 
@@ -62,15 +96,37 @@ class _Block:
     caption: list[list[str]] = field(default_factory=list)
 
 
-def anchorise(markdown: str) -> str:
-    """Return canonical Markdown with anchors for `markdown`; see the module docstring."""
+def stamp_version(converter_version: str, anchor_version: int = ANCHOR_VERSION) -> str:
+    """The version string a conversion records: the converter's own version, plus `+anchors<n>`
+    for anchoring version 2 and later. Version 1 is recorded bare, as before versioning, so every
+    conversion recorded earlier keeps its identity."""
+    return (
+        converter_version if anchor_version <= 1 else f"{converter_version}+anchors{anchor_version}"
+    )
+
+
+def split_version(recorded: str) -> tuple[str, int]:
+    """The converter's own version and the anchoring version of a recorded version string; the
+    inverse of `stamp_version`. A string without the suffix is anchoring version 1."""
+    found = _VERSION_SUFFIX.search(recorded)
+    if found is None:
+        return recorded, 1
+    return recorded[: found.start()], int(found.group(1))
+
+
+def anchorise(markdown: str, *, version: int = ANCHOR_VERSION) -> str:
+    """Return canonical Markdown with anchors for `markdown` under anchoring `version` (1 or 2);
+    see the module docstring. Raises `ValueError` for another version."""
+    if version not in (1, 2):
+        raise ValueError(f"unknown anchoring version {version}")
     lines, regions = _mask_math(normalise(_mark_pages(markdown)).split("\n"))
-    blocks = _attach_captions(_blocks(lines, regions))
+    blocks = _attach_captions(_blocks(lines, regions, lists=version >= 2))
     title = _title_index(blocks)
-    numbering = _Numbering()
+    numbering = _Numbering(split_entries=version >= 2)
+    labels = _section_labels(blocks)
     out: list[str] = []
     for index, block in enumerate(blocks):
-        out.extend(numbering.emit(block, title=index == title))
+        out.extend(numbering.emit(block, title=index == title, section_labels=labels[index]))
     return "\n\n".join(out) + "\n" if out else ""
 
 
@@ -192,8 +248,9 @@ def _math_end(lines: list[str], start: int) -> int | None:
     return None
 
 
-def _blocks(lines: list[str], regions: list[list[str]]) -> list[_Block]:
-    """The top-level blocks of the masked source, in document order."""
+def _blocks(lines: list[str], regions: list[list[str]], *, lists: bool) -> list[_Block]:
+    """The top-level blocks of the masked source, in document order. With `lists`, a list that
+    `_list_items` accepts becomes one paragraph block per top-level item."""
     tokens = MARKDOWN.parse("\n".join(lines))
     blocks: list[_Block] = []
     for index, token in enumerate(tokens):
@@ -202,6 +259,11 @@ def _blocks(lines: list[str], regions: list[list[str]]) -> list[_Block]:
         assert token.map is not None
         start, end = token.map
         body = _trim(lines[start:end])
+        if lists and token.type in ("bullet_list_open", "ordered_list_open"):
+            items = _list_items(tokens, index)
+            if items is not None:
+                blocks.extend(_Block("paragraph", [text]) for text in items)
+                continue
         if token.type == "heading_open":
             inline = tokens[index + 1]
             blocks.append(_Block("heading", level=int(token.tag[1]), text=inline.content))
@@ -218,6 +280,97 @@ def _blocks(lines: list[str], regions: list[list[str]]) -> list[_Block]:
         else:
             blocks.append(_Block("other", body))
     return blocks
+
+
+def _list_items(tokens: list[Token], start: int) -> list[str] | None:
+    """The one-line text of each top-level item of the list opening at `tokens[start]`, or None
+    if the list must stay unanchored (see the module docstring).
+
+    Ordered items are prefixed `[n] `. Each text must parse alone as a plain paragraph and
+    accept an anchor, so that a second pass reads the same blocks back.
+    """
+    ordered = tokens[start].type == "ordered_list_open"
+    number = int(str(tokens[start].attrGet("start") or 1))
+    items: list[str] = []
+    parts: list[str] | None = None
+    for token in tokens[start + 1 :]:
+        if token.level == 0:
+            break
+        if token.level == 1 and token.type == "list_item_open":
+            parts = []
+        elif token.level == 1 and token.type == "list_item_close":
+            assert parts is not None
+            text = " ".join(parts).strip()
+            if ordered:
+                text = f"[{number + len(items)}] {text}"
+            if not parts or not _plain_paragraph(text):
+                return None
+            items.append(text)
+            parts = None
+        elif token.type == "inline":
+            assert parts is not None
+            parts.append(" ".join(token.content.split("\n")).strip())
+        elif token.type not in _LIST_STRUCTURE:
+            return None
+    return items or None
+
+
+_LIST_STRUCTURE = frozenset(
+    {
+        "paragraph_open",
+        "paragraph_close",
+        "bullet_list_open",
+        "bullet_list_close",
+        "ordered_list_open",
+        "ordered_list_close",
+        "list_item_open",
+        "list_item_close",
+    }
+)
+
+
+def _plain_paragraph(text: str) -> bool:
+    """True if `text` is one line that parses as a single paragraph and takes an anchor."""
+    if not text or "\x00" in text:
+        return False
+    return _spans(MARKDOWN.parse(text)) == [("paragraph", 0, 1)] and _anchors_ok(
+        "paragraph", [text]
+    )
+
+
+def _split_entries(text: str, taken: frozenset[int] = frozenset()) -> list[str] | None:
+    """The bibliography entries held by one `[n] ...` line, or None to keep it as one entry.
+
+    The inline numbers n+1, n+2, ... must each follow in order; numbers out of sequence are left
+    in the text. A marker is refused when the text before it ends in an abbreviation (`Vol.`,
+    `Ed.`, `pp.`, ...) or a single letter, or when its label is in `taken` (a label already
+    used in this bibliography). Needs at least one split, and every part at least `_MIN_ENTRY`
+    characters.
+    """
+    lead = _LEAD_LABEL.match(text)
+    if lead is None:
+        return None
+    first = int(lead.group(1))
+    rest = text[lead.end() :]
+    expected = first + 1
+    pieces: list[str] = []
+    cursor = 0
+    for found in _INLINE_NUMBER.finditer(rest):
+        if (
+            int(found.group(1)) == expected
+            and expected not in taken
+            and not _NO_SPLIT_BEFORE.search(rest[: found.start()])
+        ):
+            pieces.append(rest[cursor : found.start()])
+            cursor = found.end()
+            expected += 1
+    if not pieces:
+        return None
+    pieces.append(rest[cursor:])
+    if any(len(piece.strip()) < _MIN_ENTRY for piece in pieces):
+        return None
+    entries = [f"[{first + i}] {piece.strip()}" for i, piece in enumerate(pieces)]
+    return entries if all(_plain_paragraph(entry) for entry in entries) else None
 
 
 def _is_top_level_open(token: Token) -> bool:
@@ -265,6 +418,28 @@ def _attach_captions(blocks: list[_Block]) -> list[_Block]:
         removed.update(claimed)
         block.caption = [blocks[position].lines for position in claimed]
     return [block for index, block in enumerate(blocks) if index not in removed]
+
+
+def _section_labels(blocks: list[_Block]) -> list[frozenset[int]]:
+    """For each block, the leading `[n]` labels of every paragraph in its section (the blocks
+    up to the next heading). An inline number whose label leads any paragraph of the section is
+    never split off, which keeps the output a fixed point: a split cannot depend on whether a
+    later entry was a list item or a paragraph."""
+    result: list[frozenset[int]] = []
+    start = 0
+    while start < len(blocks):
+        end = start + 1
+        while end < len(blocks) and blocks[end].kind != "heading":
+            end += 1
+        found = frozenset(
+            int(lead.group(1))
+            for block in blocks[start:end]
+            if block.kind == "paragraph"
+            and (lead := _LEAD_LABEL.match(" ".join(line.strip() for line in block.lines)))
+        )
+        result.extend([found] * (end - start))
+        start = end
+    return result
 
 
 def _title_index(blocks: list[_Block]) -> int | None:
@@ -321,11 +496,13 @@ def _atx(level: int, text: str) -> str:
 class _Numbering:
     """The state that assigns ids in document order."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, split_entries: bool = True) -> None:
+        self.split_entries = split_entries
         self.used: set[str] = set()
         self.section = "s0"
         self.in_bibliography = False
         self.bibliography = 0
+        self.labels: set[int] = set()
         self.paragraphs: dict[str, int] = {}
         self.ordinals: dict[tuple[str | None, int], int] = {}
         self.stack: list[tuple[int, str]] = []
@@ -333,7 +510,9 @@ class _Numbering:
         self.tables = 0
         self.equations = 0
 
-    def emit(self, block: _Block, *, title: bool) -> list[str]:
+    def emit(
+        self, block: _Block, *, title: bool, section_labels: frozenset[int] = frozenset()
+    ) -> list[str]:
         """The output blocks (each a string of lines) for one source block."""
         if block.kind == "page":
             self.pages += 1
@@ -341,12 +520,26 @@ class _Numbering:
         if block.kind == "heading":
             return [self._heading(block, title=title)]
         if block.kind == "paragraph":
+            if self.in_bibliography:
+                text = " ".join(line.strip() for line in block.lines)
+                if self.split_entries:
+                    entries = _split_entries(text, frozenset(self.labels) | section_labels)
+                    if entries is not None:
+                        self._take_labels(entries)
+                        return [self._paragraph([entry]) for entry in entries]
+                self._take_labels([text])
             return [self._paragraph(block.lines)]
         if block.kind == "math":
             return [self._equation(block.lines)]
         if block.kind == "table":
             return self._table(block)
         return ["\n".join(block.lines)]
+
+    def _take_labels(self, entries: list[str]) -> None:
+        for entry in entries:
+            lead = _LEAD_LABEL.match(entry)
+            if lead is not None:
+                self.labels.add(int(lead.group(1)))
 
     def _heading(self, block: _Block, *, title: bool) -> str:
         parent = self._parent(block.level)
@@ -366,6 +559,8 @@ class _Numbering:
         self.stack.append((block.level, sid))
         self.section = sid
         self.in_bibliography = not title and _is_bibliography_heading(block.text)
+        if self.in_bibliography:
+            self.labels = set()
         return _anchored(sid, [_atx(block.level, block.text)])
 
     def _parent(self, level: int) -> str | None:
