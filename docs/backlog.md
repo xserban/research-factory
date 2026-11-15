@@ -756,7 +756,7 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-71, the hypot
 **Open questions:** how a belt change is recorded (a hypothesis amendment with a reason, or a new event); what counts as a novel prediction (registered before the test, with the date); whether a study's protocol amendments count as belt changes.
 
 ### IDEA-75 — PubMed date slicing above the 9,999 cap
-Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_slice`, CLI `search slice`; tests offline, run one file at a time; not reviewed, not merged; decision row proposed, number to be fixed at merge) · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_slice`, CLI `search slice`; tests offline, run one file at a time; review: one Sonnet review, 1 Important fixed in 93b147d8; not merged; decision row proposed, number to be fixed at merge) · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** the adapter splits a PubMed query whose count exceeds 9,999 into `[dp]` windows and retrieves each, so the run is complete rather than partial.
 **Why:** broad biomedical queries routinely exceed the E-utilities ceiling.
 **Rigour notes:** each window is archived and counted; the sum of window counts is reported against the unsplit count, and a difference is noted (R-23).
@@ -782,7 +782,7 @@ Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; mer
 2. Import admission: a record whose resolved work has a PMID and no OpenAlex id is named by a PubMed `id_list` (own family `pmid`, comma separator). Precedence: OpenAlex id, PMID, arXiv id, DOI. Records resolved only through DOI keep the DOI route.
 
 ### IDEA-77 — Europe PMC as a second JATS route; MeSH suggestions in the probe
-Status: built on branch `europepmc` (cut from `pubmed-rest`): route `europepmc-jats` (sources/fulltext/europepmc.py) and `mesh_suggestions` in the probe report (services/mesh_suggestions.py); tests offline, run one file at a time; not reviewed, not merged; decision row proposed, number to be fixed at merge · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: built on branch `europepmc` (cut from `pubmed-rest`): route `europepmc-jats` (sources/fulltext/europepmc.py) and `mesh_suggestions` in the probe report (services/mesh_suggestions.py); tests offline, run one file at a time; review: one Sonnet review, 1 Important fixed in 93b147d8; not merged; decision row proposed, number to be fixed at merge · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** (a) Europe PMC full-text XML for articles NCBI's bucket does not serve; (b) the probe suggests MeSH descriptors harvested from the seeds' PubMed records as tick items.
 **Why:** (a) widens open full text; (b) controlled vocabulary is the best input to term harvesting.
 **Rigour notes:** (a) licence recorded per attempt; (b) suggestions only, the researcher selects.
