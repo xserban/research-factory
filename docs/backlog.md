@@ -182,7 +182,7 @@ Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required
 **Open questions:** first instruments (ML evidence checklist from NeurIPS M14; RoB 2 / PROBAST for biomedical projects).
 
 ### IDEA-22 — PubMed search and PMC full-text route
-Status: merged (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124 proposed; reviewed, live smoke passed 2026-11-14; PubMed unit tests run on branch `pubmed-tests` 2026-11-15: test_pubmed, test_registry_pubmed, test_fulltext_routes_pmc, test_inbox_links, test_inbox_service, test_seeds and new test_pubmed_edges pass; two stale test assertions fixed, id_list PMID normalisation added) · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
+Status: merged (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124 proposed; reviewed, live smoke passed 2026-11-14; PubMed unit tests run on branch `pubmed-tests` 2026-11-15: test_pubmed, test_registry_pubmed, test_fulltext_routes_pmc, test_inbox_links, test_inbox_service, test_seeds and new test_pubmed_edges pass; two stale test assertions fixed, id_list PMID normalisation added); review minors addressed in d39375d3 · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
 **What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
 **Review minors parked (2026-11-14):** `PubmedBookArticle` records not parsed; in-run dedup by work id can merge distinct DOI-less PMIDs with identical title, authors and year (key it on PMID); non-numeric `resume_from` raises a bare `ValueError`; long terms go by GET (NCBI recommends POST); OA PDF all-fail reason is the first candidate with a `pdf_url`, not always the best location.
 
