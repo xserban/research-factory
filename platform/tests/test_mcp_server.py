@@ -28,6 +28,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "whoami",
             "search_run",
             "search_chase",
+            "search_slice",
             "dedup_run",
             "ranking_compute",
             "gate_status",
