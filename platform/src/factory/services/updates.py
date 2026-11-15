@@ -6,8 +6,9 @@ Read-only. Every number is computed from events by existing services; nothing is
 - `open_period` is the window after the last snapshot (`prisma_update.update_work_ids`).
 - `additions` are the canonical works new after the baseline cut-off, one row each, newest first.
   Title, year and the title/abstract and full-text states come from the work ledger
-  (`flow_ledger`, the service behind `flow_works`); the layer from `work_layers.layers_of`;
-  `mined` from the final rows of each registered miner.
+  (`flow_ledger`, the service behind `flow_works`; read only when a work needs a row); the layer
+  from `work_layers.layers_for`; `mined` from the final rows of each registered miner. Layer and
+  mined are read for the addition works only (`layers_for`, `final_rows_restricted`).
 - `growth` is one point per snapshot; the update flow is the one pinned in the blob.
 - `watch` is `watch.watch_status` joined with the current protocol's `watch_plan`.
 
@@ -35,16 +36,17 @@ from factory.clock import parse_ts
 from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
 from factory.model.extraction import MinerScope
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.dedup import active_merges
-from factory.services.extraction_agreement import final_rows
+from factory.services.extraction_agreement import final_rows_restricted
 from factory.services.flow_ledger import LedgerRow, flow_ledger
 from factory.services.mining import registered_miners
 from factory.services.prisma_update import UpdateFlow, update_work_ids
 from factory.services.protocol import current_protocol
 from factory.services.snapshots import snapshot_blob, snapshots
 from factory.services.watch import watch_status
-from factory.services.work_layers import layers_of
+from factory.services.work_layers import layers_for
 
 Route = Literal["inbox", "feed", "watch", "chase", "search", "other"]
 _CHUNK = 500
@@ -101,6 +103,8 @@ class WatchSourceView(StrictModel):
     last_finished_at: datetime | None
     next_due: datetime | None
     due: bool
+    last_full_replay: date | None
+    windows_since_full_replay: int
 
 
 class WatchView(StrictModel):
@@ -120,11 +124,16 @@ class UpdatesView(StrictModel):
 
 
 def updates_view(project: Project) -> UpdatesView:
-    """The whole updates page as data. Writes nothing (the index sync is the projector's read)."""
+    """The whole updates page as data. Writes nothing (the index sync is the projector's read).
+    Runs in one `call_memo` scope, so the per-miner reads share the population derivations."""
+    with entering():
+        return _view(project)
+
+
+def _view(project: Project) -> UpdatesView:
     project.index.sync()
     shots = snapshots(project)
     times = _snapshot_times(project)
-    ledger = {r.work_id: r for r in flow_ledger(project) if r.canonical_id is None}
     baseline = None
     additions: tuple[AdditionRow, ...] = ()
     open_period = None
@@ -156,8 +165,9 @@ def updates_view(project: Project) -> UpdatesView:
             trigger=first.trigger,
         )
         new, _ = update_work_ids(project, first.cutoff_event, None)
-        additions = _rows(project, new, ledger)
         recent, _ = update_work_ids(project, shots[-1].cutoff_event, None)
+        ledger = _ledger(project, new | recent)
+        additions = _rows(project, new, ledger)
         open_period = OpenPeriod(
             since_snapshot=shots[-1].snapshot_id,
             new_works=len(recent),
@@ -172,6 +182,14 @@ def updates_view(project: Project) -> UpdatesView:
         growth=tuple(growth),
         watch=_watch(project),
     )
+
+
+def _ledger(project: Project, needed: set[str]) -> dict[str, LedgerRow]:
+    """The work ledger rows of canonical works; the ledger folds the whole corpus (tens of seconds
+    on a large project), so it is read only when some work needs a row."""
+    if not needed:
+        return {}
+    return {r.work_id: r for r in flow_ledger(project) if r.canonical_id is None}
 
 
 def _ta_included(row: LedgerRow) -> bool:
@@ -200,8 +218,8 @@ def _rows(
     owner = {m: w for w in work_ids for m in members_of.get(w, {w})}
     first = _first_provenance(project, owner)
     routes = _Routes.load(project)
-    layers = layers_of(project)
-    mined = _mined(project)
+    layers = layers_for(project, work_ids)
+    mined = _mined(project, work_ids)
     out: list[AdditionRow] = []
     for work_id in sorted(work_ids):
         row = ledger.get(work_id)
@@ -307,12 +325,12 @@ class _Routes:
         return "other", None
 
 
-def _mined(project: Project) -> dict[str, set[str]]:
-    """Miner name -> works with a final row of that miner."""
+def _mined(project: Project, works: set[str]) -> dict[str, set[str]]:
+    """Miner name -> works (among `works`) with a final row of that miner."""
     found: dict[str, set[str]] = {}
     for name in sorted({m.name for m in registered_miners(project)}):
         try:
-            rows = final_rows(project, scope=MinerScope(name))
+            rows = final_rows_restricted(project, works, scope=MinerScope(name))
         except FactoryValidationError:
             continue
         if rows:
@@ -338,6 +356,8 @@ def _watch(project: Project) -> WatchView:
             last_finished_at=s.last_finished_at,
             next_due=s.next_due,
             due=s.due,
+            last_full_replay=s.last_full_replay,
+            windows_since_full_replay=s.windows_since_full_replay,
         )
         for s in status.sources
     )

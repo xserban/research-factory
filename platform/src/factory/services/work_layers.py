@@ -39,7 +39,7 @@ from factory.mining.taxonomy import Dimension
 from factory.model.extraction import MinerScope
 from factory.model.taxonomies import MiningRequested, WorkLayerSet
 from factory.services.context import Project
-from factory.services.extraction_agreement import final_rows
+from factory.services.extraction_agreement import final_rows, final_rows_restricted
 from factory.services.mining import _corpus_works, registered_miner
 from factory.services.protocol import current_protocol
 from factory.services.reference_layers import current_scheme
@@ -53,6 +53,7 @@ __all__ = [
     "layer_history",
     "layer_moves",
     "layer_of",
+    "layers_for",
     "layers_of",
     "move_layer",
     "request_mining",
@@ -103,7 +104,9 @@ def layer_dimension(project: Project, spec: MinerSpec) -> Dimension | None:
     return None
 
 
-def _miner_layers(project: Project) -> dict[str, tuple[str, int, bool]]:
+def _miner_layers(
+    project: Project, works: frozenset[str] | None = None
+) -> dict[str, tuple[str, int, bool]]:
     """`work_id -> (value, scheme_version, is_layer)` from the final rows of the listed layer
     miners, the first listed miner with a final row for a work winning. `is_layer` is False for an
     absence value (`not-stated`, `other`, `not-applicable`)."""
@@ -117,7 +120,12 @@ def _miner_layers(project: Project) -> dict[str, tuple[str, int, bool]]:
         if dimension is None or dimension.layer_scheme is None:
             continue
         prefix = f"{dimension.id}/"
-        for row in final_rows(project, scope=MinerScope(use.name)):
+        rows = (
+            final_rows(project, scope=MinerScope(use.name))
+            if works is None
+            else final_rows_restricted(project, works, scope=MinerScope(use.name))
+        )
+        for row in rows:
             cell = row.fields.get(_LAYER_FIELD)
             if cell is None or not isinstance(cell.value, str):
                 continue
@@ -178,9 +186,17 @@ def layers_of(project: Project) -> dict[str, WorkLayer]:
     return dict(out)
 
 
-def _compute(project: Project) -> dict[str, WorkLayer]:
+def layers_for(project: Project, works: Iterable[str]) -> dict[str, WorkLayer]:
+    """`layers_of` restricted to `works`: the same rules over the final rows of those works only,
+    so it does not fold the whole corpus. Equal to the filter of `layers_of` by work. Read-only."""
+    project.index.sync()
+    wanted = frozenset(works)
+    return {w: v for w, v in _compute(project, wanted).items() if w in wanted}
+
+
+def _compute(project: Project, works: frozenset[str] | None = None) -> dict[str, WorkLayer]:
     moved = _moves(project)
-    mined = _miner_layers(project)
+    mined = _miner_layers(project, works)
     scheme = current_scheme(project)
     valid = set() if scheme is None else {d.id for d in scheme.layers}
     out: dict[str, WorkLayer] = {}

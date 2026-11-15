@@ -92,7 +92,7 @@ HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 8766
 MAX_BODY: Final = 16 * 1024
 TOKEN_HEADER: Final = "X-Factory-Token"
-_ACTION_PAGES: Final = ("feed", "queue", "explorer")
+_ACTION_PAGES: Final = ("feed", "queue", "explorer", "updates")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
 _API_META: Final = "<meta name='factory-api' content='{}'>"
 PORTAL_LINK: Final = (

@@ -268,6 +268,12 @@ def _build_acquisition(project: Project, out: Path) -> None:
     build_acquisition(project, out)
 
 
+def _build_updates(project: Project, out: Path) -> None:
+    from factory.services.site_updates import build_updates
+
+    build_updates(project, out)
+
+
 def _build_costs(project: Project, out: Path) -> None:
     from factory.services.site_costs import build_costs
 
@@ -277,7 +283,7 @@ def _build_costs(project: Project, out: Path) -> None:
 LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "flow", "documents", "costs"),
     "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
-    "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki"),
+    "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki", "updates"),
     "Mining": ("miners", "agreement", "steps", "lifecycle", "runs"),
     "Findings": ("results", "synthesis", "taxonomy"),
 }
@@ -406,6 +412,16 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=EXPLORER_EVENTS,
             build=_build_steps,
+        ),
+        Product(
+            id="updates",
+            title="Updates",
+            group="Corpus",
+            description="What entered the corpus since the frozen review (v1) and how far each work "
+            "got, the growth per snapshot, and the weekly watch with its settings.",
+            entry="index.html",
+            inputs=ALL_EVENTS,
+            build=_build_updates,
         ),
         Product(
             id="layers",
