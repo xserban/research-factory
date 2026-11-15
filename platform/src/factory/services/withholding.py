@@ -85,7 +85,11 @@ def withhold(value: JsonValue, tokens: Iterable[str], same_length: bool = False)
         patterns.append(
             (
                 re.compile(
-                    r"(?:" + "|".join(_PMID_CONTEXT) + r")0*(?P<n>" + numbers + r")(?![0-9A-Za-z])",
+                    r"(?:"
+                    + "|".join(_PMID_CONTEXT)
+                    + r")(?P<n>0*(?:"
+                    + numbers
+                    + r"))(?![0-9A-Za-z])",
                     re.IGNORECASE,
                 ),
                 1,
