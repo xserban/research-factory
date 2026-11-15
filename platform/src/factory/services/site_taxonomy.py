@@ -39,8 +39,13 @@ def build_taxonomy(project: Project, out: Path) -> None:
     payload = corpus_payload(project)
     works: list[dict[str, Any]] = payload["works"]
     dims = {d[0]: d for d in load_profile(project).dims}
-    body = f"<h1>Taxonomy {esc(tax.get('taxonomy', ''))}</h1>"
+    from factory.services.site_taxonomy_registered import render_index, write_registered
+
+    write_registered(project, out, page)
+    body = "<h1>Taxonomy</h1>" + render_index(project)
+    body += f"<h2>Earlier unregistered list: {esc(tax.get('taxonomy', ''))}</h2>"
     body += note(
+        "The list below is the earlier, unregistered taxonomy file, kept as it was. "
         "A taxonomy is the project's own list of categories for describing the systems, by "
         "dimension (technique, field, data, architecture, autonomy, human role, evaluation, "
         "stages). The researcher accepted this one; keyword patterns only proposed and counted "
