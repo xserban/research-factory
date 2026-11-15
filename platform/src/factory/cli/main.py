@@ -3865,6 +3865,10 @@ def document_reanchor_cmd(
         list[str] | None,
         typer.Option("--document", help="A live document; repeat for several."),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would happen; store and record nothing."),
+    ] = False,
 ) -> None:
     """Re-anchor the latest conversions under the current anchoring rules, as the researcher.
 
@@ -3876,7 +3880,7 @@ def document_reanchor_cmd(
     with _reporting_errors():
         project = _resolve_project(state)
         summary = reanchor_service.reanchor_conversions(
-            project, converter=converter, document_ids=document
+            project, converter=converter, document_ids=document, dry_run=dry_run
         )
     for line in render.convert_lines(summary):
         typer.echo(line)

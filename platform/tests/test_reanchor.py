@@ -7,7 +7,7 @@ import pytest
 from factory.document.anchorise import anchorise
 from factory.document.converter import convert
 from factory.model.document import Converted
-from factory.services import document_convert
+from factory.services import document_convert, reanchor
 from factory.services.context import Project
 from factory.services.document_read import document_read
 from factory.services.reanchor import reanchor_conversions
@@ -95,4 +95,35 @@ def test_converter_filter_and_current_conversions_are_unchanged(
 
     assert reanchor_conversions(project, converter="docling").outcomes == []
     assert reanchor_conversions(project).unchanged == 1
+    assert event_bytes(project) == before
+
+
+def test_dry_run_reports_but_writes_nothing(
+    project: Project, corpus: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert_v1(project, monkeypatch)
+    before = event_bytes(project)
+
+    summary = reanchor_conversions(project, dry_run=True)
+
+    assert summary.converted == 1
+    assert summary.outcomes[0].conversion_id is None
+    assert event_bytes(project) == before
+    assert reanchor_conversions(project).converted == 1  # the real run still has work to do
+
+
+def test_a_bad_document_fails_without_aborting_the_run(
+    project: Project, corpus: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert_v1(project, monkeypatch)
+    before = event_bytes(project)
+
+    def boom(markdown: str) -> None:
+        raise ValueError("bad manifest")
+
+    monkeypatch.setattr(reanchor, "parse_manifest", boom)
+    summary = reanchor_conversions(project)
+
+    assert summary.failed == 1 and summary.converted == 0
+    assert summary.outcomes[0].reason == "conversion-error"
     assert event_bytes(project) == before

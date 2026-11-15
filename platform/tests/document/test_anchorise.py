@@ -317,6 +317,51 @@ def test_run_with_gap_or_short_part_is_not_split() -> None:
     ]
 
 
+def _bib(md: str) -> list[str]:
+    return [a.text for a in parse_manifest(anchorise(md)).anchors if a.id.startswith("b")]
+
+
+KNUTH = "1. Knuth, D. The Art of Computer Programming, Vol. 2. Addison-Wesley, Reading, 1981."
+
+
+def test_abbreviation_before_a_number_is_not_a_split() -> None:
+    only = f"# R\n\n# References\n\n{KNUTH}\n"
+    assert _bib(only) == [f"[1] {KNUTH[3:]}"]
+    paragraph = f"# R\n\n# References\n\n[1] {KNUTH[3:]}\n"
+    assert _bib(paragraph) == [f"[1] {KNUTH[3:]}"]
+    for word in ("Vols.", "Part", "Ed.", "No.", "pp.", "Ser", "X."):
+        md = f"# R\n\n# References\n\n[1] Some long enough title, {word} 2. Another long entry.\n"
+        assert len(_bib(md)) == 1, word
+
+
+def test_a_list_item_followed_by_another_item_is_not_split() -> None:
+    md = (
+        "# R\n\n# References\n\n1. Guan, Y. et al. Drug repurposing (2025). "
+        "2. Penades, J. et al. AI Cell (2025).\n2. Smith, A. A second real entry (2020).\n"
+    )
+    assert [t[:4] for t in _bib(md)] == ["[1] ", "[2] "]
+    assert _bib(md)[1].startswith("[2] Smith")
+
+
+def test_a_label_already_used_is_not_repeated() -> None:
+    md = (
+        "# R\n\n# References\n\n[2] Smith, A. A second real entry (2020).\n\n"
+        "[1] Guan, Y. et al. Drug repurposing (2025). 2. Penades, J. et al. AI Cell (2025).\n"
+    )
+    labels = [t[:3] for t in _bib(md)]
+    assert labels == ["[2]", "[1]"]
+
+
+def test_three_item_run_in_the_only_item_is_split() -> None:
+    md = (
+        "# R\n\n# References\n\n1. Guan, Y. et al. AI-Assisted Drug Re-Purposing for Human "
+        "Liver Fibrosis. Adv Sci (Weinh) e08751 (2025). 2. Penad\u00e9s, J. R. et al. AI mirrors "
+        "experimental science. Cell 188(23), 6654\u20136665 (2025). 3. Smith, A. Another paper "
+        "title here. Nature 1, 2 (2024).\n"
+    )
+    assert [t[:4] for t in _bib(md)] == ["[1] ", "[2] ", "[3] "]
+
+
 def test_split_continues_the_count() -> None:
     md = (
         "# R\n\n# References\n\n[4] Guan, Y. et al. Drug repurposing (2025). "

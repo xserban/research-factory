@@ -33,8 +33,11 @@ the rules are versioned and `anchorise(markdown, version=1)` reproduces the old 
   as a plain paragraph) stays unanchored as in version 1. In a bibliography section, an entry
   `[n] A ... 2. B ... 3. C ...` whose inline numbers continue n by exactly one each time (marker
   preceded by a sentence end, followed by a capital letter or opening quote or bracket, each part
-  of at least `_MIN_ENTRY` characters) is split into one entry `[n] A`, `[n+1] B`, ... Anything
-  else stays one entry. Re-anchoring is idempotent: the version 2 output is a fixed point.
+  of at least `_MIN_ENTRY` characters) is split into one entry `[n] A`, `[n+1] B`, ... A marker
+  is refused after an abbreviation (`Vol.`, `Ed.`, `pp.`, `No.`, ...) or a single letter, and
+  when its label is already used in the bibliography; an item of a list that continues with
+  another item is never split (its inline numbers are not a run). Anything else stays one entry.
+  Re-anchoring is idempotent: the version 2 output is a fixed point.
 """
 
 import re
@@ -70,6 +73,13 @@ _LEAD_LABEL = re.compile(r"\[(\d{1,4})\]\s+")
 _INLINE_NUMBER = re.compile(
     r"(?<=[.)\]\u201d\"'])\s+(\d{1,4})\.\s+(?=[A-Z\u00c0-\u00de\[\u201c\"(])"
 )
+_NO_SPLIT_BEFORE = re.compile(
+    r"(?:^|[\s(\[])(?:vols?|parts?|pt|eds?|nos?|pp?|figs?|chap|ch|sec|suppl|art|iss|ser"
+    r"|[A-Za-z\u00c0-\u00ff])\.?\s*$",
+    re.IGNORECASE,
+)
+"""The text before an inline number must not end in an abbreviation (`Vol.`, `Ed.`, `pp.`) or a
+single letter (an initial), where the number is a volume or page, not a list marker."""
 _PROBE = '<a id="x"></a>'
 _KINDS = {"paragraph_open": "paragraph", "heading_open": "heading", "table_open": "table"}
 
@@ -83,6 +93,7 @@ class _Block:
     level: int = 0
     text: str = ""
     caption: list[list[str]] = field(default_factory=list)
+    more_items: bool = False  # a list item that is followed by another item of its list
 
 
 def stamp_version(converter_version: str, anchor_version: int = ANCHOR_VERSION) -> str:
@@ -250,7 +261,10 @@ def _blocks(lines: list[str], regions: list[list[str]], *, lists: bool) -> list[
         if lists and token.type in ("bullet_list_open", "ordered_list_open"):
             items = _list_items(tokens, index)
             if items is not None:
-                blocks.extend(_Block("paragraph", [text]) for text in items)
+                last = len(items) - 1
+                blocks.extend(
+                    _Block("paragraph", [text], more_items=i < last) for i, text in enumerate(items)
+                )
                 continue
         if token.type == "heading_open":
             inline = tokens[index + 1]
@@ -326,11 +340,14 @@ def _plain_paragraph(text: str) -> bool:
     )
 
 
-def _split_entries(text: str) -> list[str] | None:
+def _split_entries(text: str, taken: frozenset[int] = frozenset()) -> list[str] | None:
     """The bibliography entries held by one `[n] ...` line, or None to keep it as one entry.
 
     The inline numbers n+1, n+2, ... must each follow in order; numbers out of sequence are left
-    in the text. Needs at least one split, and every part at least `_MIN_ENTRY` characters.
+    in the text. A marker is refused when the text before it ends in an abbreviation (`Vol.`,
+    `Ed.`, `pp.`, ...) or a single letter, or when its label is in `taken` (a label already
+    used in this bibliography). Needs at least one split, and every part at least `_MIN_ENTRY`
+    characters.
     """
     lead = _LEAD_LABEL.match(text)
     if lead is None:
@@ -341,7 +358,11 @@ def _split_entries(text: str) -> list[str] | None:
     pieces: list[str] = []
     cursor = 0
     for found in _INLINE_NUMBER.finditer(rest):
-        if int(found.group(1)) == expected:
+        if (
+            int(found.group(1)) == expected
+            and expected not in taken
+            and not _NO_SPLIT_BEFORE.search(rest[: found.start()])
+        ):
             pieces.append(rest[cursor : found.start()])
             cursor = found.end()
             expected += 1
@@ -461,6 +482,7 @@ class _Numbering:
         self.section = "s0"
         self.in_bibliography = False
         self.bibliography = 0
+        self.labels: set[int] = set()
         self.paragraphs: dict[str, int] = {}
         self.ordinals: dict[tuple[str | None, int], int] = {}
         self.stack: list[tuple[int, str]] = []
@@ -476,16 +498,26 @@ class _Numbering:
         if block.kind == "heading":
             return [self._heading(block, title=title)]
         if block.kind == "paragraph":
-            if self.in_bibliography and self.split_entries:
-                entries = _split_entries(" ".join(line.strip() for line in block.lines))
-                if entries is not None:
-                    return [self._paragraph([entry]) for entry in entries]
+            if self.in_bibliography:
+                text = " ".join(line.strip() for line in block.lines)
+                if self.split_entries and not block.more_items:
+                    entries = _split_entries(text, frozenset(self.labels))
+                    if entries is not None:
+                        self._take_labels(entries)
+                        return [self._paragraph([entry]) for entry in entries]
+                self._take_labels([text])
             return [self._paragraph(block.lines)]
         if block.kind == "math":
             return [self._equation(block.lines)]
         if block.kind == "table":
             return self._table(block)
         return ["\n".join(block.lines)]
+
+    def _take_labels(self, entries: list[str]) -> None:
+        for entry in entries:
+            lead = _LEAD_LABEL.match(entry)
+            if lead is not None:
+                self.labels.add(int(lead.group(1)))
 
     def _heading(self, block: _Block, *, title: bool) -> str:
         parent = self._parent(block.level)
@@ -505,6 +537,8 @@ class _Numbering:
         self.stack.append((block.level, sid))
         self.section = sid
         self.in_bibliography = not title and _is_bibliography_heading(block.text)
+        if self.in_bibliography:
+            self.labels = set()
         return _anchored(sid, [_atx(block.level, block.text)])
 
     def _parent(self, level: int) -> str | None:

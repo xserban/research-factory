@@ -12,7 +12,9 @@ Invariants:
   converter version.
 - Soundness is checked per document: anchorising the stored Markdown under the anchoring version
   it was recorded with must reproduce it byte for byte. Otherwise the document is `failed` /
-  `hash-differs` and nothing is stored or recorded.
+  `hash-differs` and nothing is stored or recorded. Any other exception while re-anchoring one
+  document makes it `failed` / `conversion-error`; the run goes on. `dry_run` stores and records
+  nothing and reports what would happen.
 - Only the latest conversion of each live document is considered; one already at the current
   anchoring version, or whose re-anchored version is already recorded, is `unchanged`.
 - Each document is recorded on its own (one `project.record` call). Events carry hashes, counts
@@ -31,7 +33,7 @@ from factory.document.anchorise import ANCHOR_VERSION, anchorise, split_version,
 from factory.document.anchors import AnchorKind, parse_manifest
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
-from factory.model.document import Converted
+from factory.model.document import Converted, FailureReason
 from factory.services.context import Project
 from factory.services.document_convert import (
     ConversionOutcome,
@@ -52,6 +54,7 @@ def reanchor_conversions(
     *,
     converter: str | None = None,
     document_ids: Sequence[str] | None = None,
+    dry_run: bool = False,
 ) -> ConvertSummary:
     """Re-anchor the latest conversion of each live document, as the researcher.
 
@@ -59,7 +62,11 @@ def reanchor_conversions(
     `document_ids` to the named documents, which must be live (else `FactoryValidationError` on
     field `document_ids`, nothing written). Statuses: `converted` (a new conversion recorded, its
     id in the outcome), `unchanged`, `failed` (reason `store-error` for a missing or damaged blob,
-    `hash-differs` when the soundness check fails).
+    `hash-differs` when the soundness check fails, `conversion-error` for any other exception,
+    e.g. a manifest that does not parse; one bad document never aborts the run).
+
+    With `dry_run`, everything is computed but nothing is stored or recorded; a document that
+    would be re-anchored is reported `converted` with no conversion id.
     """
     with project.index.exclusive():
         project.index.sync()
@@ -84,7 +91,9 @@ def reanchor_conversions(
         if record.document_id in live:
             latest[record.document_id] = record
     outcomes = [
-        _reanchor_one(project, record, versions[(document_id, record.converter)])
+        _reanchor_safely(
+            project, record, versions[(document_id, record.converter)], dry_run=dry_run
+        )
         for document_id, record in latest.items()
         if (converter is None or record.converter == converter)
         and (wanted is None or document_id in wanted)
@@ -92,7 +101,19 @@ def reanchor_conversions(
     return _summary(outcomes)
 
 
-def _reanchor_one(project: Project, old: _Record, recorded_versions: set[str]) -> ConversionOutcome:
+def _reanchor_safely(
+    project: Project, old: _Record, recorded_versions: set[str], *, dry_run: bool
+) -> ConversionOutcome:
+    """`_reanchor_one`, with any exception turned into a `failed` / `conversion-error` outcome."""
+    try:
+        return _reanchor_one(project, old, recorded_versions, dry_run=dry_run)
+    except Exception:
+        return _outcome(old, "failed", FailureReason.CONVERSION_ERROR)
+
+
+def _reanchor_one(
+    project: Project, old: _Record, recorded_versions: set[str], *, dry_run: bool = False
+) -> ConversionOutcome:
     base, anchor_version = split_version(old.converter_version)
     new_version = stamp_version(base, ANCHOR_VERSION)
     if anchor_version >= ANCHOR_VERSION or new_version in recorded_versions:
@@ -112,6 +133,8 @@ def _reanchor_one(project: Project, old: _Record, recorded_versions: set[str]) -
     counts = {kind.value: 0 for kind in AnchorKind}
     for anchor in manifest.anchors:
         counts[anchor.kind.value] += 1
+    if dry_run:
+        return _outcome(old, "converted")
     with project.index.exclusive():
         project.index.sync()
         if _already_recorded(project, old.document_id, old.converter, new_version):
