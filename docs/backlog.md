@@ -756,18 +756,30 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-71, the hypot
 **Open questions:** how a belt change is recorded (a hypothesis amendment with a reason, or a new event); what counts as a novel prediction (registered before the test, with the date); whether a study's protocol amendments count as belt changes.
 
 ### IDEA-75 — PubMed date slicing above the 9,999 cap
-Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: built on branch `pubmed-rest` (services/pubmed_slices.py, MCP `search_slice`, CLI `search slice`; tests offline, run one file at a time; not reviewed, not merged; decision row proposed, number to be fixed at merge) · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** the adapter splits a PubMed query whose count exceeds 9,999 into `[dp]` windows and retrieves each, so the run is complete rather than partial.
 **Why:** broad biomedical queries routinely exceed the E-utilities ceiling.
 **Rigour notes:** each window is archived and counted; the sum of window counts is reported against the unsplit count, and a difference is noted (R-23).
 **Open questions:** fixed windows or recursive halving.
+**Rulings (agent, 2026-11-15, branch `pubmed-rest`; decision 124 item 2 stands, the split is now arithmetic the agent calls):**
+1. Not the adapter: a service (`services/pubmed_slices.py`) plans and runs; the adapter still records a capped query partial with `esearch-cap`.
+2. Recursive by calendar unit, not halving: a window over the cap is cut into years, a year into months, a month into days; a day over the cap stays a slice, runs partial with the cap note and is flagged `over_cap`. Only oversized windows are cut.
+3. First cut: before `first_year` (default 1900, one range), one slice per year to the clock's year, after that year (one range, to 3000). The two open ends are never cut. Disjoint, so the sum of slice counts equals the unsplit count unless records lack a `[dp]` date.
+4. Counts come from one `esearch` count per candidate slice (PubMed's own number); planning writes no event, its pages are archived as blobs. The authoritative counts are those of the recorded slice runs (R-03, R-23).
+5. Each non-empty slice is a registered and run `search` with the term `(<parent text>) AND ("YYYY/MM/DD"[dp] : "YYYY/MM/DD"[dp])`, verbatim. Empty slices are counted, not run.
+6. The parent/children relation is derived from the texts (`slice_report`); no new event type. The report states slice total against the unsplit count and any difference.
+7. A slice is not a planned query: pilot and systematic projects need `deviation_id` (the ordinary gate is unchanged). Re-running continues: completed slices are left, partial runs resume.
+8. Parent must be a pubmed keyword `search` without filters, with an unsplit count over the cap; otherwise refused.
 
 ### IDEA-76 — PubMed in watch cycles, the inbox and seeds
-Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; merged into main (see IDEA-79); watch window and import admission by PMID not built · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
+Status: seeds by PMID and PubMed/PMC inbox links built, reviewed and tested; merged into main (see IDEA-79); watch window (`listed_since` as `[edat]`) and import admission by PMID built on branch `pubmed-rest`, tested offline, not reviewed, not merged · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
 **What:** a `listed_since` window for PubMed (`[edat]`), PubMed and PMC links in the inbox parser, seeds and import admission by PMID.
 **Why:** a biomedical project lives in PMIDs; today a seed or link needs a DOI, arXiv or OpenAlex id.
 **Rigour notes:** a PMID seed is resolved and recorded like the other kinds; held-out withholding covers the PMID.
 **Open questions:** whether the seed model takes `pmid` as a fourth key or resolves through OpenAlex.
+**Rulings, rest (agent, 2026-11-15, branch `pubmed-rest`):**
+1. Watch window: `PubmedSource.window_filter` is true; `filters["listed_since"]` (YYYY-MM-DD) is sent as `(<text>) AND ("YYYY/MM/DD"[edat] : "3000"[edat])`, PubMed's entry date, a listing date and never a publication date (R-21). Keyword queries only; the recorded `query_sent` is the clause as sent. Count, match and sample probes use the same term. No other filter is accepted (`register_query` refuses it, an id_list with any filter too).
+2. Import admission: a record whose resolved work has a PMID and no OpenAlex id is named by a PubMed `id_list` (own family `pmid`, comma separator). Precedence: OpenAlex id, PMID, arXiv id, DOI. Records resolved only through DOI keep the DOI route.
 
 ### IDEA-77 — Europe PMC as a second JATS route; MeSH suggestions in the probe
 Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-22
@@ -784,7 +796,7 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-37, IDEA-50, 
 **Open questions:** trial works; slice 3c storage or new events; grader model; templates extracted after the first adaptation; a second pilot as the second adaptation.
 
 ### IDEA-79 — PubMed line: what remains (handover, 2026-11-14)
-Status: open · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depends on: IDEA-22 (merged cb447f2), IDEA-76, decision 124 (proposed), lifting of the testing pause (lifted for this line, 2026-11-15)
+Status: open (2026-11-15, branch `pubmed-rest`: IDEA-75, IDEA-76 rest and two code minors built; merge of `pmid-seeds`, `gate-tests` and decision 124 confirmation remain) · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depends on: IDEA-22 (merged cb447f2), IDEA-76, decision 124 (proposed), lifting of the testing pause (lifted for this line, 2026-11-15)
 Tests run 2026-11-15 (branch `pubmed-tests`, one file at a time): all PubMed files pass after two test fixes (retmax is the remaining count; DOI normalised lower-case) and one product fix (id_list tokens normalised: leading zeros and `pmid:` prefixes stripped, non-PMID tokens rejected before any request). New offline file `platform/tests/test_pubmed_edges.py` (18 tests: id normalisation, date-sliced terms, cap boundary, last-page retmax, efetch XML shapes, 429 Retry-After, 5xx). Remaining from step 3: merge, MAP regeneration.
 **What:** finish the PubMed work started 2026-11-14 so pilot 2 can run on a biomedical topic.
 **State:**
@@ -798,6 +810,7 @@ Tests run 2026-11-15 (branch `pubmed-tests`, one file at a time): all PubMed fil
 3. Fix failures; merge `pmid-seeds` and `gate-tests`; regenerate `docs/MAP.md`; update IDEA-22, IDEA-76 and this entry (IDEA-79).
 4. Researcher confirms decision 124 (source, route order before OA PDF, TDM manuscripts fetched).
 **Parked (not needed for pilot start):** IDEA-75 (date slicing above 9,999), IDEA-76 rest (PubMed watch window, import admission by PMID), IDEA-77 (Europe PMC route, MeSH suggestions in the probe), the review minors under IDEA-22, actor-first coverage for 9 gates whose prerequisite check runs before the actor check (screening/extraction/mine resolve, miner calibration label, hypotheses register and lead decide, experiments freeze-unlock and accept-baseline: needs built worlds), a shared PMCID converter (inbox and PMC route each have one).
+**Rulings, code items (agent, 2026-11-15, branch `pubmed-rest`):** done: non-numeric `resume_from` gives a clear `ValueError` before any request (IDEA-22 minor). Not done, each needs a choice: keying in-run dedup on PMID (the work id is derived from DOI, arXiv id or title/authors/year, so a PMID key would need a change to `work_id`); long terms by POST (`PoliteClient` has GET only); `PubmedBookArticle` parsing (new work type mapping); shared PMCID converter (touches the inbox and the PMC route); OA PDF reason (cosmetic); actor-first gate coverage (needs built worlds).
 **Rigour notes:** pmid-seeds touches held-out handling (decision 37.9, 123): review the withholding tests before merge.
 
 ### IDEA-80 — Philosophy-of-science names for factory objects
