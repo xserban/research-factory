@@ -710,7 +710,11 @@ def _join_event(
             [ValidationIssue("actor", "only an agent extractor joins a pass")]
         )
     payload = ExtractionPassJoined(
-        pass_label=label, session=actor.session, model=model, pack=_pack_tag(scope), calibration=calibration
+        pass_label=label,
+        session=actor.session,
+        model=model,
+        pack=_pack_tag(scope),
+        calibration=calibration,
     )
     return project.events.make(
         "extraction.pass_joined", payload, actor, input_blob=_input(project, actor, label, scope)

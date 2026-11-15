@@ -22,7 +22,7 @@ from factory.services.extraction import (
 )
 from factory.services.miner_gold import label_miner_calibration
 from factory.services.miners import draw_miner_calibration
-from factory.services.mining import mine_next, mine_record, register_miner
+from factory.services.mining import mine_next, mine_record, mine_status, register_miner
 from tests.extraction_helpers import _both, ext_a, ext_b, screened, world  # noqa: F401
 from tests.miner_helpers import (
     VISION_NAME,
@@ -213,6 +213,17 @@ def test_a_calibration_join_that_served_nothing_still_joins_nothing_else(
         mine_next(project, idle, OTHER, 1, A)
     _refused(raised, "pass")
     assert _joins(project, S2) == [(VISION_NAME, "A")]
+
+
+def test_mine_status_of_a_session_in_two_miners_shows_both(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    _two(project, agent)
+    actor = miner_actor(S1, OPUS)
+    assert mine_pass(project, actor, A, lambda w: [mine_row()])
+    assert mine_pass(project, actor, A, lambda w: [mine_row()], name=OTHER)
+    seen = sorted(m.name for m in mine_status(project, session=S1, with_agreement=False))
+    assert seen == sorted([OTHER, VISION_NAME])
 
 
 def test_resume_lists_each_join(

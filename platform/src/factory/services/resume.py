@@ -368,6 +368,8 @@ def _last_activity(project: Project, session: str) -> str | None:
 
 
 def _passes(project: Project, now: datetime) -> list[StalePass]:
+    """One StalePass per (scope, session) with idle sessions and pending work. The pending count
+    is per task kind, so a session in several miners shows the same count for each of them."""
     project.index.sync()
     pending = pending_work(project)
     cutoff = format_ts(now - PASS_IDLE)
