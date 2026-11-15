@@ -210,7 +210,7 @@ def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]
     if ref is None:
         return []
     # late imports: services.taxonomies imports this package's peers
-    from factory.mining.derive import derive_miner, row_key_rule
+    from factory.mining.derive import DERIVED_FIELD_NAMES, derive_miner, row_key_rule
     from factory.services.taxonomies import layer_categories, taxonomy_row
 
     field = "spec.taxonomy"
@@ -246,6 +246,7 @@ def _taxonomy_issues(project: Project, spec: MinerSpec) -> list[ValidationIssue]
             regime=spec.regime,
             layer_ids=layer_categories(project, taxonomy),
             procedure=spec.procedure,
+            attributes=tuple(f for f in spec.fields if f.name not in DERIVED_FIELD_NAMES),
         )
     except ValueError as error:
         return [ValidationIssue(field, f"the taxonomy cannot be derived: {error}")]
