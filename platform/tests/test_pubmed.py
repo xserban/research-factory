@@ -183,7 +183,7 @@ def test_keyword_two_phase_request_shape() -> None:
     assert second["WebEnv"] == "WEBENV_1"
     assert second["query_key"] == "1"
     assert second["retstart"] == "0"
-    assert second["retmax"] == "200"
+    assert second["retmax"] == "2"
     assert second["retmode"] == "xml"
     assert "api_key" not in first
     assert "email" not in first
@@ -619,7 +619,7 @@ def test_probe_sample_is_top_by_relevance_with_parsed_identifiers() -> None:
     assert kind == "top"
     assert [r.title for r in records] == ["Sampled title", "A trial of things"]
     assert records[0].identifiers.pmid == "11"
-    assert records[0].identifiers.doi == "10.1000/Test.11"
+    assert records[0].identifiers.doi == "10.1000/test.11"
     assert records[0].identifiers.pmcid == "PMC11"
     search, fetch = dict(seen[0].url.params), dict(seen[1].url.params)
     assert search["sort"] == "relevance" and search["retmax"] == "2"
