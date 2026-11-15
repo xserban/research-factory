@@ -21,6 +21,7 @@ from factory.services.screening import open_pass
 from factory.sources.fulltext.base import RouteResult, not_retrieved
 from tests.fulltext_helpers import _include_all
 from tests.helpers import _setup
+from tests.region_helpers import merge_works
 from tests.route_helpers import StubRoute
 from tests.screening_helpers import _draw
 
@@ -153,3 +154,23 @@ def test_status_and_rebuild_without_library(project: Project, corpus: None) -> N
 
     assert without_library == before
     assert after_rebuild == before
+
+
+def test_status_counts_canonical_works_and_reads_absorbed_attempts(
+    project: Project, corpus: None
+) -> None:
+    promoted = _promoted(project)
+    primary, absorbed, other = promoted[0], promoted[1], promoted[2]
+    # The absorbed work's attempts fail; the primary was never tried under its own id.
+    _fetch_two(project, other, absorbed)
+    merge_works(project, primary, absorbed)
+
+    status = fulltext_status(project)
+
+    by_work = {entry.work_id: entry for entry in status.works}
+    assert absorbed not in by_work and status.promoted == len(promoted) - 1
+    assert by_work[primary].state == "not-retrieved"
+    assert by_work[primary].reasons[Route.OA_PDF] == "no pdf"
+    assert status.unsought == len(promoted) - 3
+    with pytest.raises(FactoryValidationError):
+        fulltext_status(project, work_ids=[absorbed])

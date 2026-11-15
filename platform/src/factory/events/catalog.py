@@ -64,6 +64,7 @@ from factory.model.extraction import (
     ExtractionResolved,
 )
 from factory.model.feed import FeedConfigured, FeedFetched, FeedRanked, FeedReacted, FeedSent
+from factory.model.files import FileRegistered
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import (
     Attempted,
@@ -311,6 +312,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("mining.requested", MiningRequested, 1))
     catalog.register(EventType("work.layer_set", WorkLayerSet, 1))
     catalog.register(EventType("page.recorded", PageRecorded, 1))
+    catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))
     catalog.register(EventType("mine.imported", MineImported, 1))

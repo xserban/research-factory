@@ -31,7 +31,8 @@ LEGEND = (
     ),
     (
         "Reports sought for retrieval",
-        "Records promoted to full text that the full-text stage tried to fetch.",
+        "Records promoted to full text that the full-text stage tried to fetch. Promoted works not "
+        "yet attempted are noted beside the box as not yet sought, not counted as sought.",
     ),
     (
         "Reports not retrieved",

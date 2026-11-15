@@ -17,6 +17,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.dedup import DedupMerged, DedupReverted, MergeStatus
 from factory.model.work import Work
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.dedup_cascade import CascadeMerge, dedup, merge_works
 from factory.services.progress import track
@@ -180,6 +181,7 @@ def revert_merge(project: Project, actor: Actor, merge_id: str, reason: str) -> 
         )
 
 
+@memoised
 def active_merges(project: Project) -> list[DedupMerged]:
     """Merges not yet reverted, ordered by merge id."""
     project.index.sync()
@@ -245,9 +247,20 @@ def list_merges(project: Project, *, named: bool = True) -> list[MergeRow]:
     ]
 
 
+@memoised
 def absorbed_ids(project: Project) -> set[str]:
     """The works an active merge absorbed: records of a work whose primary stands for them."""
     return {absorbed for merge in active_merges(project) for absorbed in merge.absorbed}
+
+
+@memoised
+def absorbed_by_primary(project: Project) -> dict[str, tuple[str, ...]]:
+    """Each primary of an active merge with the works absorbed into it, sorted and without repeats.
+    Reverted merges are ignored. Memoised within a call scope, so a bulk reader pays once."""
+    found: dict[str, set[str]] = {}
+    for merge in active_merges(project):
+        found.setdefault(merge.primary, set()).update(merge.absorbed)
+    return {primary: tuple(sorted(items)) for primary, items in found.items()}
 
 
 def canonical_works(project: Project) -> list[Work]:
@@ -325,3 +338,57 @@ def _is_active(project: Project, merge_id: str) -> bool:
             text("SELECT status FROM merges WHERE merge_id = :merge"), {"merge": merge_id}
         ).one_or_none()
     return row is not None and row[0] == MergeStatus.ACTIVE.value
+
+
+class MergedAfterScreening(StrictModel):
+    """An absorbed work whose own title/abstract outcome differs from its primary's."""
+
+    merge_id: str
+    rule: str
+    primary: str
+    primary_title: str
+    primary_outcome: str
+    absorbed: str
+    absorbed_title: str
+    absorbed_outcome: str
+
+
+def merged_after_screening(project: Project) -> list[MergedAfterScreening]:
+    """Absorbed works whose own final title/abstract outcome differs from their primary's.
+
+    A review aid with no consumer yet: nothing in the platform calls it; the researcher reads it
+    to review conflicting merged pairs. Read-only: the primary's outcome stands in every count and
+    nothing here changes an event. An absorbed work with no decided outcome of its own (pending
+    records are left out by `final_outcomes`) was never screened separately and is not listed.
+    Ordered by merge id, then absorbed id."""
+    from factory.services.agreement import Outcome, final_outcomes  # circular at import time
+
+    outcomes = final_outcomes(project)
+    works = {work.id: work for work in list_works(project)}
+
+    def outcome_of(work_id: str) -> str:
+        return outcomes.get(work_id, Outcome.PENDING).value
+
+    def title_of(work_id: str) -> str:
+        work = works.get(work_id)
+        return "" if work is None else work.title
+
+    rows: list[MergedAfterScreening] = []
+    for merge in active_merges(project):
+        for absorbed in merge.absorbed:
+            own = outcome_of(absorbed)
+            if own == Outcome.PENDING.value or own == outcome_of(merge.primary):
+                continue
+            rows.append(
+                MergedAfterScreening(
+                    merge_id=merge.merge_id,
+                    rule=merge.rule,
+                    primary=merge.primary,
+                    primary_title=title_of(merge.primary),
+                    primary_outcome=outcome_of(merge.primary),
+                    absorbed=absorbed,
+                    absorbed_title=title_of(absorbed),
+                    absorbed_outcome=outcome_of(absorbed),
+                )
+            )
+    return rows

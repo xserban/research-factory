@@ -160,7 +160,10 @@ def prisma_svg(flow: PrismaFlow) -> str:
         _count("Records excluded", flow.excluded_total),
         _reasons(flow.excluded) + _background(flow.background),
     )
-    sought = _lines(_count("Reports sought for retrieval", boxes.sought), [])
+    sought = _lines(
+        _count("Reports sought for retrieval", boxes.sought),
+        [_count("Promoted, not yet sought", boxes.not_sought)] if boxes.not_sought else [],
+    )
     not_retrieved = _lines(
         _count("Reports not retrieved", boxes.not_retrieved),
         _reasons(boxes.not_retrieved_reasons),

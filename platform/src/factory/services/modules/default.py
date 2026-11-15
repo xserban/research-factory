@@ -33,6 +33,7 @@ from factory.services.modules import (
     experiments,
     exports,
     extraction,
+    files,
     finders,
     fulltext,
     grey,
@@ -70,7 +71,7 @@ def default_modules() -> ModuleRegistry:
         contributions, appraisal, cards, evidence, references, imports, inbox, grey, living,
         snapshots, ranking, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
-        portfolio, regions, mining, hypotheses, labels, views, experiments, pages,
+        portfolio, regions, mining, hypotheses, labels, views, experiments, pages, files,
         evaluation, benchmark_ledger, directions, curation, decisions, develop, writing, briefing,
         manuscripts,
     ]  # fmt: skip

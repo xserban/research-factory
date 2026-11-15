@@ -2,7 +2,7 @@
 is read from the model, so the CLI and the MCP tools cannot differ (R-05)."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from factory.document.optional import ConverterInfo
@@ -45,6 +45,10 @@ from factory.services.extraction_agreement import (
 )
 from factory.services.extraction_audit import AuditEvidence, ExtractionAuditReport
 from factory.services.finders import ConflictPage, ContradictionView, GapReport
+from factory.services.flow_ledger import TOTAL, FlowCounts, LedgerRow
+from factory.services.flow_query import FlowPage
+from factory.services.flow_skipped import RunGap, SkippedRecord
+from factory.services.flow_trails import TrailStep
 from factory.services.fulltext import FetchSummary
 from factory.services.fulltext_import import ImportReport
 from factory.services.fulltext_status import FulltextStatus
@@ -117,6 +121,7 @@ def prisma_markdown(flow: PrismaFlow) -> str:
         lines += [f"  - {work}" for work in flow.unscreened_tolerated_works]
     boxes = flow.full_text
     lines += ["", "## Full-text assessment"]
+    lines.append(f"- promoted, not yet sought: {boxes.not_sought}")
     lines.append(f"- reports sought: {boxes.sought}")
     lines.append(f"- reports not retrieved: {boxes.not_retrieved}")
     lines += [f"  - {reason}: {n}" for reason, n in boxes.not_retrieved_reasons.items()]
@@ -156,6 +161,7 @@ def update_markdown(flow: UpdateFlow) -> str:
     lines += [f"- excluded, {criterion}: {n}" for criterion, n in flow.excluded.items()]
     lines.append(f"- pending: {flow.pending}")
     lines.append(f"- full-text reports sought: {flow.full_text.sought}")
+    lines.append(f"- promoted, not yet sought: {flow.full_text.not_sought}")
     lines += ["", "## Included", f"- included in this update: {flow.included}"]
     lines.append(f"- total included now: {flow.total_included}")
     if flow.changed_previous:
@@ -1887,4 +1893,103 @@ def layer_status_lines(status: LayerStatus) -> list[str]:
                 f"  ring {layer}: kappa {'n/a' if k is None else f'{k:.2f}'}, "
                 f"agreement {'n/a' if a is None else f'{a:.2f}'}"
             )
+    return lines
+
+
+def flow_table_markdown(by_source: Mapping[str, FlowCounts]) -> str:
+    """The PRISMA counts as a table: one row per step, one column per source group, the total
+    last. Every figure is read from the counts; criteria rows are those any group excludes by."""
+    groups = [key for key in by_source if key != TOTAL] + [TOTAL]
+    ta_criteria = sorted({c for counts in by_source.values() for c in counts.ta_excluded})
+    ft_criteria = sorted({c for counts in by_source.values() for c in counts.ft_excluded})
+    steps: list[tuple[str, Callable[[FlowCounts], int]]] = [
+        ("records screened", lambda c: c.screened),
+        ("title/abstract included", lambda c: c.ta_included),
+        *[
+            (f"title/abstract excluded: {crit}", lambda c, k=crit: c.ta_excluded.get(k, 0))
+            for crit in ta_criteria
+        ],
+        ("title/abstract pending", lambda c: c.ta_pending),
+        ("full-text not sought", lambda c: c.ft_not_sought),
+        ("full-text attempted, not retrieved", lambda c: c.ft_attempted_failed),
+        ("full-text retrieved", lambda c: c.ft_retrieved),
+        ("full-text included", lambda c: c.ft_included),
+        *[
+            (f"full-text excluded: {crit}", lambda c, k=crit: c.ft_excluded.get(k, 0))
+            for crit in ft_criteria
+        ],
+        ("full-text pending", lambda c: c.ft_pending),
+        ("full-text awaiting", lambda c: c.ft_awaiting),
+    ]
+    lines = [
+        "# PRISMA counts by source group",
+        "",
+        "| step | " + " | ".join(groups) + " |",
+        "|---" * (len(groups) + 1) + "|",
+    ]
+    for label, value in steps:
+        cells = [str(value(by_source[group])) for group in groups]
+        lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def _ledger_line(row: LedgerRow) -> str:
+    ta = row.ta_outcome.value if row.ta_outcome is not None else "-"
+    if row.ta_criterion is not None:
+        ta = f"{ta} ({row.ta_criterion})"
+    ft: str = row.ft_state or "-"
+    if row.ft_outcome is not None:
+        ft = f"{ft} / {row.ft_outcome}"
+    if row.ft_criterion is not None:
+        ft = f"{ft} ({row.ft_criterion})"
+    return f"{row.work_id}  {row.source_group}  ta: {ta}  ft: {ft}  {row.title}"
+
+
+def flow_works_lines(page: FlowPage) -> list[str]:
+    """One line per ledger row, then the cursor that continues the listing when there is one."""
+    lines = [_ledger_line(row) for row in page.items]
+    if not page.items:
+        lines.append("no work matches these filters")
+    if page.next_cursor is not None:
+        lines.append(f"next cursor: {page.next_cursor}")
+    return lines
+
+
+def flow_trail_lines(work_id: str, steps: Sequence[TrailStep]) -> list[str]:
+    """One line per step, in time order: its time, its kind, then its details."""
+    lines = [f"# Trail of {work_id}", ""]
+    for step in steps:
+        details = ", ".join(f"{key}: {value}" for key, value in step.d.items())
+        lines.append(f"- {step.at} {step.kind}" + (f" ({details})" if details else ""))
+    if not steps:
+        lines.append("no steps")
+    return lines
+
+
+def flow_skipped_lines(records: Sequence[SkippedRecord], gaps: Sequence[RunGap]) -> list[str]:
+    """The skipped raw records, then each query's reported against retrieved."""
+    lines = ["# Records that never became works", ""]
+    for record in records:
+        lines.append(
+            f"- {record.run_id} {record.query_id} [{record.reason}] "
+            f"{record.native_id or '-'}  {record.title or '(untitled)'}"
+        )
+    if not records:
+        lines.append("none")
+    lines += ["", "# Run gaps by query", ""]
+    for gap in gaps:
+        reported = "unknown" if gap.reported is None else str(gap.reported)
+        shortfall = "unknown" if gap.gap is None else str(gap.gap)
+        lines.append(
+            f"- {gap.query_id} ({gap.source}): reported {reported}, "
+            f"retrieved {gap.retrieved}, gap {shortfall}"
+        )
+        for run in gap.runs:
+            note = f", note: {run.note}" if run.note else ""
+            lines.append(
+                f"  - {run.run_id} {run.status}: retrieved {run.retrieved_count}, "
+                f"skipped {run.skipped}{note}"
+            )
+    if not gaps:
+        lines.append("none")
     return lines

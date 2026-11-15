@@ -9,6 +9,10 @@ Invariants:
 - Read-only: nothing is written; the index is synced before it is read.
 - `eligible` is sorted by work id and `not_retrieved` is sorted; together they are exactly the
   promoted works.
+- Promoted works are canonical works only (promoted is a subset of the canonical works): a work an
+  active merge absorbed is never queued, whatever its own outcome, because its primary stands for
+  it and the title/abstract boxes count the primary's outcome. So title/abstract included =
+  not sought + sought in the full-text boxes.
 - The conversion named for a work is the one current at call time. A batch pins it when the task
   is created (`screening._enqueue`); a later conversion never changes a queued task.
 """
@@ -17,7 +21,8 @@ from factory.model.base import StrictModel
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.call_memo import memoised
 from factory.services.context import Project
-from factory.services.document_read import default_conversion
+from factory.services.dedup import absorbed_ids
+from factory.services.document_read import default_conversions
 
 
 class EligibleWork(StrictModel):
@@ -37,13 +42,17 @@ class FulltextQueue(StrictModel):
 
 @memoised
 def fulltext_queue(project: Project) -> FulltextQueue:
-    """Every promoted work as eligible (converted) or not retrieved (no conversion)."""
+    """Every promoted canonical work as eligible (converted) or not retrieved (no conversion)."""
     project.index.sync()
-    promoted = sorted(w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED)
+    absorbed = absorbed_ids(project)
+    promoted = sorted(
+        w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED and w not in absorbed
+    )
     eligible: list[EligibleWork] = []
     missing: list[str] = []
+    conversions = default_conversions(project, promoted)
     for work_id in promoted:
-        chosen = default_conversion(project, work_id)
+        chosen = conversions[work_id]
         if chosen is None:
             missing.append(work_id)
         else:

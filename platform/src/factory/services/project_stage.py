@@ -95,7 +95,7 @@ def stage_facts(project: Project) -> StageFacts:
         complete_search_runs=_complete_search_runs(project),
         ta_pending=_ta_pending(project),
         ft_plan=ft_plan,
-        ft_open=0 if boxes is None else boxes.not_retrieved + boxes.pending,
+        ft_open=0 if boxes is None else boxes.not_sought + boxes.not_retrieved + boxes.pending,
         extraction_schema=schema is not None,
         extraction_open=0 if schema is None else _extraction_open(project),
         snowball_plan=plan is not None,
