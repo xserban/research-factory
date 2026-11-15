@@ -182,7 +182,7 @@ Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required
 **Open questions:** first instruments (ML evidence checklist from NeurIPS M14; RoB 2 / PROBAST for biomedical projects).
 
 ### IDEA-22 — PubMed search and PMC full-text route
-Status: merged (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124 proposed; reviewed, live smoke passed 2026-11-14; unit tests not run) · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
+Status: merged (branch `pubmed`, plan `2026-11-14-pubmed.md`, decision 124 proposed; reviewed, live smoke passed 2026-11-14; PubMed unit tests run on branch `pubmed-tests` 2026-11-15: test_pubmed, test_registry_pubmed, test_fulltext_routes_pmc, test_inbox_links, test_inbox_service, test_seeds and new test_pubmed_edges pass; two stale test assertions fixed, id_list PMID normalisation added) · Added: 2026-11-03 · Slice: first biomedical project (TAVI, ND)
 **What:** PubMed source adapter (PRISMA-S fields, no truncation) and PMC OA JATS route to Markdown.
 **Review minors parked (2026-11-14):** `PubmedBookArticle` records not parsed; in-run dedup by work id can merge distinct DOI-less PMIDs with identical title, authors and year (key it on PMID); non-numeric `resume_from` raises a bare `ValueError`; long terms go by GET (NCBI recommends POST); OA PDF all-fail reason is the first candidate with a `pdf_url`, not always the best location.
 
@@ -784,7 +784,8 @@ Status: new · Added: 2026-11-14 · Slice: — · Depends on: IDEA-37, IDEA-50, 
 **Open questions:** trial works; slice 3c storage or new events; grader model; templates extracted after the first adaptation; a second pilot as the second adaptation.
 
 ### IDEA-79 — PubMed line: what remains (handover, 2026-11-14)
-Status: open · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depends on: IDEA-22 (merged cb447f2), IDEA-76, decision 124 (proposed), lifting of the testing pause
+Status: open · Added: 2026-11-14 · Slice: before pilot 2 (biomedical) · Depends on: IDEA-22 (merged cb447f2), IDEA-76, decision 124 (proposed), lifting of the testing pause (lifted for this line, 2026-11-15)
+Tests run 2026-11-15 (branch `pubmed-tests`, one file at a time): all PubMed files pass after two test fixes (retmax is the remaining count; DOI normalised lower-case) and one product fix (id_list tokens normalised: leading zeros and `pmid:` prefixes stripped, non-PMID tokens rejected before any request). New offline file `platform/tests/test_pubmed_edges.py` (18 tests: id normalisation, date-sliced terms, cap boundary, last-page retmax, efetch XML shapes, 429 Retry-After, 5xx). Remaining from step 3: merge, MAP regeneration.
 **What:** finish the PubMed work started 2026-11-14 so pilot 2 can run on a biomedical topic.
 **State:**
 - *Merged on main (cb447f2, 9be7ad5):* PubMed source (search, probe), PMC JATS route from the `pmc-oa-opendata` bucket, JATS to Markdown with references kept, OA PDF fallback through every OpenAlex OA location. Reviewed (Sonnet), review fixes in; live smoke passed (NCBI search, probe, one PMC article to Markdown with 18 references). **Unit tests never run.** Plan `docs/plans/2026-11-14-pubmed.md`.

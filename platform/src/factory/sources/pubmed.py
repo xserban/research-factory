@@ -36,6 +36,7 @@ from factory.model.work import (
     Work,
     WorkType,
 )
+from factory.model.work_ids import normalize_pmid
 from factory.sources.base import (
     BUDGET_STOP_NOTE,
     PageSink,
@@ -171,8 +172,12 @@ def _subjects(citation: ElementTree.Element) -> list[str]:
 
 
 def _requested_pmids(text: str) -> list[str]:
-    """The distinct PMIDs named in an id_list query, in the order given (comma or whitespace)."""
-    return list(dict.fromkeys(part for part in re.split(r"[,\s]+", text) if part))
+    """The distinct, normalised PMIDs named in an id_list query, in the order given (comma or
+    whitespace). `PMID:` prefixes and leading zeros are removed, so the ids match what efetch
+    returns; a token that is not a PMID raises ValueError before any request."""
+    cleaned = re.sub(r"(?i)\bpmid\s*:\s*", "", text)
+    tokens = [part for part in re.split(r"[,\s]+", cleaned) if part]
+    return list(dict.fromkeys(normalize_pmid(token) for token in tokens))
 
 
 def _identifiers(article: ElementTree.Element) -> Identifiers:
