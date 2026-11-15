@@ -37,8 +37,9 @@ def texts(f: PrismaFlow) -> str:
 def ran_boxes() -> FullTextBoxes:
     return FullTextBoxes(
         sought=100,
+        not_sought=4,
         not_retrieved=10,
-        not_retrieved_reasons={"unsought": 4, "unconverted": 6},
+        not_retrieved_reasons={"unconverted": 10},
         eligible=90,
         assessed=90,
         excluded={"C3": 30},
@@ -84,7 +85,8 @@ def test_full_text_boxes_when_run() -> None:
     out = texts(f)
     assert "not run" not in out
     assert "Reports sought for retrieval (n = 100)" in out
-    assert "Reports not retrieved (n = 10)" in out and "unconverted (n = 6)" in out
+    assert "Promoted, not yet sought (n = 4)" in out
+    assert "Reports not retrieved (n = 10)" in out and "unconverted (n = 10)" in out
     assert "Reports assessed for eligibility (n = 90)" in out
     assert "Reports excluded (n = 30)" in out and "C3 (n = 30)" in out
     assert "Studies included in review (n = 60)" in out
@@ -144,7 +146,7 @@ def test_awaiting_classification_box_prints_and_identities_hold() -> None:
     boxes = FullTextBoxes(
         sought=100,
         not_retrieved=10,
-        not_retrieved_reasons={"unsought": 10},
+        not_retrieved_reasons={"unconverted": 10},
         eligible=90,
         assessed=85,
         excluded={"C3": 30},

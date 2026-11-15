@@ -24,6 +24,7 @@ from factory.index.evaluation import evaluation_handlers, evaluation_tables
 from factory.index.experiments import experiment_handlers, experiment_tables
 from factory.index.extraction import extraction_handlers, extraction_tables
 from factory.index.feed import feed_handlers, feed_tables
+from factory.index.files import file_handlers, file_tables
 from factory.index.findings import finding_handlers, finding_tables
 from factory.index.fulltext import fulltext_handlers, fulltext_tables
 from factory.index.gates import gate_handlers, gate_tables
@@ -68,7 +69,7 @@ from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "84"
+PROJECTION_VERSION = "85"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -100,6 +101,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     references = reference_tables(metadata)
     imports = import_tables(metadata)
     inbox = inbox_tables(metadata)
+    files = file_tables(metadata)
     grey = grey_tables(metadata)
     watch = watch_tables(metadata, search.runs)
     snapshots = living_tables(metadata)
@@ -158,6 +160,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **reference_handlers(references),
         **import_handlers(imports, blobs),
         **inbox_handlers(inbox),
+        **file_handlers(files),
         **grey_handlers(grey),
         **watch_handlers(watch),
         **living_handlers(snapshots),

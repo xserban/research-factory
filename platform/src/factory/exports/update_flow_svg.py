@@ -41,7 +41,10 @@ def update_flow_svg(flow: UpdateFlow) -> str:
     duplicates = _lines(_count("Duplicate records removed", flow.duplicates_removed), [])
     screened = _lines(_count("Records screened", flow.screened), [])
     excluded = _lines(_count("Records excluded", flow.excluded_total), _reasons(flow.excluded))
-    sought = _lines(_count("Reports sought for retrieval", boxes.sought), [])
+    sought = _lines(
+        _count("Reports sought for retrieval", boxes.sought),
+        [_count("Promoted, not yet sought", boxes.not_sought)] if boxes.not_sought else [],
+    )
     not_retrieved = _lines(
         _count("Reports not retrieved", boxes.not_retrieved),
         _reasons(boxes.not_retrieved_reasons),

@@ -21,6 +21,7 @@ from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
 from factory.cli.develop import develop_app
 from factory.cli.feed import feed_app
+from factory.cli.files import files_app
 from factory.cli.ledger import budget_app, ledger_cmd
 from factory.cli.library import library_app
 from factory.cli.manuscripts import manuscript_app
@@ -127,6 +128,9 @@ from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
 from factory.services import extraction_audit as extraction_audit_service
 from factory.services import finders as findings_service
+from factory.services import flow_ledger as flow_ledger_service
+from factory.services import flow_query as flow_query_service
+from factory.services import flow_skipped as flow_skipped_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_import as fulltext_import_service
 from factory.services import fulltext_status as fulltext_status_service
@@ -566,6 +570,7 @@ app.add_typer(dashboard_app)
 app.add_typer(site_app)
 app.add_typer(costs_app)
 app.add_typer(pages_app)
+app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
 app.add_typer(taxonomy_app)
@@ -3503,6 +3508,137 @@ def report_search(ctx: typer.Context, as_json: _JSON = False) -> None:
             else agent_view_service.agent_search(project)
         )
     typer.echo(report.model_dump_json() if as_json else render.search_markdown(report), nl=as_json)
+
+
+@report_app.command("flow")
+def report_flow(
+    ctx: typer.Context,
+    by_source: Annotated[
+        bool, typer.Option("--by-source", help="The PRISMA counts per source group, as a table.")
+    ] = False,
+    as_json: _JSON = False,
+) -> None:
+    """The PRISMA counts per source group, and whether they reconcile with the flow."""
+    state = _state(ctx)
+    if not by_source:
+        _fail("report flow needs --by-source, its only view so far", 2)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(json.dumps(agent_view_service.by_source_view(project)))
+            return
+        rows = flow_ledger_service.flow_ledger(project)
+        counts = flow_ledger_service.flow_by_source(project, rows)
+        mismatches = flow_ledger_service.ledger_reconciles(project, rows)
+    if as_json:
+        payload = {
+            "by_source": {key: value.model_dump(mode="json") for key, value in counts.items()},
+            "reconciles": mismatches,
+        }
+        typer.echo(json.dumps(payload))
+        return
+    typer.echo(render.flow_table_markdown(counts), nl=False)
+    if mismatches:
+        for line in mismatches:
+            typer.echo(f"not reconciled: {line}")
+    else:
+        typer.echo("reconciles with the PRISMA flow")
+
+
+@report_app.command("flow-works")
+def report_flow_works(
+    ctx: typer.Context,
+    source: Annotated[str | None, typer.Option("--source", help="A source group.")] = None,
+    step: Annotated[
+        str | None,
+        typer.Option("--step", help="title-abstract, full-text-retrieval or full-text."),
+    ] = None,
+    outcome: Annotated[
+        str | None, typer.Option("--outcome", help="The step's outcome (needs --step).")
+    ] = None,
+    criterion: Annotated[
+        str | None,
+        typer.Option(
+            "--criterion", help="An exclusion criterion (needs --step, outcome excluded)."
+        ),
+    ] = None,
+    cursor: Annotated[str | None, typer.Option("--cursor", help="Continue a listing.")] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", help="Rows per page, at most 50.")
+    ] = flow_query_service.PAGE_LIMIT,
+    as_json: _JSON = False,
+) -> None:
+    """The work ledger, filtered and one page at a time."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(
+                json.dumps(
+                    agent_view_service.flow_works_view(
+                        project,
+                        source_group=source,
+                        step=step,
+                        outcome=outcome,
+                        criterion=criterion,
+                        cursor=cursor,
+                        limit=limit,
+                    )
+                )
+            )
+            return
+        page = flow_query_service.flow_works(
+            project,
+            source_group=source,
+            step=step,
+            outcome=outcome,
+            criterion=criterion,
+            cursor=cursor,
+            limit=limit,
+        )
+    typer.echo(page.model_dump_json() if as_json else "\n".join(render.flow_works_lines(page)))
+
+
+@report_app.command("flow-trail")
+def report_flow_trail(
+    ctx: typer.Context,
+    work_id: Annotated[str, typer.Argument(help="The work's id.")],
+    as_json: _JSON = False,
+) -> None:
+    """The trail of one work: what happened to it, in time order."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(json.dumps(agent_view_service.flow_trail_view(project, work_id)))
+            return
+        steps = flow_query_service.flow_trail(project, work_id)
+    if as_json:
+        payload = {"work_id": work_id, "steps": [step.model_dump(mode="json") for step in steps]}
+        typer.echo(json.dumps(payload))
+        return
+    typer.echo("\n".join(render.flow_trail_lines(work_id, steps)))
+
+
+@report_app.command("flow-skipped")
+def report_flow_skipped(ctx: typer.Context, as_json: _JSON = False) -> None:
+    """The raw records that never became works, and each query's run gaps."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not _full_view(project):
+            typer.echo(json.dumps(agent_view_service.flow_skipped_view(project)))
+            return
+        records = flow_skipped_service.skipped_records(project)
+        gaps = flow_skipped_service.run_gaps(project)
+    if as_json:
+        payload = {
+            "skipped": [record.model_dump(mode="json") for record in records],
+            "run_gaps": [gap.model_dump(mode="json") for gap in gaps],
+        }
+        typer.echo(json.dumps(payload))
+        return
+    typer.echo("\n".join(render.flow_skipped_lines(records, gaps)))
 
 
 @report_app.command("methods")

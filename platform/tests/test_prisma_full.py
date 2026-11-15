@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
@@ -9,9 +10,10 @@ from factory.model.screening import DecisionRecorded, PassLabel, ScreeningPhase,
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.check import check
 from factory.services.context import Project
+from factory.services.dedup import merged_after_screening
 from factory.services.fulltext_screening import fulltext_queue
 from factory.services.methods import methods_report, render_methods
-from factory.services.prisma import prisma_flow
+from factory.services.prisma import NOT_RUN_BOXES, prisma_flow
 from factory.services.project import project_status
 from factory.services.trace import TraceNode, trace
 from tests.document_helpers import (
@@ -32,8 +34,8 @@ def test_boxes_sum_and_are_derived(
     queue = fulltext_queue(project)
     outcomes = final_outcomes(project, stage=FT)
     assert boxes.stage_run is True
-    assert boxes.sought == len(promoted_works(project))
-    assert boxes.not_retrieved == 3 == len(queue.not_retrieved)
+    assert boxes.not_sought + boxes.sought == len(promoted_works(project))
+    assert boxes.not_sought + boxes.not_retrieved == len(queue.not_retrieved)
     assert boxes.eligible == len(world.eligible)
     assert boxes.sought == boxes.not_retrieved + boxes.eligible
     assert boxes.eligible == boxes.assessed + boxes.pending
@@ -58,8 +60,9 @@ def test_not_retrieved_has_route_reasons(
     assert boxes.not_retrieved_reasons == {
         "oa-pdf: paywalled": 1,  # the latest attempt of the one failed work
         "unconverted": 1,
-        "unsought": 1,
     }
+    assert boxes.not_sought == 1  # promoted, never attempted: not a "not retrieved" reason
+    assert boxes.sought == boxes.eligible + boxes.not_retrieved
     assert sum(boxes.not_retrieved_reasons.values()) == boxes.not_retrieved
     # Attempts, not works: the failed work has one latest reason per route.
     assert boxes.failed_attempts_by_route == {
@@ -79,7 +82,7 @@ def test_slice1_flow_unchanged_before_full_text_runs(
     assert boxes.assessed == boxes.included == 0 and boxes.excluded == {}
     assert boxes.pending == boxes.eligible > 0
     assert boxes.eligible == boxes.assessed + boxes.pending
-    assert boxes.sought == flow.included
+    assert boxes.not_sought + boxes.sought == flow.included
     assert flow.included_in_review is None
     # The title/abstract numbers are exactly those of a protocol with no full-text plan.
     assert flow.included + flow.excluded_total + flow.pending == flow.screened
@@ -212,6 +215,12 @@ def test_methods_mentions_full_text_plan(
     assert "planned dual-coded share: 1.000" in body
     assert "audit fraction" in body
     boxes = report.prisma.full_text
+    assert f"{boxes.not_sought} promoted works were not yet sought" in body
+    assert "0 promoted works were not yet sought" not in render_methods(
+        report.model_copy(
+            update={"prisma": report.prisma.model_copy(update={"full_text": NOT_RUN_BOXES})}
+        )
+    )
     assert f"{boxes.sought} sought" in body and f"{boxes.not_retrieved} not retrieved" in body
 
 
@@ -233,3 +242,71 @@ def test_rebuild_matches(
     after = prisma_flow(project).model_dump(mode="json")
     assert before == after
     assert json.dumps(before, sort_keys=True) == json.dumps(after, sort_keys=True)
+
+
+_LATE_MERGE = "mrg_01HZX3K4M5N6P7Q8R9S0TVWXYZ"
+
+
+def _merge_late(project: Project, primary: str, *absorbed: str) -> None:
+    """A merge recorded after title/abstract screening, as the cascade does on a later run."""
+    model = project.catalog.get("dedup.merged").payload.model_validate(
+        {
+            "merge_id": _LATE_MERGE,
+            "primary": primary,
+            "absorbed": sorted(absorbed),
+            "rule": "title-identical",
+            "records": 1 + len(absorbed),
+        }
+    )
+    project.record([project.events.make("dedup.merged", model, project.system_actor())])
+
+
+def test_absorbed_promoted_work_is_not_queued_and_boxes_still_sum(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    _ta_world(project, agent, human, mock_sources)
+    before = prisma_flow(project)
+    first, second, *_ = promoted_works(project)
+    _merge_late(project, first, second)
+
+    queue = fulltext_queue(project)
+    queued = {e.work_id for e in queue.eligible} | set(queue.not_retrieved)
+    assert second not in queued and first in queued
+    flow = prisma_flow(project)
+    boxes = flow.full_text
+    # Promoted is a subset of the canonical works: included = not sought + sought.
+    assert boxes.not_sought + boxes.sought == flow.included
+    assert flow.included == before.included - 1
+    assert (
+        boxes.not_sought + boxes.sought == before.full_text.not_sought + before.full_text.sought - 1
+    )
+
+
+def test_merged_after_screening_lists_differing_outcomes_only(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ta_world(project, agent, human, mock_sources)
+    real = dict(final_outcomes(project))
+    included = sorted(w for w, o in real.items() if o is Outcome.INCLUDED)
+    # The title/abstract world includes every work: mark one excluded so the merge differs.
+    excluded, included = included[:1], included[1:]
+    real[excluded[0]] = Outcome.EXCLUDED
+    import factory.services.agreement as agreement
+
+    monkeypatch.setattr(agreement, "final_outcomes", lambda *_a, **_k: real)
+    assert merged_after_screening(project) == []  # no merge yet
+    _merge_late(project, excluded[0], included[0], included[1])
+    rows = merged_after_screening(project)
+    assert [(r.primary, r.absorbed) for r in rows] == [
+        (excluded[0], included[0]),
+        (excluded[0], included[1]),
+    ]
+    assert {(r.primary_outcome, r.absorbed_outcome, r.rule) for r in rows} == {
+        ("excluded", "included", "title-identical")
+    }
+    # Read-only: the absorbed works keep their own outcomes.
+    assert final_outcomes(project)[included[0]] is Outcome.INCLUDED
