@@ -470,7 +470,7 @@ def test_a_further_card_shows_its_reaction_and_added_state(
     cards = {
         m.group(1): m.group(0)
         for m in re.finditer(
-            r"<article class='card further' hidden data-entry-id='([^']*)'>.*?</article>",
+            r"<article class='card further' hidden data-entry-id='([^']*)'[^>]*>.*?</article>",
             demo,
             re.S,
         )
@@ -582,3 +582,61 @@ console.log(JSON.stringify([[...classes], attrs['aria-expanded'], btn.textConten
     ).stdout.splitlines()
     assert json.loads(out[0]) == [["open"], "true", "Less"]
     assert json.loads(out[1]) == [[], "false", "More"]
+
+
+def test_cards_carry_rank_and_submission_date_and_the_page_has_an_order_switch() -> None:
+    from factory.services.feed_page import FeedFurtherItem
+    from factory.services.site_hub_feed import _SCRIPT, _further_card
+
+    card = _further_card(
+        FeedFurtherItem(
+            entry_id="2501.00001",
+            rank=7,
+            score=0.5,
+            title="T",
+            authors=("A",),
+            abstract="abs",
+            submitted="2025-01-02T00:00:00",
+        )
+    )
+    assert "data-rank='7'" in card
+    assert "data-sub='2025-01-02'" in card
+    assert "<span class=meta>2025-01-02</span>" in card
+    undated = _further_card(
+        FeedFurtherItem(
+            entry_id="2501.00002", rank=8, score=0.4, title="U", authors=(), abstract=None
+        )
+    )
+    assert "data-sub=''" in undated
+    assert "feed-order" in _SCRIPT
+    assert "factory-feed-order" in _SCRIPT
+
+
+def test_the_order_comparator_sorts_by_rank_or_date_with_undated_last() -> None:
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from factory.services.site_hub_feed import _SCRIPT
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed")
+    m = re.search(r"function cmpBy\(mode\)\{.*?\n  return mode==='old'.*?\};\}", _SCRIPT, re.S)
+    assert m
+    cards = [
+        {"dataset": {"sub": "2025-01-02", "rank": "1"}, "n": "a"},
+        {"dataset": {"sub": "", "rank": "2"}, "n": "b"},
+        {"dataset": {"sub": "2025-03-01", "rank": "3"}, "n": "c"},
+    ]
+    out = {}
+    for mode in ("rank", "new", "old"):
+        run = f"{json.dumps(cards)}.sort(cmpBy('{mode}')).map(c=>c.n)"
+        js = f"{m.group(0)}console.log(JSON.stringify({run}))"
+        out[mode] = json.loads(
+            subprocess.run([node, "-e", js], capture_output=True, text=True, check=True).stdout
+        )
+    assert out == {"rank": ["a", "b", "c"], "new": ["c", "a", "b"], "old": ["a", "c", "b"]}

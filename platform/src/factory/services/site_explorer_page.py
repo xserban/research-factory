@@ -27,6 +27,7 @@ main{flex:1;display:flex;min-height:0}
 #side{width:250px;overflow:auto;border-right:1px solid var(--line);padding:8px 10px;background:var(--panel)}
 #side h3{margin:10px 0 4px;font-size:12px;text-transform:uppercase;color:var(--dim);letter-spacing:.04em}
 .f{display:flex;gap:6px;align-items:center;font-size:13px;padding:1px 0;cursor:pointer}.f span.n{margin-left:auto;color:var(--dim)}
+.minebox{margin-top:14px;font-size:12px}.minebox summary{cursor:pointer;color:var(--dim)}
 #view{flex:1;overflow:auto;position:relative;min-width:0}
 #detail{width:420px;overflow:auto;border-left:1px solid var(--line);padding:12px 14px;background:var(--panel);display:none}
 #detail.open{display:block}.lybadge{font-size:11px;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line);border-radius:4px;padding:0 6px;color:var(--acc)}#detail h2{font-size:16px;margin:0 0 4px}.dim{color:var(--dim)}
@@ -63,6 +64,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <span class="dim">View</span>
 <button data-v="list" class="on">List</button><button data-v="timeline">Timeline</button><button data-v="chrono">Chronology</button><button data-v="lineage">Lineage</button><button data-v="graph">Graph</button>
 <span class="dim">Group by</span><select id="grp"></select>
+<span class="dim">Sort</span><select id="sortby"><option value="new">Date, newest first</option><option value="old">Date, oldest first</option><option value="cited">Most cited in corpus</option><option value="title">Title A to Z</option></select>
 <label class="dim" title="Works of this project whose extracted reference lists resolve to the work. Unknown counts are left out when a number is set.">Cited by <input id="citemin" type="number" min="0" step="1" style="width:64px"> or more corpus works</label>
 <button id="helpbtn">Help</button><!--TOGGLE--><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
 <div id="chips" hidden></div>
@@ -83,7 +85,12 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function val(w,d){if(d.src==='meta')return w[d.field]||'';const o=w[d.src];return o&&o[d.field]?o[d.field].v:'';}
 function stagesOf(w){return [...new Set(w.stages.map(s=>s.stage))];}
-const FILT={};let H=new URLSearchParams(location.hash.slice(1));let PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;let citeMin=parseInt(H.get('cite'),10)||0;
+const FILT={};let H=new URLSearchParams(location.hash.slice(1));let PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);let view=H.get('view')||'list',grp='technique',query=H.get('q')||'',sel=null;let citeMin=parseInt(H.get('cite'),10)||0;let sortBy=['new','old','cited','title'].includes(H.get('sort'))?H.get('sort'):'new';
+function wcmp(a,b){const da=a.published||'',db=b.published||'';
+ if(sortBy==='title')return a.title.localeCompare(b.title);
+ if(sortBy==='cited')return (b.cited_in_corpus||0)-(a.cited_in_corpus||0)||db.localeCompare(da);
+ if(!da!==!db)return da?-1:1;
+ return sortBy==='old'?da.localeCompare(db):db.localeCompare(da);}
 for(const f of H.getAll('f')){const i=f.indexOf(':');if(i>0){const k=f.slice(0,i);(FILT[k]=FILT[k]||new Set()).add(f.slice(i+1));}}
 const palette=['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac','#1f77b4','#d62728','#2ca02c','#9467bd'];
 const colorMap={};function colorOf(v){if(!(v in colorMap))colorMap[v]=palette[Object.keys(colorMap).length%palette.length];return colorMap[v];}
@@ -98,7 +105,7 @@ function matches(w){
 function filtered(){return W.filter(matches);}
 function drawSide(){
  let h='';
- const dims=DIMS.filter(d=>d.key!=='year').concat([{key:'stage',label:'Lifecycle stage'}]);
+ const dims=DIMS.filter(d=>d.key==='layer').concat(DIMS.filter(d=>d.key!=='year'&&d.key!=='layer'),[{key:'stage',label:'Lifecycle stage'}]);
  for(const d of dims){
   const c={};for(const w of W){const vs=d.key==='stage'?stagesOf(w):[val(w,d)];for(const v of vs)if(v)c[v]=(c[v]||0)+1;}
   const ks=Object.keys(c).sort(d.key==='layer'?lcmp:(a,b)=>c[b]-c[a]);
@@ -129,7 +136,7 @@ function layerAct(act){const box=$('#layact'),out=$('#layout'),reason=$('#layrea
  if(act==='mine-work')layerPost('/api/mine/work',{work_id:w,reason:reason||null},out);
  else layerPost('/api/layers/move',{work_id:w,layer:$('#laysel').value,reason:reason},out);}
 function mineLayer(l,el){layerPost('/api/mine/layer',{layer:l},el.nextElementSibling);}
-function layerSide(){if(!LAYERS.layers.length)return '';return '<h3>Layers</h3>'+LAYERS.layers.map(l=>{const n=Object.values(LAYERS.works).filter(x=>x.layer===l).length;return `<div>${esc(l)} <span class="n">${n}</span> <button onclick="mineLayer(this.dataset.l,this)" data-l="${esc(l)}">Mine this layer</button><span class="dim"></span></div>`;}).join('');}
+function layerSide(){if(!LAYERS.layers.length)return '';return '<details class="minebox"><summary>Mining acts (run the layer miner on a whole layer)</summary>'+LAYERS.layers.map(l=>{const n=Object.values(LAYERS.works).filter(x=>x.layer===l).length;return `<div>${esc(l)} <span class="n">${n}</span> <button onclick="mineLayer(this.dataset.l,this)" data-l="${esc(l)}">Mine this layer</button><span class="dim"></span></div>`;}).join('')+'</details>';}
 if(TOKEN)fetch(API+'/api/layers').then(r=>r.json()).then(d=>{if(d&&d.layers){LAYERS=d;drawSide();}}).catch(()=>{});
 function actionsHtml(w){const P=DATA.project||'PROJECT';const cmds=['factory --project '+P+' document read '+w.id,'factory --project '+P+' trace '+w.id];
  const row=c=>`<div style="display:flex;gap:6px;margin:3px 0"><code style="flex:1;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 6px;font-size:12px">${esc(c)}</code><button onclick="navigator.clipboard.writeText(this.dataset.c)" data-c="${esc(c)}">Copy</button></div>`;
@@ -151,10 +158,10 @@ function openWork(w){sel=w;const d=$('#detail');d.classList.add('open');
 }
 function groups(ws){const d=DIMS.find(d=>d.key===grp);const g={};
  for(const w of ws){const vs=grp==='stage'?stagesOf(w):[val(w,d)||'(none)'];for(const v of (vs.length?vs:['(none)']))(g[v]=g[v]||[]).push(w);}
- return Object.entries(g).sort((a,b)=>grp==='year'?a[0].localeCompare(b[0]):b[1].length-a[1].length);}
+ return Object.entries(g).sort((a,b)=>grp==='year'?(sortBy==='old'?a[0].localeCompare(b[0]):b[0].localeCompare(a[0])):b[1].length-a[1].length);}
 function renderList(ws){let h='<table><tr><th>Published</th><th>Title</th><th>Cited in corpus</th><th>Technique</th><th>Field</th><th>Human</th><th>Stages</th></tr>';
  for(const [g,l] of groups(ws)){h+=`<tr><td colspan="6" class="grp">${esc(g)} <span class="dim">(${l.length})</span></td></tr>`;
-  for(const w of l.sort((a,b)=>a.published.localeCompare(b.published)))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${w.cited_in_corpus==null?'—':w.cited_in_corpus}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
+  for(const w of l.sort(wcmp))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${w.cited_in_corpus==null?'—':w.cited_in_corpus}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
  $('#view').innerHTML=h+'</table>';$('#view').querySelectorAll('tr.w').forEach(r=>r.onclick=()=>openWork(W[+r.dataset.i]));}
 function renderTimeline(ws){const months=[...new Set(W.map(w=>w.month).filter(Boolean))].sort();
  const d=DIMS.find(d=>d.key===grp)||DIMS[0];
@@ -165,7 +172,7 @@ function renderTimeline(ws){const months=[...new Set(W.map(w=>w.month).filter(Bo
 function renderChrono(ws){const months=[...new Set(ws.map(w=>w.month).filter(Boolean))].sort();if(CH.newest)months.reverse();
  const by={};for(const w of ws)(by[w.month]=by[w.month]||[]).push(w);
  let h=`<div style="padding:6px 12px" class="dim">Horizontal chronology, ${CH.newest?'newest on the left, scroll right to go back in time':'oldest on the left'}. <button onclick="CH.newest=!CH.newest;render()">Reverse order</button> Dots = lifecycle stages covered; colour = primary technique.</div><div id="ch" style="height:calc(100% - 34px)">`;
- for(const m of months){const l=by[m].sort((a,b)=>CH.newest?b.published.localeCompare(a.published):a.published.localeCompare(b.published));
+ for(const m of months){const l=by[m].sort(wcmp);
   h+=`<div class="mon"><h4>${esc(m)} <span class="dim">(${l.length})</span></h4><div class="col">`+l.map(w=>{const c=w.desc.contribution;const qt=c&&c.q?c.q:(w.cls.technique_primary?w.cls.technique_primary.q:'');
    return `<div class="card" data-i="${W.indexOf(w)}"><span class="dim">${esc(w.published)}</span><b>${esc(w.title)}</b>`+
    `<span class="tag" style="border-color:${colorOf(val(w,DIMS[0]))}">${esc(val(w,DIMS[0]))}</span><span class="tag">${esc(val(w,DIMS[1]))}</span><span class="tag">${esc(val(w,DIMS[5]))}</span><div>${stagesOf(w).map(s=>`<span class="sd" title="${esc(s)}" style="background:${colorOf(s)}"></span>`).join('')}</div>`+
@@ -235,7 +242,7 @@ function render(){const ws=filtered();drawChips();$('#count').textContent=ws.len
  if(view==='list')renderList(ws);else if(view==='timeline')renderTimeline(ws);else if(view==='chrono')renderChrono(ws);else if(view==='lineage')renderLineage(ws);else renderGraph(ws);}
 document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x===b));render();});
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
-gs.onchange=()=>{grp=gs.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
+gs.onchange=()=>{grp=gs.value;render();};const sb=$('#sortby');sb.value=sortBy;sb.onchange=()=>{sortBy=sb.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
 $('#citemin').value=citeMin||'';$('#citemin').closest('label').title='Counts only works whose reference lists were extracted ('+DATA.refs_done+' of '+W.length+'); a work whose citers were never extracted shows 0 or a dash, not a known zero.';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
 addEventListener('keydown',e=>{if(e.key==='Escape'&&PANEL&&parent!==window)parent.postMessage('rfp-close',location.origin);});
 addEventListener('hashchange',()=>{H=new URLSearchParams(location.hash.slice(1));PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);const o=H.get('open');if(o&&BYS[o]!==undefined)openWork(W[BYS[o]]);});
