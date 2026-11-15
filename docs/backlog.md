@@ -833,3 +833,10 @@ Status: new · Added: 2026-11-15 · Slice: 5 · Depends on: decisions 106 to 112
 **Why:** the code is on main and passes its own tests, but nobody has run a team through it; decisions 106 to 112 are still Proposed. Pilot 2 has one human and does not exercise it (the pilot plan records that independence rules needing two humans are flagged `self-reviewed`).
 **State:** the old branch `plan-teams-a` held nothing main lacks (compared 2026-11-15: every added file is on main, ten identical, the rest in later corrected versions); tagged `archive/plan-teams-a` and deleted; the agent's scratch scripts are in `~/.cache/rf-overnight-tmp/plan-teams-a-scratchpad.tgz`.
 **Open questions:** who the first second person is and which role they hold; whether the server and hosting side (single writer, signed commits) is wanted before teams of scientists work in one project.
+
+### IDEA-85 — Quotes with Markdown escapes fail verification
+Status: new · Added: 2026-11-15 · Slice: — · Depends on: —
+**What:** `document_read` serves segment text with Markdown escapes as stored (`team\_size`), while `quote_in_element` (`document/quotes.py:51`) compares the quote with the parsed block text, where markdown-it has removed the escape (`team_size`). A quote copied verbatim from what the agent read fails as `quote-not-in-anchor`. Found in the technique-miner dry run (EvoSci, 2026-11-15); the agent had to choose a quote without the token. Fix: apply the same unescaping to the needle in `normalise_quote` (backslash before ASCII punctuation), or serve unescaped text; either way one rule on both sides.
+**Why:** verbatim quoting is the core evidence rule; agents should never have to avoid a span because of rendering.
+**Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
+**Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).

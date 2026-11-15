@@ -431,6 +431,33 @@ def _taxonomy_ref_from_json(r: _Reader, value: object) -> TaxonomyRef:
     )
 
 
+def _field_from_json(r: _Reader, raw: object, path: str) -> MinerField:
+    """One field object, its problems located under `path`."""
+    data = r.obj(raw, path, {"name", "group", "kind", "required", "description", "compared"})
+    return MinerField(
+        name=r.text(data, "name", path, None),
+        group=r.text(data, "group", path, None),
+        kind=_kind_from_json(r, data.get("kind"), f"{path}.kind"),
+        required=r.boolean(data, "required", path, False),
+        description=r.text(data, "description", path, ""),
+        compared=r.boolean(data, "compared", path, True),
+    )
+
+
+def fields_from_json(value: object) -> tuple[MinerField, ...]:
+    """The fields a JSON list describes, in the shape `spec_to_json` writes under `fields`.
+    Raises `FactoryValidationError` (dotted `fields[i]...` paths) on any shape error."""
+    r = _Reader()
+    fields: list[MinerField] = []
+    if not isinstance(value, list):
+        r.bad("fields", "must be a list")
+    else:
+        fields = [_field_from_json(r, raw, f"fields[{i}]") for i, raw in enumerate(value)]
+    if r.issues:
+        raise FactoryValidationError(r.issues)
+    return tuple(fields)
+
+
 def spec_from_json(value: object) -> MinerSpec:
     """The spec `value` describes. Raises `FactoryValidationError` (dotted fields) on any shape
     error: a missing or unknown key, a wrong type, an unknown kind or population."""
@@ -445,18 +472,7 @@ def spec_from_json(value: object) -> MinerSpec:
         r.bad("fields", "must be a list")
         raw_fields = []
     for i, raw in enumerate(raw_fields):
-        path = f"fields[{i}]"
-        data = r.obj(raw, path, {"name", "group", "kind", "required", "description", "compared"})
-        fields.append(
-            MinerField(
-                name=r.text(data, "name", path, None),
-                group=r.text(data, "group", path, None),
-                kind=_kind_from_json(r, data.get("kind"), f"{path}.kind"),
-                required=r.boolean(data, "required", path, False),
-                description=r.text(data, "description", path, ""),
-                compared=r.boolean(data, "compared", path, True),
-            )
-        )
+        fields.append(_field_from_json(r, raw, f"fields[{i}]"))
     conditionals: list[Conditional] = []
     raw_cond = top.get("conditionals", [])
     if not isinstance(raw_cond, list):

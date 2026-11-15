@@ -18,9 +18,17 @@ Invariants:
   and `row_key_rule` reads it back from a spec. `register` derives with the rule the spec declares,
   so a version registered under the category key for one single dimension stays valid and a later
   change of the default never invalidates it. `work` is refused for any other dimension choice.
+- Attributes: `derive_miner(attributes=...)` appends the given fields, in the given order, after
+  `category`, `quote` and `described_as`. An attribute is optional (never `required`), is not named
+  like a derived field, repeats no name, and is an enum, quote, number or integer field. Attributes
+  are never row key or anchor fields. With none, the spec is exactly the one without the argument.
+- A `not-stated` or `not-applicable` row carries no attribute value: each attribute is forbidden
+  (a `Conditional` like the one on `described_as`) when `category` is an absence value. Without
+  attributes no such conditional is added.
 - `absence_values` are the `not-stated` and `not-applicable` residuals of the chosen dimensions.
 - `derive_miner` raises `ValueError` for an unknown or repeated dimension, for no dimension, or
-  for a dimension zero without `layer_ids`. Meaning is checked by `validate_miner`, not here.
+  for a dimension zero without `layer_ids`, or for an invalid attribute. Meaning is checked by
+  `validate_miner`, not here.
 """
 
 from __future__ import annotations
@@ -30,9 +38,11 @@ from collections.abc import Sequence
 from factory.mining.spec import (
     EnumKind,
     EvidenceRule,
+    IntegerKind,
     MinerField,
     MinerRegime,
     MinerSpec,
+    NumberKind,
     QuoteKind,
     Selector,
     TaxonomyRef,
@@ -46,6 +56,26 @@ DERIVED_PROCEDURE = "rf-taxonomy"
 ROW_KEY_WORK = "work"
 ROW_KEY_CATEGORY = "category"
 ROW_KEY_RULES: tuple[str, ...] = (ROW_KEY_WORK, ROW_KEY_CATEGORY)
+DERIVED_FIELD_NAMES: tuple[str, ...] = ("category", "quote", "described_as")
+ATTRIBUTE_KINDS = (EnumKind, QuoteKind, NumberKind, IntegerKind)
+
+
+def _check_attributes(attributes: Sequence[MinerField]) -> None:
+    """ValueError unless `attributes` are optional enum, quote, number or integer fields with
+    distinct names that are not the derived field names."""
+    seen: set[str] = set()
+    for attribute in attributes:
+        if attribute.name in DERIVED_FIELD_NAMES:
+            raise ValueError(f"attribute {attribute.name} is named like a derived field")
+        if attribute.name in seen:
+            raise ValueError(f"attribute {attribute.name} is given twice")
+        seen.add(attribute.name)
+        if not isinstance(attribute.kind, ATTRIBUTE_KINDS):
+            raise ValueError(
+                f"attribute {attribute.name}: the kind must be enum, quote, number or integer"
+            )
+        if attribute.required:
+            raise ValueError(f"attribute {attribute.name} cannot be required")
 
 
 def row_key_rule(spec: MinerSpec) -> str | None:
@@ -98,12 +128,15 @@ def derive_miner(
     layer_ids: Sequence[str] = (),
     procedure: str = DERIVED_PROCEDURE,
     row_key: str | None = None,
+    attributes: Sequence[MinerField] = (),
 ) -> MinerSpec:
     """The classification miner of `taxonomy` over `dimensions`, named `name`. Raises
     `ValueError` when a dimension is unknown, repeated or missing, a dimension zero has no
     `layer_ids`, `row_key` is not a key rule, or `row_key` is `work` for other than one single
-    dimension. The result carries the taxonomy reference (name, version, digest, dimensions)."""
+    dimension, or an attribute is invalid (see the module invariants). The result carries the
+    taxonomy reference (name, version, digest, dimensions)."""
     chosen = _chosen(taxonomy, dimensions)
+    _check_attributes(attributes)
     if row_key is None:
         row_key = ROW_KEY_WORK if _one_single(chosen) else ROW_KEY_CATEGORY
     if row_key not in ROW_KEY_RULES:
@@ -144,13 +177,18 @@ def derive_miner(
         forbidden = tuple(values)
     if forbidden:
         conditionals.append(Conditional("described_as", "category", forbidden, "forbidden"))
+    if absent:
+        conditionals.extend(
+            Conditional(attribute.name, "category", tuple(absent), "forbidden")
+            for attribute in attributes
+        )
     digest = taxonomy_digest(taxonomy)
     ids = tuple(d.id for d in chosen)
     return MinerSpec(
         name=name,
         version=version,
         selector=selector,
-        fields=(category, quote, described_as),
+        fields=(category, quote, described_as, *attributes),
         row_key_fields=() if row_key == ROW_KEY_WORK else ("category",),
         row_anchor_fields=(),
         conditionals=tuple(conditionals),

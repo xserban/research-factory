@@ -19,7 +19,14 @@ import typer
 from factory.document.anchors import AnchorKind
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.mining.derive import derive_miner
-from factory.mining.spec import MinerRegime, Population, Selector, spec_to_json
+from factory.mining.spec import (
+    MinerField,
+    MinerRegime,
+    Population,
+    Selector,
+    fields_from_json,
+    spec_to_json,
+)
 from factory.mining.taxonomy import taxonomy_to_json
 from factory.services import taxonomies as taxonomies_service
 from factory.services import taxonomy_agreement as taxonomy_agreement_service
@@ -221,6 +228,14 @@ def taxonomy_derive_cmd(
     field_agreement_min: Annotated[
         float, typer.Option("--field-agreement-min", help="Minimum field agreement.")
     ] = _REGIME_DEFAULTS.field_agreement_min,
+    attributes: Annotated[
+        Path | None,
+        typer.Option(
+            "--attributes",
+            help="A JSON file: a list of field objects (the miner specification's `fields` "
+            "shape) appended as optional attribute fields.",
+        ),
+    ] = None,
     out: Annotated[
         Path | None, typer.Option("--out", help="Write the miner specification to this file.")
     ] = None,
@@ -248,8 +263,16 @@ def taxonomy_derive_cmd(
         elements=(AnchorKind.PARAGRAPH,),
         heading_patterns=tuple(heading or ()),
     )
+    attribute_fields: tuple[MinerField, ...] = ()
+    if attributes is not None:
+        try:
+            raw = json.loads(attributes.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _fail(f"--attributes {attributes}: cannot read JSON ({exc})", 2)
     state = _state(ctx)
     with _reporting_errors():
+        if attributes is not None:
+            attribute_fields = fields_from_json(raw)
         project = _resolve_project(state)
         spec = taxonomies_service.registered_taxonomy(project, name, version)
         if spec is None:
@@ -266,6 +289,7 @@ def taxonomy_derive_cmd(
                 selector=selector,
                 regime=regime,
                 layer_ids=layer_ids,
+                attributes=attribute_fields,
             )
         except ValueError as exc:
             raise FactoryValidationError([ValidationIssue("dimension", str(exc))]) from exc
