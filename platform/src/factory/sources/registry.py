@@ -97,6 +97,12 @@ def default_sources() -> dict[str, SourceFactory]:
             ),
             window_filter=OpenAlexSource.window_filter,
         ),
+        # Status lookups (notices) and works lookups (reference resolution, IDEA-89); it takes
+        # no search purpose, so a protocol cannot usefully plan a search of it.
+        "crossref": SourceFactory(
+            CrossrefSource.kinds,
+            lambda s, c: CrossrefSource(default_http(s), clock=c, mailto=s.mailto),
+        ),
         "arxiv": SourceFactory(
             ArxivSource.kinds,
             lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
@@ -122,14 +128,5 @@ def window_filter_sources() -> frozenset[str]:
 
 
 def status_sources() -> dict[str, SourceFactory]:
-    """The adapters a status lookup may use: the default sources plus Crossref.
-
-    Crossref takes status queries only, so it is not among `default_sources`: a protocol cannot
-    plan a search of it."""
-    return {
-        **default_sources(),
-        "crossref": SourceFactory(
-            CrossrefSource.kinds,
-            lambda s, c: CrossrefSource(default_http(s), clock=c, mailto=s.mailto),
-        ),
-    }
+    """The adapters a status lookup may use: the default sources, Crossref among them."""
+    return dict(default_sources())
