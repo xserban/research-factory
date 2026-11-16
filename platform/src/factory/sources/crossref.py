@@ -388,7 +388,9 @@ class CrossrefSource:
         total = message.get("total-results")
         if spec.limit is not None and isinstance(total, int) and total > int(params["rows"]):
             return self._lookup_result(spec, works, skipped, 1, RunStatus.PARTIAL, _TRUNCATED)
-        skip_note = f"{skipped} records skipped (untitled or duplicate within run)" if skipped else None
+        skip_note = (
+            f"{skipped} records skipped (untitled or duplicate within run)" if skipped else None
+        )
         return self._lookup_result(spec, works, skipped, 1, RunStatus.COMPLETE, skip_note)
 
     def _lookup_result(
