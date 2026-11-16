@@ -85,8 +85,10 @@ from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
 from factory.services.reference_resolve import (
+    DEFAULT_LOOKUP_SOURCE,
     Corpus,
     carried_decisions,
+    check_lookup_source,
     entry_digest,
     entry_raw,
     load_corpus,
@@ -239,11 +241,14 @@ def extract_references(
     work_ids: Sequence[str] | None,
     *,
     sources: Mapping[str, SourceFactory],
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
 ) -> ExtractSummary:
     """Extract and resolve the references of `work_ids` (default: every included work with a
     conversion and no current extraction). A malformed work id, or a named work whose current
-    extraction already uses this conversion and parser version, refuses the call, writing nothing.
+    extraction already uses this conversion and parser version, refuses the call, writing nothing,
+    as does an unknown `lookup_source` (crossref or openalex; the source of DOI and title lookups).
     """
+    check_lookup_source(lookup_source)
     if work_ids is not None:
         bad = [w for w in work_ids if re.match(WORK_ID_RE, w) is None]
         if bad:
@@ -284,7 +289,15 @@ def extract_references(
     results: list[ExtractionResult] = []
     corpus = load_corpus(project) if scope else Corpus()
     for work, conversion in scope:
-        result = _extract_one(project, actor, work, conversion, sources=sources, corpus=corpus)
+        result = _extract_one(
+            project,
+            actor,
+            work,
+            conversion,
+            sources=sources,
+            corpus=corpus,
+            lookup_source=lookup_source,
+        )
         if isinstance(result, Skipped):
             skipped.append(result)
         else:
@@ -407,6 +420,7 @@ def _extract_one(
     *,
     sources: Mapping[str, SourceFactory],
     corpus: Corpus,
+    lookup_source: str,
 ) -> ExtractionResult | Skipped:
     try:
         manifest = conversion_manifest(project, conversion.conversion_id)
@@ -423,7 +437,9 @@ def _extract_one(
     flags = list(
         dict.fromkeys([*bib.flags, *completeness_flags(bib, contexts), *bbl_flags, *field_flags])
     )
-    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
+    outcome = resolve_entries(
+        project, actor, entries, sources=sources, corpus=corpus, lookup_source=lookup_source
+    )
 
     extraction_id = project.ids.new("rex")
     extracted = ReferenceExtracted(
@@ -581,10 +597,13 @@ def _re_resolve_one(
     corpus: Corpus,
     states: Sequence[str],
     only_identifiers: bool = False,
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
 ) -> ReResolved | None:
     """Look the entries up, then write under the lock what is still retryable: a decision, or a
     new extraction, may have landed during the lookups. None when nothing is left to write."""
-    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
+    outcome = resolve_entries(
+        project, actor, entries, sources=sources, corpus=corpus, lookup_source=lookup_source
+    )
     with project.index.exclusive():
         project.index.sync()
         still = _retryable(project, [work], states, only_identifiers=only_identifiers).get(
@@ -645,6 +664,7 @@ def re_resolve(
     states: Sequence[str] = ("source-error",),
     sources: Mapping[str, SourceFactory],
     only_identifiers: bool = False,
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
 ) -> ReResolveSummary:
     """Resolve again the links of the live extractions selected by `states` (`RE_RESOLVE_STATES`:
     an unresolved reason, or a link state), in `work_ids` or everywhere.
@@ -654,8 +674,10 @@ def re_resolve(
     unknown state refuses the call, writing nothing; a named work with no live extraction is
     skipped with a reason. The entries are not parsed again: their stored fields are looked up.
     With `only_identifiers`, only entries with a DOI or arXiv id are retried, by identifier
-    lookup; entries without one are left as recorded.
+    lookup; entries without one are left as recorded. DOI and title lookups go to
+    `lookup_source` (crossref by default; openalex on request); an unknown one refuses the call.
     """
+    check_lookup_source(lookup_source)
     issues: list[ValidationIssue] = []
     if work_ids is not None:
         issues += [
@@ -699,6 +721,7 @@ def re_resolve(
                 corpus=corpus,
                 states=states,
                 only_identifiers=only_identifiers,
+                lookup_source=lookup_source,
             )
         )
         is not None
