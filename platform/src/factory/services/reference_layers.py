@@ -823,6 +823,56 @@ def record_assignments(
     return AssignResult(len(events), tuple(e.id for e in events))
 
 
+# --- layers of entries --------------------------------------------------------------------------
+
+
+def snowball_layer_ids(project: Project) -> list[str]:
+    """The ids of the current scheme's layers marked `snowball`, in scheme order. Refused when no
+    scheme is recorded."""
+    scheme = current_scheme(project)
+    if scheme is None:
+        raise _refuse("scheme", "no layer scheme is recorded")
+    return [d.id for d in scheme.layers if d.snowball]
+
+
+def entries_in_layers(project: Project, layers: Sequence[str]) -> set[tuple[str, int]]:
+    """The (extraction id, ordinal) of every live entry whose cited item holds one of `layers`
+    under the latest scheme version.
+
+    An item's layer is the researcher's label if there is one, else the latest agent layer at the
+    abstract stage, else at the title stage; assignments are found by the item's key or any of its
+    aliases. Items with no layer select nothing. Refused, reading nothing further, when no scheme
+    is recorded, `layers` is empty, or a layer id is not one of the scheme's.
+    """
+    scheme = current_scheme(project)
+    if scheme is None:
+        raise _refuse("scheme", "no layer scheme is recorded")
+    known = {d.id for d in scheme.layers}
+    issues = [
+        ValidationIssue("layers", f"{layer!r}: not a layer of scheme version {scheme.version}")
+        for layer in layers
+        if layer not in known
+    ]
+    if not layers:
+        issues.append(ValidationIssue("layers", "no layers named"))
+    if issues:
+        raise FactoryValidationError(issues)
+    wanted = set(layers)
+    v = scheme.version
+    stages = (
+        _labels(project, v),
+        _latest_layers(project, "abstract", v),
+        _latest_layers(project, "title", v),
+    )
+    selected: set[tuple[str, int]] = set()
+    for item in cited_items(project).items:
+        keys = (item.key, *item.aliases)
+        layer = next((m[k] for m in stages for k in keys if k in m), None)
+        if layer in wanted:
+            selected.update((e.extraction_id, e.ordinal) for e in item.entries)
+    return selected
+
+
 # --- status -------------------------------------------------------------------------------------
 
 

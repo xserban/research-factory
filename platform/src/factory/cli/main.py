@@ -1714,11 +1714,29 @@ def references_re_resolve_cmd(
             help="Where DOI and title lookups go: crossref (default) or openalex.",
         ),
     ] = "crossref",
+    layer: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--layer",
+            help="Retry only entries whose cited item holds this layer of the latest scheme "
+            "(a human label wins over the agent's); repeatable.",
+        ),
+    ] = None,
+    snowball_layers: Annotated[
+        bool,
+        typer.Option(
+            "--snowball-layers",
+            help="Retry only entries in the scheme's layers marked snowball.",
+        ),
+    ] = False,
 ) -> None:
     """Look up again links whose lookup failed or whose matcher changed; extraction ids stay."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        layers = [*(layer or [])]
+        if snowball_layers:
+            layers += layers_service.snowball_layer_ids(project)
         summary = references_service.re_resolve(
             project,
             project.human_actor(),
@@ -1727,6 +1745,7 @@ def references_re_resolve_cmd(
             sources=dict(default_sources()),
             only_identifiers=only_identifiers,
             lookup_source=lookup_source,
+            layers=list(dict.fromkeys(layers)) if (layer or snowball_layers) else None,
         )
     for line in render.re_resolve_summary_lines(summary):
         typer.echo(line)
