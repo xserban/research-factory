@@ -209,7 +209,7 @@ from factory.services.server_check import server_check
 from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import default_sources, status_sources
+from factory.sources.registry import default_sources, lookup_sources, status_sources
 from factory.views import render as views_render
 from factory.views.briefing_render import briefing_markdown
 
@@ -1589,6 +1589,13 @@ def references_extract_cmd(
             "that need a lookup are recorded as source-error; `references re-resolve` asks again.",
         ),
     ] = False,
+    lookup_source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help="Where DOI and title lookups go: crossref (default) or openalex.",
+        ),
+    ] = "crossref",
 ) -> None:
     """Extract and resolve the reference lists; default: every included work not yet extracted."""
     state = _state(ctx)
@@ -1598,7 +1605,8 @@ def references_extract_cmd(
             project,
             project.human_actor(),
             work,
-            sources={} if corpus_only else dict(default_sources()),
+            sources={} if corpus_only else dict(lookup_sources()),
+            lookup_source=lookup_source,
         )
     for line in render.extract_summary_lines(summary):
         typer.echo(line)
@@ -1699,18 +1707,45 @@ def references_re_resolve_cmd(
             help="Retry only entries with a DOI or arXiv id (identifier lookup, no title search).",
         ),
     ] = False,
+    lookup_source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help="Where DOI and title lookups go: crossref (default) or openalex.",
+        ),
+    ] = "crossref",
+    layer: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--layer",
+            help="Retry only entries whose cited item holds this layer of the latest scheme "
+            "(a human label wins over the agent's); repeatable.",
+        ),
+    ] = None,
+    snowball_layers: Annotated[
+        bool,
+        typer.Option(
+            "--snowball-layers",
+            help="Retry only entries in the scheme's layers marked snowball.",
+        ),
+    ] = False,
 ) -> None:
     """Look up again links whose lookup failed or whose matcher changed; extraction ids stay."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        layers = [*(layer or [])]
+        if snowball_layers:
+            layers += layers_service.snowball_layer_ids(project)
         summary = references_service.re_resolve(
             project,
             project.human_actor(),
             work_ids=work,
             states=states or ("source-error",),
-            sources=dict(default_sources()),
+            sources=dict(lookup_sources()),
             only_identifiers=only_identifiers,
+            lookup_source=lookup_source,
+            layers=list(dict.fromkeys(layers)) if (layer or snowball_layers) else None,
         )
     for line in render.re_resolve_summary_lines(summary):
         typer.echo(line)

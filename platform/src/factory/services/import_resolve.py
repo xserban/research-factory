@@ -147,6 +147,7 @@ def resolve_import(
         entries,
         sources=sources,
         corpus=load_corpus(project),
+        lookup_source="openalex",  # imports keep their source until the researcher rules otherwise
     )
     payload = ImportResolved(
         import_id=import_id,

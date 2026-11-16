@@ -32,7 +32,7 @@ def _cli(root: Path, *args: str) -> tuple[int, str, str]:
 
 def _use(monkeypatch: pytest.MonkeyPatch, lookups: Lookups) -> None:
     mapping: Mapping[str, SourceFactory] = lookups.sources()
-    monkeypatch.setattr("factory.cli.main.default_sources", lambda: mapping)
+    monkeypatch.setattr("factory.cli.main.lookup_sources", lambda: mapping)
 
 
 def _count(project: Project) -> int:
