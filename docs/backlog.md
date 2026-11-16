@@ -856,7 +856,7 @@ Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: decis
 **Open questions:** is FTS5 plus Claude's own synonyms enough to start; recorded chats or not; interface (hub page with Claude, or MCP only); how answers enter the idea graph.
 
 ### IDEA-89 — Reference lookup without OpenAlex
-Status: built, not reviewed · Added: 2026-11-16 (researcher) · Slice: 3a · Depends on: decision 130
+Status: built, reviewed (Sonnet), merged 2026-11-16 · Added: 2026-11-16 (researcher) · Slice: 3a · Depends on: decision 130
 **What:** reference resolution looks up DOIs and titles in Crossref by default; OpenAlex is an explicit option; flagged titles are never searched; re-resolve can be limited to layers (plan `2026-11-16-reference-lookup-crossref.md`).
 **Why:** the bulk re-resolve exhausted the OpenAlex key's daily quota; about 21,500 links remain `source-error`.
 **Rigour notes:** `MATCHER_VERSION` unchanged; probe lookups stay outside the corpus; each Crossref response is archived like any source page.
