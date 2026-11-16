@@ -97,12 +97,6 @@ def default_sources() -> dict[str, SourceFactory]:
             ),
             window_filter=OpenAlexSource.window_filter,
         ),
-        # Status lookups (notices) and works lookups (reference resolution, IDEA-89); it takes
-        # no search purpose, so a protocol cannot usefully plan a search of it.
-        "crossref": SourceFactory(
-            CrossrefSource.kinds,
-            lambda s, c: CrossrefSource(default_http(s), clock=c, mailto=s.mailto),
-        ),
         "arxiv": SourceFactory(
             ArxivSource.kinds,
             lambda s, c: ArxivSource(default_http(s), clock=c, mailto=s.mailto),
@@ -127,6 +121,22 @@ def window_filter_sources() -> frozenset[str]:
     return frozenset(name for name, factory in default_sources().items() if factory.window_filter)
 
 
+def _crossref_factory() -> SourceFactory:
+    return SourceFactory(
+        CrossrefSource.kinds,
+        lambda s, c: CrossrefSource(default_http(s), clock=c, mailto=s.mailto),
+    )
+
+
 def status_sources() -> dict[str, SourceFactory]:
-    """The adapters a status lookup may use: the default sources, Crossref among them."""
-    return dict(default_sources())
+    """The adapters a status lookup may use: the default sources plus Crossref.
+
+    Crossref takes no search purpose, so it is not among `default_sources`: a protocol cannot
+    plan a search of it."""
+    return {**default_sources(), "crossref": _crossref_factory()}
+
+
+def lookup_sources() -> dict[str, SourceFactory]:
+    """The adapters reference resolution may look works up in (IDEA-89): the default sources plus
+    Crossref. Like `status_sources`, never used to validate a protocol."""
+    return {**default_sources(), "crossref": _crossref_factory()}

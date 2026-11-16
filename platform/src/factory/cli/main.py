@@ -209,7 +209,7 @@ from factory.services.server_check import server_check
 from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import default_sources, status_sources
+from factory.sources.registry import default_sources, lookup_sources, status_sources
 from factory.views import render as views_render
 from factory.views.briefing_render import briefing_markdown
 
@@ -1605,7 +1605,7 @@ def references_extract_cmd(
             project,
             project.human_actor(),
             work,
-            sources={} if corpus_only else dict(default_sources()),
+            sources={} if corpus_only else dict(lookup_sources()),
             lookup_source=lookup_source,
         )
     for line in render.extract_summary_lines(summary):
@@ -1742,7 +1742,7 @@ def references_re_resolve_cmd(
             project.human_actor(),
             work_ids=work,
             states=states or ("source-error",),
-            sources=dict(default_sources()),
+            sources=dict(lookup_sources()),
             only_identifiers=only_identifiers,
             lookup_source=lookup_source,
             layers=list(dict.fromkeys(layers)) if (layer or snowball_layers) else None,

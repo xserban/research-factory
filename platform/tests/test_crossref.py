@@ -133,7 +133,7 @@ def test_crossref_takes_no_search_queries() -> None:
     source = _crossref(_fixture("crossref_updates_empty.json"))
     with pytest.raises(ValueError):
         _run(source, QuerySpec(source="crossref", kind=QueryKind.FILTER, text="updates:10.1/x"))
-    assert "crossref" in status_sources() and "crossref" in default_sources()
+    assert "crossref" in status_sources() and "crossref" not in default_sources()
 
 
 def test_crossref_bad_json_is_a_failed_explained_run() -> None:

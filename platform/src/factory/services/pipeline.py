@@ -464,7 +464,7 @@ def automatic_steps(
         extract_references,
         included_works,
     )
-    from factory.sources.registry import default_sources
+    from factory.sources.registry import lookup_sources
 
     runner.advance_after(project)
     skip = failed if failed is not None else set()
@@ -482,7 +482,7 @@ def automatic_steps(
             "listing the works for reference extraction failed for %s", project.paths.slug
         )
         return
-    sources = dict(default_sources())
+    sources = dict(lookup_sources())
     for work in todo:
         try:
             extract_references(project, project.system_actor(), [work], sources=sources)

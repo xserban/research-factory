@@ -204,7 +204,7 @@ from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import SourceFactory, default_sources
+from factory.sources.registry import SourceFactory, default_sources, lookup_sources
 
 _M = TypeVar("_M", bound=StrictModel)
 _SYSTEM_CLOCK = SystemClock()
@@ -256,6 +256,8 @@ def build_server(
     provider = stdio_provider(settings, clock) if context is None else context
     unit_cap = UnitCap.from_env(os.environ) if cap is None else cap
     adapters = dict(default_sources() if sources is None else sources)
+    # reference resolution may also look works up in Crossref (IDEA-89)
+    lookup_adapters = dict(lookup_sources() if sources is None else sources)
     session = THIS_SESSION
 
     def open_for_call(slug: str, call: CallContext) -> Project:
@@ -2573,13 +2575,13 @@ def build_server(
                     actor,
                     work_ids=work_ids,
                     states=states or ("source-error",),
-                    sources=adapters,
+                    sources=lookup_adapters,
                     only_identifiers=only_identifiers,
                     lookup_source=source,
                 )
                 return _withheld(opened, retried.model_dump(mode="json"), include_work_ids=False)
             summary = references_service.extract_references(
-                opened, actor, work_ids, sources=adapters, lookup_source=source
+                opened, actor, work_ids, sources=lookup_adapters, lookup_source=source
             )
             return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 
