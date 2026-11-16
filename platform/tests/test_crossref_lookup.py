@@ -204,3 +204,14 @@ def test_unknown_lookup_text_is_refused(text: str) -> None:
         # QuerySpec strips the text; "doi:" alone names no DOI
         _run(_source(_serving(_body([]), seen)), _spec(text))
     assert seen == []
+
+
+def test_title_markup_and_entities_are_removed() -> None:
+    item = {
+        **ARTICLE,
+        "title": ["Effect of <i>p</i>-values &amp; <jats:sub>2</jats:sub>D models"],
+        "container-title": ["Science &amp; <i>Society</i>"],
+    }
+    [work] = _run(_source(_serving(_body([item]), [])), _spec("doi:10.1000/alpha")).works
+    assert work.title == "Effect of p-values & 2D models"
+    assert work.venue is not None and work.venue.name == "Science & Society"

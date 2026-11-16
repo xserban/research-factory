@@ -15,6 +15,8 @@ the run's note, so an unmapped type is never silent.
 
 from __future__ import annotations
 
+import html
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -96,6 +98,16 @@ def _date_parts(node: Any) -> date | None:
         return None
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _plain(text: str | None) -> str | None:
+    """`text` without JATS/HTML tags and with entities decoded (Crossref titles carry both)."""
+    if text is None:
+        return None
+    return " ".join(html.unescape(_TAG.sub("", text)).split()) or None
+
+
 def _first(value: Any) -> str | None:
     """The first non-empty string of a Crossref list-of-strings field (or a bare string)."""
     if isinstance(value, str):
@@ -153,11 +165,12 @@ def parse_work(
 
     Authors carry `Given Family` display names (the family name is the last token); the year
     comes from `issued`, else the other publication dates, else `posted`; the venue is the
-    first `container-title`. Crossref's JATS abstract is not carried.
+    first `container-title`; both lose markup tags and entities. Crossref's JATS abstract is not
+    carried.
     """
     if not isinstance(item, dict):
         return None
-    title = _first(item.get("title"))
+    title = _plain(_first(item.get("title")))
     if not title:
         return None
     doi = _text(item.get("DOI"))
@@ -172,7 +185,7 @@ def parse_work(
         ],
         identifiers=Identifiers(doi=normalize_doi(doi) if doi else None),
         venue=Venue(
-            name=_first(item.get("container-title")),
+            name=_plain(_first(item.get("container-title"))),
             publisher=_text(item.get("publisher")),
             volume=_text(item.get("volume")),
             issue=_text(item.get("issue")),
