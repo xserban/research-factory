@@ -17,10 +17,14 @@ permissions:
 jobs:
   sonar:
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - if: env.SONAR_TOKEN == ''
+        run: echo "::notice::SONAR_TOKEN is not set; skipping the SonarQube Cloud scan."
+      - if: env.SONAR_TOKEN != ''
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0  # full history: needed for blame and new-code detection
-      - uses: SonarSource/sonarqube-scan-action@v5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v5
