@@ -100,6 +100,7 @@ def test_journal_article_is_parsed() -> None:
     assert work.identifiers.doi == "10.1000/alpha"
     assert [a.name for a in work.authors] == ["Ada Zhou", "The Vessel Consortium"]
     assert work.authors[0].orcid == "0000-0002-1825-0097"
+    assert work.venue is not None
     assert work.venue.name == "Medical Image Analysis" and work.venue.pages == "10-22"
     assert work.dates.published == date(2023, 6, 14) and work.cited_by_count == 30
     assert work.provenance[0].source == "crossref"
