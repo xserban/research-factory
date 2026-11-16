@@ -447,7 +447,13 @@ def _extract_one(
         dict.fromkeys([*bib.flags, *completeness_flags(bib, contexts), *bbl_flags, *field_flags])
     )
     outcome = resolve_entries(
-        project, actor, entries, sources=sources, corpus=corpus, lookup_source=lookup_source
+        project,
+        actor,
+        entries,
+        sources=sources,
+        corpus=corpus,
+        lookup_source=lookup_source,
+        skip_flagged_titles=True,
     )
 
     extraction_id = project.ids.new("rex")
@@ -611,7 +617,13 @@ def _re_resolve_one(
     """Look the entries up, then write under the lock what is still retryable: a decision, or a
     new extraction, may have landed during the lookups. None when nothing is left to write."""
     outcome = resolve_entries(
-        project, actor, entries, sources=sources, corpus=corpus, lookup_source=lookup_source
+        project,
+        actor,
+        entries,
+        sources=sources,
+        corpus=corpus,
+        lookup_source=lookup_source,
+        skip_flagged_titles=True,
     )
     with project.index.exclusive():
         project.index.sync()

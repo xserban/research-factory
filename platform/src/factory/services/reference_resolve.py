@@ -16,8 +16,9 @@ that yields a decision wins:
    stated identifier is authoritative, and a title match could only contradict it.
 2. An entry without an identifier but with a parsed title is matched against the corpus
    (`corpus-title`), then through one probe `title.search` of the lookup source per entry
-   (`lookup-title`). A title that `flags_for` flags (author list, et al., noise, too short) is
-   never searched: the entry settles as `unresolved` / `no-identifier-no-title`.
+   (`lookup-title`). In reference lists (`skip_flagged_titles`) a title that `flags_for` flags
+   (author list, et al., noise, too short) is never searched: the entry settles as
+   `unresolved` / `no-identifier-no-title`.
 3. Otherwise `unresolved`: `no-identifier-no-title`, `not-found`, or `source-error` when the
    lookup that would have answered failed (only the entries of that lookup are affected).
 A work found by a lookup takes the corpus work's id when its identifiers name one (R-26).
@@ -305,9 +306,12 @@ def resolve_entries(
     sources: Mapping[str, SourceFactory],
     corpus: Corpus,
     lookup_source: str = DEFAULT_LOOKUP_SOURCE,
+    skip_flagged_titles: bool = False,
 ) -> ResolutionOutcome:
     """Resolve `entries` by the ordered methods of the module docstring, against `corpus`
-    (`load_corpus`). DOI and title lookups go to `lookup_source` (`LOOKUP_SOURCES`).
+    (`load_corpus`). DOI and title lookups go to `lookup_source` (`LOOKUP_SOURCES`). With
+    `skip_flagged_titles` (reference lists) a title `flags_for` flags is not searched; imports leave
+    it False and search every titled entry.
 
     Lookups are probe-purpose queries, recorded as searches by `actor` and outside the corpus.
     Nothing else is written; the caller records the resolutions.
@@ -421,7 +425,7 @@ def resolve_entries(
         if match.state is not LinkState.UNRESOLVED:
             out[entry.ordinal] = _from_match(entry.ordinal, match, CORPUS_TITLE, None)
             continue
-        if flags_for(entry.title):
+        if skip_flagged_titles and flags_for(entry.title):
             # an unusable title is no title: nothing is asked of a source
             out[entry.ordinal] = _unresolved(entry.ordinal, "no-identifier-no-title", None)
             flagged += 1

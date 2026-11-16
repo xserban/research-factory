@@ -90,6 +90,7 @@ def test_flagged_title_is_not_searched(
         [_Entry(1, title)],
         sources=lookups.sources(),
         corpus=load_corpus(project),
+        skip_flagged_titles=True,
     )
     [r] = outcome.resolutions
     assert r.state is LinkState.UNRESOLVED and r.reason == "no-identifier-no-title"
@@ -101,7 +102,12 @@ def test_an_entry_without_a_title_is_not_searched_either(
 ) -> None:
     lookups = Lookups(openalex=[RECORD])
     outcome = resolve_entries(
-        project, agent, [_Entry(1, None)], sources=lookups.sources(), corpus=load_corpus(project)
+        project,
+        agent,
+        [_Entry(1, None)],
+        sources=lookups.sources(),
+        corpus=load_corpus(project),
+        skip_flagged_titles=True,
     )
     assert outcome.resolutions[0].reason == "no-identifier-no-title" and lookups.asked == []
 
@@ -124,3 +130,19 @@ def test_usable_title_is_searched_in_the_chosen_source(
         "crossref title.search:sparse kernels for tidal data",
         "openalex title.search:sparse kernels for tidal data",
     ]
+
+
+def test_import_resolution_still_searches_a_flagged_title(
+    project: Project, corpus: None, agent: Actor
+) -> None:
+    lookups = Lookups(openalex=[RECORD])
+    outcome = resolve_entries(
+        project,
+        agent,
+        [_Entry(1, "Tidal")],
+        sources=lookups.sources(),
+        corpus=load_corpus(project),
+        lookup_source="openalex",
+    )
+    assert lookups.asked == ["openalex title.search:tidal"]
+    assert outcome.flagged_titles == 0 and len(outcome.lookup_runs) == 1
