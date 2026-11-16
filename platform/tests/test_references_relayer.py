@@ -177,3 +177,32 @@ def test_cli_snowball_layers_and_summary_counts(
     assert code == 0, out
     assert "1 entries selected, 2 skipped by layer, 0 skipped by flagged title" in out
     assert lookups.asked == ["crossref doi:10.5555/jim.4"]
+
+
+def test_snowball_layers_refused_when_the_scheme_has_none(
+    project: Project,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    corpus: None,
+    agent: Actor,
+    human: Actor,
+) -> None:
+    converted_work(project, ENTRIES, BODY)
+    extract_references(project, agent, None, sources={})
+
+    def layer(i: str, ring: int) -> LayerDef:
+        return LayerDef(id=i, ring=ring, snowball=False, name=i, criteria=f"criteria of {i}")
+
+    # the event model demands a snowball layer, so a scheme without one is built unvalidated
+    scheme = LayerSchemeRecorded.model_construct(
+        version=1, layers=(layer("core", 0), layer("applied", 1))
+    )
+    monkeypatch.setattr("factory.services.reference_layers.current_scheme", lambda _p: scheme)
+    with pytest.raises(FactoryValidationError) as bad:
+        snowball_layer_ids(project)
+    assert "the scheme has no snowball layers" in bad.value.issues[0].reason
+    lookups = Lookups(openalex=RECORDS)
+    _use(monkeypatch, lookups)
+    code, _, err = _cli(settings.root, "references", "re-resolve", "--snowball-layers")
+    assert code != 0 and "the scheme has no snowball layers" in err
+    assert lookups.asked == [] and events_of_type(project, "reference.re_resolved") == []

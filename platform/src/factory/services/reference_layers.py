@@ -828,11 +828,14 @@ def record_assignments(
 
 def snowball_layer_ids(project: Project) -> list[str]:
     """The ids of the current scheme's layers marked `snowball`, in scheme order. Refused when no
-    scheme is recorded."""
+    scheme is recorded or when none of its layers is marked `snowball`."""
     scheme = current_scheme(project)
     if scheme is None:
         raise _refuse("scheme", "no layer scheme is recorded")
-    return [d.id for d in scheme.layers if d.snowball]
+    ids = [d.id for d in scheme.layers if d.snowball]
+    if not ids:
+        raise _refuse("layers", "the scheme has no snowball layers")
+    return ids
 
 
 def entries_in_layers(project: Project, layers: Sequence[str]) -> set[tuple[str, int]]:
