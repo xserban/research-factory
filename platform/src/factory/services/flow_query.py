@@ -24,6 +24,7 @@ from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.flow_ledger import LedgerRow, flow_ledger
 from factory.services.flow_trails import TrailStep, flow_trails
+from factory.services.work_ref import resolve_work_id
 
 PAGE_LIMIT: Final = 50
 TITLE_ABSTRACT: Final = "title-abstract"
@@ -165,8 +166,11 @@ def flow_works(
 
 
 def flow_trail(project: Project, work_id: str) -> list[TrailStep]:
-    """The time-ordered trail of one work (see `flow_trails`). An id that names no work of the
+    """The time-ordered trail of one work (see `flow_trails`). An NFC-equivalent spelling of an id
+    is mapped to the stored one (`work_ref`, IDEA-66). An id that names no work of the
     ledger is refused as `unknown work id`; a work with no recorded step has an empty trail."""
+    project.index.sync()
+    work_id = resolve_work_id(project, work_id)
     if work_id not in {row.work_id for row in _ledger(project)}:
         raise FactoryValidationError([ValidationIssue("work_id", "unknown work id")])
     return flow_trails(project).get(work_id, [])

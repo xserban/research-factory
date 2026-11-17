@@ -108,6 +108,26 @@ def test_flow_trail_is_the_trail_of_one_work_and_refuses_an_unknown_id(
     assert [issue.field for issue in caught.value.issues] == ["work_id"]
 
 
+def test_flow_trail_resolves_the_id_through_work_ref(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ft_world(project, agent, human, mock_sources)
+    work_id = flow_ledger(project)[0].work_id
+    seen: list[str] = []
+
+    def resolve(_project: Project, given: str, *, field: str = "work_id") -> str:
+        seen.append(given)
+        return work_id
+
+    monkeypatch.setattr("factory.services.flow_query.resolve_work_id", resolve)
+    assert flow_trail(project, "typed-spelling") == flow_trails(project).get(work_id, [])
+    assert seen == ["typed-spelling"]
+
+
 def test_cli_report_flow_trail_full_and_refused_ids(
     settings: Settings,
     project: Project,
