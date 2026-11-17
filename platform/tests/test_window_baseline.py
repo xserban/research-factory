@@ -84,8 +84,16 @@ def test_every_set_keeps_old_rule() -> None:
 
 
 def test_full_replay_request_refused_for_agent(
-    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The real adapter's filter is unverified (`OpenAlexSource.window_filter`): tell the rule.
+    monkeypatch.setattr(
+        "factory.services.protocol.window_filter_sources", lambda: frozenset({"openalex"})
+    )
     watch_ready(project, agent, human, mock_sources, plan=window_plan())
     before = len(read_all(project.paths.events_dir, project.catalog))
     with pytest.raises(FactoryValidationError) as exc:

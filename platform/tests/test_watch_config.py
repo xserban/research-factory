@@ -18,6 +18,15 @@ from tests.watch_helpers import watch_ready
 REASON = "Weekly watch settings saved from the Updates page"
 
 
+@pytest.fixture(autouse=True)
+def _openalex_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real adapter's listing-date filter is unverified (`OpenAlexSource.window_filter` is
+    False), so the readiness rule is told openalex has one, as `test_watch_window` does."""
+    monkeypatch.setattr(
+        "factory.services.protocol.window_filter_sources", lambda: frozenset({"openalex"})
+    )
+
+
 def _fields(exc: pytest.ExceptionInfo[FactoryValidationError]) -> list[str]:
     return [issue.field for issue in exc.value.issues]
 
