@@ -39,6 +39,7 @@ from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.progress import track
 from factory.sources.base import BudgetedSink, RawPage, SourceError, StatusRecord
+from factory.sources.crossref import TITLE_FILTERS
 from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
 
@@ -530,15 +531,15 @@ def query_issues(
     return _spec_issues(project, spec, sources)
 
 
-def _arxiv_filter_issues(filters: Mapping[str, str]) -> list[ValidationIssue]:
-    """arXiv takes one filter, `listed_since` (YYYY-MM-DD), as the watch does."""
+def _window_filter_issues(source: str, filters: Mapping[str, str]) -> list[ValidationIssue]:
+    """arXiv and PubMed take one filter, `listed_since` (YYYY-MM-DD), as the watch does."""
     issues: list[ValidationIssue] = []
     for key, value in filters.items():
         if key != "listed_since":
             issues.append(
                 ValidationIssue(
                     "filters",
-                    f"arxiv takes only the filter 'listed_since' (YYYY-MM-DD), not {key!r}",
+                    f"{source} takes only the filter 'listed_since' (YYYY-MM-DD), not {key!r}",
                 )
             )
             continue
@@ -546,7 +547,7 @@ def _arxiv_filter_issues(filters: Mapping[str, str]) -> list[ValidationIssue]:
             date.fromisoformat(value)
         except ValueError:
             issues.append(
-                ValidationIssue("filters", "arxiv 'listed_since' must be a date, YYYY-MM-DD")
+                ValidationIssue("filters", f"{source} 'listed_since' must be a date, YYYY-MM-DD")
             )
     return issues
 
@@ -563,8 +564,18 @@ def _spec_issues(
         issues.append(
             ValidationIssue("kind", f"{spec.source} does not take {spec.kind.value} queries")
         )
-    if spec.filters and spec.source == "arxiv":
-        issues.extend(_arxiv_filter_issues(spec.filters))
+    if spec.filters and spec.source == "pubmed" and spec.kind is QueryKind.ID_LIST:
+        issues.append(ValidationIssue("filters", "pubmed id_list queries take no filters"))
+    elif spec.filters and spec.source in ("arxiv", "pubmed"):
+        issues.extend(_window_filter_issues(spec.source, spec.filters))
+    elif spec.filters and spec.source == "crossref" and spec.purpose is QueryPurpose.PROBE:
+        extra = sorted(set(spec.filters) - TITLE_FILTERS)
+        if extra or not spec.text.startswith("title.search:"):
+            issues.append(
+                ValidationIssue(
+                    "filters", "crossref takes author on a title lookup (title.search:)"
+                )
+            )
     elif spec.filters and spec.source != "openalex":
         issues.append(ValidationIssue("filters", f"{spec.source} does not take filters"))
     if spec.source == "openalex" and any(

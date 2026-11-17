@@ -323,12 +323,12 @@ class TestFailure:
 
 
 class TestPoliteness:
-    def test_mailto_is_sent_when_configured(self) -> None:
+    def test_mailto_is_never_sent_even_when_configured(self) -> None:
         seen: list[httpx.Request] = []
         make_source(capture(seen), mailto="someone@example.org").run(
             keyword(), run_id=RUN_ID, query_id=QUERY_ID, archive=_archive
         )
-        assert seen[0].url.params["mailto"] == "someone@example.org"
+        assert "mailto" not in seen[0].url.params
 
     def test_no_mailto_is_sent_when_unconfigured(self) -> None:
         seen: list[httpx.Request] = []
@@ -508,7 +508,7 @@ class TestProbes:
             return _archive(page_)
 
         make_source(handler, mailto="ops@example.org").count(keyword(), archive=archive)
-        assert seen[0].url.params["mailto"] == "ops@example.org"
+        assert "mailto" not in seen[0].url.params
         assert "ops@example.org" not in archived[0].url
         assert "mailto" not in archived[0].url
 

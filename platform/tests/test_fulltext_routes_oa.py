@@ -273,11 +273,10 @@ def test_pinned_version_that_matches_is_retrieved() -> None:
     assert r.source_version == f"{DOI}#publishedVersion"
 
 
-def test_mailto_is_sent_to_openalex_only() -> None:
+def test_mailto_is_sent_to_no_host() -> None:
     client, log = scripted()
     OaPdfRoute(client, MAILTO).fetch(work_with(doi=DOI))
-    assert log[0].url.params.get("mailto") == MAILTO
-    assert all("mailto" not in str(request.url) for request in pdf_requests(log))
+    assert all("mailto" not in str(request.url) for request in log)
 
 
 def test_mailto_never_in_url_or_metadata() -> None:
@@ -450,7 +449,7 @@ def test_each_default_routes_call_has_its_own_lookup(
     assert _lookups(log) == 2
 
 
-def test_registry_oa_route_carries_the_settings_mailto(
+def test_registry_oa_route_does_not_send_the_settings_mailto(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     log: list[httpx.Request] = []
@@ -467,4 +466,4 @@ def test_registry_oa_route_carries_the_settings_mailto(
     r: RouteResult = routes[Route.OA_PDF].fetch(work_with(doi=DOI))
     assert r.outcome is AttemptOutcome.RETRIEVED
     openalex_requests = [q for q in log if q.url.host == "api.openalex.org"]
-    assert openalex_requests[0].url.params.get("mailto") == MAILTO
+    assert openalex_requests and "mailto" not in str(openalex_requests[0].url)

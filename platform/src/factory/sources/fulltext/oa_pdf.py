@@ -1,10 +1,10 @@
 """Open-access PDF route: the PDFs OpenAlex reports for a work, best location first.
 
 The work is looked up by DOI (its own, else the DataCite DOI arXiv assigns, `10.48550/arxiv.<id>`).
-The lookup carries the contact address (`mailto`) as OpenAlex asks; the address never reaches a
-`RouteResult` field or an archived lookup body. The version is the one OpenAlex reports for the
-location used, which makes `source_version` `<doi>#<version>`; a location that reports no version
-is `<doi>#unknown`.
+The lookup does not carry the contact address (`mailto`); it is still redacted from every
+`RouteResult` field and archived lookup body as a safeguard. The version is the one OpenAlex
+reports for the location used, which makes `source_version` `<doi>#<version>`; a location that
+reports no version is `<doi>#unknown`.
 
 Candidates are `best_oa_location`, then the `locations` entries that are open access and name a
 `pdf_url`, in OpenAlex's order, without repeated URLs and at most `_MAX_CANDIDATES`. Each is tried
@@ -106,9 +106,8 @@ class OaPdfRoute:
         doi = _doi_for(work)
         if doi is None:
             return not_retrieved(self.route, AttemptOutcome.NOT_AVAILABLE, "no-identifier")
-        params = {"mailto": self._mailto} if self._mailto else None
         try:
-            lookup = self._http.fetch(_WORKS.format(doi=quote(doi, safe="/")), params)
+            lookup = self._http.fetch(_WORKS.format(doi=quote(doi, safe="/")))
         except httpx.RequestError:
             return transport_failure(self.route)
         status = lookup.status_code

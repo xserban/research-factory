@@ -162,7 +162,7 @@ def test_interval_is_registered() -> None:
 def test_class_attributes() -> None:
     assert PubmedSource.name == "pubmed"
     assert PubmedSource.kinds == {QueryKind.KEYWORD, QueryKind.ID_LIST}
-    assert PubmedSource.window_filter is False
+    assert PubmedSource.window_filter is True
 
 
 def test_keyword_two_phase_request_shape() -> None:
@@ -183,7 +183,7 @@ def test_keyword_two_phase_request_shape() -> None:
     assert second["WebEnv"] == "WEBENV_1"
     assert second["query_key"] == "1"
     assert second["retstart"] == "0"
-    assert second["retmax"] == "200"
+    assert second["retmax"] == "2"
     assert second["retmode"] == "xml"
     assert "api_key" not in first
     assert "email" not in first
@@ -509,8 +509,8 @@ def test_key_and_address_are_sent_but_never_archived_or_noted() -> None:
     result = run(make_source(handler, mailto=mail, api_key=key), keyword(), archive=archive)
     sent = seen[0].url.params
     assert sent["api_key"] == key
-    assert sent["email"] == mail
-    assert sent["tool"] == "research-factory"
+    assert "email" not in sent
+    assert "tool" not in sent
     assert result.note is not None
     assert key not in result.note
     assert mail not in result.note
@@ -619,11 +619,23 @@ def test_probe_sample_is_top_by_relevance_with_parsed_identifiers() -> None:
     assert kind == "top"
     assert [r.title for r in records] == ["Sampled title", "A trial of things"]
     assert records[0].identifiers.pmid == "11"
-    assert records[0].identifiers.doi == "10.1000/Test.11"
+    assert records[0].identifiers.doi == "10.1000/test.11"
     assert records[0].identifiers.pmcid == "PMC11"
     search, fetch = dict(seen[0].url.params), dict(seen[1].url.params)
     assert search["sort"] == "relevance" and search["retmax"] == "2"
     assert fetch["id"] == "11,12"
+
+
+def test_probe_sample_carries_mesh_descriptors_not_keywords() -> None:
+    with_mesh = article("11").replace(
+        "<DescriptorName>Humans</DescriptorName></MeshHeading>",
+        "<DescriptorName>Humans</DescriptorName></MeshHeading>"
+        "<MeshHeading><DescriptorName>Stroke</DescriptorName>"
+        "<QualifierName>therapy</QualifierName></MeshHeading>",
+    )
+    handler, _ = router(_search_ids(["11"], count=1), efetch(with_mesh))
+    _, records = make_source(handler).sample(keyword(), 1, archive=_archive)
+    assert records[0].mesh == ("Humans", "Stroke")  # "testing" is a keyword, not MeSH
 
 
 def test_probe_sample_with_no_hits_makes_no_fetch() -> None:

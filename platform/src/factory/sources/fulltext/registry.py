@@ -16,9 +16,10 @@ from factory.sources.fulltext.arxiv import (
     arxiv_version_lookup,
 )
 from factory.sources.fulltext.base import FullTextRoute
+from factory.sources.fulltext.europepmc import EuropePmcJatsRoute
 from factory.sources.fulltext.oa_pdf import OaPdfRoute
 from factory.sources.fulltext.pmc import PmcJatsRoute
-from factory.sources.http import default_http
+from factory.sources.http import default_http, generic_http
 
 
 def default_routes(settings: Settings) -> dict[Route, FullTextRoute]:
@@ -28,6 +29,7 @@ def default_routes(settings: Settings) -> dict[Route, FullTextRoute]:
     return {
         Route.ARXIV_HTML: ArxivHtmlRoute(http, lookup=lookup),
         Route.ARXIV_SOURCE: ArxivSourceRoute(http, lookup=lookup),
-        Route.PMC_JATS: PmcJatsRoute(http, settings.mailto),
+        Route.PMC_JATS: PmcJatsRoute(http),
+        Route.EUROPEPMC_JATS: EuropePmcJatsRoute(generic_http()),
         Route.OA_PDF: OaPdfRoute(http, settings.mailto),
     }

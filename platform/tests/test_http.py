@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from factory.config import Settings
-from factory.sources.http import HOST_INTERVALS, PoliteClient, default_http, redact, user_agent
+from factory.sources.http import HOST_INTERVALS, PoliteClient, default_http, redact
 
 ARXIV = "https://export.arxiv.org/api/query"
 OPENALEX = "https://api.openalex.org/works"
@@ -218,18 +218,13 @@ def test_client_errors_are_not_retried() -> None:
     assert time.sleeps == []
 
 
-def test_user_agent_carries_mailto_only_when_configured() -> None:
-    assert user_agent(None) == "research-factory/0.2"
-    assert user_agent("someone@example.org") == "research-factory/0.2 (mailto:someone@example.org)"
-
-
 def test_default_http_sets_timeout_redirects_and_user_agent(tmp_path: Path) -> None:
     settings = Settings(root=tmp_path, user="obd", mailto="someone@example.org")
     client = default_http(settings)
     http = client._http
     assert http.timeout.read == 60.0
     assert http.follow_redirects is True
-    assert http.headers["User-Agent"] == "research-factory/0.2 (mailto:someone@example.org)"
+    assert http.headers["User-Agent"] == "research-factory"
 
 
 @pytest.mark.parametrize(

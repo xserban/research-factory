@@ -1,7 +1,8 @@
 """One polite client for every outbound request: per-host throttle, Retry-After, backoff.
 
 arXiv asks for at least 3 seconds between requests and blocks hard otherwise; OpenAlex asks
-for a polite pace and a contact address (`mailto`) in the User-Agent.
+for a polite pace. Every request carries the generic client name only: the configured contact
+address (`Settings.mailto`) is never sent to any outside host (ruling 2026-11-17).
 """
 
 import math
@@ -29,13 +30,8 @@ HOST_INTERVALS: Mapping[str, float] = {
 # the clock it is throttled on; hosts not listed keep their own.
 THROTTLE_GROUPS: Mapping[str, str] = {"export.arxiv.org": "arxiv.org"}
 
-VERSION = "0.2"
-
-
-def user_agent(mailto: str | None) -> str:
-    base = f"research-factory/{VERSION}"
-    return f"{base} (mailto:{mailto})" if mailto else base
-
+GENERIC_CLIENT = "research-factory"
+"""The client name sent to every outside host. No contact address is ever sent."""
 
 _MAILTO_FIRST = re.compile(r"\?mailto=[^&#\s'\"]*&")
 _MAILTO_PARAM = re.compile(r"[?&]mailto=[^&#\s'\"]*")
@@ -61,8 +57,8 @@ def redact(url_or_text: str, secret: str | None) -> str:
     """Remove the contact address from a URL or a message built from one.
 
     The `mailto` query parameter is dropped from any URL in the text, then every remaining
-    occurrence of `secret` (literal or percent-encoded) becomes `<mailto>`. The address is sent
-    to OpenAlex but must never reach the event log, which is committed and shared.
+    occurrence of `secret` (literal or percent-encoded) becomes `<mailto>`. The address is no
+    longer sent anywhere; this stays as a safeguard so it never reaches the event log.
     """
     text = _MAILTO_FIRST.sub("?", url_or_text)
     text = _MAILTO_PARAM.sub("", text)
@@ -158,17 +154,16 @@ class PoliteClient:
 
 
 def default_http(settings: Settings) -> PoliteClient:
+    """The shared polite client. `settings` is kept for the call sites; its contact address is
+    not used: the User-Agent is `GENERIC_CLIENT`."""
+    del settings
     http = httpx.Client(
         timeout=60.0,
         follow_redirects=True,
         event_hooks={"request": [client_hook()]},
-        headers={"User-Agent": user_agent(settings.mailto)},
+        headers={"User-Agent": GENERIC_CLIENT},
     )
     return PoliteClient(http)
-
-
-GENERIC_CLIENT = "research-factory"
-"""The client name sent to sites that are not APIs of ours. No contact address is ever sent."""
 
 
 def fetch_page(url: str) -> httpx.Response:
@@ -184,3 +179,16 @@ def fetch_page(url: str) -> httpx.Response:
         return PoliteClient(http).get(url)
     finally:
         http.close()
+
+
+def generic_http() -> PoliteClient:
+    """A persistent polite client under the generic client name: for services that did not ask for
+    a contact address. No `mailto` or key is ever sent. The outbound guard applies as for
+    `default_http`."""
+    http = httpx.Client(
+        timeout=60.0,
+        follow_redirects=True,
+        event_hooks={"request": [client_hook()]},
+        headers={"User-Agent": GENERIC_CLIENT},
+    )
+    return PoliteClient(http)
