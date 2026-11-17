@@ -24,18 +24,21 @@ Invariants:
 
 from __future__ import annotations
 
-import os
 import threading
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from html import escape as e
-from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
 from factory.errors import FactoryError
-from factory.events.reader import read_all
+from factory.model.dedup import MergeStatus
 from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
+from factory.services.feed_events import feed_events
 from factory.services.feed_page import FeedFurtherItem, FeedRankedPage, feed_ranked_page
 from factory.services.feed_read import FeedListing, FeedListItem, feed_list
 from factory.services.site import page
@@ -83,42 +86,67 @@ def _int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-_CACHE: dict[tuple[str, str], tuple[tuple[tuple[str, int, int], ...], ProjectFeed]] = {}
+CACHE_TTL_SECONDS: Final = 300.0
+_MONOTONIC: Callable[[], float] = time.monotonic  # replaced in tests
+_Signature = tuple[str, tuple[int, int], tuple[str, ...]]
+_CACHE: dict[tuple[str, str], tuple[_Signature, ProjectFeed, float]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def _signature(events_dir: Path, index_path: Path) -> tuple[tuple[str, int, int], ...]:
-    """Name, size and mtime of every event file and of the index: an appended event, or the
-    projector catching up, changes it."""
-    found: list[tuple[str, int, int]] = []
-    for root, _dirs, files in os.walk(events_dir):
-        for name in files:
-            st = os.stat(os.path.join(root, name))
-            found.append((os.path.join(root, name), st.st_size, st.st_mtime_ns))
-    if index_path.exists():
-        st = index_path.stat()
-        found.append((str(index_path), st.st_size, st.st_mtime_ns))
-    return tuple(sorted(found))
+def _corpus_fingerprint(project: Project) -> tuple[int, int]:
+    """(works stored, active dedup merges), two plain COUNT queries on the index as it stands: no
+    sync and no event read."""
+    with project.index.connect() as conn:
+        works = conn.execute(text("SELECT COUNT(*) FROM works")).scalar_one()
+        merges = conn.execute(
+            text("SELECT COUNT(*) FROM merges WHERE status = :active"),
+            {"active": MergeStatus.ACTIVE.value},
+        ).scalar_one()
+    return int(works), int(merges)
+
+
+def _signature(project: Project) -> _Signature:
+    """What the cached view depends on, and so what invalidates it:
+    - the clock's current date (`status.due` and the fetch windows are computed from it);
+    - the corpus fingerprint, the count of works and of active merges (the reference titles of
+      `nearest_reference_title` come from the corpus: an import or a work merge changes a count);
+    - the ids of the project's feed events (fetches, rankings, reactions, sends, configuration),
+      in order. The log as a whole is not part of it: on a live project other events (mining,
+      search) arrive all the time and would invalidate the view on every request. The scan reads
+      only the appended tail of each event file.
+    Not detected by the key, and bounded by `CACHE_TTL_SECONDS` instead: a change that keeps both
+    counts (a title correction, a merge reverted as another is made). A hit reads no event file
+    and runs two COUNT queries; the index is not synchronised on a hit, so a change not yet
+    applied to it is seen after the next sync of any reader or the TTL."""
+    day = project.clock.now().date().isoformat()
+    ids = tuple(e.id for e in feed_events(project.paths.events_dir, project.catalog))
+    return day, _corpus_fingerprint(project), ids
 
 
 def collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed:
-    """`_collect` kept until the project's event files change. Reading the whole log costs seconds
-    on a large project and the hub asks on every page view; the answer depends on the events alone
-    (the token and title are put in afterwards), so a changed size or mtime is the only
-    invalidation needed. A failure is not cached."""
+    """`_collect` kept while its `_signature` is unchanged and it is younger than
+    `CACHE_TTL_SECONDS` (monotonic). The token and title are put in afterwards. A failure, in the
+    view or in reading the key, is not cached. The cache holds one view per project and slug."""
     key = (str(project.paths.events_dir), slug)
     try:
-        sig = _signature(project.paths.events_dir, project.paths.index_path)
-    except OSError:
+        sig: _Signature | None = _signature(project)
+    except (OSError, FactoryError, SQLAlchemyError):
+        sig = None
+    if sig is None:
         return _collect(project, slug, title, token)
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
-    if hit is not None and hit[0] == sig:
+    if hit is not None and hit[0] == sig and _MONOTONIC() - hit[2] < CACHE_TTL_SECONDS:
         return replace(hit[1], title=title, token=token)
     fresh = _collect(project, slug, title, token)
     if fresh.error is None:
+        try:
+            # the build synchronises the index, so the fingerprint is read again afterwards
+            sig = (sig[0], _corpus_fingerprint(project), sig[2])
+        except (OSError, FactoryError, SQLAlchemyError):
+            return fresh
         with _CACHE_LOCK:
-            _CACHE[key] = (sig, fresh)
+            _CACHE[key] = (sig, fresh, _MONOTONIC())
     return fresh
 
 
@@ -134,7 +162,7 @@ def _collect(project: Project, slug: str, title: str, token: str) -> ProjectFeed
         last_fetch: LastFetch | None = None
         count: int | None = None
         refs: str | None = None
-        for event in read_all(project.paths.events_dir, project.catalog):
+        for event in feed_events(project.paths.events_dir, project.catalog):
             if event.actor.kind not in ("system", "agent"):
                 continue
             p = event.payload
