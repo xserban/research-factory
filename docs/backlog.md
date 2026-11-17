@@ -891,3 +891,35 @@ Status: new · Added: 2026-11-16 · Slice: — · Depends on: IDEA-37 (miners), 
 **Why:** a second model family could cheapen long-context reading and give an independent reader for cross-checks, if it measures up against labels we already hold.
 **Rigour notes:** the platform calls no model; held-out handling, blinding, calibration before production and the rule never to write pilot data are unchanged; thresholds and the stop rule are written before the first run; figures are computed from files and events; a promotion is scoped to job, miner, version and model identifier and lapses on a model change. Unpublished or non-open material is not sent until the tool's data-retention terms are known.
 **Open questions:** whether the tool can be an MCP client or read and write files; context window and quota units; which gold sets are large enough (the `m-layer` and `m-lifecycle` gold labels were pending on 2026-11-13); whether an importer for external result files is needed (not specified here).
+
+## CI and code quality (added 2026-11-17)
+
+Set up 2026-11-16/17 on `main` (repository public, MIT): SonarQube Cloud (`sonar.yml`, project `xserban_research-factory`, CI-based analysis), weekly report-only job (`weekly-quality.yml`: ruff, mypy, radon, xenon, vulture, pip-audit, scc), import-linter contracts (`architecture.yml`, `[tool.importlinter]` in `platform/pyproject.toml`). The items below were offered and deferred.
+
+### IDEA-91 — Triage the first SonarQube findings and close the two contract exceptions
+Status: new · Added: 2026-11-17 · Slice: — · Depends on: —
+**What:** sort the first scan's 21 bugs and 26 vulnerabilities (reliability and security rated C; maintainability A) into real, accepted and false positive, and fix the real ones; move the names that `services/site_catalog.py` and `services/run_costs.py` import from `mcp/` below `mcp`, then drop the two `ignore_imports` exceptions.
+**Why:** the ratings are only useful once known false alarms are marked; the exceptions weaken the rule that the core never imports the interfaces.
+**Rigour notes:** each "accepted" or "false positive" mark carries a one-line reason in Sonar; fixes follow TDD once testing resumes.
+**Open questions:** whether to adopt a Sonar quality gate that fails pushes on new issues.
+
+### IDEA-92 — Dependency and security hygiene in CI
+Status: new · Added: 2026-11-17 · Slice: — · Depends on: —
+**What:** Dependabot for GitHub Actions and the `uv` dependencies; CodeQL security analysis; secret scanning with push protection (repository settings); bump the actions that still target Node 20.
+**Why:** the repository is public; leaked keys and vulnerable dependencies are now visible to anyone.
+**Rigour notes:** Dependabot pull requests are reviewed like any change; none merges automatically.
+**Open questions:** weekly or monthly Dependabot cadence; whether optional extras (docling, ranker) are included.
+
+### IDEA-93 — Test and coverage job in CI
+Status: new · Added: 2026-11-17 · Slice: — · Depends on: lifting of the test pause (2026-11-05)
+**What:** run the offline suite (`not network and not slow`) on GitHub's runners, split across parallel jobs, and send the coverage report to SonarQube Cloud.
+**Why:** the full suite does not fit this machine's memory; CI checks the coverage bar (≥ 90 % for `services/` and `model/`) automatically.
+**Rigour notes:** network tests stay excluded; the untested work built during the pause runs first.
+**Open questions:** how to split the suite; whether the slow suites run on a schedule.
+
+### IDEA-94 — Quality trend file and MAP freshness check
+Status: new · Added: 2026-11-17 · Slice: — · Depends on: —
+**What:** the weekly job appends one line of metrics (date, lines of code split into source and tests, complexity, COCOMO, mypy and xenon counts) to a history file and charts it; a CI job regenerates `docs/MAP.md` with `scripts/gen_map.py` and fails if it differs. Also silence the two CI-only mypy errors (optional `torch`, `transformers`).
+**Why:** run reports expire after 90 days; MAP.md must be regenerated after every merge and is easy to forget.
+**Rigour notes:** COCOMO is "equivalent conventional effort", not real effort, and is labelled so wherever shown.
+**Open questions:** where the history file lives (repository, a data branch, or a hub page).
