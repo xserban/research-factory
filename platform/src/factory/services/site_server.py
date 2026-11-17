@@ -15,7 +15,10 @@ Invariants:
   (IDEA-50): `POST /api/mine/work` (`work_id`, optional `reason`), `POST /api/mine/layer`
   (`layer`, optional `reason`) and `POST /api/layers/move` (`work_id`, `layer`, `reason`
   required), which call `work_layers.request_mining` and `work_layers.move_layer` as the local
-  human, as the CLI does (`cli:mine request`, `cli:layers move`). Hub acts (main server, hub
+  human, as the CLI does (`cli:mine request`, `cli:layers move`). `POST /api/export/works`
+  (`work_ids`, optional `pdfs`; IDEA-87) answers a zip of the chosen works' converted Markdown and
+  manifest as the local human (`cli:export works`), read-only, body limit
+  `MAX_EXPORT_BODY`; held-out works are withheld by the service. Hub acts (main server, hub
   token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
@@ -48,6 +51,8 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -63,6 +68,7 @@ from sqlalchemy import text
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
+from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import inbox as inbox_service
 from factory.services import pipeline as pipeline_service
@@ -91,6 +97,10 @@ from factory.sources.registry import default_sources
 HOST: Final = "127.0.0.1"
 DEFAULT_PORT: Final = 8766
 MAX_BODY: Final = 16 * 1024
+MAX_EXPORT_BODY: Final = 256 * 1024
+"""The export route takes a list of work ids (up to the cap of 200 works, each id up to a few
+hundred characters), which the usual 16 KiB body limit would cut."""
+EXPORT_ROUTE: Final = "/api/export/works"
 TOKEN_HEADER: Final = "X-Factory-Token"
 _ACTION_PAGES: Final = ("feed", "queue", "explorer", "updates")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
@@ -463,6 +473,48 @@ def layers_payload(project: Project) -> dict[str, object]:
     }
 
 
+def export_works_zip(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Build the export zip of the works the page selected (`work_ids`, optional `pdfs`) as the
+    local human (`cli:export works`). Read-only: no event. On success the body names the zip
+    (`_zip`, in a fresh temporary directory the handler removes after sending it) and its
+    download name (`_name`); a refusal is a structured error and nothing is left behind."""
+    ids = body.get("work_ids")
+    pdfs = body.get("pdfs", False)
+    bad: list[ValidationIssue] = []
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        bad.append(ValidationIssue("work_ids", "must be a list of work ids"))
+    if not isinstance(pdfs, bool):
+        bad.append(ValidationIssue("pdfs", "must be true or false"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(ids, list)
+    tmp = Path(tempfile.mkdtemp(prefix="rf-export-"))
+    try:
+        authorize_command(project, project.principal, "cli:export works")
+        slug = project.paths.slug
+        name = f"{slug}-works-{date.today().isoformat()}.zip"
+        export_works_service.export_works(
+            project,
+            export_works_service.Selection(
+                export_works_service.work_ids_of(ids), "selected in the explorer"
+            ),
+            tmp / name,
+            pdfs=bool(pdfs),
+            max_works=export_works_service.MAX_WORKS,
+            max_bytes=export_works_service.MAX_BYTES,
+        )
+    except FactoryValidationError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    return 200, {"ok": True, "_zip": str(tmp / name), "_name": name}
+
+
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
@@ -474,6 +526,7 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/mine/work": mine_work,
     "/api/mine/layer": mine_layer,
     "/api/layers/move": move_layer,
+    EXPORT_ROUTE: export_works_zip,
 }
 
 
@@ -629,6 +682,19 @@ def _handler_class(
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_zip(self, path: Path, name: str) -> None:
+            """Stream `path` as a download, then remove its temporary directory."""
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(path.stat().st_size))
+                self.end_headers()
+                with path.open("rb") as handle:
+                    shutil.copyfileobj(handle, self.wfile, 1024 * 1024)
+            finally:
+                shutil.rmtree(path.parent, ignore_errors=True)
+
         def _html(self, text: str) -> None:
             body = text.encode()
             self.send_response(200)
@@ -759,7 +825,7 @@ def _handler_class(
             except ValueError:
                 self._deny(411, "length required")
                 return
-            if length < 0 or length > MAX_BODY:
+            if length < 0 or length > (MAX_EXPORT_BODY if act == EXPORT_ROUTE else MAX_BODY):
                 self._deny(413, "body too large")
                 return
             try:
@@ -781,6 +847,11 @@ def _handler_class(
                     code, payload = route(project, body)
             elif route is queue_resume:
                 code, payload = queue_resume(project, body, slot.resumer)
+            elif route is export_works_zip:
+                code, payload = export_works_zip(project, body)
+                if code == 200:
+                    self._send_zip(Path(str(payload["_zip"])), str(payload["_name"]))
+                    return
             else:
                 # no lock: `feed add` looks the paper up over the network, and each service
                 # serialises its own index work (`send` and the lookup take the index lock)
