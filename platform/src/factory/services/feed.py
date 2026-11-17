@@ -69,7 +69,6 @@ from factory.errors import (
     ValidationIssue,
 )
 from factory.events.envelope import Actor
-from factory.events.reader import read_all
 from factory.index.ranking import corpus_hash
 from factory.model.base import StrictModel
 from factory.model.feed import (
@@ -92,6 +91,7 @@ from factory.model.work_ids import normalize_arxiv
 from factory.services.context import Project, list_projects, open_project
 from factory.services.core_works import core_marks, forward_core_sources, seed_core_works
 from factory.services.dedup_incremental import held_matches
+from factory.services.feed_events import feed_events
 from factory.services.inbox import LinkInput, _refuse_actor, link_event, resolve_links
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
 from factory.services.ranking_model import Embedder
@@ -898,7 +898,7 @@ def feed_run_all(
 def ranking_order(project: Project, ranking_id: str) -> list[tuple[str, int, float]]:
     """`(entry_id, rank, score)` of the ranking's order blob, in blob order; empty when the event
     or the blob cannot be read or an item is malformed."""
-    for event in read_all(project.paths.events_dir, project.catalog):
+    for event in feed_events(project.paths.events_dir, project.catalog):
         if event.type != "feed.ranked" or event.actor.kind not in ("system", "agent"):
             continue
         if event.payload.get("ranking_id") != ranking_id:

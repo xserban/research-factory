@@ -25,9 +25,9 @@ from html import escape
 from pathlib import Path
 
 from factory.errors import FactoryError
-from factory.events.reader import read_all
 from factory.services.context import Project
 from factory.services.feed import FeedStatus, feed_status
+from factory.services.feed_events import feed_events
 from factory.services.feed_read import FeedListItem, feed_list
 
 FEED_CSS = (
@@ -235,7 +235,7 @@ def _entry_records(project: Project) -> dict[str, Mapping[str, object]]:
     """The record of each entry from the first valid fetch that saw it (events in id order). An
     unreadable blob or a record that is not an object contributes nothing."""
     found: dict[str, Mapping[str, object]] = {}
-    for event in read_all(project.paths.events_dir, project.catalog):
+    for event in feed_events(project.paths.events_dir, project.catalog):
         if event.type != "feed.fetched" or event.actor.kind not in ("system", "agent"):
             continue
         ref = event.payload.get("entries_blob")
