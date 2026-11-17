@@ -5,6 +5,8 @@ and the feed events are read from the files without parsing the rest of the log.
 from __future__ import annotations
 
 import dataclasses
+import logging
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -18,6 +20,9 @@ from tests.test_site_feed import _ranked, _world, stub_titles  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def _fresh() -> None:
+    feed._CACHE.clear()
+    feed_events.clear()
+    yield  # type: ignore[misc]
     feed._CACHE.clear()
     feed_events.clear()
 
@@ -131,3 +136,148 @@ def test_an_error_is_not_cached(project: Project, monkeypatch: pytest.MonkeyPatc
     feed.collect(project, "s", "T", "t")
     feed.collect(project, "s", "T", "t")
     assert len(calls) == 2
+
+
+def _count_collects(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls: list[int] = []
+    orig = feed._collect
+
+    def counting(*a: Any) -> Any:
+        calls.append(1)
+        return orig(*a)
+
+    monkeypatch.setattr(feed, "_collect", counting)
+    return calls
+
+
+def test_a_new_day_invalidates(
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project)
+    feed.collect(project, "s", "T", "t")
+    calls = _count_collects(monkeypatch)
+    feed.collect(project, "s", "T", "t")
+    assert calls == []
+    project.clock.advance(timedelta(days=1))  # type: ignore[attr-defined]
+    feed.collect(project, "s", "T", "t")
+    assert calls == [1]
+
+
+def _bump_counts(project: Project, monkeypatch: pytest.MonkeyPatch, **counts: int) -> None:
+    """Stand in for an import or a merge: what the fingerprint reads changes."""
+    orig = feed._corpus_fingerprint
+
+    def bumped(p: Project) -> tuple[int, int]:
+        works, merges = orig(p)
+        return works + counts.get("works", 0), merges + counts.get("merges", 0)
+
+    monkeypatch.setattr(feed, "_corpus_fingerprint", bumped)
+
+
+def test_the_corpus_fingerprint_counts_works_and_active_merges(project: Project) -> None:
+    _world(project)
+    project.index.sync()
+    works, merges = feed._corpus_fingerprint(project)
+    assert merges == 0 and works >= 0
+
+
+def test_a_changed_corpus_fingerprint_invalidates(
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project)
+    feed.collect(project, "s", "T", "t")
+    calls = _count_collects(monkeypatch)
+    _bump_counts(project, monkeypatch, merges=1)
+    feed.collect(project, "s", "T", "t")
+    assert calls == [1]
+    feed.collect(project, "s", "T", "t")
+    assert calls == [1]
+    _bump_counts(project, monkeypatch, works=1)
+    feed.collect(project, "s", "T", "t")
+    assert calls == [1, 1]
+
+
+def test_a_hit_runs_only_the_two_count_queries(
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project)
+    feed.collect(project, "s", "T", "t")
+    calls = _spy(monkeypatch)
+    sqls: list[str] = []
+    from sqlalchemy import event as sa_event
+
+    engine = project.index._engine  # type: ignore[attr-defined]
+    sa_event.listen(engine, "before_cursor_execute", lambda c, cur, st, *a: sqls.append(st))
+    feed.collect(project, "s", "T", "t")
+    assert calls == []
+    assert len(sqls) == 2 and all("COUNT(*)" in q for q in sqls)
+
+
+def test_the_ttl_expires_an_entry(
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project)
+    now = [1000.0]
+    monkeypatch.setattr(feed, "_MONOTONIC", lambda: now[0])
+    feed.collect(project, "s", "T", "t")
+    calls = _count_collects(monkeypatch)
+    now[0] += feed.CACHE_TTL_SECONDS - 1
+    feed.collect(project, "s", "T", "t")
+    assert calls == []
+    now[0] += 2
+    feed.collect(project, "s", "T", "t")
+    assert calls == [1]
+
+
+def test_an_unrelated_event_append_keeps_the_entry_and_the_view_equals_a_fresh_one(
+    project: Project,
+    stub_titles: None,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _world(project)
+    first = feed.collect(project, "s", "T", "t")
+    feed._CACHE.clear()
+    feed_events.clear()
+    assert feed.collect(project, "s", "T", "t") == first  # the cached view equals a fresh one
+    files = sorted(project.paths.events_dir.glob("*/*.jsonl"))
+    with files[0].open("ab") as f:
+        f.write(b'{"type":"other.thing"}\n')
+    calls = _count_collects(monkeypatch)
+    again = feed.collect(project, "s", "T", "t")
+    assert calls == [] and again == first
+
+
+def test_feed_events_clear_and_evict_a_vanished_directory(project: Project, tmp_path: Any) -> None:
+    _world(project)
+    feed_events.feed_events(project.paths.events_dir, project.catalog)
+    ghost = tmp_path / "ghost"
+    feed_events._SEEN[str(ghost)] = {}
+    feed_events.feed_events(project.paths.events_dir, project.catalog)
+    assert str(ghost) not in feed_events._SEEN
+    assert str(project.paths.events_dir) in feed_events._SEEN
+    feed_events.clear()
+    assert feed_events._SEEN == {}
+
+
+def test_corrupt_feed_lines_are_counted_and_logged_once(
+    project: Project, caplog: pytest.LogCaptureFixture
+) -> None:
+    _world(project)
+    files = sorted(project.paths.events_dir.glob("*/*.jsonl"))
+    with files[0].open("ab") as f:
+        f.write(b'{"type":"feed.broken", garbage}\n')
+        f.write(b'{"type":"feed.unknown_kind"}\n')
+    with caplog.at_level(logging.WARNING, logger="factory.services.feed_events"):
+        got = feed_events.feed_events(project.paths.events_dir, project.catalog)
+        feed_events.feed_events(project.paths.events_dir, project.catalog)
+    assert got
+    msgs = [r for r in caplog.records if r.name == "factory.services.feed_events"]
+    assert len(msgs) == 1 and "2" in msgs[0].getMessage()
