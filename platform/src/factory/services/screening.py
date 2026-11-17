@@ -897,7 +897,9 @@ def screen_record(
     with project.index.exclusive():
         project.index.sync()
         human = actor.kind == "human"
-        if actor.kind != "agent" and not (human and passes.human_joined_screening(project, actor.session)):
+        if actor.kind != "agent" and not (
+            human and passes.human_joined_screening(project, actor.session)
+        ):
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent screener records a decision")]
             )

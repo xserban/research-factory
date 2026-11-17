@@ -68,7 +68,14 @@ def test_the_project_sidebar_groups_by_what_the_reader_is_doing() -> None:
     assert list(by_group) == ["Overview", "Sources", "Corpus", "Mining", "Findings"]
     assert by_group["Overview"] == ["dashboard", "prisma", "flow", "documents", "costs"]
     assert by_group["Sources"] == ["search", "feed", "acquisition", "conversion", "queue"]
-    assert by_group["Corpus"] == ["explorer", "bibliography", "citations", "layers", "wiki", "updates"]
+    assert by_group["Corpus"] == [
+        "explorer",
+        "bibliography",
+        "citations",
+        "layers",
+        "wiki",
+        "updates",
+    ]
     assert by_group["Mining"] == ["miners", "agreement", "steps", "lifecycle", "runs"]
     assert by_group["Findings"] == ["results", "synthesis", "taxonomy"]
     # every product is in exactly one group

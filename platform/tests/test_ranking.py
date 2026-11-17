@@ -157,6 +157,7 @@ def test_a_malformed_ranking_event_changes_nothing_and_rebuild_agrees(
         project.events.make("ranking.computed", forged, project.system_actor()),
         project.events.make("ranking.computed", malformed, project.system_actor()),
     ]
+
     def folded() -> tuple[object, ...]:
         from sqlalchemy import text
 
