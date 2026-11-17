@@ -147,7 +147,15 @@ def test_progress_writes_no_event_and_stays_out_of_the_index(project: Project) -
 
 
 def test_dashboard_state_has_a_progress_panel(project: Project) -> None:
-    with track(project, "ranking", "SPECTER2 embedding", unit="records", total=10) as reporter:
+    ticks = iter([0.0, 5.0])  # an update after the write throttle (one second) is written
+    with Reporter(
+        project.paths.dir / progress_service.PROGRESS_DIR,
+        "ranking",
+        "SPECTER2 embedding",
+        unit="records",
+        total=10,
+        monotonic=lambda: next(ticks),
+    ) as reporter:
         reporter.update(4)
         state = dashboard_service.dashboard_state(project)
     panel = state["progress"]
