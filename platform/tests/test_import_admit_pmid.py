@@ -45,3 +45,13 @@ def test_precedence_is_openalex_then_pmid_then_arxiv_then_doi() -> None:
     assert _route(_work(pmid="2", arxiv="2001.00001", doi="10.1/x")) == ("pmid", "2")
     assert _route(_work(arxiv="2001.00001", doi="10.1/x")) == ("arxiv", "2001.00001")
     assert _route(_work(doi="10.1/x")) == ("doi", "10.1/x")
+
+
+def test_a_pmid_is_skipped_when_pubmed_is_not_a_registered_source() -> None:
+    """An admission that went by DOI or arXiv before PMID routing is not refused for an unknown
+    source: the next identifier names the work."""
+    without = {"openalex", "arxiv"}
+    assert _route(_work(pmid="2", doi="10.1/x"), without) == ("doi", "10.1/x")
+    assert _route(_work(pmid="2", arxiv="2001.00001"), without) == ("arxiv", "2001.00001")
+    assert _route(_work(pmid="2"), without) is None  # the caller falls back to the import list
+    assert _route(_work(pmid="2", doi="10.1/x"), {"pubmed"}) == ("pmid", "2")
