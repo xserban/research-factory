@@ -2,7 +2,11 @@
 
 Works lookups (PROBE purpose) serve reference resolution without OpenAlex: a FILTER query
 `doi:<a>|<b>|...` is sent as `/works?filter=doi:a,doi:b`, and `title.search:<query>` as
-`/works?query.bibliographic=<query>`. Each response is one archived page, parsed into `Work`s.
+`/works?query.bibliographic=<query>`, with `query.author=<surname>` when the spec's
+`filters["author"]` is given and `filter=type:...` limiting it to paper-like types (repeated
+`type:` values are ORed by Crossref). A year filter is refused: a preprint's
+and its published year differ, so the matcher scores years instead. Each response is one
+archived page, parsed into `Work`s.
 
 Crossref records which later items declare themselves a retraction, correction, withdrawal or
 expression of concern of a DOI (`update-to`). The query is a `filter` expression such as
@@ -54,6 +58,28 @@ _ROWS = 1000
 _TITLE_ROWS = 10  # rows of a title lookup when the query states no limit
 _DOI_PREFIX = "doi:"
 _TITLE_PREFIX = "title.search:"
+# Every Crossref work type a reference can cite. Excluded as noise: peer-review, dataset,
+# component, grant (and containers such as journal, journal-issue, book-series).
+_TITLE_TYPES = (
+    "journal-article",
+    "proceedings-article",
+    "posted-content",
+    "book-chapter",
+    "book-section",
+    "book-part",
+    "book",
+    "monograph",
+    "edited-book",
+    "reference-book",
+    "reference-entry",
+    "dissertation",
+    "proceedings",
+    "report",
+    "report-series",
+    "standard",
+    "other",
+)
+TITLE_FILTERS = frozenset({"author"})
 _TRUNCATED = "truncated by caller-supplied limit"
 
 # Crossref `type` -> our vocabulary. Unmapped types become OTHER rather than guessing.
@@ -63,6 +89,8 @@ _TYPES: dict[str, WorkType] = {
     "book-chapter": WorkType.BOOK_CHAPTER,
     "book": WorkType.BOOK_CHAPTER,
     "monograph": WorkType.BOOK_CHAPTER,
+    "edited-book": WorkType.BOOK_CHAPTER,
+    "reference-book": WorkType.BOOK_CHAPTER,
     "dissertation": WorkType.THESIS,
     "report": WorkType.TECH_REPORT,
     "standard": WorkType.STANDARD,
@@ -346,7 +374,8 @@ class CrossrefSource:
         """A works lookup: one request, its page archived before it is parsed.
 
         `doi:a|b` asks for exactly those DOIs (rows = the number asked); `title.search:q` asks
-        for the best matches of `q` (rows = the query's limit, else 10). A lookup is never
+        for the best matches of `q` among paper-like types, narrowed by the author surname in
+        `filters["author"]` (rows = the query's limit, else 10). A lookup is never
         paged: more matches than a stated limit is a truncation, noted as such.
         """
         text = spec.text
@@ -363,7 +392,17 @@ class CrossrefSource:
             query = text[len(_TITLE_PREFIX) :].strip()
             if not query:
                 raise ValueError("crossref title lookup names no title")
-            params = {"query.bibliographic": query, "rows": spec.limit or _TITLE_ROWS}
+            unknown = sorted(set(spec.filters) - TITLE_FILTERS)
+            if unknown:
+                raise ValueError(f"crossref title lookup takes no filter {unknown[0]}")
+            params = {
+                "query.bibliographic": query,
+                "filter": ",".join(f"type:{t}" for t in _TITLE_TYPES),
+                "rows": spec.limit or _TITLE_ROWS,
+            }
+            author = spec.filters.get("author", "").strip()
+            if author:
+                params["query.author"] = author
         else:
             raise ValueError("crossref lookups are `doi:<a>|<b>` or `title.search:<query>`")
         if budget_spent(archive):

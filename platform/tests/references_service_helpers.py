@@ -89,6 +89,8 @@ class Lookups:
     fail_crossref: bool = False
     fail_arxiv: bool = False
     asked: list[str] = field(default_factory=list)
+    crossref_params: list[dict[str, str]] = field(default_factory=list)
+    """Query parameters of every Crossref request, in order."""
     citing: list[dict[str, Any]] = field(default_factory=list)
     """Answers to every `cites:` filter (a forward chase)."""
     cited: list[dict[str, Any]] = field(default_factory=list)
@@ -99,6 +101,7 @@ class Lookups:
 
         def crossref(request: httpx.Request) -> httpx.Response:
             params = request.url.params
+            self.crossref_params.append(dict(params))
             if "query.bibliographic" in params:
                 expression = f"title.search:{params['query.bibliographic']}"
             else:
