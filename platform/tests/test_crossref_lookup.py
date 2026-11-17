@@ -148,10 +148,12 @@ def test_title_query_uses_bibliographic_search_with_the_limit_as_rows() -> None:
 def test_title_query_is_limited_to_paper_types() -> None:
     seen: list[httpx.Request] = []
     _run(_source(_serving(_body([ARTICLE]), seen)), _spec("title.search:vessels"))
-    assert seen[0].url.params["filter"] == (
-        "type:journal-article,type:proceedings-article,type:posted-content,"
-        "type:book-chapter,type:report"
-    )
+    types = seen[0].url.params["filter"].split(",")
+    assert all(t.startswith("type:") for t in types)
+    allowed = {t.removeprefix("type:") for t in types}
+    assert {"journal-article", "book", "monograph", "edited-book", "dissertation"} <= allowed
+    assert {"proceedings", "report-series", "standard", "other"} <= allowed
+    assert not allowed & {"peer-review", "dataset", "component", "grant"}
 
 
 def test_title_query_sends_the_author_surname_and_never_the_year() -> None:

@@ -58,12 +58,26 @@ _ROWS = 1000
 _TITLE_ROWS = 10  # rows of a title lookup when the query states no limit
 _DOI_PREFIX = "doi:"
 _TITLE_PREFIX = "title.search:"
+# Every Crossref work type a reference can cite. Excluded as noise: peer-review, dataset,
+# component, grant (and containers such as journal, journal-issue, book-series).
 _TITLE_TYPES = (
     "journal-article",
     "proceedings-article",
     "posted-content",
     "book-chapter",
+    "book-section",
+    "book-part",
+    "book",
+    "monograph",
+    "edited-book",
+    "reference-book",
+    "reference-entry",
+    "dissertation",
+    "proceedings",
     "report",
+    "report-series",
+    "standard",
+    "other",
 )
 TITLE_FILTERS = frozenset({"author", "year"})
 _TRUNCATED = "truncated by caller-supplied limit"
@@ -75,6 +89,8 @@ _TYPES: dict[str, WorkType] = {
     "book-chapter": WorkType.BOOK_CHAPTER,
     "book": WorkType.BOOK_CHAPTER,
     "monograph": WorkType.BOOK_CHAPTER,
+    "edited-book": WorkType.BOOK_CHAPTER,
+    "reference-book": WorkType.BOOK_CHAPTER,
     "dissertation": WorkType.THESIS,
     "report": WorkType.TECH_REPORT,
     "standard": WorkType.STANDARD,
