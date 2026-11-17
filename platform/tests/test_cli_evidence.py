@@ -28,7 +28,7 @@ def report(monkeypatch: pytest.MonkeyPatch) -> EvidenceReport:
     monkeypatch.setattr(
         cli_main.evidence_report_service,
         "evidence_report",
-        lambda _p, expect=(), include_notice_affected=False: full,
+        lambda _p, expect=(), include_notice_affected=False, without_grey=False: full,
     )
     return full
 
