@@ -897,7 +897,7 @@ def screen_record(
     with project.index.exclusive():
         project.index.sync()
         human = actor.kind == "human"
-        if actor.kind != "agent" and not (human and _is_human_session(project, actor.session)):
+        if actor.kind != "agent" and not (human and passes.human_joined_screening(project, actor.session)):
             raise FactoryValidationError(
                 [ValidationIssue("actor", "only an agent screener records a decision")]
             )
@@ -1546,15 +1546,6 @@ def _joined_pass(project: Project, session: str, stage: ScreeningStage = TA) -> 
             {"session": session, "stage": stage.value},
         ).one_or_none()
     return None if row is None else PassLabel(str(row[0]))
-
-
-def _is_human_session(project: Project, session: str) -> bool:
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM pass_sessions WHERE session = :s AND actor_kind = 'human' LIMIT 1"),
-            {"s": session},
-        ).first()
-    return row is not None
 
 
 def _other(label: PassLabel) -> PassLabel:

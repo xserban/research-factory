@@ -674,19 +674,9 @@ def _may_add_miner(
     for other, other_label in joined:
         if not isinstance(other, MinerScope) or other_label is not label:
             return False
-    if _calibration_joined(project, actor.session):
+    if passes.calibration_joined(project, actor.session):
         return False
     return not any(actor.session in calibration_sessions_of(project, o) for o, _ in joined)
-
-
-def _calibration_joined(project: Project, session: str) -> bool:
-    """Whether any join of the session was made for a calibration pass."""
-    with project.index.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM extraction_sessions WHERE session = :s AND calibration = 1"),
-            {"s": session},
-        ).first()
-    return row is not None
 
 
 def _pack_tag(scope: ScopeKey) -> str | None:

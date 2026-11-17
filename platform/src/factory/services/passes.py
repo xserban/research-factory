@@ -88,6 +88,33 @@ def is_pass_session(
     return False
 
 
+def human_joined_screening(project: Project, session: str) -> bool:
+    """Whether `session` joined a screening pass as a human. Reads the index as it stands."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT session FROM pass_sessions WHERE session = :s AND actor_kind = 'human' "
+                "LIMIT 1"
+            ),
+            {"s": session},
+        ).first()
+    return row is not None
+
+
+def calibration_joined(project: Project, session: str) -> bool:
+    """Whether any extraction join of `session` was made for a calibration pass. Reads the index
+    as it stands."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT session FROM extraction_sessions WHERE session = :s AND calibration = 1 "
+                "LIMIT 1"
+            ),
+            {"s": session},
+        ).first()
+    return row is not None
+
+
 def pass_users(project: Project, label: PassLabel, stage: ScreeningStage = TA) -> frozenset[str]:
     """U(P): the humans of pass `label` of `stage` and the principals of its agents."""
     project.index.sync()
