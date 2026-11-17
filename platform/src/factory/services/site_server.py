@@ -18,7 +18,7 @@ Invariants:
   human, as the CLI does (`cli:mine request`, `cli:layers move`). `POST /api/export/works`
   (`work_ids`, optional `pdfs`; IDEA-87) answers a zip of the chosen works' converted Markdown and
   manifest as the local human (`cli:export works`), read-only, body limit
-  `MAX_EXPORT_BODY`; held-out works are withheld by the service. Hub acts (main server, hub
+  `MAX_EXPORT_BODY`; nothing is withheld. Hub acts (main server, hub
   token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
@@ -89,7 +89,7 @@ from factory.services import (
 )
 from factory.services import snapshots as snapshots_service
 from factory.services import watch_config as watch_config_service
-from factory.services.access import authorize_command
+from factory.services.access import authorize_command, authorize_export_works
 from factory.services.context import Project
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
@@ -475,22 +475,34 @@ def layers_payload(project: Project) -> dict[str, object]:
 
 def export_works_zip(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
     """Build the export zip of the works the page selected (`work_ids`, optional `pdfs`) as the
-    local human (`cli:export works`). Read-only: no event. On success the body names the zip
+    local human (`cli:export works`); `pdfs: true` also needs `confirm: true` and the human
+    confirmation permission (licensed files). Read-only: no event. On success the body names the zip
     (`_zip`, in a fresh temporary directory the handler removes after sending it) and its
     download name (`_name`); a refusal is a structured error and nothing is left behind."""
     ids = body.get("work_ids")
     pdfs = body.get("pdfs", False)
+    confirm = body.get("confirm", False)
     bad: list[ValidationIssue] = []
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         bad.append(ValidationIssue("work_ids", "must be a list of work ids"))
     if not isinstance(pdfs, bool):
         bad.append(ValidationIssue("pdfs", "must be true or false"))
+    if not isinstance(confirm, bool):
+        bad.append(ValidationIssue("confirm", "must be true or false"))
     if bad:
         return 400, _issues(*bad)
     assert isinstance(ids, list)
-    tmp = Path(tempfile.mkdtemp(prefix="rf-export-"))
     try:
-        authorize_command(project, project.principal, "cli:export works")
+        authorize_export_works(project, project.principal, pdfs=bool(pdfs), confirm=bool(confirm))
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    # beside the project, not in /tmp (a small tmpfs that is often full)
+    scratch = project.paths.dir / "ops" / "export-tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="rf-export-", dir=scratch))
+    try:
         slug = project.paths.slug
         name = f"{slug}-works-{date.today().isoformat()}.zip"
         export_works_service.export_works(

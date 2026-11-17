@@ -1,6 +1,6 @@
 """`export_works` (IDEA-87): the converted Markdown of chosen works as files for a notebook tool,
-each with a traceability header, an exact manifest, skipped works with reasons, held-out works
-withheld, and caps. Read-only: no event is written."""
+each with a traceability header, an exact manifest, skipped works with reasons, no withholding
+(decisions 43 and 81), and caps. Read-only: no event is written."""
 
 from __future__ import annotations
 
@@ -158,19 +158,48 @@ def test_a_stored_pdf_is_copied_when_asked(project: Project, corpus: None, tmp_p
     assert pdf  # the fixture bytes are not special
 
 
-def test_a_held_out_work_is_skipped_as_withheld_and_never_named(
+def test_a_held_out_work_is_exported_like_any_and_nothing_mentions_it(
     project: Project, two: tuple[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     done = two[0]
     monkeypatch.setattr(withholding, "held_out_tokens", lambda p, include_work_ids=True: {done})
     out = tmp_path / "out"
     summary = ew.export_works(project, ew.Selection((done,), "ids"), out)
-    assert summary.exported == 0 and summary.withheld == 1
+    assert summary.exported == 1 and not hasattr(summary, "withheld")
     manifest = _manifest(out)
-    assert manifest["works"] == [] and manifest["withheld"] == 1
-    assert done not in json.dumps(manifest)
-    assert done not in (out / "MANIFEST.md").read_text(encoding="utf-8")
-    assert not list((out / "markdown").glob("*"))
+    assert [e["work_id"] for e in manifest["works"]] == [done]
+    assert "withheld" not in manifest
+    text = json.dumps(manifest) + (out / "MANIFEST.md").read_text(encoding="utf-8")
+    assert "held-out" not in text.lower() and "withheld" not in text.lower()
+    assert list((out / "markdown").glob("*.md"))
+
+
+def test_a_damaged_pdf_blob_is_not_exported_and_the_hash_is_of_the_bytes_read(
+    project: Project, corpus: None, tmp_path: Path
+) -> None:
+    work = _promoted(project)[0]
+    _fetch_pdf(project, work, MD)
+    _convert(project)
+    ok = tmp_path / "ok"
+    ew.export_works(project, ew.Selection((work,), "ids"), ok, pdfs=True)
+    [entry] = _manifest(ok)["works"]
+    copied = (ok / entry["pdf"]["file"]).read_bytes()
+    assert entry["pdf"]["sha256"] == hashlib.sha256(copied).hexdigest()
+    ref = "sha256:" + entry["pdf"]["sha256"]
+    project.library.path(ref).write_bytes(b"tampered")
+    bad = tmp_path / "bad"
+    ew.export_works(project, ew.Selection((work,), "ids"), bad, pdfs=True)
+    assert _manifest(bad)["works"][0]["pdf"] is None
+    assert not list((bad / "pdf").glob("*"))
+
+
+def test_the_id_part_of_a_file_name_is_lower_case(
+    project: Project, two: tuple[str, str], tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    ew.export_works(project, ew.Selection((two[0],), "ids"), out)
+    name = Path(_manifest(out)["works"][0]["file"]).stem
+    assert name.split("--", 1)[1] == ew.slug_of_id(two[0]).lower()
 
 
 def test_the_layer_selection_takes_the_works_of_that_layer(

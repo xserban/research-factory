@@ -15,8 +15,14 @@ Invariants:
   conversion id and the Markdown hash so an answer read elsewhere can be traced back by hand.
 - A work without a converted document, an unknown id and a work whose blob is missing are listed in
   the manifest as skipped with a reason; none is dropped silently.
-- A held-out seed's work is never exported (R-20). It is counted as `withheld` and named nowhere:
-  neither its id nor any identifier is written to the manifest or the files.
+- Nothing is withheld and nothing says anything about held-out seeds (decisions 43 and 81): a
+  seed's work is exported like any work, because the researcher's own file exports are complete
+  and a withheld count would be an oracle. R-20 covers the probe, criteria and worked examples,
+  not file exports (decision 123: work-naming agent tools use `include_work_ids=False`).
+- The PDF is read from the library and checked by its sha256 as the Markdown is; the manifest
+  carries the hash of the bytes actually copied.
+- File stems are unique case-insensitively, so ids differing only in case cannot collide on a
+  case-insensitive filesystem.
 - The selection is capped in works and in total bytes (defaults `MAX_WORKS`, `MAX_BYTES`).
 - The manifest states that answers produced in the other tool are not records.
 """
@@ -39,7 +45,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
-from factory.services import document_read, withholding, work_layers
+from factory.services import document_read, work_layers
 from factory.services.context import Project
 from factory.services.conversions import conversion_of
 
@@ -67,7 +73,6 @@ class ExportSummary:
     out: Path
     exported: int
     skipped: int
-    withheld: int
     bytes: int
     without_pdf: int = 0
     works: tuple[str, ...] = field(default=())
@@ -105,24 +110,6 @@ def select_by_layer(project: Project, layer: str) -> Selection:
 
 def _refuse(field_: str, reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field_, reason)])
-
-
-def _withheld(project: Project, work_id: str, data: dict[str, Any] | None) -> bool:
-    tokens = {t.lower() for t in withholding.held_out_tokens(project, include_work_ids=True)}
-    if not tokens:
-        return False
-    if work_id.lower() in tokens:
-        return True
-    ident = (data or {}).get("identifiers") or {}
-    if not isinstance(ident, dict):
-        return False
-    for key, value in ident.items():
-        if not value:
-            continue
-        stated = f"pmid:{value}" if key == "pmid" else str(value)
-        if stated.lower() in tokens:
-            return True
-    return False
 
 
 def _work_data(project: Project, work_id: str) -> dict[str, Any] | None:
@@ -229,14 +216,10 @@ def _build(
         (stage / "pdf").mkdir()
     entries: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    withheld = 0
     total = 0
     used: set[str] = set()
     for work_id in ids:
         data = _work_data(project, work_id)
-        if _withheld(project, work_id, data):
-            withheld += 1
-            continue
         if data is None:
             skipped.append({"work_id": work_id, "reason": "unknown work"})
             continue
@@ -273,31 +256,33 @@ def _build(
             ("layer", _quote(layer.layer if layer and layer.layer else UNLAYERED)),
         ]
         body = _header(fields) + markdown
-        stem = f"{_title_slug(title)}--{slug_of_id(work_id)}"
-        while stem in used:
+        stem = f"{_title_slug(title)}--{slug_of_id(work_id).lower()}"
+        while stem.lower() in used:
             stem += "-x"
-        used.add(stem)
+        used.add(stem.lower())
         raw = body.encode("utf-8")
         total += len(raw)
         pdf_entry: dict[str, Any] | None = None
-        pdf_src: Path | None = None
+        pdf_bytes: bytes | None = None
         if pdfs:
             found = _pdf_of(project, work_id, ref.document_id)
             if found is not None:
-                path = project.library.path(found[0])
-                if path.is_file():
-                    pdf_src = path
-                    total += path.stat().st_size
+                try:
+                    pdf_bytes = project.library.get(found[0])
+                except (BlobNotFoundError, BlobIntegrityError, OSError):
+                    pdf_bytes = None
+                if pdf_bytes is not None:
+                    total += len(pdf_bytes)
                     pdf_entry = {
                         "file": f"pdf/{stem}.pdf",
-                        "sha256": found[0].split(":")[-1],
+                        "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
                         "document_id": found[1],
                     }
         if total > max_bytes:
             raise _refuse("bytes", f"the export exceeds {max_bytes} bytes (at work {work_id})")
         (stage / "markdown" / f"{stem}.md").write_bytes(raw)
-        if pdf_src is not None and pdf_entry is not None:
-            shutil.copyfile(pdf_src, stage / pdf_entry["file"])
+        if pdf_bytes is not None and pdf_entry is not None:
+            (stage / pdf_entry["file"]).write_bytes(pdf_bytes)
         entries.append(
             {
                 "work_id": work_id,
@@ -318,7 +303,6 @@ def _build(
         "pdfs": "included where stored" if pdfs else "not requested",
         "works": entries,
         "skipped": skipped,
-        "withheld": withheld,
         "works_without_pdf": without,
         "note": CAVEAT,
     }
@@ -330,7 +314,6 @@ def _build(
         out=out,
         exported=len(entries),
         skipped=len(skipped),
-        withheld=withheld,
         bytes=total,
         without_pdf=len(without),
         works=tuple(e["work_id"] for e in entries),
@@ -345,8 +328,7 @@ def _manifest_md(m: dict[str, Any]) -> str:
         f"- Exported at: {m['exported_at']}",
         f"- Selection: {m['selection']} ({m['selected']} works)",
         f"- PDFs: {m['pdfs']}",
-        f"- Exported: {len(m['works'])}; skipped: {len(m['skipped'])}; "
-        f"withheld (held-out, not named): {m['withheld']}",
+        f"- Exported: {len(m['works'])}; skipped: {len(m['skipped'])}",
         "",
         f"**Note.** {m['note']}",
         "",

@@ -160,10 +160,14 @@ function groups(ws){const d=DIMS.find(d=>d.key===grp);const g={};
  for(const w of ws){const vs=grp==='stage'?stagesOf(w):[val(w,d)||'(none)'];for(const v of (vs.length?vs:['(none)']))(g[v]=g[v]||[]).push(w);}
  return Object.entries(g).sort((a,b)=>grp==='year'?(sortBy==='old'?a[0].localeCompare(b[0]):b[0].localeCompare(a[0])):b[1].length-a[1].length);}
 const SELX=new Set();
-function exUpdate(){const n=SELX.size,b=$('#exgo');b.textContent='Export selected ('+n+')';b.disabled=!n||!TOKEN;b.title=TOKEN?'':'Open this page with factory site serve to export.';}
+const EXCAP=200;let NF=0;
+function exUpdate(){const n=SELX.size,b=$('#exgo'),m=$('#exmsg'),a=$('#exall');b.textContent='Export selected ('+n+')';
+ const over=n>EXCAP;b.disabled=!n||!TOKEN||over;b.title=TOKEN?'':'Open this page with factory site serve to export.';
+ a.title=NF>EXCAP?NF+' works are in this filter; an export takes at most '+EXCAP+'. Narrow the filter first.':'';
+ if(over)m.textContent=n+' works selected; an export takes at most '+EXCAP+'. Clear some or narrow the filter.';else if(m.textContent.indexOf('at most')>=0)m.textContent='';}
 function exFilename(r){const m=/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'');return m?m[1]:'works-export.zip';}
 function exGo(){const out=$('#exmsg');if(!TOKEN||!SELX.size)return;out.textContent='preparing...';$('#exgo').disabled=true;
- fetch(API+'/api/export/works',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':TOKEN},body:JSON.stringify({work_ids:[...SELX],pdfs:$('#expdf').checked})})
+ fetch(API+'/api/export/works',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':TOKEN},body:JSON.stringify({work_ids:[...SELX],pdfs:$('#expdf').checked,confirm:$('#expdf').checked&&confirm('The PDFs are licensed files. Copy them out of the library into the download?')})})
  .then(r=>{if(r.ok&&(r.headers.get('Content-Type')||'').startsWith('application/zip'))return r.blob().then(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=exFilename(r);document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);out.textContent='downloaded; see MANIFEST.md for skipped works';});
   return r.json().catch(()=>({issues:[{field:'response',reason:'status '+r.status}]})).then(j=>{out.textContent=(j.issues||[]).map(i=>i.field+': '+i.reason).join('; ');});})
  .catch(e=>{out.textContent='failed: '+e;}).finally(exUpdate);}
@@ -246,13 +250,13 @@ function drawChips(){const c=$('#chips');c.replaceChildren();let n=0;
  if(citeMin>0){n++;const b=document.createElement('button');b.className='chip';b.textContent='cited by '+citeMin+' or more corpus works  \u00d7';b.onclick=()=>{citeMin=0;$('#citemin').value='';render();};c.append(b);}
  if(query){n++;const b=document.createElement('button');b.className='chip';b.textContent='search: '+query+'  \u00d7';b.onclick=()=>{query='';$('#q').value='';render();};c.append(b);}
  c.hidden=!n;}
-function render(){const ws=filtered();drawChips();$('#count').textContent=ws.length+' of '+W.length+' works';
+function render(){const ws=filtered();NF=ws.length;exUpdate();drawChips();$('#count').textContent=ws.length+' of '+W.length+' works';
  if(view==='list')renderList(ws);else if(view==='timeline')renderTimeline(ws);else if(view==='chrono')renderChrono(ws);else if(view==='lineage')renderLineage(ws);else renderGraph(ws);}
 document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{view=b.dataset.v;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x===b));render();});
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
 gs.onchange=()=>{grp=gs.value;render();};const sb=$('#sortby');sb.value=sortBy;sb.onchange=()=>{sortBy=sb.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
 $('#citemin').value=citeMin||'';$('#citemin').closest('label').title='Counts only works whose reference lists were extracted ('+DATA.refs_done+' of '+W.length+'); a work whose citers were never extracted shows 0 or a dash, not a known zero.';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
-$('#exall').onclick=()=>{filtered().forEach(w=>SELX.add(w.id));exUpdate();render();};$('#exclear').onclick=()=>{SELX.clear();exUpdate();render();};$('#exgo').onclick=exGo;exUpdate();if(PANEL)$('#exbox').hidden=true;
+$('#exall').onclick=()=>{const f=filtered();if(f.length>EXCAP&&!confirm(f.length+' works are in this filter; an export takes at most '+EXCAP+'. Select them anyway? (Export will stay disabled until you narrow the selection.)'))return;f.forEach(w=>SELX.add(w.id));exUpdate();render();};$('#exclear').onclick=()=>{SELX.clear();exUpdate();render();};$('#exgo').onclick=exGo;exUpdate();if(PANEL)$('#exbox').hidden=true;
 addEventListener('keydown',e=>{if(e.key==='Escape'&&PANEL&&parent!==window)parent.postMessage('rfp-close',location.origin);});
 addEventListener('hashchange',()=>{H=new URLSearchParams(location.hash.slice(1));PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);const o=H.get('open');if(o&&BYS[o]!==undefined)openWork(W[BYS[o]]);});
 </script></body></html>
