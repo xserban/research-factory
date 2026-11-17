@@ -238,7 +238,7 @@ def test_acquisition_rebuild_is_deterministic(
 
 
 def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: FixedClock) -> None:
-    # The mailto address is sent to OpenAlex but must not be persisted: not in an archived page
+    # The mailto address is never sent and must not be persisted either: not in an archived page
     # URL, not in an HTTP-failure note, and so not anywhere under events/ or blobs/.
     mailto = "team@example.org"
     settings = Settings(root=tmp_path, user="obd", mailto=mailto)
@@ -295,5 +295,5 @@ def test_contact_address_never_reaches_the_event_log(tmp_path: Path, clock: Fixe
             # The URL form is percent-encoded, so check that and the parameter name as well.
             assert mailto not in text and quote(mailto, safe="") not in text
             assert "mailto=" not in text
-    # Redaction is not vacuous: the address really was sent to OpenAlex.
-    assert any(r.url.params.get("mailto") == mailto for r in sent)
+    # The address is not sent to OpenAlex at all.
+    assert sent and all("mailto" not in r.url.params for r in sent)

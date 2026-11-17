@@ -28,7 +28,10 @@ class Settings(StrictModel):
     one code version's use of an index keeps another from rebuilding it (IDEA-62;
     `FACTORY_INDEX_HOLD_MINUTES`, default 10, 0 turns the guard off). `mcp_configs` are the MCP
     config files `check` compares (IDEA-62; `FACTORY_MCP_CONFIGS`, paths joined by the path
-    separator), besides those listed in `<root>/mcp-configs.txt`.
+    separator), besides those listed in `<root>/mcp-configs.txt`. `mailto` is the researcher's
+    contact address: it is read so that existing configuration loads, and it is NEVER sent to an
+    outside host (no User-Agent, no query parameter; ruling 2026-11-17). It is only used to
+    redact the address from URLs and notes that might contain it.
     """
 
     root: Path

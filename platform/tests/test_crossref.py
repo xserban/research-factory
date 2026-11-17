@@ -115,7 +115,7 @@ def test_crossref_sends_filter_polite_and_archives_before_parse() -> None:
         archive=archive,
     )
     params = dict(seen[0].url.params)
-    assert params["filter"] == "updates:10.1000/alpha" and params["mailto"] == "me@example.org"
+    assert params["filter"] == "updates:10.1000/alpha" and "mailto" not in params
     assert len(archived) == 1 and "me@example.org" not in archived[0].url
 
 

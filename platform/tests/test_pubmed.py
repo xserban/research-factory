@@ -509,8 +509,8 @@ def test_key_and_address_are_sent_but_never_archived_or_noted() -> None:
     result = run(make_source(handler, mailto=mail, api_key=key), keyword(), archive=archive)
     sent = seen[0].url.params
     assert sent["api_key"] == key
-    assert sent["email"] == mail
-    assert sent["tool"] == "research-factory"
+    assert "email" not in sent
+    assert "tool" not in sent
     assert result.note is not None
     assert key not in result.note
     assert mail not in result.note

@@ -286,8 +286,6 @@ class CrossrefSource:
                     spec, records, ignored, archived, RunStatus.PARTIAL, BUDGET_STOP_NOTE, cursor
                 )
             params: dict[str, str | int] = {"filter": spec.text, "rows": _ROWS, "cursor": cursor}
-            if self._mailto:
-                params["mailto"] = self._mailto
             try:
                 response = self._http.get(_ENDPOINT, params)
             except httpx.HTTPError as exc:
@@ -368,8 +366,6 @@ class CrossrefSource:
             raise ValueError("crossref lookups are `doi:<a>|<b>` or `title.search:<query>`")
         if budget_spent(archive):
             return self._lookup_result(spec, [], 0, 0, RunStatus.PARTIAL, BUDGET_STOP_NOTE)
-        if self._mailto:
-            params["mailto"] = self._mailto
         try:
             response = self._http.get(_ENDPOINT, params)
         except httpx.HTTPError as exc:

@@ -131,7 +131,7 @@ def test_doi_list_is_a_filter_with_rows_equal_to_the_dois_asked() -> None:
     [request] = seen
     assert request.url.params["filter"] == "doi:10.1/a,doi:10.1/b,doi:10.1/c"
     assert request.url.params["rows"] == "3"
-    assert request.url.params["mailto"] == "me@example.org"
+    assert "mailto" not in request.url.params
 
 
 def test_title_query_uses_bibliographic_search_with_the_limit_as_rows() -> None:

@@ -192,9 +192,8 @@ class OpenAlexSource:
         api_key: str | None = None,
         page_size: int = _PAGE_SIZE,
     ) -> None:
-        # The polite pool wants a contact address. The caller passes it from configuration
-        # (Settings.mailto, env FACTORY_MAILTO) — never hardcoded. A repo that ships someone's
-        # email address ships it to everyone who clones it.
+        # `mailto` is used only to redact the configured address from archived URLs and notes;
+        # it is never sent (ruling 2026-11-17).
         self._http = http
         self._clock = clock
         self._mailto = mailto
@@ -252,8 +251,6 @@ class OpenAlexSource:
                 "per-page": per_page,
                 "cursor": cursor,
             }
-            if self._mailto:
-                params["mailto"] = self._mailto
             if self._api_key:
                 params["api_key"] = self._api_key
 
@@ -379,8 +376,6 @@ class OpenAlexSource:
                 "per-page": self._page_size,
                 "cursor": cursor,
             }
-            if self._mailto:
-                params["mailto"] = self._mailto
             if self._api_key:
                 params["api_key"] = self._api_key
             note: str | None = None
@@ -546,11 +541,9 @@ class OpenAlexSource:
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """One archived probe request: its `meta` and `results`.
 
-        The contact address is sent (polite pool) but never archived: the archived URL is
-        redacted, as for a run. Transport failures become `SourceError`.
+        The contact address is not sent; the archived URL is still redacted, as for a run.
+        Transport failures become `SourceError`.
         """
-        if self._mailto:
-            params = {**params, "mailto": self._mailto}
         if self._api_key:
             params = {**params, "api_key": self._api_key}
         try:
