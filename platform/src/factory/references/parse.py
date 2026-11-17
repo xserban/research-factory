@@ -246,11 +246,14 @@ def _author_block(text: str) -> tuple[str, int] | None:
     pos = 0
     end = 0
     first: str | None = None
+    prev_start = -1
+    last_start = -1  # where the last name began, and the block would end without it
     while True:
         m = _NAME_SURNAME_FIRST_RE.match(text, pos) or _NAME_INITIALS_FIRST_RE.match(text, pos)
         if not m:
             break
         first = first or m.group("sur")
+        prev_start, last_start = last_start, pos
         end = m.end()
         et_al = _ET_AL_RE.match(text, end)
         if et_al:
@@ -263,7 +266,17 @@ def _author_block(text: str) -> tuple[str, int] | None:
     if first is None:
         return None
     closed = _BLOCK_END_RE.match(text, end)
-    return (first, closed.end()) if closed else None
+    if closed is None:
+        return None
+    # Unmarked block ending in a lowercase word (`J. Doe, A. Roe, C. Title of the paper`): the
+    # last "name" is the first word of the title, so the block stops before it.
+    if (
+        prev_start >= 0
+        and not text[end : closed.end()].strip()
+        and text[closed.end() : closed.end() + 1].islower()
+    ):
+        return first, last_start
+    return first, closed.end()
 
 
 def _split_title_venue(rest: str) -> tuple[str | None, str | None]:
