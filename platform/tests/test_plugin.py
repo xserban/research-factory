@@ -292,5 +292,10 @@ def test_rf_write_names_its_tools_and_never_types_a_citation_or_number() -> None
         assert phrase in lowered, phrase
     for kept in ("## Independence", "## Procedure", "## Tool arguments", "## Done when"):
         assert kept in text
-    for absent in ("draft_verify", "draft_release", "draft_render"):
+    for absent in ("draft_verify", "draft_render"):
         assert absent not in text
+    # The researcher's ruling (2026-11-12, IDEA-61 group C): `draft_release` is named, only as
+    # another session's step, in "Stopping and human steps", never in the procedure.
+    procedure, _, stopping = text.partition("## Stopping and human steps")
+    assert "draft_release" not in procedure
+    assert "draft_release" in stopping.partition("## Tool arguments")[0]
