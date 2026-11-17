@@ -15,7 +15,7 @@ from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.model.work_ids import normalize_arxiv, normalize_doi
 
 PARSER = "refparse"
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 MAX_ENTRY_CHARS = 1000
 
 MAX_FIELD_CHARS = 4000  # entry text examined for fields; longer tails are ignored
@@ -38,6 +38,45 @@ _LOWER_WORD = r"(?:[^\W\d_]|['\u2019\-])"
 
 _HEADING_PREFIX_RE = re.compile(r"^\s*#+\s*")
 _LABEL_RE = re.compile(r"^\s*(?:\[([^\]\s]{1,20})\]|\((\d{1,4})\)|(\d{1,4})[.)])\s*")
+
+_AUTHOR_YEAR_LABEL_RE = re.compile(
+    r"^(?P<label>[^()\[\]]{1,120}?)\s*[(\[](?P<year>\d{4}[a-z]?)[)\]]\s+(?=[^\s.])"
+)
+"""A natbib author-year label LaTeXML keeps before the entry: `Baek et al. (2025) J. Baek, ...`.
+Read as a label only when its first word recurs within the next 80 characters (the author list
+repeats it), so `Surname, A. (2020). Title` (APA: a period follows) and a title with a year in
+parentheses are left alone."""
+
+
+_YEAR_ANCHOR_RE = re.compile(r"(?:[(\[]|\.\s)(?:19|20)\d{2}[a-z]?(?:[)\]])?\.?\s+(?=[A-Z0-9\"“])")
+"""A year closing the author list: `Names. 2025. Title`, `Names (2025) Title`, `[2024] Title`."""
+_YEAR_ANCHOR_WINDOW = 400
+_MIN_TITLE_WORDS = 3
+
+
+def _title_after_year(work: str) -> tuple[str | None, str | None] | None:
+    """Fallback for a title that would otherwise be a fragment: the title and venue after the
+    first year that closes the author list (within the first `_YEAR_ANCHOR_WINDOW` characters),
+    or None when there is none or what follows is itself a fragment."""
+    m = _YEAR_ANCHOR_RE.search(work[:_YEAR_ANCHOR_WINDOW])
+    if m is None:
+        return None
+    title, venue = _split_title_venue(work[m.end() :])
+    if not _better(title):
+        return None
+    return title, venue
+
+
+def _strip_author_year_label(work: str) -> str:
+    m = _AUTHOR_YEAR_LABEL_RE.match(work)
+    if m is None:
+        return work
+    first = re.split(r"[\s,]", m.group("label").strip(), maxsplit=1)[0]
+    rest = work[m.end() :]
+    if len(first) < 2 or not first[0].isupper() or first not in rest[:80]:
+        return work
+    return rest
+
 
 _DOI_RE = re.compile(
     r"(?:(?:https?://(?:dx\.)?doi\.org/)|(?:\bdoi\s*:?\s*))?(10\.\d{4,9}/\S+)", re.IGNORECASE
@@ -194,7 +233,44 @@ def parse_entry_fields(text: str) -> RefFields:
     years = _YEAR_RE.findall(work)
     year = int(years[-1]) if years else None
     title, venue = _title_venue(work)
-    return RefFields(doi, arxiv, url, year, _first_author(work), title, venue)
+    author = _first_author(work)
+    if _is_fragment(title):
+        # Fallbacks (v3), tried only when the title would otherwise be a fragment, so an entry
+        # earlier versions parsed well never changes: a leading author-year label, then a year
+        # closing the author list.
+        unlabelled = _strip_author_year_label(work)
+        if unlabelled != work:
+            again, again_venue = _title_venue(unlabelled)
+            if _better(again):
+                title, venue, author = again, again_venue, _first_author(unlabelled)
+                work = unlabelled
+        if _is_fragment(title):
+            found = _title_after_year(unlabelled)
+            if found is not None:
+                title, venue = found
+                author = _first_author(unlabelled)
+    return RefFields(doi, arxiv, url, year, author, title, venue)
+
+
+_NOTE_TITLE_RE = re.compile(
+    r"^(?:note|external links?|accessed|cited by|available|retrieved|url|online)\b", re.IGNORECASE
+)
+"""A trailing note LaTeXML renders after the entry; never taken as a fallback title."""
+
+
+def _better(candidate: str | None) -> bool:
+    """A fallback title is taken only when it is not itself a fragment or a trailing note."""
+    return not _is_fragment(candidate) and _NOTE_TITLE_RE.match(candidate or "") is None
+
+
+def _is_fragment(title: str | None) -> bool:
+    """No title, fewer than `_MIN_TITLE_WORDS` words, or one starting with a bracket or
+    punctuation (a label or citation key left in front)."""
+    return (
+        title is None
+        or len(title.split()) < _MIN_TITLE_WORDS
+        or title.lstrip()[:1] in tuple("[](){}.,;:-")
+    )
 
 
 def _first_author(text: str) -> str | None:

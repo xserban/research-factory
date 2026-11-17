@@ -233,9 +233,9 @@ def test_methods_states_mechanisms_rule_and_versions(
     assert report.snowball_rule == (
         "at most 2 backward and 1 forward round(s); stop when a round yields no newly included work"
     )
-    assert report.reference_parser == "refparse 2" and report.reference_matcher == "1"
+    assert report.reference_parser == "refparse 3" and report.reference_matcher == "1"
     text = render_methods(report)
-    assert "Reference lists" in text and "refparse 2" in text
+    assert "Reference lists" in text and "refparse 3" in text
 
 
 def test_methods_unchanged_without_references(project: Project, corpus: None) -> None:
