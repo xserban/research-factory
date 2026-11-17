@@ -63,6 +63,7 @@ def test_default_intervals_match_the_brief() -> None:
         "arxiv.org": 3.0,
         "api.openalex.org": 0.1,
         "api.crossref.org": 0.2,
+        "eutils.ncbi.nlm.nih.gov": 0.34,  # PubMed E-utilities: 3 requests a second without a key
     }
 
 
