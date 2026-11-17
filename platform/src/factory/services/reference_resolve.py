@@ -7,14 +7,18 @@ that yields a decision wins:
    the corpus works, absorbed works mapped to their primary (`corpus-identifier`); else through
    probe-purpose lookups, arXiv `id_list` and OpenAlex `doi:` filters in chunks of at most
    `LOOKUP_CHUNK` (`lookup-identifier`). An entry with an arXiv id is asked of arXiv first; on a
-   miss, a plain (non-DataCite) DOI it also states is asked of OpenAlex. An identifier no source
+   miss, a plain (non-DataCite) DOI it also states is asked of the lookup source (Crossref by
+   default, OpenAlex on request: `lookup_source`). An identifier no source
    returns gives a `no-source-record` work (ruling 8) when the entry has a parsed title and year,
    else `unresolved` / `not-found`. A DOI containing `|` or `,` cannot be carried by the OpenAlex
    filter syntax; it is never asked and is settled as not returned (no-source-record or
    not-found), not as a source error. An entry with an identifier is never title-matched: its
    stated identifier is authoritative, and a title match could only contradict it.
 2. An entry without an identifier but with a parsed title is matched against the corpus
-   (`corpus-title`), then through one probe OpenAlex `title.search` per entry (`lookup-title`).
+   (`corpus-title`), then through one probe `title.search` of the lookup source per entry
+   (`lookup-title`). In reference lists (`skip_flagged_titles`) a title that `flags_for` flags
+   (author list, et al., noise, too short) is never searched: the entry settles as
+   `unresolved` / `no-identifier-no-title`.
 3. Otherwise `unresolved`: `no-identifier-no-title`, `not-found`, or `source-error` when the
    lookup that would have answered failed (only the entries of that lookup are affected).
 A work found by a lookup takes the corpus work's id when its identifiers name one (R-26).
@@ -84,10 +88,14 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.dedup import active_merges, canonical_works
 from factory.services.gates import effective_policy, indexed_rigor_mode
+from factory.services.reference_items import flags_for
 from factory.services.search import get_work, list_works, register_query, run_query
 from factory.services.work_ref import resolve_work_id
 from factory.sources.registry import SourceFactory
 
+LOOKUP_SOURCES = ("crossref", "openalex")
+"""The sources a DOI or title lookup may go to; arXiv ids are always asked of arXiv."""
+DEFAULT_LOOKUP_SOURCE = "crossref"
 LOOKUP_CHUNK = 50
 TITLE_SEARCH_LIMIT = 10
 MAX_TITLE_QUERY = 200
@@ -140,6 +148,8 @@ class ResolutionOutcome:
 
     resolutions: tuple[Resolution, ...]
     lookup_runs: tuple[str, ...]
+    flagged_titles: int = 0
+    """Entries whose title was flagged by `flags_for` and so not searched."""
 
 
 @dataclass
@@ -279,6 +289,15 @@ def _fields(entry: Resolvable) -> RefFields:
     )
 
 
+def check_lookup_source(name: str) -> str:
+    """`name` when it is a lookup source (`LOOKUP_SOURCES`); else a refusal that writes nothing."""
+    if name not in LOOKUP_SOURCES:
+        raise FactoryValidationError(
+            [ValidationIssue("source", f"{name!r}: one of {list(LOOKUP_SOURCES)}")]
+        )
+    return name
+
+
 def resolve_entries(
     project: Project,
     actor: Actor,
@@ -286,15 +305,21 @@ def resolve_entries(
     *,
     sources: Mapping[str, SourceFactory],
     corpus: Corpus,
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
+    skip_flagged_titles: bool = False,
 ) -> ResolutionOutcome:
     """Resolve `entries` by the ordered methods of the module docstring, against `corpus`
-    (`load_corpus`).
+    (`load_corpus`). DOI and title lookups go to `lookup_source` (`LOOKUP_SOURCES`). With
+    `skip_flagged_titles` (reference lists) a title `flags_for` flags is not searched; imports leave
+    it False and search every titled entry.
 
     Lookups are probe-purpose queries, recorded as searches by `actor` and outside the corpus.
     Nothing else is written; the caller records the resolutions.
     """
+    check_lookup_source(lookup_source)
     out: dict[int, Resolution] = {}
     runs: list[str] = []
+    flagged = 0
     by_arxiv: dict[str, list[Resolvable]] = {}
     by_doi: dict[str, list[Resolvable]] = {}
     titled: list[Resolvable] = []
@@ -376,7 +401,7 @@ def resolve_entries(
         settle(by_doi, key, None, False)
     for chunk in _chunks(queryable):
         spec = QuerySpec(
-            source="openalex",
+            source=lookup_source,
             kind=QueryKind.FILTER,
             text="doi:" + "|".join(chunk),
             purpose=QueryPurpose.PROBE,
@@ -400,8 +425,13 @@ def resolve_entries(
         if match.state is not LinkState.UNRESOLVED:
             out[entry.ordinal] = _from_match(entry.ordinal, match, CORPUS_TITLE, None)
             continue
+        if skip_flagged_titles and flags_for(entry.title):
+            # an unusable title is no title: nothing is asked of a source
+            out[entry.ordinal] = _unresolved(entry.ordinal, "no-identifier-no-title", None)
+            flagged += 1
+            continue
         spec = QuerySpec(
-            source="openalex",
+            source=lookup_source,
             kind=QueryKind.FILTER,
             text=f"title.search:{query}",
             purpose=QueryPurpose.PROBE,
@@ -428,6 +458,7 @@ def resolve_entries(
     return ResolutionOutcome(
         resolutions=tuple(out[o] for o in sorted(out)),
         lookup_runs=tuple(dict.fromkeys(runs)),
+        flagged_titles=flagged,
     )
 
 

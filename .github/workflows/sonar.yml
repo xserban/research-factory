@@ -1,0 +1,30 @@
+name: SonarQube Cloud
+
+# Static analysis on every push to main and every pull request.
+# Requires the repository secret SONAR_TOKEN (SonarQube Cloud > My Account > Security).
+# Tests are paused (2026-11-05), so no coverage report is sent yet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - if: env.SONAR_TOKEN == ''
+        run: echo "::notice::SONAR_TOKEN is not set; skipping the SonarQube Cloud scan."
+      - if: env.SONAR_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history: needed for blame and new-code detection
+      - if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v5

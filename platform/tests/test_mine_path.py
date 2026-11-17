@@ -173,19 +173,25 @@ def test_legacy_log_replays_identically(project: Project) -> None:
 
 
 def test_session_cannot_cross_miner_scopes(project: Project) -> None:
-    """G2-A ruling 2 extended: a session joins one pass across all scopes, miners included."""
+    """G2-A ruling 2 as decision 129 amends it: a session joins one pass across evidence and
+    contribution; across miners it may hold one label (so a second miner's pass A is allowed),
+    never another label, never evidence or contribution."""
     first, other = MinerScope(M), MinerScope("m-other-thing")
     a = _extractor(SESSION_A, "claude-opus-5-5")
     join_extraction_pass(project, a, PassLabel.A, scope=first)
     assert session_scope(project, a.session) == first
     join_extraction_pass(project, a, PassLabel.A, scope=first)  # idempotent
-    for scope in (other, Scope.EVIDENCE, Scope.CONTRIBUTION):
+    for scope in (Scope.EVIDENCE, Scope.CONTRIBUTION):
         with pytest.raises(FactoryValidationError) as raised:
             join_extraction_pass(project, a, PassLabel.A, scope=scope)
         assert raised.value.issues[0].field == "pass"
     with pytest.raises(FactoryValidationError) as raised:
         join_extraction_pass(project, a, PassLabel.B, scope=first)
     assert raised.value.issues[0].field == "pass"
+    with pytest.raises(FactoryValidationError) as raised:
+        join_extraction_pass(project, a, PassLabel.B, scope=other)  # another label, another miner
+    assert raised.value.issues[0].field == "pass"
+    join_extraction_pass(project, a, PassLabel.A, scope=other)  # the same label of another miner
 
 
 def test_model_independence_is_per_miner_scope(project: Project) -> None:

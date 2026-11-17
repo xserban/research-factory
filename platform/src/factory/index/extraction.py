@@ -69,9 +69,10 @@ def extraction_tables(metadata: MetaData) -> ExtractionTables:
         "extraction_sessions",
         metadata,
         Column("session", String, primary_key=True),
-        Column("scope", String, nullable=False, server_default="evidence"),
+        Column("scope", String, primary_key=True, server_default="evidence"),
         Column("pass_label", String, nullable=False),
         Column("model", String, nullable=False),
+        Column("calibration", Boolean, nullable=False, server_default="0"),
     )
     rows = Table(
         "extraction_rows",
@@ -234,8 +235,9 @@ def _pass_joined(t: ExtractionTables) -> Handler:
                 scope=scope_of_pack(payload.pack).value,
                 pass_label=payload.pass_label.value,
                 model=payload.model,
+                calibration=payload.calibration,
             )
-            .on_conflict_do_nothing(index_elements=["session"])
+            .on_conflict_do_nothing(index_elements=["session", "scope"])
         )
 
     return pass_joined

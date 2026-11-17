@@ -129,7 +129,7 @@ def test_crossref_follows_cursor_to_the_end() -> None:
     assert len(seen) == 1 and len(result.status_records) == 1
 
 
-def test_crossref_takes_only_status_queries() -> None:
+def test_crossref_takes_no_search_queries() -> None:
     source = _crossref(_fixture("crossref_updates_empty.json"))
     with pytest.raises(ValueError):
         _run(source, QuerySpec(source="crossref", kind=QueryKind.FILTER, text="updates:10.1/x"))

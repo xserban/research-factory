@@ -84,9 +84,12 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.protocol import current_protocol
+from factory.services.reference_layers import entries_in_layers
 from factory.services.reference_resolve import (
+    DEFAULT_LOOKUP_SOURCE,
     Corpus,
     carried_decisions,
+    check_lookup_source,
     entry_digest,
     entry_raw,
     load_corpus,
@@ -132,11 +135,19 @@ class ReResolved(StrictModel):
     ordinals: list[int]
     states: dict[LinkState, int]
     lookup_runs: list[str]
+    flagged_titles: int = 0
+    """Entries of this extraction whose flagged title was not searched."""
 
 
 class ReResolveSummary(StrictModel):
     re_resolved: list[ReResolved]
     skipped: list[Skipped]
+    selected: int = 0
+    """Entries retryable under the selection and left for lookup."""
+    skipped_layer: int = 0
+    """Retryable entries left as recorded because their item holds none of the requested layers."""
+    skipped_flagged_title: int = 0
+    """Entries whose flagged title was not searched (they settle as no-identifier-no-title)."""
 
 
 class ReferenceCounts(StrictModel):
@@ -239,11 +250,14 @@ def extract_references(
     work_ids: Sequence[str] | None,
     *,
     sources: Mapping[str, SourceFactory],
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
 ) -> ExtractSummary:
     """Extract and resolve the references of `work_ids` (default: every included work with a
     conversion and no current extraction). A malformed work id, or a named work whose current
-    extraction already uses this conversion and parser version, refuses the call, writing nothing.
+    extraction already uses this conversion and parser version, refuses the call, writing nothing,
+    as does an unknown `lookup_source` (crossref or openalex; the source of DOI and title lookups).
     """
+    check_lookup_source(lookup_source)
     if work_ids is not None:
         bad = [w for w in work_ids if re.match(WORK_ID_RE, w) is None]
         if bad:
@@ -284,7 +298,15 @@ def extract_references(
     results: list[ExtractionResult] = []
     corpus = load_corpus(project) if scope else Corpus()
     for work, conversion in scope:
-        result = _extract_one(project, actor, work, conversion, sources=sources, corpus=corpus)
+        result = _extract_one(
+            project,
+            actor,
+            work,
+            conversion,
+            sources=sources,
+            corpus=corpus,
+            lookup_source=lookup_source,
+        )
         if isinstance(result, Skipped):
             skipped.append(result)
         else:
@@ -407,6 +429,7 @@ def _extract_one(
     *,
     sources: Mapping[str, SourceFactory],
     corpus: Corpus,
+    lookup_source: str,
 ) -> ExtractionResult | Skipped:
     try:
         manifest = conversion_manifest(project, conversion.conversion_id)
@@ -423,7 +446,15 @@ def _extract_one(
     flags = list(
         dict.fromkeys([*bib.flags, *completeness_flags(bib, contexts), *bbl_flags, *field_flags])
     )
-    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
+    outcome = resolve_entries(
+        project,
+        actor,
+        entries,
+        sources=sources,
+        corpus=corpus,
+        lookup_source=lookup_source,
+        skip_flagged_titles=True,
+    )
 
     extraction_id = project.ids.new("rex")
     extracted = ReferenceExtracted(
@@ -581,10 +612,19 @@ def _re_resolve_one(
     corpus: Corpus,
     states: Sequence[str],
     only_identifiers: bool = False,
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
 ) -> ReResolved | None:
     """Look the entries up, then write under the lock what is still retryable: a decision, or a
     new extraction, may have landed during the lookups. None when nothing is left to write."""
-    outcome = resolve_entries(project, actor, entries, sources=sources, corpus=corpus)
+    outcome = resolve_entries(
+        project,
+        actor,
+        entries,
+        sources=sources,
+        corpus=corpus,
+        lookup_source=lookup_source,
+        skip_flagged_titles=True,
+    )
     with project.index.exclusive():
         project.index.sync()
         still = _retryable(project, [work], states, only_identifiers=only_identifiers).get(
@@ -634,6 +674,7 @@ def _re_resolve_one(
         ordinals=[r.ordinal for r in resolutions],
         states=counts,
         lookup_runs=list(outcome.lookup_runs),
+        flagged_titles=outcome.flagged_titles,
     )
 
 
@@ -645,6 +686,8 @@ def re_resolve(
     states: Sequence[str] = ("source-error",),
     sources: Mapping[str, SourceFactory],
     only_identifiers: bool = False,
+    lookup_source: str = DEFAULT_LOOKUP_SOURCE,
+    layers: Sequence[str] | None = None,
 ) -> ReResolveSummary:
     """Resolve again the links of the live extractions selected by `states` (`RE_RESOLVE_STATES`:
     an unresolved reason, or a link state), in `work_ids` or everywhere.
@@ -654,8 +697,13 @@ def re_resolve(
     unknown state refuses the call, writing nothing; a named work with no live extraction is
     skipped with a reason. The entries are not parsed again: their stored fields are looked up.
     With `only_identifiers`, only entries with a DOI or arXiv id are retried, by identifier
-    lookup; entries without one are left as recorded.
+    lookup; entries without one are left as recorded. DOI and title lookups go to
+    `lookup_source` (crossref by default; openalex on request); an unknown one refuses the call.
+    With `layers`, only entries whose cited item holds one of those layers under the latest scheme
+    version (`entries_in_layers`) are retried; the others are left as recorded and counted in
+    `skipped_layer`. An unknown layer id, or no recorded scheme, refuses the call.
     """
+    check_lookup_source(lookup_source)
     issues: list[ValidationIssue] = []
     if work_ids is not None:
         issues += [
@@ -670,6 +718,7 @@ def re_resolve(
     ]
     if issues:
         raise FactoryValidationError(issues)
+    in_layers = entries_in_layers(project, layers) if layers is not None else None
     project.index.sync()
     with project.index.connect() as conn:
         extracted = {
@@ -684,6 +733,14 @@ def re_resolve(
         if w not in extracted
     ]
     scope = _retryable(project, work_ids, states, only_identifiers=only_identifiers)
+    skipped_layer = 0
+    if in_layers is not None:
+        kept = {
+            key: [e for e in entries if (key[0], e.ordinal) in in_layers]
+            for key, entries in scope.items()
+        }
+        skipped_layer = sum(len(scope[key]) - len(entries) for key, entries in kept.items())
+        scope = {key: entries for key, entries in kept.items() if entries}
     corpus = load_corpus(project) if scope else Corpus()
     results = [
         result
@@ -699,11 +756,18 @@ def re_resolve(
                 corpus=corpus,
                 states=states,
                 only_identifiers=only_identifiers,
+                lookup_source=lookup_source,
             )
         )
         is not None
     ]
-    return ReResolveSummary(re_resolved=results, skipped=skipped)
+    return ReResolveSummary(
+        re_resolved=results,
+        skipped=skipped,
+        selected=sum(len(entries) for entries in scope.values()),
+        skipped_layer=skipped_layer,
+        skipped_flagged_title=sum(r.flagged_titles for r in results),
+    )
 
 
 # --- Counts and listing ---

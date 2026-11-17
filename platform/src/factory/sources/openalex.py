@@ -245,9 +245,11 @@ class OpenAlexSource:
                     note=BUDGET_STOP_NOTE,
                     resume_token=cursor,
                 )
+            # Ask only for what will be kept: a limited lookup does not fetch a full page.
+            per_page = self._page_size if spec.limit is None else min(self._page_size, spec.limit)
             params: dict[str, str | int] = {
                 "filter": query_sent,
-                "per-page": self._page_size,
+                "per-page": per_page,
                 "cursor": cursor,
             }
             if self._mailto:

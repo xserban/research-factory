@@ -838,8 +838,8 @@ def mine_status(
     project: Project, *, session: str | None = None, with_agreement: bool = True
 ) -> list[MineStatus]:
     """The status of every miner the current protocol lists, by name. A session that joined a miner
-    pass sees that miner only, and only the units of its own pass; `with_agreement` False leaves
-    the agreement out (agent views carry no rate).
+    pass sees the miners it joined only, and only the units of its own pass; `with_agreement`
+    False leaves the agreement out (agent views carry no rate).
 
     Read-only: it syncs the index once and reads the rest under a snapshot, in one memo scope, so
     the per-miner reads neither sync again nor refold the screening outcomes (the pilot paid
@@ -852,7 +852,7 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
     protocol = current_protocol(project)
     if protocol is None:
         return []
-    own: tuple[str, PassLabel] | None = None
+    own: dict[str, PassLabel] | None = None
     if session is not None:
         for member in memberships(project, session):
             if (
@@ -860,12 +860,12 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
                 and member.scope is not None
                 and member.scope.startswith("m-")
             ):
-                own = (member.scope, member.label)
+                own = {**(own or {}), member.scope: member.label}
     if session is not None and own is None and memberships(project, session):
         return []  # a screening or evidence pass session sees no miner's status
     out: list[MineStatus] = []
     for use in sorted(protocol.spec.miners or (), key=lambda u: u.name):
-        if own is not None and own[0] != use.name:
+        if own is not None and use.name not in own:
             continue
         spec = registered_miner(project, use.name, use.version)
         if spec is None:
@@ -875,7 +875,7 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
         states = [
             s
             for s in unit_states(project, scope=scope, ledger=ledger)
-            if own is None or s.pass_label == own[1]
+            if own is None or s.pass_label == own[use.name]
         ]
         stale = stale_extractions(project, scope=scope, ledger=ledger)
         live = [r for r in live_rows(project, scope=scope) if r.extraction_id not in stale]
@@ -902,7 +902,8 @@ def _mine_status(project: Project, session: str | None, with_agreement: bool) ->
                 units=len(states),
                 open=sum(s.state in ("open", "queued") for s in states),
                 closed=sum(s.state == "current" for s in states),
-                rows=len([r for r in live if own is None or r.pass_label == own[1]]) + imported,
+                rows=len([r for r in live if own is None or r.pass_label == own[use.name]])
+                + imported,
                 stale=sum(s.state == "stale" for s in states),
                 agreement=None if overall is None else overall.overall_all_rows,
                 agreement_aligned=None if overall is None else overall.overall,

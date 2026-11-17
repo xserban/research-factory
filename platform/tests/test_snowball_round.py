@@ -101,7 +101,9 @@ def world(project: Project, corpus: None, agent: Actor) -> tuple[str, str]:
     fetched_document(project, work_a, bib_html(ENTRIES_A, BODY_A))
     fetched_document(project, work_b, bib_html(ENTRIES_B, BODY_B))
     run_convert(project, make_registry())
-    summary = extract_references(project, agent, None, sources=_lookups().sources())
+    summary = extract_references(
+        project, agent, None, sources=_lookups().sources(), lookup_source="openalex"
+    )
     assert len(summary.extractions) == 2
     return work_a, work_b
 
@@ -200,7 +202,7 @@ def explore_world(
     work_a = promoted_works(project)[0]
     fetched_document(project, work_a, bib_html(ENTRIES_A, BODY_A))
     run_convert(project, make_registry())
-    extract_references(project, agent, None, sources=_lookups().sources())
+    extract_references(project, agent, None, sources=_lookups().sources(), lookup_source="openalex")
     return project
 
 
@@ -618,7 +620,7 @@ def test_candidate_rows_are_read_for_the_current_extractions_only(
     run_convert(project, make_registry(StubConverter(version="2.0+stub")))
     rows_before = snowball._extraction_rows
     old = {r for (r,) in _extraction_ids(project)}
-    extract_references(project, agent, None, sources=_lookups().sources())
+    extract_references(project, agent, None, sources=_lookups().sources(), lookup_source="openalex")
     current = {r for (r,) in _extraction_ids(project)} - old
     links, contexts = rows_before(project, sorted(current))
     assert {str(row[0]) for row in links} <= current and links
