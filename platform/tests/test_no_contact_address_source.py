@@ -29,12 +29,10 @@ PARAM = re.compile(r"(^|[?&\s])(mailto|email|tool)=")
 KEYS = {"mailto", "email", "tool"}
 
 ALLOWED = {
-    # Sources that hold the address only to redact it from archived text, notes and URLs.
-    "sources/arxiv.py",
-    "sources/crossref.py",
-    "sources/openalex.py",
-    "sources/pubmed.py",
-    "sources/fulltext/oa_pdf.py",
+    # arxiv.py, crossref.py, openalex.py, pubmed.py and fulltext/oa_pdf.py hold the address as a
+    # private `_mailto` (set from a constructor parameter) only to redact it from archived text,
+    # notes and URLs. They match none of the rules above, so they need no entry; a new use of
+    # `.mailto` or a `mailto=` keyword in them would fail here.
     # The redactor itself (regexes for `mailto=`) and the generic clients.
     "sources/http.py",
     # Constructors that pass the address to a source for redaction only.
