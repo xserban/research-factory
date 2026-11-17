@@ -149,8 +149,8 @@ class ArxivSource:
         mailto: str | None = None,
         page_size: int = _PAGE_SIZE,
     ) -> None:
-        # arXiv is never sent the address, but it travels in the User-Agent, so anything built
-        # from a request or an exception is redacted before it is archived or noted.
+        # The address is never sent to arXiv (the User-Agent is generic); it is held only so that
+        # anything built from a request or an exception is redacted before it is archived or noted.
         self._http = http
         self._clock = clock
         self._mailto = mailto

@@ -3,7 +3,7 @@
 Endpoints, checked 2026-11-14 (the PMC OA web service `oa.fcgi` was retired on 2026-02-12):
 
 - ID converter `https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/` (`ids`, `idtype`,
-  `format=json`; `tool` and `email` only when a contact address is configured), used only when the
+  `format=json`; no `tool` or `email`: the contact address is never sent), used only when the
   work has no PMCID. Reply `{status, records: [{doi, pmcid, pmid, requested-id}]}`.
 - Bucket `https://pmc-oa-opendata.s3.amazonaws.com/`: `PMC<id>.<ver>/PMC<id>.<ver>.json` and
   `.xml`. The bucket README (read 2026-11-14) confirms the layout and the JSON fields used here:
