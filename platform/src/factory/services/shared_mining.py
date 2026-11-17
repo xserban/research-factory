@@ -22,7 +22,7 @@ import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -77,6 +77,7 @@ from factory.model.miners import ImportedFrom, MinerRegistered
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project, ProjectPaths, list_projects, open_project
 from factory.services.conversions import conversion_manifest, conversion_of
+from factory.services.dedup import absorbed_by_primary
 from factory.services.extraction import (
     ExtraCheck,
     ExtractionRow,
@@ -834,6 +835,9 @@ class _Importer:
     corpus: frozenset[str]
     mined: frozenset[str]
     calibration: frozenset[str]
+    canonical: Mapping[str, str] = field(default_factory=dict)
+    """Each work an active merge absorbed -> its primary: a conversion's owner is judged, and
+    imported, under the canonical work, as the mined and calibration sets are."""
 
 
 def _reverified(
@@ -874,7 +878,7 @@ def _unit_items(
         return [], [ValidationIssue("units", _NOT_FINAL)]
     if len(unit.rows) > MAX_ITEMS:
         return [], [ValidationIssue("units", _TOO_LARGE)]
-    work = conversion.work_id
+    work = importer.canonical.get(conversion.work_id, conversion.work_id)
     if work in importer.mined:
         return [], [ValidationIssue("units", _MINED_HERE)]
     if work in importer.calibration:
@@ -1009,6 +1013,11 @@ def mine_import(
             corpus=frozenset(w.id for w in list_works(project)),
             mined=frozenset(mined_works(project, MinerScope(miner))),
             calibration=frozenset(calibration_sample(project, miner)),
+            canonical={
+                absorbed: primary
+                for primary, group in absorbed_by_primary(project).items()
+                for absorbed in group
+            },
         )
         written: list[str] = []
         rejected: list[ItemError] = []

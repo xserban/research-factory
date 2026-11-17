@@ -24,7 +24,7 @@ ENTRIES = [
 
 
 def test_parser_identity() -> None:
-    assert (PARSER, PARSER_VERSION) == ("refparse", "2")
+    assert (PARSER, PARSER_VERSION) == ("refparse", "3")
 
 
 def test_entries_from_b_anchors() -> None:

@@ -700,7 +700,7 @@ Status: (1) to (4) built and on main (163d6c4; 9f85548, cc9e675 rule B; (3) the 
 **Ruling (researcher, 2026-11-13):** the stored agreement values of existing miners are kept, not superseded; `mine status` shows the rate over all rows with the aligned rate beside it. The 0.90 gate is not changed by this ruling.
 
 ### IDEA-70 — `mine status` reads the index once (per-call cost on the pilot)
-Status: remaining cost built 2026-11-14 (branch `low-hanging-2`, merged to main dbe3d01, reviewed (one Sonnet review, fixes 1ed65da to 2a5c4fb and 570d467); 8f4b6b1: one ledger per miner scope passed to the readers; not timed on the pilot); earlier: built, not reviewed (branch `mine-status-perf`) · Added: 2026-11-13 · Slice: — · Depends on: `services/call_memo.py`, `Index.snapshot()`
+Status: checked 2026-11-15 on `fix-82-70`: nothing left to build, the one-snapshot, one-memo-scope and one-ledger-per-scope reads are on main (`test_mine_status_cost.py` rerun); remaining cost built 2026-11-14 (branch `low-hanging-2`, merged to main dbe3d01, reviewed (one Sonnet review, fixes 1ed65da to 2a5c4fb and 570d467); 8f4b6b1: one ledger per miner scope passed to the readers; not timed on the pilot); earlier: built, not reviewed (branch `mine-status-perf`) · Added: 2026-11-13 · Slice: — · Depends on: `services/call_memo.py`, `Index.snapshot()`
 **What:** `mining.mine_status` runs under one `Index.snapshot()` and one memo scope (`call_memo.entering`), so the per-miner reads (`unit_states`, `stale_extractions`, `live_rows`, `agreement_overall`, the population) neither sync the index again nor refold the screening outcomes. The CLI, MCP tool, dashboard and site pages all call this one function.
 **Why:** on a copy of the pilot (43,642 events, 2,258 event files, 8 miners) one `factory mine status` took 134 s wall clock: 1,754 incremental syncs (each stats every event file; no rebuild, the index was at projection 84) and 78 folds of `final_outcomes` (one per population lookup). After: 39 s, 1 sync inside the call, 2 folds (one per stage), identical output.
 **Rigour notes:** read-only; nothing is cached across calls (the memo exists only inside the call). Trade-off: writers wait on the shared lock for the length of the call (about 40 s on the pilot), as for the dashboard, instead of interleaving with its reads.
@@ -829,7 +829,7 @@ Status: new; researcher ruling 2026-11-15: build all three parts before pilot 2 
 **Open questions:** whether miners see hints at all (anchoring) or only the agreement report uses them; whether a hint naming a scheme version goes stale when the scheme changes.
 
 ### IDEA-82 — Merged works in shared-mining imports
-Status: new · Added: 2026-11-15 · Slice: — · Depends on: branch `fix-docread-merge` (`document_owners`)
+Status: built, not reviewed, tests run (branch `fix-82-70`: `_Importer.canonical` maps an absorbed owner to its primary before the mined and calibration checks and for the imported item's work; `test_shared_mining_merged.py`, stubbed conversion, no full import fixture exists) · Added: 2026-11-15 · Slice: — · Depends on: branch `fix-docread-merge` (`document_owners`)
 **What:** `services/shared_mining.py` `_unit_items` takes `work = conversion.work_id`, the absorbed owner when the conversion belongs to a work merged into another, and checks it against the importer's mined and calibration sets; if those hold canonical ids, an already-mined or calibration work can be imported again. Map the owner to its canonical work before the checks.
 **Why:** found by the review of the document_read merge fix (2026-11-15); same canonical-versus-absorbed mismatch.
 **Rigour notes:** calibration works must never be imported (the exclusion protects the calibration set).
@@ -850,17 +850,18 @@ Status: new · Added: 2026-11-15 · Slice: 5 · Depends on: decisions 106 to 112
 **Open questions:** who the first second person is and which role they hold; whether the server and hosting side (single writer, signed commits) is wanted before teams of scientists work in one project.
 
 ### IDEA-85 — Quotes with Markdown escapes fail verification
-Status: new · Added: 2026-11-15 · Slice: — · Depends on: —
+Status: reviewed: one Sonnet review, no Important findings; minors addressed in 800feda0 (branch `fix-85-86`; `quote_in_element` removes a backslash before ASCII punctuation on the quote and on each block text, nothing else; tests in `test_document_quotes`; past-rejection count not done) · Added: 2026-11-15 · Slice: — · Depends on: —
 **What:** `document_read` serves segment text with Markdown escapes as stored (`team\_size`), while `quote_in_element` (`document/quotes.py:51`) compares the quote with the parsed block text, where markdown-it has removed the escape (`team_size`). A quote copied verbatim from what the agent read fails as `quote-not-in-anchor`. Found in the technique-miner dry run (EvoSci, 2026-11-15); the agent had to choose a quote without the token. Fix: apply the same unescaping to the needle in `normalise_quote` (backslash before ASCII punctuation), or serve unescaped text; either way one rule on both sides.
 **Why:** verbatim quoting is the core evidence rule; agents should never have to avoid a span because of rendering.
 **Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
 **Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).
 
-### IDEA-86 — Updates page: per-work miner and ledger reads are slow
-Status: new · Added: 2026-11-15 · Slice: — · Depends on: branch `updates-page` (`services/updates.py`)
-**What:** with additions, `updates_view` reads `flow_ledger` (folds the whole corpus, ~27 s on the pilot) and per-work mined state through `miner_population` (~5 s per miner per call; 39 s for 5 works). Read both for the addition ids only (a filtered ledger, one miner-population read per miner for the set).
+### IDEA-86 — Updates page: per-miner ledger and index reads once per call
+Status: reviewed: one Sonnet review, no Important findings; minors addressed in 800feda0 (branch `fix-85-86`; not timed on the pilot) · Added: 2026-11-15 · Slice: — · Depends on: decision 127, IDEA-70
+**What:** `updates_view` now runs under one `Index.snapshot()` (one sync) and `_mined` reads one `scope_ledger` per miner and passes it to `final_rows_restricted` (new `ledger=` argument), instead of each reader inside `_read_state` building its own ledger (about 3 per miner) and syncing the index again. Output is unchanged. Tests: `test_mine_status_cost` (one ledger per miner, one sync per call).
 **Why:** a weekly update of tens of works would make the page take minutes to build.
-**Rigour notes:** read-only; numbers stay computed from events.
+**Rigour notes:** read-only; nothing cached across calls. As for `mine status`, writers wait on the shared lock for the length of the call.
+**Remaining:** `flow_ledger` still folds the whole corpus once per call when additions exist; no timing taken.
 **Open questions:** whether the hub should cache the page per snapshot.
 
 ### IDEA-87 — Export papers to a notebook tool (NotebookLM, Open Notebook)
@@ -876,6 +877,7 @@ Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: decis
 **Why:** NotebookLM-like use without losing traceability; search only proposes candidates, Claude reads and decides (search ranks, never judges).
 **Rigour notes:** embedding model chosen by evaluation, not by name. Free test set from the technique miners (2026-11-16 run): each category definition is a query, the anchored quotes mined for it are the paragraphs a good search finds. Candidates: EmbeddingGemma (300M, 2k tokens, Gemma licence) or EmbeddingGemma 2 (Apache 2.0, 8k tokens; details to verify on the model card), SPECTER2 (already in decision 116, but trained on title and abstract, likely weak for paragraphs), keyword only as baseline.
 **Open questions:** is FTS5 plus Claude's own synonyms enough to start; recorded chats or not; interface (hub page with Claude, or MCP only); how answers enter the idea graph.
+**Design note:** `docs/design-note-corpus-search-2026-11-17.md` (draft, 2026-11-17): passage versus anchor units, hybrid keyword and dense search, evaluation on miner quotes and a researcher test set; Spar (argument sheets, case against first) as the second mode.
 
 ### IDEA-89 — Reference lookup without OpenAlex
 Status: built, reviewed (Sonnet), merged 2026-11-16 · Added: 2026-11-16 (researcher) · Slice: 3a · Depends on: decision 130
