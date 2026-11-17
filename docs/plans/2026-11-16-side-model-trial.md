@@ -1,6 +1,6 @@
 # Plan: side-model trial (Antigravity, Gemini "3.8 flash")
 
-Date: 2026-11-16 · Status: plan, not executed · Backlog: IDEA-87 · Decisions touched: none (no *Decided* entry is changed; a promotion needs a new proposed entry, see section 9)
+Date: 2026-11-16 · Status: plan, not executed · Backlog: IDEA-90 · Decisions touched: none (no *Decided* entry is changed; a promotion needs a new proposed entry, see section 9)
 
 ## 1. Purpose and scope
 
@@ -113,4 +113,4 @@ Asked as multiple choice (recommended first):
 
 ## 9. After the trial
 
-A promotion is a proposal: a new entry in `docs/decisions.md` (status Proposed) stating job, miner, version, model identifier, evidence and lapse rule. Nothing here is built. If the file route works well and a second non-Claude model is later wanted, an importer for externally produced result files may be added as its own backlog item; this trial does not specify it. Backlog: IDEA-87.
+A promotion is a proposal: a new entry in `docs/decisions.md` (status Proposed) stating job, miner, version, model identifier, evidence and lapse rule. Nothing here is built. If the file route works well and a second non-Claude model is later wanted, an importer for externally produced result files may be added as its own backlog item; this trial does not specify it. Backlog: IDEA-90.

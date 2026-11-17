@@ -841,7 +841,7 @@ Status: new · Added: 2026-11-15 · Slice: — · Depends on: —
 **Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
 **Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).
 
-### IDEA-87 — Side-model trial: a non-Claude model for long-context and support jobs (Antigravity)
+### IDEA-90 — Side-model trial: a non-Claude model for long-context and support jobs (Antigravity)
 Status: new · Added: 2026-11-16 · Slice: — · Depends on: IDEA-37 (miners), IDEA-53 (agreement), decision 37 (independence, calibration), screening calibration and audit
 **What:** a measured trial of the researcher's Antigravity model (Google; "Gemini 3.8 flash", identifier to be read from the tool) on four side jobs: quote-verification triage, second reader on a calibrated miner, long-context pass A screening re-check, whole-corpus or long-PDF lookup. It runs as an external session handed task files and returning result files, imported into a throwaway project copy with its own model name recorded. Plan: `docs/plans/2026-11-16-side-model-trial.md`.
 **Why:** a second model family could cheapen long-context reading and give an independent reader for cross-checks, if it measures up against labels we already hold.
