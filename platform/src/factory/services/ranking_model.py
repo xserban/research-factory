@@ -110,7 +110,7 @@ class Specter2Embedder:
             try:
                 tokenizer = AutoTokenizer.from_pretrained(self._dir, local_files_only=True)
                 model = AutoModel.from_pretrained(self._dir, local_files_only=True)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:  # newer transformers raise ValueError for no files
                 raise ranker_unavailable(f"{self._dir} holds no loadable model") from exc
             model.eval()
             self._loaded = (torch, tokenizer, model)

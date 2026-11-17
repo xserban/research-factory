@@ -157,11 +157,28 @@ def test_a_malformed_ranking_event_changes_nothing_and_rebuild_agrees(
         project.events.make("ranking.computed", forged, project.system_actor()),
         project.events.make("ranking.computed", malformed, project.system_actor()),
     ]
-    before = project.index.state_hash()
+    def folded() -> tuple[object, ...]:
+        from sqlalchemy import text
+
+        project.index.sync()
+        latest = latest_ranking(project)
+        with project.index.connect() as conn:
+            rows = sorted(repr(tuple(r)) for r in conn.execute(text("SELECT * FROM rankings")))
+        return (latest and latest.ranking_id, ranking_positions(project), rows)
+
+    before = folded()
+    # Hand-written: the writer refuses a payload that fails its model (`rnk_` + ULID ids, integer
+    # counts), so the lines go into the log directly, as a forged file would. The log gains the
+    # events (the state hash covers them); the ranking tables must not move, on sync or rebuild.
     with project.writing():
-        project.record(events)
-    assert project.index.state_hash() == before
-    assert project.index.rebuild() == before
+        for event in events:
+            path = project.paths.events_dir / event.actor.id / f"{event.actor.session}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("ab") as handle:
+                handle.write(event.to_line())
+    assert folded() == before
+    project.index.rebuild()
+    assert folded() == before
 
 
 def test_screened_works_are_not_ranked(
