@@ -142,7 +142,32 @@ def test_title_query_uses_bibliographic_search_with_the_limit_as_rows() -> None:
     )
     params = seen[0].url.params
     assert params["query.bibliographic"] == "vessels" and params["rows"] == "7"
-    assert "filter" not in params
+    assert "query.author" not in params
+
+
+def test_title_query_is_limited_to_paper_types() -> None:
+    seen: list[httpx.Request] = []
+    _run(_source(_serving(_body([ARTICLE]), seen)), _spec("title.search:vessels"))
+    assert seen[0].url.params["filter"] == (
+        "type:journal-article,type:proceedings-article,type:posted-content,"
+        "type:book-chapter,type:report"
+    )
+
+
+def test_title_query_sends_the_author_surname_and_never_the_year() -> None:
+    seen: list[httpx.Request] = []
+    spec = _spec("title.search:vessels", filters={"author": "Steiner", "year": "2024"})
+    _run(_source(_serving(_body([ARTICLE]), seen)), spec)
+    params = seen[0].url.params
+    assert params["query.bibliographic"] == "vessels" and params["query.author"] == "Steiner"
+    assert "2024" not in str(seen[0].url.query.decode())
+
+
+def test_unknown_title_filter_is_refused() -> None:
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValueError):
+        _run(_source(_serving(_body([]), seen)), _spec("title.search:v", filters={"x": "y"}))
+    assert seen == []
 
 
 def test_title_query_with_more_matches_than_the_limit_is_partial() -> None:

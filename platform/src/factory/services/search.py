@@ -39,6 +39,7 @@ from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.progress import track
 from factory.sources.base import BudgetedSink, RawPage, SourceError, StatusRecord
+from factory.sources.crossref import TITLE_FILTERS
 from factory.sources.http import redact
 from factory.sources.registry import INTERFACES, SourceFactory
 
@@ -565,6 +566,14 @@ def _spec_issues(
         )
     if spec.filters and spec.source == "arxiv":
         issues.extend(_arxiv_filter_issues(spec.filters))
+    elif spec.filters and spec.source == "crossref" and spec.purpose is QueryPurpose.PROBE:
+        extra = sorted(set(spec.filters) - TITLE_FILTERS)
+        if extra or not spec.text.startswith("title.search:"):
+            issues.append(
+                ValidationIssue(
+                    "filters", "crossref takes author and year on a title lookup (title.search:)"
+                )
+            )
     elif spec.filters and spec.source != "openalex":
         issues.append(ValidationIssue("filters", f"{spec.source} does not take filters"))
     if spec.source == "openalex" and any(

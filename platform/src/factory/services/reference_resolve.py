@@ -436,6 +436,7 @@ def resolve_entries(
             text=f"title.search:{query}",
             purpose=QueryPurpose.PROBE,
             limit=TITLE_SEARCH_LIMIT,
+            filters=_title_filters(entry, lookup_source),
         )
         result = _lookup(project, actor, spec, sources)
         runs += [result.run_id] if result.run_id else []
@@ -460,6 +461,19 @@ def resolve_entries(
         lookup_runs=tuple(dict.fromkeys(runs)),
         flagged_titles=flagged,
     )
+
+
+def _title_filters(entry: Resolvable, lookup_source: str) -> dict[str, str]:
+    """Crossref title lookups carry the entry's first author and year (`author`, `year`); the
+    year is documented there as not sent. OpenAlex lookups carry none."""
+    if lookup_source != "crossref":
+        return {}
+    out: dict[str, str] = {}
+    if entry.first_author and entry.first_author.strip():
+        out["author"] = entry.first_author.strip()
+    if entry.year is not None:
+        out["year"] = str(entry.year)
+    return out
 
 
 # --- Entry text, re-derived ---
