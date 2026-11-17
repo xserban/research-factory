@@ -2,6 +2,7 @@ import fcntl
 import hashlib
 import os
 import socket
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -346,8 +347,9 @@ class Index:
         self._projection = projection
         self._engine = _make_engine(db_path)
         self._identity = _file_identity(db_path)
-        self._holding = False
-        self._snapshot = False
+        self._threads = threading.Lock()  # one thread of this process holds the file lock
+        self._owner: int | None = None  # that thread's ident while it holds it
+        self._snapshot = False  # set and read only by the owner
         self._on_exclusive = on_exclusive
 
     def sync(self) -> SyncResult:
@@ -356,7 +358,7 @@ class Index:
         Inside `snapshot()` it applies nothing: the snapshot synced on entry and holds only the
         shared lock, under which this process must not write.
         """
-        if self._snapshot:
+        if self._in_snapshot():
             return SyncResult(applied=0, rebuilt=False)
         with self._locked():
             return self._sync()
@@ -388,7 +390,7 @@ class Index:
         With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id
         (the ID floor of a hosted project, slice 5 ruling 3).
         """
-        if self._snapshot:
+        if self._in_snapshot():
             raise RuntimeError("exclusive() inside a read-only snapshot")
         outermost = not self._holding
         with self._locked():
@@ -403,26 +405,38 @@ class Index:
             self._build()
             return self._state_hash()
 
+    @property
+    def _holding(self) -> bool:
+        """Whether the calling thread holds the lock (re-entry is per thread, not per instance)."""
+        return self._owner == threading.get_ident()
+
+    def _in_snapshot(self) -> bool:
+        return self._holding and self._snapshot
+
     @contextmanager
     def _locked(self, *, shared: bool = False) -> Iterator[None]:
         """Hold the cross-process lock, with an engine on the current DB file.
 
         Writers take it exclusively; readers share it so they wait for any rebuild in progress.
-        Limit: the hold is per instance (two instances on one file in one process deadlock), ignores
-        `shared` once held, and is not thread-safe.
+        Threads of one process take turns on an in-process lock first: `flock` is per open file
+        description, so it cannot order threads, and re-entry is granted only to the owning
+        thread (a threaded server shares one instance). Limits: two instances on one file in one
+        process deadlock; `shared` is ignored once held; threads of one process never share a hold
+        (a snapshot also makes other threads wait). Never wait on another thread that needs this
+        index while holding it (inside `snapshot`, `exclusive` or `on_exclusive`): it deadlocks.
         """
         if self._holding:
             yield
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with (self._db_path.parent / "lock").open("a") as handle:
+        with self._threads, (self._db_path.parent / "lock").open("a") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
-            self._holding = True
+            self._owner = threading.get_ident()
             try:
                 self._refresh_engine()
                 yield
             finally:
-                self._holding = False
+                self._owner = None
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def reopen(self) -> None:
