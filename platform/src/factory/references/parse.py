@@ -73,7 +73,11 @@ def _strip_author_year_label(work: str) -> str:
         return work
     first = re.split(r"[\s,]", m.group("label").strip(), maxsplit=1)[0]
     rest = work[m.end() :]
-    if len(first) < 2 or not first[0].isupper() or first not in rest[:80]:
+    if (
+        len(first) < 2
+        or not first[0].isupper()
+        or re.search(rf"\b{re.escape(first)}\b", rest[:80]) is None
+    ):
         return work
     return rest
 
@@ -242,13 +246,12 @@ def parse_entry_fields(text: str) -> RefFields:
         if unlabelled != work:
             again, again_venue = _title_venue(unlabelled)
             if _better(again):
-                title, venue, author = again, again_venue, _first_author(unlabelled)
-                work = unlabelled
+                title, venue, author = again, again_venue, (_first_author(unlabelled) or author)
         if _is_fragment(title):
             found = _title_after_year(unlabelled)
             if found is not None:
                 title, venue = found
-                author = _first_author(unlabelled)
+                author = _first_author(unlabelled) or author
     return RefFields(doi, arxiv, url, year, author, title, venue)
 
 
