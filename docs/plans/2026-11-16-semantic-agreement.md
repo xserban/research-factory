@@ -1,7 +1,7 @@
 # Semantic agreement for miners: stable row alignment, secondary labels as sets, an equivalence judge
 
 Status: plan for the researcher's validation (2026-11-16). Nothing built, nothing run. Backlog: IDEA-53; builds on IDEA-52 (evidence overlap), IDEA-68 (unit ignored), IDEA-69 (unmatched rows in the rate), IDEA-50 and 51 (versioned miner specs, `miner add`), IDEA-64 (design choices explicit), IDEA-37 (miners).
-Depends on: `services/extraction_agreement.py`, `mining/score.py`, `mining/spec.py` and `mining/compile.py`, the `mine agreement`, `mine status` and `miner calibrate` commands, `services/site_agreement.py` (hub product), the projector and the event registry (a new event is proposed, so decision 129 below).
+Depends on: `services/extraction_agreement.py`, `mining/score.py`, `mining/spec.py` and `mining/compile.py`, the `mine agreement`, `mine status` and `miner calibrate` commands, `services/site_agreement.py` (hub product), the projector and the event registry (a new event is proposed, so decision 132 below).
 Binding: `00-system.md` (events append-only, index a projection, MCP conventions), decision 37 (independence of passes), decisions 86 and 91 (miner spec and calibration), R-xx on dual extraction and agreement.
 
 ## 1. Goal and non-goals
@@ -95,7 +95,7 @@ Effect on rates. A one-sided secondary leaves the denominator, so the rate rises
 
 Which pairs. For each aligned pair and each `judge.fields` field: if `_normalised` values are equal (and `reported_in`, `reproduced` match), the pair agrees without a judge. Otherwise it needs a verdict. Where a judge is declared, the IDEA-52 `evidence_overlap` shortcut is not applied to those fields (same anchor is not same meaning; Q10). Fields not in `judge.fields` keep exact comparison.
 
-Event (proposed, decision 129): `extraction.pair_judged`.
+Event (proposed, decision 132): `extraction.pair_judged`.
 ```
 miner, version, scope, work_id, slot, field,
 pair_digest = sha256(canonical json of: miner, version, work_id, slot, field,
@@ -106,7 +106,7 @@ provenance: model, skill version, input_blob (the task blob shown to the judge),
 ```
 Latest event per `pair_digest` wins (supersession; no edit). A judgement is current iff its `pair_digest` equals the digest of the pair now computed; a changed row (re-extraction, supersession) makes the digest differ and the pair pending again. Projection table `pair_judgements` (rebuildable) holds the latest verdict per digest.
 
-A second event, `extraction.judgement_audited` (researcher label: agree | overturn, with the researcher's verdict and a note, by `pair_digest`), supports the audit of the judge (below). Both are in decision 129.
+A second event, `extraction.judgement_audited` (researcher label: agree | overturn, with the researcher's verdict and a note, by `pair_digest`), supports the audit of the judge (below). Both are in decision 132.
 
 Service (`services/pair_judge.py`, new):
 - `judge_next(project, actor, miner, limit)`: pending pairs of dual works in a deterministic order (sha256 of `pair_digest`), each as a task: work id, slot, field name and definition (description, allowed form), the two values and quotes and anchors, `input_blob` of the task. Side order is blinded: side "1" is A when `sha256(pair_digest)[0]` is even, else B; the mapping is recomputed by the platform, never sent. The tool carries no rate.
@@ -164,7 +164,7 @@ Judge (`test_pair_judge.py`, `test_pair_judge_projection.py`):
 
 ## 5. Tasks (branch `semantic-agreement`; 1 to 3 hours each; one commit each)
 
-0. Decision 129 proposed (events `extraction.pair_judged`, `extraction.judgement_audited`; the spec `agreement` block; the gate reads the declared-rules all-rows rate). Files: `docs/decisions.md`, `docs/specs/00-system.md` event list. Docs only, 1 h. Blocks 4, 5.
+0. Decision 132 proposed (events `extraction.pair_judged`, `extraction.judgement_audited`; the spec `agreement` block; the gate reads the declared-rules all-rows rate). Files: `docs/decisions.md`, `docs/specs/00-system.md` event list. Docs only, 1 h. Blocks 4, 5.
 1. Spec block: `AgreementDecl` dataclass, parse, digest only when non-default, validation, `miner add --check` output. Files: `mining/spec.py`, `mining/validate.py`, `mining/compile.py` (`Pack.agreement`), `services/miner_add.py`. Tests 6, 12 (registration parts). rf-builder-critical (spec digest). 2.5 h. Depends on 0.
 2. Alignment: `services/agreement_align.py`, use in `_read_state`, `_Pair.row_key_b`, resolution matching and orphan listing. Files: `services/extraction_agreement.py`, new module. Tests 1–5, 7. rf-builder-critical (agreement core). 3 h. Depends on 1.
 3. Label sets: `services/agreement_rules.py`, `_compare`, `_tally` completeness record, `score`. Files: `services/extraction_agreement.py`, `mining/score.py`. Tests 8–13. rf-builder-critical. 3 h. Depends on 1; independent of 2 (merge order 2 then 3).
