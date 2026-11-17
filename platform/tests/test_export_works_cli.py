@@ -27,7 +27,7 @@ def test_ids_export_to_a_directory_and_say_what_was_skipped(
         env=_cli_env(settings.root),
     )
     assert done.exit_code == 0, done.stderr + done.stdout
-    assert "1 exported, 1 skipped, 0 withheld" in done.stdout
+    assert "1 exported, 1 skipped;" in done.stdout
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["selection"] == "ids" and len(manifest["works"]) == 1
     assert _event_files(project) == before
@@ -93,8 +93,21 @@ def test_pdfs_flag_is_reported(
 ) -> None:
     done = runner.invoke(
         app,
-        ["export", "works", "--ids", two[0], "--pdfs", "--out", str(tmp_path / "o")],
+        ["export", "works", "--ids", two[0], "--pdfs", "--confirm", "--out", str(tmp_path / "o")],
         env=_cli_env(settings.root),
     )
     assert done.exit_code == 0, done.stderr
     assert "without a PDF: 1" in done.stdout
+    assert "held" not in done.stdout.lower() and "withheld" not in done.stdout.lower()
+
+
+def test_pdfs_without_confirm_are_refused_and_write_nothing(
+    settings: Settings, project: Project, two: tuple[str, str], tmp_path: Path
+) -> None:
+    done = runner.invoke(
+        app,
+        ["export", "works", "--ids", two[0], "--pdfs", "--out", str(tmp_path / "o")],
+        env=_cli_env(settings.root),
+    )
+    assert done.exit_code == 1 and "confirm" in done.stderr
+    assert not (tmp_path / "o").exists()

@@ -20,6 +20,7 @@ Invariants:
 from collections.abc import Iterator, Mapping
 from enum import StrEnum
 from functools import cache
+from typing import Final
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
@@ -96,6 +97,9 @@ ROLE_PERMISSIONS: Mapping[ProjectRole, frozenset[Permission]] = {
     ProjectRole.OBSERVER: _READ,
 }
 
+
+EXPORT_WORKS_PDFS: Final = "cli:export works --pdfs"
+"""The `TOOL_PERMISSIONS` key of an export of works that includes the stored PDFs."""
 
 TOOL_PERMISSIONS: Mapping[str, Permission] = {
     # MCP tools that only read.
@@ -493,6 +497,11 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:consolidation complete": Permission.HUMAN_CONFIRM,
     "cli:appraisal judge": Permission.HUMAN_CONFIRM,
     "cli:appraisal resolve": Permission.HUMAN_CONFIRM,
+    # Markdown-only file export: read-only, the researcher's own copy (decisions 43 and 81).
+    "cli:export works": Permission.PROJECT_READ,
+    # With --pdfs it copies licensed files out of the library: a human confirmation, like a layer
+    # move; `authorize_export_works` applies it.
+    EXPORT_WORKS_PDFS: Permission.HUMAN_CONFIRM,
 }
 """One permission per MCP tool and per mutating CLI command (ruling 10). A tool with no row is a
 tool the server refuses to start with."""
@@ -635,6 +644,34 @@ def authorize_command(project: Project, principal: Principal, tool: str) -> None
     if permission is None or not (private or governed(project)):
         return
     authorize(project, principal, "human", permission, lab=lab_of(project))
+
+
+def authorize_export_works(
+    project: Project,
+    principal: Principal,
+    *,
+    pdfs: bool,
+    confirm: bool,
+    actor_kind: ActorKind = "human",
+) -> None:
+    """Authorise `export works`. Only a person exports (any other actor is refused, with or without
+    PDFs). With `pdfs` the person must also hold `human-act:confirm` and say `confirm`: licensed
+    files leave the library only on an explicit confirmation, as a layer move needs one."""
+    if actor_kind != "human":
+        raise not_held(Permission.HUMAN_CONFIRM if pdfs else Permission.PROJECT_READ)
+    authorize_command(project, principal, "cli:export works")
+    if not pdfs:
+        return
+    if not confirm:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "confirm",
+                    "PDFs are licensed files; confirm that they may be copied out of the library",
+                )
+            ]
+        )
+    authorize_command(project, principal, EXPORT_WORKS_PDFS)
 
 
 def gate_role_issues(project: Project, actor: Actor, gate_id: str) -> list[ValidationIssue]:

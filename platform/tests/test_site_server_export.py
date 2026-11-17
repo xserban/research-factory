@@ -9,6 +9,7 @@ import io
 import json
 import re
 import threading
+import time
 import zipfile
 from collections.abc import Iterator
 from typing import Any
@@ -16,7 +17,7 @@ from typing import Any
 import pytest
 
 from factory.errors import FactoryError
-from factory.services import site_server, withholding
+from factory.services import access, site_server, withholding
 from factory.services.context import Project
 from factory.services.site import site_dir
 from tests.test_export_works import _event_files, two
@@ -79,7 +80,7 @@ def test_pdfs_flag_reaches_the_service(
     two: tuple[str, str],
 ) -> None:
     port, token = served
-    _, _, data = _post(port, {"work_ids": [two[0]], "pdfs": True}, token)
+    _, _, data = _post(port, {"work_ids": [two[0]], "pdfs": True, "confirm": True}, token)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         assert json.loads(z.read("manifest.json"))["pdfs"] == "included where stored"
 
@@ -105,7 +106,7 @@ def test_a_refused_command_is_403_and_exports_nothing(
         seen.append(tool)
         raise FactoryError("not allowed")
 
-    monkeypatch.setattr(site_server, "authorize_command", refuse)
+    monkeypatch.setattr(access, "authorize_command", refuse)
     status, _, data = _post(port, {"work_ids": [two[0]]}, token)
     assert status == 403 and seen == ["cli:export works"]
     assert json.loads(data)["ok"] is False
@@ -124,7 +125,7 @@ def test_bad_bodies_and_the_cap_are_structured_400s(
     assert status == 400 and json.loads(data)["issues"][0]["field"] == "selection"
 
 
-def test_a_held_out_work_is_withheld_over_the_hub_too(
+def test_a_held_out_work_is_exported_over_the_hub_and_nothing_says_so(
     served: tuple[int, str],
     two: tuple[str, str],
     monkeypatch: pytest.MonkeyPatch,
@@ -134,7 +135,47 @@ def test_a_held_out_work_is_withheld_over_the_hub_too(
     _, _, data = _post(port, {"work_ids": [two[0]]}, token)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         manifest = json.loads(z.read("manifest.json"))
-        assert manifest["withheld"] == 1 and two[0] not in json.dumps(manifest)
+        assert [e["work_id"] for e in manifest["works"]] == [two[0]]
+        assert "withheld" not in json.dumps(manifest)
+        assert "held-out" not in z.read("MANIFEST.md").decode().lower()
+
+
+def test_pdfs_need_an_explicit_confirm(
+    project: Project, served: tuple[int, str], two: tuple[str, str]
+) -> None:
+    port, token = served
+    status, _, data = _post(port, {"work_ids": [two[0]], "pdfs": True}, token)
+    assert status == 400 and json.loads(data)["issues"][0]["field"] == "confirm"
+    assert _post(port, {"work_ids": [two[0]], "pdfs": True, "confirm": "yes"}, token)[0] == 400
+    assert _post(port, {"work_ids": [two[0]], "pdfs": True, "confirm": True}, token)[0] == 200
+
+
+def test_a_non_human_actor_is_refused_with_and_without_pdfs(project: Project) -> None:
+    for kind in ("agent", "system"):
+        for pdfs in (False, True):
+            with pytest.raises(FactoryError):
+                access.authorize_export_works(
+                    project,
+                    project.principal,
+                    pdfs=pdfs,
+                    confirm=True,
+                    actor_kind=kind,  # type: ignore[arg-type]
+                )
+    assert access.TOOL_PERMISSIONS["cli:export works"] is access.Permission.PROJECT_READ
+    assert access.TOOL_PERMISSIONS[access.EXPORT_WORKS_PDFS] is access.Permission.HUMAN_CONFIRM
+
+
+def test_the_scratch_zip_is_not_left_in_the_project_after_a_download(
+    project: Project, served: tuple[int, str], two: tuple[str, str]
+) -> None:
+    port, token = served
+    assert _post(port, {"work_ids": [two[0]]}, token)[0] == 200
+    scratch = project.paths.dir / "ops" / "export-tmp"
+    for _ in range(50):  # the handler removes the directory just after the last byte is sent
+        if not list(scratch.iterdir()):
+            break
+        time.sleep(0.1)
+    assert scratch.is_dir() and not list(scratch.iterdir())
 
 
 def test_a_body_larger_than_the_usual_limit_is_taken_for_this_route(

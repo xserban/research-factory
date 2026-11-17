@@ -25,13 +25,14 @@ def test_the_page_has_the_export_controls_and_a_count() -> None:
 def test_each_list_row_has_a_checkbox_that_does_not_open_the_detail() -> None:
     assert 'class="xs" data-id="${esc(w.id)}"' in PAGE
     assert "c.onclick=e=>e.stopPropagation()" in PAGE
-    assert "filtered().forEach(w=>SELX.add(w.id))" in PAGE
+    assert "f.forEach(w=>SELX.add(w.id))" in PAGE
 
 
 def test_the_export_posts_the_ids_with_the_token_and_downloads_a_zip() -> None:
     assert "fetch(API+'/api/export/works'" in PAGE
     assert "'X-Factory-Token':TOKEN" in PAGE
-    assert "work_ids:[...SELX],pdfs:$('#expdf').checked" in PAGE
+    assert "work_ids:[...SELX],pdfs:$('#expdf').checked,confirm:" in PAGE
+    assert "licensed files" in PAGE
     assert "application/zip" in PAGE and "a.download=" in PAGE
     assert "Open this page with factory site serve to export." in PAGE
 
@@ -54,3 +55,10 @@ def test_the_build_code_hash_covers_the_page_module() -> None:
     module, so a changed page makes the explorer stale and the hub's rebuilder rebuilds it."""
     here = Path(site.__file__).parent
     assert (here / "site_explorer_page.py") in set(here.glob("site*.py"))
+
+
+def test_a_filter_over_the_cap_warns_before_the_click_and_disables_the_export() -> None:
+    assert "const EXCAP=200" in PAGE
+    assert "b.disabled=!n||!TOKEN||over" in PAGE
+    assert "NF>EXCAP" in PAGE and "Narrow the filter first." in PAGE
+    assert "f.length>EXCAP&&!confirm(" in PAGE

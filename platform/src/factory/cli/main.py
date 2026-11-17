@@ -193,7 +193,7 @@ from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
 from factory.services import watch as watch_service
 from factory.services import xruns as xruns_service
-from factory.services.access import authorize_command, full_view_allowed
+from factory.services.access import authorize_command, authorize_export_works, full_view_allowed
 from factory.services.access_log import admin_call, audited, os_login
 from factory.services.cli_access import authorise_root_command, server_root
 from factory.services.commit import commit_hosted
@@ -3584,7 +3584,12 @@ def export_works_cmd(
     from_file: Annotated[
         Path | None, typer.Option("--from-file", help="Work ids, one per line.")
     ] = None,
-    pdfs: Annotated[bool, typer.Option("--pdfs", help="Add the stored PDFs.")] = False,
+    pdfs: Annotated[
+        bool, typer.Option("--pdfs", help="Add the stored PDFs (licensed files; needs --confirm).")
+    ] = False,
+    confirm: Annotated[
+        bool, typer.Option("--confirm", help="Confirm that licensed PDFs may be copied out.")
+    ] = False,
     max_works: Annotated[int, typer.Option("--max-works", help="Selection cap.")] = (
         export_works_service.MAX_WORKS
     ),
@@ -3593,10 +3598,11 @@ def export_works_cmd(
     ),
 ) -> None:
     """The converted Markdown of chosen works (and with --pdfs their PDFs) with a header per file
-    and a manifest, for upload to a notebook tool. Held-out seeds' works are withheld."""
+    and a manifest, for upload to a notebook tool. With --pdfs, --confirm is required."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        authorize_export_works(project, project.principal, pdfs=pdfs, confirm=confirm)
         given = [x for x in (layer, ids, from_file) if x is not None]
         if len(given) != 1:
             raise FactoryValidationError(
@@ -3622,7 +3628,7 @@ def export_works_cmd(
             max_bytes=max_mb * 1024 * 1024,
         )
     typer.echo(
-        f"{summary.exported} exported, {summary.skipped} skipped, {summary.withheld} withheld; "
+        f"{summary.exported} exported, {summary.skipped} skipped; "
         f"{summary.bytes} bytes -> {summary.out}"
     )
     if pdfs:
