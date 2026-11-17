@@ -103,6 +103,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "interpretation_reviews",
         "layer_nodes",
         "layer_edges",
+        "registered_files",
         "concepts",
         "concept_aliases",
         "concept_definitions",
