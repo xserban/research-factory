@@ -92,7 +92,9 @@ def test_counts_equal_the_projects_own_reports(portfolio_settings: Settings) -> 
         assert row.ta_included == flow.included
         assert row.ft_included == flow.full_text.included
         assert row.last_event_at == status.last_event_at
-        assert row.human == status.human
+        # The portfolio JSON is safe for any agent (ruling 3): the agent path's queue, with no
+        # assignee and the import gates counting the development part only.
+        assert row.human == project_status(project, agent=True).human
         assert row.question_id == status.question
         if status.protocol is None:
             assert row.protocol_id is None and row.protocol_status is None
