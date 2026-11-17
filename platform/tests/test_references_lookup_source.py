@@ -132,6 +132,32 @@ def test_usable_title_is_searched_in_the_chosen_source(
     ]
 
 
+def test_crossref_title_lookup_carries_the_first_author_and_openalex_does_not(
+    project: Project, corpus: None, agent: Actor
+) -> None:
+    lookups = Lookups(openalex=[RECORD])
+    entry = _Entry(1, "Sparse kernels for tidal data", year=2019, first_author="Thornbury")
+    resolve_entries(
+        project,
+        agent,
+        [entry, _Entry(2, "Sparse kernels for tidal data", first_author=None)],
+        sources=lookups.sources(),
+        corpus=load_corpus(project),
+        lookup_source="crossref",
+    )
+    assert [p.get("query.author") for p in lookups.crossref_params] == ["Thornbury", None]
+    resolve_entries(
+        project,
+        agent,
+        [entry],
+        sources=lookups.sources(),
+        corpus=load_corpus(project),
+        lookup_source="openalex",
+    )
+    assert lookups.asked[-1] == "openalex title.search:sparse kernels for tidal data"
+    assert len(lookups.crossref_params) == 2
+
+
 def test_import_resolution_still_searches_a_flagged_title(
     project: Project, corpus: None, agent: Actor
 ) -> None:

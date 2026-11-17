@@ -131,7 +131,7 @@ def test_doi_list_is_a_filter_with_rows_equal_to_the_dois_asked() -> None:
     [request] = seen
     assert request.url.params["filter"] == "doi:10.1/a,doi:10.1/b,doi:10.1/c"
     assert request.url.params["rows"] == "3"
-    assert request.url.params["mailto"] == "me@example.org"
+    assert "mailto" not in request.url.params
 
 
 def test_title_query_uses_bibliographic_search_with_the_limit_as_rows() -> None:
@@ -142,7 +142,41 @@ def test_title_query_uses_bibliographic_search_with_the_limit_as_rows() -> None:
     )
     params = seen[0].url.params
     assert params["query.bibliographic"] == "vessels" and params["rows"] == "7"
-    assert "filter" not in params
+    assert "query.author" not in params
+
+
+def test_title_query_is_limited_to_paper_types() -> None:
+    seen: list[httpx.Request] = []
+    _run(_source(_serving(_body([ARTICLE]), seen)), _spec("title.search:vessels"))
+    types = seen[0].url.params["filter"].split(",")
+    assert all(t.startswith("type:") for t in types)
+    allowed = {t.removeprefix("type:") for t in types}
+    assert {"journal-article", "book", "monograph", "edited-book", "dissertation"} <= allowed
+    assert {"proceedings", "report-series", "standard", "other"} <= allowed
+    assert not allowed & {"peer-review", "dataset", "component", "grant"}
+
+
+def test_title_query_sends_the_author_surname() -> None:
+    seen: list[httpx.Request] = []
+    spec = _spec("title.search:vessels", filters={"author": "Steiner"})
+    _run(_source(_serving(_body([ARTICLE]), seen)), spec)
+    params = seen[0].url.params
+    assert params["query.bibliographic"] == "vessels" and params["query.author"] == "Steiner"
+    assert "2024" not in str(seen[0].url.query.decode())
+
+
+def test_year_title_filter_is_refused() -> None:
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValueError):
+        _run(_source(_serving(_body([]), seen)), _spec("title.search:v", filters={"year": "2024"}))
+    assert seen == []
+
+
+def test_unknown_title_filter_is_refused() -> None:
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValueError):
+        _run(_source(_serving(_body([]), seen)), _spec("title.search:v", filters={"x": "y"}))
+    assert seen == []
 
 
 def test_title_query_with_more_matches_than_the_limit_is_partial() -> None:

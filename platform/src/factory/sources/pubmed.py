@@ -249,9 +249,6 @@ class PubmedSource:
         params: dict[str, str | int] = {"db": "pubmed", **extra}
         if self._api_key:
             params["api_key"] = self._api_key
-        if self._mailto:
-            params["tool"] = "research-factory"
-            params["email"] = self._mailto
         return params
 
     def run(

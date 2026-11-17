@@ -29,7 +29,7 @@ def default_routes(settings: Settings) -> dict[Route, FullTextRoute]:
     return {
         Route.ARXIV_HTML: ArxivHtmlRoute(http, lookup=lookup),
         Route.ARXIV_SOURCE: ArxivSourceRoute(http, lookup=lookup),
-        Route.PMC_JATS: PmcJatsRoute(http, settings.mailto),
+        Route.PMC_JATS: PmcJatsRoute(http),
         Route.EUROPEPMC_JATS: EuropePmcJatsRoute(generic_http()),
         Route.OA_PDF: OaPdfRoute(http, settings.mailto),
     }

@@ -51,7 +51,6 @@ def route(
     xml: bytes = XML,
     converter: dict[str, object] | None = None,
     fail: bool = False,
-    mailto: str | None = None,
 ) -> tuple[PmcJatsRoute, list[httpx.Request]]:
     log: list[httpx.Request] = []
 
@@ -70,7 +69,7 @@ def route(
     client = PoliteClient(
         httpx.Client(transport=httpx.MockTransport(handler)), sleep=lambda _s: None
     )
-    return PmcJatsRoute(client, mailto), log
+    return PmcJatsRoute(client), log
 
 
 def test_pmcid_present_skips_the_converter() -> None:
@@ -100,12 +99,12 @@ def test_pmcid_converted_from_pmid() -> None:
     assert "email" not in log[0].url.params
 
 
-def test_converter_sends_tool_and_email_when_configured() -> None:
-    r, log = route(converter={"records": [{"pmcid": "PMC123"}]}, mailto="a@example.org")
+def test_converter_sends_no_contact_address() -> None:
+    r, log = route(converter={"records": [{"pmcid": "PMC123"}]})
     r.fetch(work(doi="10.1/x"))
     assert log[0].url.params["idtype"] == "doi"
-    assert log[0].url.params["email"] == "a@example.org"
-    assert log[0].url.params["tool"]
+    assert "email" not in log[0].url.params
+    assert "tool" not in log[0].url.params
 
 
 def test_no_pmcid_anywhere() -> None:

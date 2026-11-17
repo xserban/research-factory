@@ -37,7 +37,6 @@ _IDCONV = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 _BUCKET = "https://pmc-oa-opendata.s3.amazonaws.com/"
 _OBJECT = _BUCKET + "PMC{num}.{ver}/PMC{num}.{ver}.{ext}"
 _MEDIA_TYPE = "application/jats+xml"
-_TOOL = "research-factory"
 _TDM = "TDM"
 _VERSION_RE = re.compile(r"^PMC(\d+)\.(\d+)$")
 _PMCID_RE = re.compile(r"^(?:PMC)?(\d+)$", re.IGNORECASE)
@@ -93,9 +92,8 @@ class PmcJatsRoute:
 
     route: Route = Route.PMC_JATS
 
-    def __init__(self, http: PoliteClient, mailto: str | None) -> None:
+    def __init__(self, http: PoliteClient) -> None:
         self._http = http
-        self._mailto = mailto
 
     def _convert(self, work: Work) -> tuple[str | None, RouteResult | None]:
         """The PMC number from the converter, or a failure result. `(None, None)` means none."""
@@ -107,9 +105,6 @@ class PmcJatsRoute:
         else:
             return None, None
         params: dict[str, str | int] = {"ids": value, "idtype": idtype, "format": "json"}
-        if self._mailto:
-            params["tool"] = _TOOL
-            params["email"] = self._mailto
         try:
             reply = self._http.fetch(_IDCONV, params)
         except httpx.RequestError:
