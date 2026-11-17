@@ -162,6 +162,7 @@ from factory.services import probe as probe_service
 from factory.services import progress as progress_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
+from factory.services import pubmed_slices
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
@@ -204,7 +205,7 @@ from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import SourceFactory, default_sources
+from factory.sources.registry import SourceFactory, default_sources, lookup_sources
 
 _M = TypeVar("_M", bound=StrictModel)
 _SYSTEM_CLOCK = SystemClock()
@@ -256,6 +257,8 @@ def build_server(
     provider = stdio_provider(settings, clock) if context is None else context
     unit_cap = UnitCap.from_env(os.environ) if cap is None else cap
     adapters = dict(default_sources() if sources is None else sources)
+    # reference resolution may also look works up in Crossref (IDEA-89)
+    lookup_adapters = dict(lookup_sources() if sources is None else sources)
     session = THIS_SESSION
 
     def open_for_call(slug: str, call: CallContext) -> Project:
@@ -429,6 +432,62 @@ def build_server(
             return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 
         return _reply(project, chase, include_work_ids=False)
+
+    @server.tool()
+    def search_slice(
+        project: str,
+        query_id: str,
+        role: str,
+        model: str,
+        skill: str,
+        run: bool = False,
+        first_year: int = 1900,
+        deviation_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Split a capped PubMed query (partial, note `esearch-cap`) by publication date.
+
+        The platform counts by year, then month, then day until every slice is within PubMed's
+        9,999 cap; nothing is guessed and no model is involved. Without `run` it returns the plan
+        (slices and PubMed's counts) and writes nothing. With `run` it registers each non-empty
+        slice as its own search, the slice term verbatim, runs it, and returns the report: the
+        slices against the unsplit count, with any difference stated. Running again continues.
+        In a pilot or systematic project the slices are not planned queries: pass a
+        `deviation_id` recorded against the current protocol."""
+
+        def slice_() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            if not run:
+                plan = pubmed_slices.propose_slices(
+                    opened, query_id, sources=adapters, first_year=first_year
+                )
+                return {
+                    "parent_count": plan.parent_count,
+                    "slice_total": plan.total,
+                    "counts_requested": plan.counts_requested,
+                    "slices": [
+                        {
+                            "start": s.window.start.isoformat(),
+                            "end": s.window.end.isoformat(),
+                            "unit": s.window.unit,
+                            "count": s.count,
+                            "over_cap": s.over_cap,
+                        }
+                        for s in plan.slices
+                    ],
+                }
+            budget_service.require_for(opened, actor, REQUESTS_SEARCH)
+            summary = pubmed_slices.run_slices(
+                opened,
+                actor,
+                query_id,
+                sources=adapters,
+                deviation_id=deviation_id,
+                first_year=first_year,
+            )
+            return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
+
+        return _reply(project, slice_, include_work_ids=False)
 
     @server.tool()
     def dedup_run(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
@@ -797,9 +856,11 @@ def build_server(
         arXiv takes only filters={"listed_since": "YYYY-MM-DD"}. The first probe of a pilot or
         systematic project draws the hold-out split. Each measured query also returns `sample`
         titles (default 20, 0 for none) to judge noise: a seeded random sample from OpenAlex, the
-        first page by relevance from arXiv (`sample_kind` says
-        which). Samples are not corpus records and drop any held-out seed's work. `decision_ids`
-        are the selected `probe` decisions this round implements; pilot and systematic projects
+        first page by relevance from arXiv and PubMed (`sample_kind` says
+        which). A PubMed sample also returns `mesh_suggestions`, the MeSH descriptors of the
+        sampled records with counts: suggestions only, never applied to a query. Samples are not
+        corpus records and drop any held-out seed's work. `decision_ids` are the selected `probe`
+        decisions this round implements; pilot and systematic projects
         refuse a probe without one."""
 
         def probe() -> JsonValue:
@@ -1672,13 +1733,13 @@ def build_server(
         limit: int = 20,
     ) -> dict[str, JsonValue]:
         """Fetch full text for promoted works. Routes are tried in order (arxiv-html, arxiv-source,
-        pmc-jats, oa-pdf) and each work stops at its first retrieved attempt. `routes` names routes
-        to try instead, all of them, without stopping. `work_ids` defaults to the promoted works
-        that have no document and no attempt yet, so a work whose routes all failed is retried
-        only by `refresh` (every promoted work), `routes`, or by naming it in `work_ids`.
-        `limit` caps the works processed; more `work_ids` than `limit` are refused. Returns each
-        work's attempts and
-        documents, and `remaining`, the promoted works still without a document. A researcher's
+        pmc-jats, europepmc-jats, oa-pdf) and each work stops at its first retrieved attempt.
+        `routes` names routes to try instead, all of them, without stopping.
+        `work_ids` defaults to the promoted works that have no document and no attempt yet, so a
+        work whose routes all failed is retried only by `refresh` (every promoted work),
+        `routes`, or by naming it in `work_ids`. `limit` caps the works processed; more
+        `work_ids` than `limit` are refused. Returns each work's attempts and documents, and
+        `remaining`, the promoted works still without a document. A researcher's
         PDF is imported by the researcher, never fetched. Refused to a session that has joined a
         pass."""
 
@@ -2548,6 +2609,7 @@ def build_server(
         re_resolve: bool = False,
         states: list[str] | None = None,
         only_identifiers: bool = False,
+        source: Literal["crossref", "openalex"] = "crossref",
     ) -> dict[str, JsonValue]:
         """Extract and resolve the reference lists of included works from their converted
         documents. With no `work_ids`: every included work with a conversion and no current
@@ -2558,7 +2620,9 @@ def build_server(
         selected by `states` (default `source-error`; an unresolved reason or a link state) are
         looked up again under the same extraction ids, where the lookup failed or the matcher has
         changed. With `only_identifiers` (re-resolution only) just the entries with a DOI or arXiv
-        id are retried, by identifier lookup. Refused to a session that has joined a pass."""
+        id are retried, by identifier lookup. `source` is where DOI and title lookups go (default
+        `crossref`; `openalex` on request; arXiv ids are always asked of arXiv). Refused to a
+        session that has joined a pass."""
 
         def extract() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -2570,12 +2634,13 @@ def build_server(
                     actor,
                     work_ids=work_ids,
                     states=states or ("source-error",),
-                    sources=adapters,
+                    sources=lookup_adapters,
                     only_identifiers=only_identifiers,
+                    lookup_source=source,
                 )
                 return _withheld(opened, retried.model_dump(mode="json"), include_work_ids=False)
             summary = references_service.extract_references(
-                opened, actor, work_ids, sources=adapters
+                opened, actor, work_ids, sources=lookup_adapters, lookup_source=source
             )
             return _withheld(opened, summary.model_dump(mode="json"), include_work_ids=False)
 

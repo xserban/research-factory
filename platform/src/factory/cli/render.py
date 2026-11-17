@@ -903,7 +903,13 @@ def re_resolve_summary_lines(summary: ReResolveSummary) -> list[str]:
         for r in summary.re_resolved
     ]
     lines += [f"skipped {s.work_id}: {s.reason}" for s in summary.skipped]
-    return lines or ["nothing to retry"]
+    if not lines:
+        lines = ["nothing to retry"]
+    lines.append(
+        f"{summary.selected} entries selected, {summary.skipped_layer} skipped by layer, "
+        f"{summary.skipped_flagged_title} skipped by flagged title"
+    )
+    return lines
 
 
 def extract_summary_lines(summary: ExtractSummary) -> list[str]:

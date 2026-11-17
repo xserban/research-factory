@@ -1,6 +1,6 @@
 # Research Factory
 
-Status: **planning** (no implementation yet). Last updated: 2026-10-31.
+Status: **in development**: the platform (slices 1 to 3c and later) is implemented and a pilot is under way; see [docs/build-status.md](docs/build-status.md). Licence: MIT.
 
 A research factory is a platform in which teams of researchers and AI agents run research projects end to end — literature search, corpus building, knowledge extraction, hypothesis generation and testing, keeping knowledge current — with full transparency, provenance and a built-in quality system. The intelligence comes from Claude (through Claude subscriptions); the platform itself is deterministic.
 
@@ -26,4 +26,3 @@ A research factory is a platform in which teams of researchers and AI agents run
 | [docs/references.md](docs/references.md) | Literature and documentation |
 | [docs/thesis-proposal.pdf](docs/thesis-proposal.pdf) | Draft MSc thesis proposal (first instance of the factory) |
 
-The editable version of the thesis proposal is the Claude doc: https://claude.ai/artifact/P8GEeyE8C4ZQJDnyjmyCWW

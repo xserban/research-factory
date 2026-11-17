@@ -97,7 +97,7 @@ from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
-from factory.services import card_import, region_adoption
+from factory.services import card_import, pubmed_slices, region_adoption
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
@@ -209,7 +209,7 @@ from factory.services.server_check import server_check
 from factory.services.server_init import init_server
 from factory.services.xrun_accounting import baseline_verdicts
 from factory.sources.fulltext.registry import default_routes
-from factory.sources.registry import default_sources, status_sources
+from factory.sources.registry import default_sources, lookup_sources, status_sources
 from factory.views import render as views_render
 from factory.views.briefing_render import briefing_markdown
 
@@ -1528,6 +1528,49 @@ def search_chase_cmd(
     )
 
 
+@search_app.command("slice")
+def search_slice_cmd(
+    ctx: typer.Context,
+    query_id: Annotated[str, typer.Argument(help="The capped pubmed keyword query (qry_...).")],
+    run: Annotated[bool, typer.Option("--run", help="Register and run every slice.")] = False,
+    first_year: Annotated[int, typer.Option("--first-year", help="First year cut singly.")] = 1900,
+    deviation: Annotated[
+        str | None, typer.Option("--deviation", help="Deviation (dev_...) that allows the slices.")
+    ] = None,
+) -> None:
+    """Split a capped PubMed query by date; without --run, show the plan and write nothing."""
+    state = _state(ctx)
+    sources = dict(default_sources())
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not run:
+            plan = pubmed_slices.propose_slices(
+                project, query_id, sources=sources, first_year=first_year
+            )
+            for planned in plan.slices:
+                if planned.count:
+                    typer.echo(
+                        f"{planned.window.start} .. {planned.window.end}  {planned.count}"
+                        + ("  over the cap" if planned.over_cap else "")
+                    )
+            typer.echo(f"{len(plan.runnable)} slices, total {plan.total} of {plan.parent_count}")
+            return
+        summary = pubmed_slices.run_slices(
+            project,
+            project.human_actor(),
+            query_id,
+            sources=sources,
+            deviation_id=deviation,
+            first_year=first_year,
+        )
+    typer.echo(
+        f"{len(summary.runs)} runs; slice total {summary.report.slice_reported_total}, "
+        f"unsplit {summary.report.parent_reported}"
+    )
+    if summary.report.note:
+        typer.echo(summary.report.note)
+
+
 @protocol_app.command("show")
 def protocol_show_cmd(ctx: typer.Context, as_json: _JSON = False) -> None:
     """The current protocol: id, status, PRESS state, amendments and the whole spec."""
@@ -1589,6 +1632,13 @@ def references_extract_cmd(
             "that need a lookup are recorded as source-error; `references re-resolve` asks again.",
         ),
     ] = False,
+    lookup_source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help="Where DOI and title lookups go: crossref (default) or openalex.",
+        ),
+    ] = "crossref",
 ) -> None:
     """Extract and resolve the reference lists; default: every included work not yet extracted."""
     state = _state(ctx)
@@ -1598,7 +1648,8 @@ def references_extract_cmd(
             project,
             project.human_actor(),
             work,
-            sources={} if corpus_only else dict(default_sources()),
+            sources={} if corpus_only else dict(lookup_sources()),
+            lookup_source=lookup_source,
         )
     for line in render.extract_summary_lines(summary):
         typer.echo(line)
@@ -1699,18 +1750,45 @@ def references_re_resolve_cmd(
             help="Retry only entries with a DOI or arXiv id (identifier lookup, no title search).",
         ),
     ] = False,
+    lookup_source: Annotated[
+        str,
+        typer.Option(
+            "--source",
+            help="Where DOI and title lookups go: crossref (default) or openalex.",
+        ),
+    ] = "crossref",
+    layer: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--layer",
+            help="Retry only entries whose cited item holds this layer of the latest scheme "
+            "(a human label wins over the agent's); repeatable.",
+        ),
+    ] = None,
+    snowball_layers: Annotated[
+        bool,
+        typer.Option(
+            "--snowball-layers",
+            help="Retry only entries in the scheme's layers marked snowball.",
+        ),
+    ] = False,
 ) -> None:
     """Look up again links whose lookup failed or whose matcher changed; extraction ids stay."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        layers = [*(layer or [])]
+        if snowball_layers:
+            layers += layers_service.snowball_layer_ids(project)
         summary = references_service.re_resolve(
             project,
             project.human_actor(),
             work_ids=work,
             states=states or ("source-error",),
-            sources=dict(default_sources()),
+            sources=dict(lookup_sources()),
             only_identifiers=only_identifiers,
+            lookup_source=lookup_source,
+            layers=list(dict.fromkeys(layers)) if (layer or snowball_layers) else None,
         )
     for line in render.re_resolve_summary_lines(summary):
         typer.echo(line)

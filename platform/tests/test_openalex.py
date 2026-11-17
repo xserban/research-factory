@@ -243,6 +243,16 @@ class TestCursorPaging:
         assert (result.status, result.retrieved_count) == (RunStatus.PARTIAL, 1)
         assert result.note == "truncated by caller-supplied limit"
 
+    def test_limited_request_asks_for_no_more_than_the_limit(self) -> None:
+        seen: list[httpx.Request] = []
+        search(make_source(capture(seen)), keyword(limit=10))
+        assert seen[0].url.params["per-page"] == "10"
+
+    def test_limit_above_the_page_size_keeps_the_page_size(self) -> None:
+        seen: list[httpx.Request] = []
+        search(make_source(capture(seen), page_size=50), keyword(limit=500))
+        assert seen[0].url.params["per-page"] == "50"
+
     def test_limit_equal_to_everything_available_is_complete(self) -> None:
         result = search(source_returning(page([ITEM], 1, None)), keyword(limit=1))
         assert result.status is RunStatus.COMPLETE

@@ -1053,7 +1053,7 @@ def _refuse_shared(
     project: Project, views: list[ExtractionPassView], scope: ScopeKey = Scope.EVIDENCE
 ) -> None:
     """Refuse when one session joined both passes or the passes share a model. Joins are read
-    from the log: the projection keeps the first join of a session only. A pass's models are
+    from the log, whatever the projection keeps. A pass's models are
     those of its joins and of the actors that recorded its rows, so a session that changed to
     the other pass's model after joining is caught."""
     joins: dict[PassLabel, set[str]] = {label: set() for label in PassLabel}

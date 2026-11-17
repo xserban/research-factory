@@ -1,0 +1,90 @@
+name: Weekly quality report
+
+# Report-only: nothing here fails the build. Results appear in the run summary
+# and as a downloadable artifact (quality-report), kept 90 days.
+#   ruff, mypy   lint and strict typing (the project's own gates)
+#   radon        complexity per function, maintainability grade per file
+#   xenon        complexity threshold check (reported, not enforced yet)
+#   vulture      probable dead code (guesses; MCP/CLI entry points look unused)
+#   pip-audit    known vulnerabilities in locked dependencies
+#   scc          line counts and COCOMO effort estimate ("equivalent conventional
+#                effort"; overstates real effort for agent-written code)
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Install tools
+        run: |
+          uv sync --frozen
+          uv tool install radon
+          uv tool install xenon
+          uv tool install vulture
+          uv tool install pip-audit
+          go install github.com/boyter/scc/v3@v3.4.0
+          mkdir -p ../report
+
+      - name: ruff
+        run: uv run ruff check src > ../report/ruff.txt 2>&1 || true
+      - name: mypy
+        run: uv run mypy src > ../report/mypy.txt 2>&1 || true
+      - name: radon
+        run: |
+          radon cc src -s -a -nc > ../report/radon-complexity.txt || true
+          radon mi src -s > ../report/radon-maintainability.txt || true
+      - name: xenon
+        run: xenon --max-absolute C --max-modules B --max-average A src > ../report/xenon.txt 2>&1 || true
+      - name: vulture
+        run: vulture src --min-confidence 80 > ../report/vulture.txt || true
+      - name: pip-audit
+        run: |
+          uv export --frozen --no-hashes --no-emit-project > ../report/requirements.txt
+          pip-audit -r ../report/requirements.txt > ../report/pip-audit.txt 2>&1 || true
+      - name: scc (size and COCOMO)
+        working-directory: .
+        run: |
+          ~/go/bin/scc --exclude-dir data,experiments,.git > report/scc.txt
+          ~/go/bin/scc --exclude-dir data,experiments,.git --format html > report/scc.html
+
+      - name: Summary
+        working-directory: .
+        run: |
+          {
+            echo "# Weekly quality report"
+            echo "## Size and effort (scc, COCOMO)"
+            echo '```'; cat report/scc.txt; echo '```'
+            for f in ruff mypy xenon pip-audit; do
+              echo "## $f (last 15 lines)"
+              echo '```'; tail -n 15 "report/$f.txt"; echo '```'
+            done
+            echo "## radon: average complexity"
+            echo '```'; tail -n 2 report/radon-complexity.txt; echo '```'
+            echo "## radon: files below grade A"
+            echo '```'; grep -vE ' - A ' report/radon-maintainability.txt | head -n 30; echo '```'
+            echo "## vulture: probable dead code ($(wc -l < report/vulture.txt) items)"
+            echo '```'; head -n 30 report/vulture.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: report/
+          retention-days: 90

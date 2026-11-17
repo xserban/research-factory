@@ -19,6 +19,7 @@ from factory.model.work_ids import normalize_doi, normalize_title
 from factory.services.context import Project
 from factory.services.search import corpus_size
 from factory.sources.arxiv import ArxivSource
+from factory.sources.crossref import CrossrefSource
 from factory.sources.http import PoliteClient
 from factory.sources.openalex import OpenAlexSource
 from factory.sources.registry import SourceFactory
@@ -85,6 +86,7 @@ class Lookups:
     openalex: list[dict[str, Any]] = field(default_factory=list)
     arxiv: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     fail_openalex: bool = False
+    fail_crossref: bool = False
     fail_arxiv: bool = False
     asked: list[str] = field(default_factory=list)
     citing: list[dict[str, Any]] = field(default_factory=list)
@@ -93,6 +95,22 @@ class Lookups:
     """Answers to every `cited_by:` filter (a backward chase)."""
 
     def sources(self) -> dict[str, SourceFactory]:
+        """`openalex`, `crossref` (answering from the same `openalex` records) and `arxiv`."""
+
+        def crossref(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if "query.bibliographic" in params:
+                expression = f"title.search:{params['query.bibliographic']}"
+            else:
+                dois = [d.removeprefix("doi:") for d in params.get("filter", "").split(",")]
+                expression = "doi:" + "|".join(dois)
+            self.asked.append(f"crossref {expression}")
+            if self.fail_crossref:
+                raise httpx.ConnectError("scripted failure", request=request)
+            items = [_cr_item(i) for i in self.openalex if _oa_matches(i, expression)]
+            message = {"total-results": len(items), "items": items}
+            return httpx.Response(200, json={"status": "ok", "message": message})
+
         def openalex(request: httpx.Request) -> httpx.Response:
             expression = request.url.params.get("filter", "")
             self.asked.append(f"openalex {expression}")
@@ -118,6 +136,10 @@ class Lookups:
             return PoliteClient(client, sleep=lambda _s: None)
 
         return {
+            "crossref": SourceFactory(
+                CrossrefSource.kinds,
+                lambda s, c: CrossrefSource(polite(crossref), clock=c, mailto=s.mailto),
+            ),
             "openalex": SourceFactory(
                 OpenAlexSource.kinds,
                 lambda s, c: OpenAlexSource(polite(openalex), clock=c, mailto=s.mailto),
@@ -127,6 +149,24 @@ class Lookups:
                 lambda s, c: ArxivSource(polite(arxiv), clock=c, mailto=s.mailto),
             ),
         }
+
+
+def _cr_item(item: dict[str, Any]) -> dict[str, Any]:
+    """The Crossref form of a scripted OpenAlex record: same title, authors, year and DOI."""
+    authors = []
+    for entry in item.get("authorships", []):
+        *given, family = str(entry["author"]["display_name"]).split()
+        authors.append({"given": " ".join(given), "family": family})
+    year = int(str(item["publication_date"])[:4])
+    out: dict[str, Any] = {
+        "title": [item["display_name"]],
+        "type": "posted-content" if item.get("type") == "preprint" else "journal-article",
+        "issued": {"date-parts": [[year]]},
+        "author": authors,
+    }
+    if item.get("doi"):
+        out["DOI"] = str(item["doi"]).removeprefix("https://doi.org/")
+    return out
 
 
 def _oa_matches(item: dict[str, Any], expression: str) -> bool:

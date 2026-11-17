@@ -206,6 +206,8 @@ class SampledRecord:
 
     title: str
     identifiers: Identifiers
+    mesh: tuple[str, ...] = ()
+    """MeSH descriptor names the source gave the record (PubMed only; author keywords excluded)."""
 
 
 SampleKind = Literal["random", "top"]

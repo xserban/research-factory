@@ -130,13 +130,20 @@ def test_catalog_registers_fulltext_events() -> None:
 
 
 def test_route_order_excludes_researcher() -> None:
-    assert ROUTE_ORDER == (Route.ARXIV_HTML, Route.ARXIV_SOURCE, Route.PMC_JATS, Route.OA_PDF)
+    assert ROUTE_ORDER == (
+        Route.ARXIV_HTML,
+        Route.ARXIV_SOURCE,
+        Route.PMC_JATS,
+        Route.EUROPEPMC_JATS,
+        Route.OA_PDF,
+    )
     assert Route.RESEARCHER not in ROUTE_ORDER
     # LAB_LIBRARY has no quality of its own: an adopted document keeps its own (c52130a).
     assert set(QUALITY) == set(Route) - {Route.LAB_LIBRARY}
     assert QUALITY[Route.ARXIV_HTML] is Quality.STRUCTURED_HTML
     assert QUALITY[Route.ARXIV_SOURCE] is Quality.LATEX
     assert QUALITY[Route.PMC_JATS] is Quality.STRUCTURED_XML
+    assert QUALITY[Route.EUROPEPMC_JATS] is Quality.STRUCTURED_XML
     assert QUALITY[Route.OA_PDF] is Quality.PDF_TEXT
 
 

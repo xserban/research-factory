@@ -42,6 +42,7 @@ class Route(StrEnum):
     ARXIV_HTML = "arxiv-html"
     ARXIV_SOURCE = "arxiv-source"
     PMC_JATS = "pmc-jats"
+    EUROPEPMC_JATS = "europepmc-jats"
     OA_PDF = "oa-pdf"
     RESEARCHER = "researcher-supplied"
     LAB_LIBRARY = "lab-library"
@@ -52,6 +53,7 @@ ROUTE_ORDER: tuple[Route, ...] = (
     Route.ARXIV_HTML,
     Route.ARXIV_SOURCE,
     Route.PMC_JATS,
+    Route.EUROPEPMC_JATS,
     Route.OA_PDF,
 )
 """The automatic routes in the order they are tried. `RESEARCHER` and `LAB_LIBRARY` are not among
@@ -70,6 +72,7 @@ QUALITY: Mapping[Route, Quality] = MappingProxyType(
         Route.ARXIV_HTML: Quality.STRUCTURED_HTML,
         Route.ARXIV_SOURCE: Quality.LATEX,
         Route.PMC_JATS: Quality.STRUCTURED_XML,
+        Route.EUROPEPMC_JATS: Quality.STRUCTURED_XML,
         Route.OA_PDF: Quality.PDF_TEXT,
         Route.RESEARCHER: Quality.PDF_TEXT,
     }
