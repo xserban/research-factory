@@ -97,7 +97,7 @@ from factory.services import audit as audit_service
 from factory.services import benchmark_ledger as ledger_service
 from factory.services import briefing as briefing_service
 from factory.services import calibration as calibration_service
-from factory.services import card_import, region_adoption
+from factory.services import card_import, pubmed_slices, region_adoption
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import check as check_service
@@ -1526,6 +1526,49 @@ def search_chase_cmd(
         f"chase round {summary.round_id}: {len(summary.runs)} queries, "
         f"{summary.new_works} new works, {len(summary.unchasable)} unchasable"
     )
+
+
+@search_app.command("slice")
+def search_slice_cmd(
+    ctx: typer.Context,
+    query_id: Annotated[str, typer.Argument(help="The capped pubmed keyword query (qry_...).")],
+    run: Annotated[bool, typer.Option("--run", help="Register and run every slice.")] = False,
+    first_year: Annotated[int, typer.Option("--first-year", help="First year cut singly.")] = 1900,
+    deviation: Annotated[
+        str | None, typer.Option("--deviation", help="Deviation (dev_...) that allows the slices.")
+    ] = None,
+) -> None:
+    """Split a capped PubMed query by date; without --run, show the plan and write nothing."""
+    state = _state(ctx)
+    sources = dict(default_sources())
+    with _reporting_errors():
+        project = _resolve_project(state)
+        if not run:
+            plan = pubmed_slices.propose_slices(
+                project, query_id, sources=sources, first_year=first_year
+            )
+            for planned in plan.slices:
+                if planned.count:
+                    typer.echo(
+                        f"{planned.window.start} .. {planned.window.end}  {planned.count}"
+                        + ("  over the cap" if planned.over_cap else "")
+                    )
+            typer.echo(f"{len(plan.runnable)} slices, total {plan.total} of {plan.parent_count}")
+            return
+        summary = pubmed_slices.run_slices(
+            project,
+            project.human_actor(),
+            query_id,
+            sources=sources,
+            deviation_id=deviation,
+            first_year=first_year,
+        )
+    typer.echo(
+        f"{len(summary.runs)} runs; slice total {summary.report.slice_reported_total}, "
+        f"unsplit {summary.report.parent_reported}"
+    )
+    if summary.report.note:
+        typer.echo(summary.report.note)
 
 
 @protocol_app.command("show")

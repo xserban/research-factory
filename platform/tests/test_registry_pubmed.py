@@ -6,9 +6,9 @@ from factory.sources.registry import INTERFACES, default_sources, window_filter_
 
 def test_default_sources_has_pubmed() -> None:
     factory = default_sources()["pubmed"]
-    assert factory.kinds == {QueryKind.KEYWORD, QueryKind.ID_LIST}
-    assert factory.probe_kinds == {QueryKind.KEYWORD}
-    assert "pubmed" not in window_filter_sources()
+    assert factory.kinds == frozenset({QueryKind.KEYWORD, QueryKind.ID_LIST})
+    assert factory.probe_kinds == frozenset({QueryKind.KEYWORD})
+    assert "pubmed" in window_filter_sources()
 
 
 def test_interface_line_names_eutils() -> None:

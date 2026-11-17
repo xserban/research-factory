@@ -31,6 +31,19 @@ class TermSuggestion(StrictModel):
     holders: tuple[str, ...]
 
 
+class MeshSuggestion(StrictModel):
+    """A MeSH descriptor carried by records of a probe's title sample, as a suggestion only.
+
+    `records` is the number of sampled records that carry the descriptor and `sampled` the number
+    of sampled records with any MeSH heading; both are counts, never typed. The list is read-only
+    information for the researcher: nothing is applied to a query and no event stores it.
+    """
+
+    descriptor: str
+    records: int
+    sampled: int
+
+
 class ProbePageArchived(StrictModel):
     """One raw response a probe received, archived before it is measured (R-03)."""
 

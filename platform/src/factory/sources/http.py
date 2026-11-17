@@ -179,3 +179,16 @@ def fetch_page(url: str) -> httpx.Response:
         return PoliteClient(http).get(url)
     finally:
         http.close()
+
+
+def generic_http() -> PoliteClient:
+    """A persistent polite client under the generic client name: for services that did not ask for
+    a contact address. No `mailto` or key is ever sent. The outbound guard applies as for
+    `default_http`."""
+    http = httpx.Client(
+        timeout=60.0,
+        follow_redirects=True,
+        event_hooks={"request": [client_hook()]},
+        headers={"User-Agent": GENERIC_CLIENT},
+    )
+    return PoliteClient(http)

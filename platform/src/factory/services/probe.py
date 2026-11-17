@@ -15,6 +15,11 @@ never enters the corpus or PRISMA. A sampled title is not masked: titles do not 
 status, and a held-out seed's work is an ordinary record (decision 37.9). A failed sample
 request leaves the recall in place and is named in `sample_note`.
 
+PubMed sample records carry their MeSH descriptors. `mesh_suggestions` lists the descriptors of
+the sample by number of records (services/mesh_suggestions.py; IDEA-77): a read-only suggestion
+list for the researcher to select from, computed from the sample, never applied to a query and
+not stored in an event (the sample is `top`, so it favours the query's own matches).
+
 When a probe measures both `openalex` and `arxiv`, each OpenAlex query also counts its hits hosted
 on arXiv (`openalex_on_arxiv`). That is an estimate of the overlap between the two sources, not a
 dedup; the report says so in `overlap_note`.
@@ -43,6 +48,7 @@ from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.decisions import DecisionLevel
 from factory.model.probe import (
+    MeshSuggestion,
     ProbeFailed,
     ProbeMeasured,
     ProbePageArchived,
@@ -55,6 +61,7 @@ from factory.model.work import Work
 from factory.services.budgets import budget_issue, budget_issues, exhausted_unit
 from factory.services.context import Project
 from factory.services.decision_binding import bind
+from factory.services.mesh_suggestions import mesh_suggestions
 from factory.services.progress import track
 from factory.services.project import project_status
 from factory.services.question import current_question
@@ -111,6 +118,7 @@ class ProbeQueryResult(StrictModel):
     sample_titles: tuple[str, ...] = ()
     sample_kind: Literal["random", "top"] | None = None
     sample_note: str | None = None
+    mesh_suggestions: tuple[MeshSuggestion, ...] = ()
     openalex_on_arxiv: int | None = None
     overlap_note: str | None = None
     reason: str | None
@@ -325,6 +333,7 @@ def _measure(
     sample_kind: Literal["random", "top"] | None = None
     titles: tuple[str, ...] = ()
     sample_note: str | None = None
+    mesh: tuple[MeshSuggestion, ...] = ()
     if sample > 0 and isinstance(prober, Sampler):
         # Network outside `project.writing()`; the sample is archived page by page as it arrives.
         try:
@@ -334,6 +343,7 @@ def _measure(
             )
             sample_kind = kind
             titles = tuple(r.title for r in records)
+            mesh = mesh_suggestions([r.mesh for r in records], spec.text)
         except SourceError as exc:
             sample_note = redact(f"{type(exc).__name__}: {exc}", project.settings.mailto)
 
@@ -389,6 +399,7 @@ def _measure(
         sample_titles=titles,
         sample_kind=sample_kind,
         sample_note=sample_note,
+        mesh_suggestions=mesh,
         openalex_on_arxiv=on_arxiv,
         overlap_note=overlap_note,
         reason=None,
