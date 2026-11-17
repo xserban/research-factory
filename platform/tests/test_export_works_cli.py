@@ -1,3 +1,4 @@
+# ruff: noqa: F811, F401
 """`factory export works` (IDEA-87): selection by layer, ids or file; output a directory or zip."""
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from factory.config import Settings
 from factory.services import work_layers
 from factory.services.context import Project
 from tests.cli_helpers import _cli_env, runner
-from tests.test_export_works import _event_files, two  # noqa: F401
+from tests.test_export_works import _event_files, two
 
 
 def test_ids_export_to_a_directory_and_say_what_was_skipped(
@@ -71,7 +72,16 @@ def test_exactly_one_selection_is_required_and_caps_are_errors(
     assert both.exit_code == 1 and "selection:" in both.stderr
     capped = runner.invoke(
         app,
-        ["export", "works", "--ids", f"{two[0]},{two[1]}", "--max-works", "1", "--out", str(tmp_path / "o")],
+        [
+            "export",
+            "works",
+            "--ids",
+            f"{two[0]},{two[1]}",
+            "--max-works",
+            "1",
+            "--out",
+            str(tmp_path / "o"),
+        ],
         env=env,
     )
     assert capped.exit_code == 1 and "cap is 1" in capped.stderr

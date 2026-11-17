@@ -49,8 +49,8 @@ UNLAYERED = "unlayered"
 
 CAVEAT = (
     "Answers produced in the other tool are not records of this project. Their citations point to "
-    "that tool's copy of each file, not to the factory's anchors; trace one back by the work id and "
-    "conversion id in the header of the file it cites."
+    "that tool's copy of each file, not to the factory's anchors; trace one back by the work id "
+    "and conversion id in the header of the file it cites."
 )
 
 
@@ -354,8 +354,10 @@ def _manifest_md(m: dict[str, Any]) -> str:
         "",
     ]
     for e in m["works"]:
-        pdf = "" if m["pdfs"] == "not requested" else (
-            f"; PDF {e['pdf']['file']}" if e["pdf"] else "; no PDF in the store"
+        pdf = (
+            ""
+            if m["pdfs"] == "not requested"
+            else (f"; PDF {e['pdf']['file']}" if e["pdf"] else "; no PDF in the store")
         )
         lines.append(
             f"- {e['work_id']}: {e['title']} -> {e['file']} (conversion {e['conversion_id']}, "

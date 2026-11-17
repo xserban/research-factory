@@ -66,7 +66,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <span class="dim">Group by</span><select id="grp"></select>
 <span class="dim">Sort</span><select id="sortby"><option value="new">Date, newest first</option><option value="old">Date, oldest first</option><option value="cited">Most cited in corpus</option><option value="title">Title A to Z</option></select>
 <label class="dim" title="Works of this project whose extracted reference lists resolve to the work. Unknown counts are left out when a number is set.">Cited by <input id="citemin" type="number" min="0" step="1" style="width:64px"> or more corpus works</label>
-<button id="helpbtn">Help</button><!--TOGGLE--><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
+<span id="exbox" title="Tick works in the list (or select all in the current filter), then download them as files for a notebook tool. Answers produced there are not records." style="display:inline-flex;gap:6px;align-items:center"><button id="exall">Select all in filter</button><button id="exclear">Clear</button><label class="dim"><input type="checkbox" id="expdf"> with PDFs</label><button id="exgo" disabled>Export selected (0)</button><span id="exmsg" class="dim"></span></span><button id="helpbtn">Help</button><!--TOGGLE--><span id="count" class="dim"></span><span class="dim" style="margin-left:auto" id="gen"></span></header>
 <div id="chips" hidden></div>
 <div id="helpbox" hidden><b>What this is.</b> The corpus of the review: every paper included after full-text screening, with what the miners read from it. Every value shown has a quote from the paper behind it.
 <ul><li><b>List</b>: titles by date, grouped by any dimension (Group by). <b>Timeline</b>: one lane per group, one block per paper by month. <b>Chronology</b>: months side by side, newest on the left, a card per paper. <b>Lineage</b>: papers by month with an arrow to each earlier paper in the corpus that they cite; click a paper to light up what it builds on (red) and what builds on it (green). <b>Graph</b>: papers linked to techniques, stages and other categories.</li>
@@ -159,10 +159,18 @@ function openWork(w){sel=w;const d=$('#detail');d.classList.add('open');
 function groups(ws){const d=DIMS.find(d=>d.key===grp);const g={};
  for(const w of ws){const vs=grp==='stage'?stagesOf(w):[val(w,d)||'(none)'];for(const v of (vs.length?vs:['(none)']))(g[v]=g[v]||[]).push(w);}
  return Object.entries(g).sort((a,b)=>grp==='year'?(sortBy==='old'?a[0].localeCompare(b[0]):b[0].localeCompare(a[0])):b[1].length-a[1].length);}
-function renderList(ws){let h='<table><tr><th>Published</th><th>Title</th><th>Cited in corpus</th><th>Technique</th><th>Field</th><th>Human</th><th>Stages</th></tr>';
- for(const [g,l] of groups(ws)){h+=`<tr><td colspan="6" class="grp">${esc(g)} <span class="dim">(${l.length})</span></td></tr>`;
-  for(const w of l.sort(wcmp))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${w.cited_in_corpus==null?'—':w.cited_in_corpus}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
- $('#view').innerHTML=h+'</table>';$('#view').querySelectorAll('tr.w').forEach(r=>r.onclick=()=>openWork(W[+r.dataset.i]));}
+const SELX=new Set();
+function exUpdate(){const n=SELX.size,b=$('#exgo');b.textContent='Export selected ('+n+')';b.disabled=!n||!TOKEN;b.title=TOKEN?'':'Open this page with factory site serve to export.';}
+function exFilename(r){const m=/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition')||'');return m?m[1]:'works-export.zip';}
+function exGo(){const out=$('#exmsg');if(!TOKEN||!SELX.size)return;out.textContent='preparing...';$('#exgo').disabled=true;
+ fetch(API+'/api/export/works',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':TOKEN},body:JSON.stringify({work_ids:[...SELX],pdfs:$('#expdf').checked})})
+ .then(r=>{if(r.ok&&(r.headers.get('Content-Type')||'').startsWith('application/zip'))return r.blob().then(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=exFilename(r);document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),10000);out.textContent='downloaded; see MANIFEST.md for skipped works';});
+  return r.json().catch(()=>({issues:[{field:'response',reason:'status '+r.status}]})).then(j=>{out.textContent=(j.issues||[]).map(i=>i.field+': '+i.reason).join('; ');});})
+ .catch(e=>{out.textContent='failed: '+e;}).finally(exUpdate);}
+function renderList(ws){let h='<table><tr><th></th><th>Published</th><th>Title</th><th>Cited in corpus</th><th>Technique</th><th>Field</th><th>Human</th><th>Stages</th></tr>';
+ for(const [g,l] of groups(ws)){h+=`<tr><td colspan="8" class="grp">${esc(g)} <span class="dim">(${l.length})</span></td></tr>`;
+  for(const w of l.sort(wcmp))h+=`<tr class="w" data-i="${W.indexOf(w)}"><td><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${SELX.has(w.id)?'checked':''} title="Select for export"></td><td>${esc(w.published)}</td><td>${esc(w.title)}</td><td>${w.cited_in_corpus==null?'—':w.cited_in_corpus}</td><td>${esc(val(w,DIMS[0]))}</td><td>${esc(val(w,DIMS[1]))}</td><td>${esc(val(w,DIMS[5]))}</td><td>${stagesOf(w).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`;}
+ $('#view').innerHTML=h+'</table>';$('#view').querySelectorAll('tr.w').forEach(r=>r.onclick=()=>openWork(W[+r.dataset.i]));$('#view').querySelectorAll('input.xs').forEach(c=>{c.onclick=e=>e.stopPropagation();c.onchange=()=>{c.checked?SELX.add(c.dataset.id):SELX.delete(c.dataset.id);exUpdate();};});}
 function renderTimeline(ws){const months=[...new Set(W.map(w=>w.month).filter(Boolean))].sort();
  const d=DIMS.find(d=>d.key===grp)||DIMS[0];
  let h=`<div id="tl"><div class="axis">${months.map(m=>`<div>${m.slice(2)}</div>`).join('')}</div>`;
@@ -244,6 +252,7 @@ document.querySelectorAll('header button[data-v]').forEach(b=>b.onclick=()=>{vie
 const gs=$('#grp');for(const d of DIMS.concat([{key:'stage',label:'Lifecycle stage'}]))gs.insertAdjacentHTML('beforeend',`<option value="${d.key}">${esc(d.label)}</option>`);
 gs.onchange=()=>{grp=gs.value;render();};const sb=$('#sortby');sb.value=sortBy;sb.onchange=()=>{sortBy=sb.value;render();};$('#helpbtn').onclick=()=>{const b=$('#helpbox');b.hidden=!b.hidden;};if(query)$('#q').value=query;$('#q').oninput=e=>{query=e.target.value;render();};
 $('#citemin').value=citeMin||'';$('#citemin').closest('label').title='Counts only works whose reference lists were extracted ('+DATA.refs_done+' of '+W.length+'); a work whose citers were never extracted shows 0 or a dash, not a known zero.';$('#citemin').oninput=e=>{citeMin=parseInt(e.target.value,10)||0;render();};$('#gen').textContent='Generated '+DATA.generated;document.querySelectorAll('header button[data-v]').forEach(x=>x.classList.toggle('on',x.dataset.v===view));if(H.get('grp')){grp=H.get('grp');gs.value=grp;}drawSide();render();if(H.get('open')&&BYS[H.get('open')]!==undefined)openWork(W[BYS[H.get('open')]]);else if(H.get('openfirst')){const w=W.find(x=>x.sum&&Object.keys(x.sum).length>6);if(w)openWork(w);}
+$('#exall').onclick=()=>{filtered().forEach(w=>SELX.add(w.id));exUpdate();render();};$('#exclear').onclick=()=>{SELX.clear();exUpdate();render();};$('#exgo').onclick=exGo;exUpdate();if(PANEL)$('#exbox').hidden=true;
 addEventListener('keydown',e=>{if(e.key==='Escape'&&PANEL&&parent!==window)parent.postMessage('rfp-close',location.origin);});
 addEventListener('hashchange',()=>{H=new URLSearchParams(location.hash.slice(1));PANEL=H.get('panel')==='1';document.documentElement.classList.toggle('panel',PANEL);const o=H.get('open');if(o&&BYS[o]!==undefined)openWork(W[BYS[o]]);});
 </script></body></html>

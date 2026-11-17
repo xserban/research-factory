@@ -864,11 +864,12 @@ Status: new · Added: 2026-11-15 · Slice: — · Depends on: branch `updates-pa
 **Open questions:** whether the hub should cache the page per snapshot.
 
 ### IDEA-87 — Export papers to a notebook tool (NotebookLM, Open Notebook)
-Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: —
+Status: built (file export, CLI and explorer button; Open Notebook push not built), not reviewed, tests run (branch `export-selection`) · Added: 2026-11-15 (researcher) · Slice: — · Depends on: —
 **What:** a command that writes the current converted Markdown of a chosen set of works (a layer, a list of work ids, the works of a taxonomy category) as files for upload to NotebookLM, or pushes them through the REST API of a self-hosted Open Notebook (lfnovo/open-notebook, MIT). One file per work, header with work id, title and conversion id, so an answer read there can be traced back by hand.
 **Why:** the researcher wants to chat with the papers now; a one-way export costs little. NotebookLM (consumer subscription) has no public API as far as known (unverified; the Enterprise API runs through Google Cloud).
 **Rigour notes:** exploratory only: answers given in those tools are not records, their citations point to the tool's copy, not to factory anchors. Papers leave the machine (NotebookLM); the export lists what was sent. Open Notebook calls models itself, so it runs beside the factory, never inside it.
 **Open questions:** NotebookLM source limits per notebook (plan-dependent); whether to include appendices; Open Notebook API version.
+**Rulings (2026-11-17, built with the researcher's request):** smallest form: `factory export works --layer L | --ids a,b | --from-file f [--pdfs] --out DIR|file.zip` and an explorer selection (row checkboxes, "Select all in filter", "Export selected (N)", zip download via `POST /api/export/works`). Markdown goes to `markdown/`, optional PDFs to `pdf/`, with `MANIFEST.md` and `manifest.json` (works, hashes, date, selection, skipped with reasons, works without PDF). Each file starts with a header (work id, title, authors, year, DOI, conversion id, Markdown hash, layer). Held-out seeds' works are not exported and are counted, never named. Caps: 200 works and 500 MB, configurable. Read-only, no event, no new event type; the CLI leaves its usual access-log line, the hub route does not. Answers in the other tool are not records.
 
 ### IDEA-88 — Chat with the papers inside the factory, with verified citations
 Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: decision 116 (local embedding model), IDEA-85 (quote escapes)

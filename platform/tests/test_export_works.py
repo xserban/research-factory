@@ -144,9 +144,7 @@ def test_pdfs_are_off_by_default_and_reported_missing_when_asked(
     assert "no PDF" in (on / "MANIFEST.md").read_text(encoding="utf-8")
 
 
-def test_a_stored_pdf_is_copied_when_asked(
-    project: Project, corpus: None, tmp_path: Path
-) -> None:
+def test_a_stored_pdf_is_copied_when_asked(project: Project, corpus: None, tmp_path: Path) -> None:
     work = _promoted(project)[0]
     pdf = b"%PDF-1.4 fake\n"
     _fetch_pdf(project, work, MD)  # converted text is the bytes; the original is the "PDF"
@@ -185,7 +183,9 @@ def test_the_layer_selection_takes_the_works_of_that_layer(
     assert ew.select_by_layer(project, "applied").ids == ()
 
 
-def test_unknown_ids_are_listed_as_skipped(project: Project, two: tuple[str, str], tmp_path: Path) -> None:
+def test_unknown_ids_are_listed_as_skipped(
+    project: Project, two: tuple[str, str], tmp_path: Path
+) -> None:
     out = tmp_path / "out"
     ew.export_works(project, ew.Selection((two[0], "rf:nonexistent"), "ids"), out)
     reasons = {s["work_id"]: s["reason"] for s in _manifest(out)["skipped"]}
@@ -217,7 +217,9 @@ def test_an_empty_selection_is_refused(project: Project, tmp_path: Path) -> None
         ew.export_works(project, ew.Selection((), "ids"), tmp_path / "out")
 
 
-def test_an_existing_output_is_refused(project: Project, two: tuple[str, str], tmp_path: Path) -> None:
+def test_an_existing_output_is_refused(
+    project: Project, two: tuple[str, str], tmp_path: Path
+) -> None:
     out = tmp_path / "out"
     out.mkdir()
     (out / "x").write_text("keep")
@@ -226,7 +228,9 @@ def test_an_existing_output_is_refused(project: Project, two: tuple[str, str], t
     assert (out / "x").read_text() == "keep"
 
 
-def test_a_zip_output_holds_the_same_files(project: Project, two: tuple[str, str], tmp_path: Path) -> None:
+def test_a_zip_output_holds_the_same_files(
+    project: Project, two: tuple[str, str], tmp_path: Path
+) -> None:
     out = tmp_path / "papers.zip"
     ew.export_works(project, ew.Selection((two[0],), "ids"), out)
     with zipfile.ZipFile(out) as z:
