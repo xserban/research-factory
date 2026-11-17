@@ -31,7 +31,7 @@ Depends on: `services/inbox.py` (`LinkInput`, `link_event`, `add_links`), `servi
 
 ### 3.1 Data model
 
-**New event `hint.recorded` (schema 1), refs the target.** Decision row needed (proposed, next free number; 128 at the time of writing, fixed at merge). Fields:
+**New event `hint.recorded` (schema 1), refs the target.** Decision row needed (proposed, next free number; 131 at the merge of 2026-11-17). Fields:
 - `target`: exactly one of `item_id` (an `inb_` item, the capture-time target) or `work_id` (a later hint on a work already in the corpus).
 - `layer`: optional `{scheme_version, layer}`; the layer must be an id of that recorded scheme version.
 - `category`: optional `{taxonomy_id, version, category}` where `category` is `<dimension>/<category>` of a registered taxonomy version (for example `t-agentic-layer`).
