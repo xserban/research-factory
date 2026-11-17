@@ -156,13 +156,20 @@ def test_title_query_is_limited_to_paper_types() -> None:
     assert not allowed & {"peer-review", "dataset", "component", "grant"}
 
 
-def test_title_query_sends_the_author_surname_and_never_the_year() -> None:
+def test_title_query_sends_the_author_surname() -> None:
     seen: list[httpx.Request] = []
-    spec = _spec("title.search:vessels", filters={"author": "Steiner", "year": "2024"})
+    spec = _spec("title.search:vessels", filters={"author": "Steiner"})
     _run(_source(_serving(_body([ARTICLE]), seen)), spec)
     params = seen[0].url.params
     assert params["query.bibliographic"] == "vessels" and params["query.author"] == "Steiner"
     assert "2024" not in str(seen[0].url.query.decode())
+
+
+def test_year_title_filter_is_refused() -> None:
+    seen: list[httpx.Request] = []
+    with pytest.raises(ValueError):
+        _run(_source(_serving(_body([]), seen)), _spec("title.search:v", filters={"year": "2024"}))
+    assert seen == []
 
 
 def test_unknown_title_filter_is_refused() -> None:

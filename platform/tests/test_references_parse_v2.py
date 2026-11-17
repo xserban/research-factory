@@ -90,9 +90,7 @@ def test_author_block_without_a_title_after_it_never_yields_an_initial_as_title(
     assert f.title not in {"A", "B"}
 
 
-def test_trailing_initial_and_capitalised_word_is_the_title_start_when_a_lowercase_word_follows() -> (
-    None
-):
+def test_trailing_initial_before_lowercase_continuation_starts_the_title() -> None:
     f = parse_entry_fields("J. Doe, A. Roe, C. Title of the paper. Venue 2020.")
     assert (f.first_author, f.title) == ("Doe", "C. Title of the paper")
 

@@ -571,7 +571,7 @@ def _spec_issues(
         if extra or not spec.text.startswith("title.search:"):
             issues.append(
                 ValidationIssue(
-                    "filters", "crossref takes author and year on a title lookup (title.search:)"
+                    "filters", "crossref takes author on a title lookup (title.search:)"
                 )
             )
     elif spec.filters and spec.source != "openalex":

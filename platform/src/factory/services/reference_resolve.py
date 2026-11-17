@@ -464,15 +464,13 @@ def resolve_entries(
 
 
 def _title_filters(entry: Resolvable, lookup_source: str) -> dict[str, str]:
-    """Crossref title lookups carry the entry's first author and year (`author`, `year`); the
-    year is documented there as not sent. OpenAlex lookups carry none."""
+    """Crossref title lookups carry the entry's first author (`author`) only: the year is not
+    sent, so it is not recorded. OpenAlex lookups carry none."""
     if lookup_source != "crossref":
         return {}
     out: dict[str, str] = {}
     if entry.first_author and entry.first_author.strip():
         out["author"] = entry.first_author.strip()
-    if entry.year is not None:
-        out["year"] = str(entry.year)
     return out
 
 

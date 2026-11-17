@@ -4,9 +4,9 @@ Works lookups (PROBE purpose) serve reference resolution without OpenAlex: a FIL
 `doi:<a>|<b>|...` is sent as `/works?filter=doi:a,doi:b`, and `title.search:<query>` as
 `/works?query.bibliographic=<query>`, with `query.author=<surname>` when the spec's
 `filters["author"]` is given and `filter=type:...` limiting it to paper-like types (repeated
-`type:` values are ORed by Crossref). `filters["year"]` is accepted and not sent: a preprint's
-and its published year differ, and the matcher scores years. Each response is one archived page,
-parsed into `Work`s.
+`type:` values are ORed by Crossref). A year filter is refused: a preprint's
+and its published year differ, so the matcher scores years instead. Each response is one
+archived page, parsed into `Work`s.
 
 Crossref records which later items declare themselves a retraction, correction, withdrawal or
 expression of concern of a DOI (`update-to`). The query is a `filter` expression such as
@@ -79,7 +79,7 @@ _TITLE_TYPES = (
     "standard",
     "other",
 )
-TITLE_FILTERS = frozenset({"author", "year"})
+TITLE_FILTERS = frozenset({"author"})
 _TRUNCATED = "truncated by caller-supplied limit"
 
 # Crossref `type` -> our vocabulary. Unmapped types become OTHER rather than guessing.
