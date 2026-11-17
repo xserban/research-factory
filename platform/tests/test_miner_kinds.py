@@ -247,8 +247,14 @@ def test_title_kind_accepts_exact_and_rejects_unknown(
     assert _run(project, world[0], spec, {"ref": _stored(title, "s3.p1", quote)}) == {}
     nothing = {"ref": _stored("a title no work has ever carried", "s3.p1", f"x ({year})")}
     assert _run(project, world[0], spec, nothing) == {"fields.ref.value": WORK_NOT_FOUND}
-    no_year = {"ref": _stored(title, "s3.p1", title)}
-    assert _run(project, world[0], spec, no_year) == {"fields.ref.value": WORK_NOT_FOUND}
+    # A quote with no stated year: the window runs up to the citing work's year (decision 102.9),
+    # and the match is only inferred. With no year from either source the title is not found.
+    assert title_ref(project, title, title) is None
+    widened = title_ref(project, title, title, citing_year=year)
+    assert widened is not None and widened.work_id == work_id and widened.state == "inferred"
+    unknown_no_year = {"ref": _stored("a title no work has ever carried", "s3.p1", "no year here")}
+    assert title_ref(project, "a title no work has ever carried", "no year", year) is None
+    assert _run(project, world[0], spec, unknown_no_year) == {"fields.ref.value": WORK_NOT_FOUND}
     assert title in seen
 
 
