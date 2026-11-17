@@ -421,7 +421,9 @@ class Index:
         Threads of one process take turns on an in-process lock first: `flock` is per open file
         description, so it cannot order threads, and re-entry is granted only to the owning
         thread (a threaded server shares one instance). Limits: two instances on one file in one
-        process deadlock; `shared` is ignored once held; threads of one process never share a hold.
+        process deadlock; `shared` is ignored once held; threads of one process never share a hold
+        (a snapshot also makes other threads wait). Never wait on another thread that needs this
+        index while holding it (inside `snapshot`, `exclusive` or `on_exclusive`): it deadlocks.
         """
         if self._holding:
             yield
