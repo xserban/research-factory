@@ -1,0 +1,26 @@
+name: Architecture contracts
+
+# Fails the build when an import breaks a CLAUDE.md rule (contracts in
+# platform/pyproject.toml, [tool.importlinter]): no model SDK, interfaces never
+# append events, the core never imports mcp/cli, mcp never imports cli.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run lint-imports
