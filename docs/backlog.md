@@ -841,6 +841,13 @@ Status: new · Added: 2026-11-15 · Slice: — · Depends on: —
 **Rigour notes:** quote verification is shared by every extraction and miner; change with tests first (a quote with `\_`, `\*`, `\[`), and confirm no previously verified quote is invalidated (both sides normalised the same way can only accept more).
 **Open questions:** how many past rejections had this cause (count `quote-not-in-anchor` rejections whose quote contains a backslash).
 
+### IDEA-86 — Updates page: per-work miner and ledger reads are slow
+Status: new · Added: 2026-11-15 · Slice: — · Depends on: branch `updates-page` (`services/updates.py`)
+**What:** with additions, `updates_view` reads `flow_ledger` (folds the whole corpus, ~27 s on the pilot) and per-work mined state through `miner_population` (~5 s per miner per call; 39 s for 5 works). Read both for the addition ids only (a filtered ledger, one miner-population read per miner for the set).
+**Why:** a weekly update of tens of works would make the page take minutes to build.
+**Rigour notes:** read-only; numbers stay computed from events.
+**Open questions:** whether the hub should cache the page per snapshot.
+
 ### IDEA-87 — Export papers to a notebook tool (NotebookLM, Open Notebook)
 Status: new · Added: 2026-11-15 (researcher) · Slice: — · Depends on: —
 **What:** a command that writes the current converted Markdown of a chosen set of works (a layer, a list of work ids, the works of a taxonomy category) as files for upload to NotebookLM, or pushes them through the REST API of a self-hosted Open Notebook (lfnovo/open-notebook, MIT). One file per work, header with work id, title and conversion id, so an answer read there can be traced back by hand.
