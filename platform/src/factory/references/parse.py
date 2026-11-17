@@ -15,7 +15,7 @@ from factory.document.anchors import Anchor, AnchorKind, Manifest
 from factory.model.work_ids import normalize_arxiv, normalize_doi
 
 PARSER = "refparse"
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 MAX_ENTRY_CHARS = 1000
 
 MAX_FIELD_CHARS = 4000  # entry text examined for fields; longer tails are ignored
@@ -58,6 +58,15 @@ _AUTHOR_INITIALS_RE = re.compile(
     rf"^(?:[{UPPER}]\.[\s\-]*)+(?:(?:van|von|de|der|den|di|da|le|la)\s+)*({_SURNAME})"
 )
 _AUTHOR_GIVEN_RE = re.compile(rf"^[{UPPER}][^\W\d_]+\s+({_SURNAME})\s*(?:,|and\b|&|et al)")
+_PARTICLES = r"(?i:(?:van|von|de|der|den|di|da|del|dos|du|le|la|ten|ter)\s+)*"
+_INITIALS = rf"(?:[{UPPER}]\.[\s\-]*){{1,4}}"
+_NAME_INITIALS_FIRST_RE = re.compile(
+    rf"{_INITIALS}{_PARTICLES}(?P<sur>{_SURNAME}|[{UPPER}](?=\s*(?:,|and\b|&|et\s+al\b)))"
+)
+_NAME_SURNAME_FIRST_RE = re.compile(rf"(?P<sur>{_PARTICLES}{_SURNAME}),\s*{_INITIALS}")
+_NAME_SEP_RE = re.compile(r"\s*(?:,\s*(?:and\s+|&\s*)?|;\s*|\s+and\s+|\s*&\s*)")
+_ET_AL_RE = re.compile(r"\s*,?\s*et\s+al\b\.?")
+_BLOCK_END_RE = re.compile(r"\s*[.:]?\s*")
 _PAREN_YEAR_TITLE_RE = re.compile(r"\((?:19|20)\d{2}[a-z]?\)\.?\s*([^.?!]+[.?!]?)(.*)$", re.DOTALL)
 _QUOTED_RE = re.compile(r"[“\"]([^”\"]{8,})[”\"]")
 _PREFIX_RE = re.compile(r"(?i)\b(?:doi|arxiv|url|available at|accessed)\s*:?\s*$")
@@ -225,6 +234,49 @@ def _tidy(segment: str) -> str | None:
     return seg or None
 
 
+def _author_block(text: str) -> tuple[str, int] | None:
+    """`(first surname, end index)` of a leading author block of initials, else None.
+
+    Names are `A. B. Surname` or `Surname, A. B.`, joined by `,` `;` `and` `&` and optionally
+    closed by `et al.`. The end index is after the block and the `.` or `:` that may follow it;
+    the source text sometimes has no such mark (`... Steiner A tale of ...`), so the title starts
+    at the next token. Each name needs at least one initial with a period: a list of full names
+    is not recognised. Linear: every step consumes input.
+    """
+    pos = 0
+    end = 0
+    first: str | None = None
+    while True:
+        m = _NAME_SURNAME_FIRST_RE.match(text, pos) or _NAME_INITIALS_FIRST_RE.match(text, pos)
+        if not m:
+            break
+        first = first or m.group("sur")
+        end = m.end()
+        et_al = _ET_AL_RE.match(text, end)
+        if et_al:
+            end = et_al.end()
+            break
+        sep = _NAME_SEP_RE.match(text, end)
+        if not sep:
+            break
+        pos = sep.end()
+    if first is None:
+        return None
+    closed = _BLOCK_END_RE.match(text, end)
+    return (first, closed.end()) if closed else None
+
+
+def _split_title_venue(rest: str) -> tuple[str | None, str | None]:
+    """Title and venue of `rest`, which starts at the title (the author block is gone)."""
+    cuts = _boundaries(rest)
+    stop = cuts[0] if cuts else len(rest)
+    title = rest[:stop].strip().rstrip(".").strip()
+    if not title:
+        return None, None
+    end = cuts[1] if len(cuts) > 1 else len(rest)
+    return title, _tidy(rest[stop:end])
+
+
 def _title_venue(text: str) -> tuple[str | None, str | None]:
     quoted = _QUOTED_RE.search(text)
     if quoted:
@@ -233,6 +285,11 @@ def _title_venue(text: str) -> tuple[str | None, str | None]:
     if py:
         title = py.group(1).strip().rstrip(".?!").strip()
         return (title or None), _tidy(py.group(2))
+    block = _author_block(text)
+    if block is not None and text[block[1] :].strip():
+        title, venue = _split_title_venue(text[block[1] :])
+        if title is not None:
+            return title, venue
     cuts = _boundaries(text)
     if not cuts:
         return None, None
