@@ -123,6 +123,7 @@ from factory.services import evaluation_view as evaluation_view_service
 from factory.services import evidence as evidence_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import experiments as experiments_service
+from factory.services import export_works as export_works_service
 from factory.services import exports as exports_service
 from factory.services import extraction as extraction_service
 from factory.services import extraction_agreement as extraction_agreement_service
@@ -3572,6 +3573,61 @@ def export_nanopub_cmd(
         typer.echo("unsigned; holds quote text, for local use only: do not publish")
     else:
         typer.echo("unsigned; sign and publish with nanopub tooling")
+
+
+@export_app.command("works")
+def export_works_cmd(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="A new directory, or a new file ending .zip.")],
+    layer: Annotated[str | None, typer.Option("--layer", help="Every work of this layer.")] = None,
+    ids: Annotated[str | None, typer.Option("--ids", help="Work ids, comma separated.")] = None,
+    from_file: Annotated[
+        Path | None, typer.Option("--from-file", help="Work ids, one per line.")
+    ] = None,
+    pdfs: Annotated[bool, typer.Option("--pdfs", help="Add the stored PDFs.")] = False,
+    max_works: Annotated[int, typer.Option("--max-works", help="Selection cap.")] = (
+        export_works_service.MAX_WORKS
+    ),
+    max_mb: Annotated[int, typer.Option("--max-mb", help="Total size cap in MB.")] = (
+        export_works_service.MAX_BYTES // (1024 * 1024)
+    ),
+) -> None:
+    """The converted Markdown of chosen works (and with --pdfs their PDFs) with a header per file
+    and a manifest, for upload to a notebook tool. Held-out seeds' works are withheld."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        given = [x for x in (layer, ids, from_file) if x is not None]
+        if len(given) != 1:
+            raise FactoryValidationError(
+                [ValidationIssue("selection", "give exactly one of --layer, --ids, --from-file")]
+            )
+        if layer is not None:
+            selection = export_works_service.select_by_layer(project, layer)
+        elif ids is not None:
+            selection = export_works_service.Selection(
+                export_works_service.work_ids_of(ids.split(",")), "ids"
+            )
+        else:
+            assert from_file is not None
+            selection = export_works_service.Selection(
+                export_works_service.read_ids_file(from_file), f"ids from file {from_file.name}"
+            )
+        summary = export_works_service.export_works(
+            project,
+            selection,
+            out,
+            pdfs=pdfs,
+            max_works=max_works,
+            max_bytes=max_mb * 1024 * 1024,
+        )
+    typer.echo(
+        f"{summary.exported} exported, {summary.skipped} skipped, {summary.withheld} withheld; "
+        f"{summary.bytes} bytes -> {summary.out}"
+    )
+    if pdfs:
+        typer.echo(f"without a PDF: {summary.without_pdf} (listed in the manifest)")
+    typer.echo("answers produced in the other tool are not records; see MANIFEST.md")
 
 
 @report_app.command("search")
