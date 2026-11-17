@@ -214,7 +214,12 @@ def test_methods_text_states_cost_axes_and_no_ranking(
 def _audited() -> EvidenceReport:
     report = _clean()
     quality = report.quality.model_copy(
-        update={"audit_error_rate": 0.25, "audit_above_ceiling": True, "audit_n": 8}
+        update={
+            "audit_error_rate": 0.25,
+            "audit_above_ceiling": True,
+            "audit_n": 8,
+            "audit_reportable": True,  # a labelled audit: the agent view says so, not what it was
+        }
     )
     limit = Limit(
         code="audit-above-ceiling", text="The audit error rate is above the ceiling.", subject="a1"
