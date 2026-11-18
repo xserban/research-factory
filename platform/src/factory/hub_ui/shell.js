@@ -261,13 +261,32 @@ function init(payload){
   return HUB;
 }
 /* Payloads: the static build writes data/<name>.js (file:// blocks fetch); the server serves
-   data/<name>.json. Resolves to {name: payload}. */
+   data/<name>.json. A name the page did not preload is loaded on demand: by a script tag when the
+   page itself was loaded by script tags (static build), otherwise by fetch. Resolves to {name: payload}. */
+/* Decided once, while shell.js runs: mounting a page may replace the body and its script tags. */
+const STATIC_BUILD = !!document.querySelector('script[src^="data/"]');
+const loaders = {};
+function loadOne(n){
+  const D = window.HUB_DATA;
+  if (n in D) return Promise.resolve(D[n]);
+  if (loaders[n]) return loaders[n];
+  const done = STATIC_BUILD
+    ? new Promise((res, rej) => {
+        const el = document.createElement('script');
+        el.src = 'data/' + n + '.js';
+        el.onload = () => (n in D) ? res(D[n]) : rej(new Error(n + ': script did not define the payload'));
+        el.onerror = () => rej(new Error(n + ': script failed to load'));
+        document.head.appendChild(el);
+      })
+    : fetch('data/' + n + '.json').then(r => { if (!r.ok) throw new Error(n + ': HTTP ' + r.status); return r.json(); })
+        .then(j => (D[n] = j));
+  loaders[n] = done.catch(e => { delete loaders[n]; throw e; });
+  return loaders[n];
+}
 HUB.load = function(names){
   window.HUB_DATA = window.HUB_DATA || {};
-  return Promise.all(names.map(n => n in window.HUB_DATA ? window.HUB_DATA[n]
-    : fetch('data/'+n+'.json').then(r=>{ if(!r.ok) throw new Error(n+': HTTP '+r.status); return r.json(); })
-        .then(j=>(window.HUB_DATA[n]=j))))
-    .then(vals=>Object.fromEntries(names.map((n,i)=>[n,vals[i]])));
+  return Promise.all(names.map(loadOne))
+    .then(vals => Object.fromEntries(names.map((n, i) => [n, vals[i]])));
 };
 window.HUB = HUB;
 

@@ -352,3 +352,85 @@ def test_shell_size_is_measured_and_dna_is_computed_once(
     size = report.payloads["shell"].bytes
     works = len(json.loads((tmp_path / "ui/data/shell.json").read_text(encoding="utf-8"))["works"])
     assert size < 4000 * max(works, 1) + 50_000, f"{size} bytes for {works} works"
+
+
+@pytest.fixture
+def mined_world(world: Project, agent: Actor) -> Project:
+    """The world plus one registered miner with rows on its first two included works: the first
+    has two rows (a quote on the first), the second one row with an undetermined value."""
+    from factory.mining.spec import spec_to_json
+    from factory.services.mining import register_miner
+    from tests.test_hub_mining import _insert_field, _insert_row, mk_spec
+
+    register_miner(world, agent, spec_to_json(mk_spec("m-test", 1, ("stance",))))
+    first, second = sorted(hp.load_flow_data(world).sets.included)[:2]
+    _insert_row(world, "r1", first, "A", "m-test@1")
+    _insert_field(world, "r1", "stance", "pro", "the quote")
+    _insert_row(world, "r2", first, "A", "m-test@1")
+    _insert_field(world, "r2", "stance", "con")
+    _insert_row(world, "r3", second, "A", "m-test@1")
+    _insert_field(world, "r3", "stance", "other")
+    return world
+
+
+def test_grid_family_is_written_per_miner_and_matches_the_manifest(
+    mined_world: Project, tmp_path: Path
+) -> None:
+    out = tmp_path / "ui"
+    report = hb.build_static(mined_world, out, only={"mining", "grid"})
+    assert report.errors == {}
+    mining = json.loads((out / "data/mining.json").read_text(encoding="utf-8"))
+    manifest = mining["grids"]
+    assert manifest and [g["name"] for g in manifest] == sorted(g["name"] for g in manifest)
+    assert {n for n in report.payloads if n.startswith("grid-")} == {g["name"] for g in manifest}
+    for g in manifest:
+        raw = (out / "data" / f"{g['name']}.json").read_text(encoding="utf-8")
+        data = json.loads(raw)
+        assert g["bytes"] == len(raw.encode("utf-8")) - 1  # trailing newline
+        assert g["works_read"] == len(data["rows"]) == data["works_read"]
+        assert g["columns"] == len(data["columns"])
+        assert g["name"] == f"grid-{data['miner']}"
+        js = (out / "data" / f"{g['name']}.js").read_text(encoding="utf-8")
+        assert js.startswith("window.HUB_DATA=window.HUB_DATA||{};")
+        for row in data["rows"]:
+            assert len(row["c"]) == len(data["columns"])
+            for cell in row["c"]:
+                if cell is not None:
+                    assert len(cell) in (3, 5) and (len(cell) == 3 or cell[3] > 1)
+                    assert cell[0] != ""
+    grid = json.loads((out / "data/grid-m-test.json").read_text(encoding="utf-8"))
+    rows = sorted(grid["rows"], key=lambda r: r["id"])
+    assert len(rows) == 2 and grid["not_read"] == grid["included"] - 2
+    stance = [c["key"] for c in grid["columns"]].index("m-test.stance")
+    assert rows[0]["c"][stance] == ["pro", "the quote", "an", 2, ["pro", "con"]]
+    assert rows[1]["c"][stance] == ["other", "", "an"]
+    assert grid["columns"][stance]["gap"] == 1
+
+
+def test_only_accepts_one_grid_and_refuses_an_unknown_one(
+    mined_world: Project, tmp_path: Path
+) -> None:
+    names = [g["name"] for g in _payload(mined_world, tmp_path / "a", "mining")["grids"]]  # type: ignore[attr-defined]
+    report = hb.build_static(mined_world, tmp_path / "b", only={names[0]})
+    assert report.errors == {} and set(report.payloads) == {names[0]}
+    with pytest.raises(ValueError, match="unknown grid"):
+        hb.build_static(mined_world, tmp_path / "c", only={"grid-m-nope"})
+    assert not (tmp_path / "c").exists()
+
+
+def test_mining_data_is_loaded_once_for_mining_and_grids(
+    mined_world: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hub_mining
+
+    calls: list[int] = []
+    real = hub_mining.load_mining_data
+
+    def counted(*a: object, **k: object) -> hub_mining.MiningData:
+        calls.append(1)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(hub_mining, "load_mining_data", counted)
+    report = hb.build_static(mined_world, tmp_path / "ui", only={"mining", "grid"})
+    assert report.errors == {}
+    assert len(calls) == 1

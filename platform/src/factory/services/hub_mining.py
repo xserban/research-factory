@@ -50,6 +50,10 @@ HOLES_TOP = 25
 DEFAULT_COLUMNS = 8
 MAX_PAGE_SIZE = 200
 NO_MODEL = "unknown"
+# First values that say nothing: counted as "undetermined" next to the empty cells (Holes).
+GAP_VALUES = frozenset({"not-determinable", "other", "not-stated", "none-stated", "unclear"})
+GRID_PREFIX = "grid-"
+HOLES_SKIP = frozenset({"m-release.artefact_scope"})
 
 METHODS: dict[str, str] = {
     "miners": (
@@ -91,8 +95,10 @@ METHODS: dict[str, str] = {
     ),
     "holes": (
         "Per field, the share of included works the miner read where no value was recorded, "
-        "and the share of all included works that lack one (missing or not read). Works are "
-        "ranked by how many required fields are missing."
+        "and the share of all included works that lack one (missing or not read). A value that "
+        "says nothing (not determinable, not stated, unclear or other) is counted apart as "
+        "undetermined. Works are ranked by how many primary coded fields (enumerated fields not "
+        "ending in _secondary) are missing or undetermined."
     ),
     "codebook": (
         "Technique codes with their stage and label, from the registered technique taxonomies "
@@ -619,42 +625,151 @@ def coverage(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> 
     }
 
 
+def _is_primary(key: str, f: FieldInfo) -> bool:
+    """A coded field that every read paper should have: enumerated, not a secondary, not skipped."""
+    return f.type == "enum" and not f.name.endswith("_secondary") and key not in HOLES_SKIP
+
+
 def holes(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> dict[str, Any]:
-    """Per field the works missing a value, and the works missing most required fields."""
+    """Per field the works missing a value (and those whose first value says nothing), and the
+    works with the most primary coded fields missing or undetermined."""
     atts = atts or attributions(data)
     n = len(data.sets.included)
     fields_out: list[dict[str, Any]] = []
-    per_work: dict[str, list[str]] = defaultdict(list)
+    thin: dict[str, list[tuple[str, bool]]] = defaultdict(list)
     for info in sorted(data.miners, key=lambda m: m.name):
         a = atts[info.name].by_pass.get("A", {})
         for f in info.fields:
-            missing_works = sorted(w for w, rows in a.items() if not first_cell(rows, f.name))
             key = f"{info.name}.{f.name}"
+            missing_works: list[str] = []
+            gap_works: list[str] = []
+            for w, rows in sorted(a.items()):
+                cell = first_cell(rows, f.name)
+                if cell is None:
+                    missing_works.append(w)
+                elif f.type == "enum" and cell.value in GAP_VALUES:
+                    gap_works.append(w)
             unread = n - len(a)
+            primary = _is_primary(key, f)
             fields_out.append(
                 {
                     "key": key,
                     "miner": info.name,
                     "field": f.name,
                     "required": f.required,
+                    "primary": primary,
                     "read": len(a),
                     "missing": len(missing_works),
+                    "undetermined": len(gap_works),
                     "unread": unread,
                     "share_of_read": len(missing_works) / len(a) if a else None,
                     "share_of_included": (len(missing_works) + unread) / n if n else None,
                 }
             )
-            if f.required:
-                for w in missing_works:
-                    per_work[w].append(key)
-    ranked = sorted(per_work.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:HOLES_TOP]
+            if primary:
+                thin_here = [(w, False) for w in missing_works] + [(w, True) for w in gap_works]
+                for w, is_gap in thin_here:
+                    thin[w].append((key, is_gap))
+    ranked = sorted(thin.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:HOLES_TOP]
     return {
         "fields": fields_out,
         "works": [
-            {"id": w, "title": data.titles.get(w, w), "missing": sorted(keys)} for w, keys in ranked
+            {
+                "id": w,
+                "title": data.titles.get(w, w),
+                "missing": sorted(k for k, g in keys if not g),
+                "undetermined": sorted(k for k, g in keys if g),
+            }
+            for w, keys in ranked
         ],
         "methods": METHODS["holes"],
     }
+
+
+# ------------------------------------------------------------------ per-miner grids
+
+
+def grid_name(miner: str) -> str:
+    return f"{GRID_PREFIX}{miner}"
+
+
+def _dumps(payload: object) -> str:
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=None)
+
+
+def miner_grid(data: MiningData, info: MinerInfo, att: Attributed) -> dict[str, Any]:
+    """One miner's grid: its fields as columns and a row for every included work its pass A
+    read. A cell is null (no value) or [value, quote, anchor]; for a work with several values of
+    a field the cell also carries `n` and the distinct values in order: [v, q, a, n, [values]].
+    Quotes are as recorded, cut to `site_corpus.MAX_QUOTE`; `gap` counts first values that say
+    nothing (`GAP_VALUES`), `empty` the read works with no value."""
+    a = att.by_pass.get("A", {})
+    works = [w for w in data.sets.included if w in a]
+    columns: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = [{"id": w, "c": []} for w in works]
+    for f in info.fields:
+        empty = gap = 0
+        for row, w in zip(rows, works, strict=True):
+            cells = value_cells(a[w], f.name)
+            if not cells:
+                empty += 1
+                row["c"].append(None)
+                continue
+            first = cells[0]
+            if f.type == "enum" and first.value in GAP_VALUES:
+                gap += 1
+            out: list[Any] = [first.value, first.quote[: site_corpus.MAX_QUOTE], first.anchor]
+            if len(cells) > 1:
+                out += [len(cells), list(dict.fromkeys(c.value for c in cells))]
+            row["c"].append(out)
+        columns.append(
+            {
+                "key": f"{info.name}.{f.name}",
+                "name": f.name,
+                "type": f.type,
+                "group": f.group,
+                "required": f.required,
+                "empty": empty,
+                "gap": gap,
+            }
+        )
+    return {
+        "miner": info.name,
+        "version": info.version,
+        "columns": columns,
+        "rows": rows,
+        "works_read": len(works),
+        "included": len(data.sets.included),
+        "not_read": len(data.sets.included) - len(works),
+        "multi_row": any(len(v) > 1 for v in a.values()),
+        "gap_values": sorted(GAP_VALUES),
+        "methods": METHODS["grid"],
+    }
+
+
+def grid_payloads(
+    data: MiningData, atts: Mapping[str, Attributed] | None = None
+) -> dict[str, dict[str, Any]]:
+    """`grid-<miner>` name -> payload, for every miner in the mining data."""
+    atts = atts or attributions(data)
+    return {
+        grid_name(i.name): miner_grid(data, i, atts[i.name])
+        for i in sorted(data.miners, key=lambda m: m.name)
+    }
+
+
+def grid_manifest(grids: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Name, miner, works read, column count and JSON size in bytes of every grid payload."""
+    return [
+        {
+            "name": name,
+            "miner": g["miner"],
+            "works_read": g["works_read"],
+            "columns": len(g["columns"]),
+            "bytes": len(_dumps(g).encode("utf-8")),
+        }
+        for name, g in sorted(grids.items())
+    ]
 
 
 # ------------------------------------------------------------------ codebook
@@ -778,15 +893,21 @@ def load_mining_data(
 # ------------------------------------------------------------------ payload
 
 
-def mining_payload_from(data: MiningData) -> dict[str, Any]:
-    """The Miners and Data page payload (the grid is served page by page by `data_grid`)."""
+def mining_payload_from(
+    data: MiningData, grids: Mapping[str, Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """The Miners and Data page payload. Its `grids` manifest lists the per-miner grid payloads
+    (`grid_payloads`), which pages load on demand; pass them in when already computed."""
     atts = attributions(data)
+    if grids is None:
+        grids = grid_payloads(data, atts)
     return {
         "miners": miners(data, atts),
         "coverage": coverage(data, atts),
         "holes": holes(data, atts),
         "codebook": {k: dict(v) for k, v in sorted(data.codebook.items())},
         "columns": _catalogue(data, atts),
+        "grids": grid_manifest(grids),
         "sets": sets_payload(data.sets),
         "methods": METHODS,
     }

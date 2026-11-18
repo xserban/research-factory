@@ -326,7 +326,7 @@ def test_coverage_lists_works_no_miner_read() -> None:
     assert c["miners"][0]["unread"] == 1
 
 
-def test_holes_per_field_and_works_with_most_missing_required_fields() -> None:
+def test_holes_per_field_and_works_with_most_thin_primary_fields() -> None:
     sets = mk_sets(["w1", "w2", "w3", "w4"], ["w1", "w2", "w3"], {})
     rows = [
         mk_row("a1", "w1", "A", stance="pro", shape="loop"),
@@ -341,8 +341,71 @@ def test_holes_per_field_and_works_with_most_missing_required_fields() -> None:
     assert f["m-test.stance"]["share_of_included"] == pytest.approx(3 / 4)  # missing + unread
     assert f["m-test.shape"]["missing"] == 1
     assert f["m-test.stance"]["required"] is True
-    assert h["works"][0] == {"id": "w2", "title": "Title w2", "missing": ["m-test.stance"]}
-    assert [w["id"] for w in h["works"]] == ["w2", "w3"]  # required fields only; ties by id
+    assert h["works"][0] == {
+        "id": "w3",
+        "title": "Title w3",
+        "missing": ["m-test.shape", "m-test.stance"],
+        "undetermined": [],
+    }
+    # Primary coded fields only (the quote field is left out); most thin first, ties by id.
+    assert [w["id"] for w in h["works"]] == ["w3", "w2"]
+
+
+def test_holes_count_undetermined_values_apart_from_missing_ones() -> None:
+    spec = mk_spec(
+        extra=(MinerField("topic_secondary", "g1", EnumKind(("a", "other"))),),
+    )
+    sets = mk_sets(["w1", "w2"], ["w1", "w2"], {})
+    rows = [
+        mk_row("a1", "w1", "A", stance="other", shape="loop", topic_secondary="other"),
+        mk_row("a2", "w2", "A", stance="pro"),
+    ]
+    h = hm.holes(mk_data(rows, sets, spec=spec))
+    f = {x["key"]: x for x in h["fields"]}
+    assert f["m-test.stance"]["undetermined"] == 1 and f["m-test.stance"]["missing"] == 0
+    assert f["m-test.shape"]["undetermined"] == 0 and f["m-test.shape"]["missing"] == 1
+    assert f["m-test.topic_secondary"]["primary"] is False  # secondaries never rank works
+    assert h["works"] == [
+        {"id": "w1", "title": "Title w1", "missing": [], "undetermined": ["m-test.stance"]},
+        {"id": "w2", "title": "Title w2", "missing": ["m-test.shape"], "undetermined": []},
+    ]
+
+
+# ---------------------------------------------------------------- per-miner grids
+
+
+def test_miner_grid_rows_cells_quotes_and_multi_row_values() -> None:
+    sets = mk_sets(["w1", "w2", "w3"], ["w1", "w2"], {})
+    rows = [
+        mk_row("a1", "w1", "A", stance=("pro", "we are pro", "s1.p1"), shape="loop"),
+        mk_row("a2", "w1", "A", stance=("con", "", ""), shape="loop"),
+        mk_row("a3", "w1", "A", stance=("pro", "again", "s2")),
+        mk_row("a4", "w2", "A", stance="other"),
+    ]
+    g = hm.grid_payloads(mk_data(rows, sets))["grid-m-test"]
+    assert [c["name"] for c in g["columns"]] == ["stance", "shape", "evidence"]
+    assert g["columns"][0]["key"] == "m-test.stance" and g["columns"][0]["group"] == "g1"
+    assert [r["id"] for r in g["rows"]] == ["w1", "w2"]  # included works it read, in order
+    assert g["works_read"] == 2 and g["included"] == 3 and g["not_read"] == 1
+    first = g["rows"][0]["c"]
+    assert first[0] == ["pro", "we are pro", "s1.p1", 3, ["pro", "con"]]  # n rows, distinct
+    assert first[1] == ["loop", "", "", 2, ["loop"]]  # no quote recorded: empty, not invented
+    assert first[2] is None  # read, no value
+    assert g["rows"][1]["c"][0] == ["other", "", ""]  # single value: no n
+    assert g["columns"][0]["gap"] == 1 and g["columns"][1]["empty"] == 1
+    assert g["multi_row"] is True
+
+
+def test_grid_manifest_matches_the_payloads_and_is_in_the_mining_payload() -> None:
+    d = two_pass_data()
+    grids = hm.grid_payloads(d)
+    p = hm.mining_payload_from(d, grids)
+    assert p["grids"] == hm.grid_manifest(grids)
+    entry = p["grids"][0]
+    assert entry["name"] == "grid-m-test" and entry["works_read"] == 3 and entry["columns"] == 3
+    assert entry["bytes"] == len(
+        json.dumps(grids["grid-m-test"], sort_keys=True, ensure_ascii=False).encode()
+    )
 
 
 # ---------------------------------------------------------------- codebook
@@ -384,6 +447,7 @@ def test_payload_is_json_safe_and_carries_methods() -> None:
     p = hm.mining_payload_from(two_pass_data())
     json.dumps(p)
     assert set(p) >= {"miners", "coverage", "holes", "codebook", "columns", "methods", "sets"}
+    assert [g["name"] for g in p["grids"]] == ["grid-m-test"]
     assert "exact" in p["methods"] and "fairer" in p["methods"] and "platform" in p["methods"]
     assert len(p["sets"]["included"]) == 3
 

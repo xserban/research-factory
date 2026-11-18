@@ -1,6 +1,6 @@
 /* Extracted data page: paper-by-field grid, who read what (coverage), holes.
-   Payloads: shell (works with their four core fields and quotes) and mining (columns catalogue, coverage, holes, methods).
-   The mining payload does not carry grid rows, so the grid is built from the shell works (see the payload gaps in the commit note). */
+   Payloads: shell (titles), mining (grid manifest, coverage, holes, methods) and, loaded on demand when a miner is
+   picked, grid-<miner> (that miner's fields and, for every included paper it read, each value with its quote and anchor). */
 HUB.load(['shell', 'mining']).then(d => {
   const H = HUB.init(d.shell);
   const {esc, fmt, term, info, header, byId, $} = H;
@@ -36,6 +36,8 @@ table.dg{border-collapse:separate;border-spacing:0;font-size:var(--t-s);table-la
 .srt:hover,.srt[data-on]{color:var(--acc)}
 .dist{display:flex;height:8px;border-radius:3px;overflow:hidden;background:var(--hair);margin:5px 0 3px;cursor:help}
 .dist i{display:block;height:100%}
+.pill.m{max-width:calc(100% - 62px)}
+.more{margin-left:6px;font:400 11px var(--f-mono);color:var(--mut)}
 .pill{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;padding:3px 9px;border-radius:999px;background:var(--raised);color:var(--fg);font-size:12px}
 .pill .dot{margin-right:6px;width:7px;height:7px}
 .pill.gap{background:transparent;color:var(--mut);box-shadow:inset 0 0 0 1px var(--line)}
@@ -78,34 +80,39 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
   const fname = f => H.pretty(f.replace(/_primary$/, '').replace(/_/g, '-'));
   const GAPV = new Set(['not-determinable', 'other', 'not-stated', 'none-stated', 'unclear']);
 
-  /* Grid columns: the fields the shell carries for every paper, keyed as in the mining catalogue. */
-  const COLS = [
-    {k: 'm-layer.category', m: 'm-layer', label: 'Layer', get: w => ({v: w.layer, q: ''}), vl: H.layerLabel},
-    {k: 'm-classification.technique_primary', m: 'm-classification', label: 'Technique', get: w => w.technique, vl: H.pretty},
-    {k: 'm-classification.architecture_primary', m: 'm-classification', label: 'Architecture', get: w => w.architecture, vl: H.pretty},
-    {k: 'm-mapping.automated_span', m: 'm-mapping', label: 'Automated span', get: w => w.span, vl: H.pretty},
-    {k: 'm-mapping.human_position', m: 'm-mapping', label: 'Human role', get: w => w.human, vl: H.humanLabel},
-  ];
-  const COL = Object.fromEntries(COLS.map(c => [c.k, c]));
-  const ROWS = RF.works;
+  /* Grid columns come from the loaded grid-<miner> payload. */
+  const MAN = M.grids || [], MANIFEST = new Map(MAN.map(g => [g.miner, g]));
+  const DEFAULT_MINER = MANIFEST.has('m-classification') ? 'm-classification' : (MAN[0] ? MAN[0].miner : null);
+  let COLS = [], COL = {}, ROWS = [], G = null;
+  const CB = M.codebook || {};
+  const codeLabel = v => { const e = CB[String(v).split('/').pop()]; return e && e.label ? e.label : H.pretty(String(v).split('/').pop()); };
+  const vlFor = (c, k) => k === 'm-layer.category' ? H.layerLabel : k === 'm-mapping.human_position' ? H.humanLabel : c.type !== 'enum' ? (v => String(v)) : k.startsWith('m-tech-') && /\.category$/.test(k) ? codeLabel : H.pretty;
+  const getter = i => r => { const x = r.c[i]; return x ? {v: x[0], q: x[1], a: x[2], n: x[3] || 1, all: x[4] || null} : null; };
+  function setGrid(g) {
+    G = g;
+    COLS = g.columns.map((c, i) => ({k: c.key, m: g.miner, label: fname(c.name), type: c.type, group: c.group || '', req: c.required, get: getter(i), vl: vlFor(c, c.key)}));
+    COL = Object.fromEntries(COLS.map(c => [c.k, c]));
+    ROWS = g.rows.map(r => ({id: r.id, title: (byId.get(r.id) || {}).title || r.id, c: r.c}));
+  }
   const cell = (r, c) => { const e = c.get(r); return e && e.v != null && e.v !== '' ? e : null; };
   const cv = (r, c) => { const e = cell(r, c); return e ? e.v : null; };
-  const catalogue = (M.columns || []);
-  const otherFields = Math.max(0, catalogue.length - COLS.length);
+  const gridCache = new Map();
+  const loadGrid = m => gridCache.has(m) ? Promise.resolve(gridCache.get(m)) : HUB.load(['grid-' + m]).then(x => { gridCache.set(m, x['grid-' + m]); return x['grid-' + m]; });
 
   /* ---------- state (hash) ---------- */
-  const S = {view: 'grid', filters: [], hidden: new Set(), sort: null, page: 0, cur: {r: 0, c: 0}, miner: null, minerMissing: false};
+  const S = {view: 'grid', filters: [], hidden: new Set(), sort: null, page: 0, cur: {r: 0, c: 0}, miner: DEFAULT_MINER, minerMissing: false};
   const PS = 100;
+  let hashPending = null;
   function readHash() {
     const h = H.hash.get();
     if (['grid', 'coverage', 'holes'].includes(h.get('view'))) S.view = h.get('view');
     const mi = h.get('miner');
-    if (mi) {
-      S.miner = mi;
-      const own = COLS.filter(c => c.m === mi);
-      if (own.length) COLS.forEach(c => { if (c.m !== mi) S.hidden.add(c.k); });
-      else S.minerMissing = true;
-    }
+    if (mi) { if (MANIFEST.has(mi)) S.miner = mi; else S.minerMissing = true; }
+    hashPending = h;
+  }
+  /* Filters, hidden columns, sort and page can be checked only once the miner's columns are known. */
+  function applyHash() {
+    const h = hashPending; hashPending = null; if (!h) return;
     try {
       if (h.get('f')) S.filters = JSON.parse(h.get('f')).filter(f => COL[f[0]]).map(f => ({col: f[0], val: f[1]}));
       if (h.get('hide') != null) S.hidden = new Set(h.get('hide').split(',').filter(k => COL[k]));
@@ -114,7 +121,7 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     S.page = +h.get('p') || 0;
   }
   function writeHash() {
-    H.hash.set({view: S.view === 'grid' ? '' : S.view, miner: S.miner || '',
+    H.hash.set({view: S.view === 'grid' ? '' : S.view, miner: S.miner && S.miner !== DEFAULT_MINER ? S.miner : '',
       f: S.filters.length ? JSON.stringify(S.filters.map(f => [f.col, f.val])) : '',
       hide: S.hidden.size ? [...S.hidden].join(',') : '', sort: S.sort ? S.sort.col + '|' + (S.sort.dir < 0 ? 'd' : 'a') : '', p: S.page ? S.page : ''});
   }
@@ -125,7 +132,7 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
   const vlab = (c, v) => v == null ? 'No value' : c.vl(v);
   function filtered() {
     const by = {}; for (const f of S.filters) (by[f.col] = by[f.col] || []).push(f);
-    let rows = ROWS.filter(r => Object.values(by).every(fs => fs.some(f => { const v = cv(r, COL[f.col]); return f.val === '__empty' ? v == null : v === f.val; })));
+    let rows = ROWS.filter(r => Object.values(by).every(fs => fs.some(f => { const v = cv(r, COL[f.col]); return f.val === '__empty' ? v == null : f.val === '__gap' ? (v == null || GAPV.has(v)) : v === f.val; })));
     if (S.sort) {
       const {col, dir} = S.sort, g = r => col === '__title' ? r.title : cv(r, COL[col]), lab = x => col === '__title' ? x : vlab(COL[col], x);
       rows = rows.map((r, i) => [r, i]).sort((a, b) => {
@@ -135,7 +142,7 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     }
     return rows;
   }
-  const filtLabel = f => COL[f.col].label + ': ' + (f.val === '__empty' ? 'no value' : vlab(COL[f.col], f.val));
+  const filtLabel = f => COL[f.col].label + ': ' + (f.val === '__empty' ? 'no value' : f.val === '__gap' ? 'no value or undetermined' : vlab(COL[f.col], f.val));
   function toggleFilter(col, val) {
     const i = S.filters.findIndex(f => f.col === col && f.val === val);
     if (i >= 0) S.filters.splice(i, 1); else S.filters.push({col, val});
@@ -147,11 +154,11 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     return '';
   }
   function td(r, c, ri, ci) {
-    const e = cell(r, c), v = e ? e.v : null, tab = (ri === S.cur.r && ci === S.cur.c) ? 0 : -1;
-    const lab = esc(c.label + ': ' + (v == null ? 'no value' : vlab(c, v)) + (e && e.q ? '. Evidence: ' + e.q : ''));
+    const e = cell(r, c), v = e ? e.v : null, tab = (ri === S.cur.r && ci === S.cur.c) ? 0 : -1, more = e && e.n > 1;
+    const lab = esc(c.label + ': ' + (v == null ? 'no value' : vlab(c, v)) + (more ? '. ' + e.n + ' values: ' + e.all.map(x => vlab(c, x)).join(', ') : '') + (e && e.q ? '. Evidence: ' + e.q : ''));
     if (v == null) return `<td class=empty data-r=${ri} data-c=${ci} tabindex=${tab} aria-label="${lab}">—</td>`;
     const sel = S.filters.some(f => f.col === c.k && f.val === v);
-    return `<td data-r=${ri} data-c=${ci} tabindex=${tab} aria-label="${lab}"><span class="pill ${GAPV.has(v) ? 'gap' : ''} ${sel ? 'on' : ''}">${dotFor(c, v)}${esc(vlab(c, v))}</span></td>`;
+    return `<td data-r=${ri} data-c=${ci} tabindex=${tab} aria-label="${lab}"><span class="pill ${GAPV.has(v) ? 'gap' : ''} ${sel ? 'on' : ''} ${more ? 'm' : ''}">${dotFor(c, v)}${esc(vlab(c, v))}</span>${more ? `<span class=more>+${fmt(e.n - 1)} more</span>` : ''}</td>`;
   }
   function dist(rows, c) {
     const cnt = new Map(); let emp = 0;
@@ -160,7 +167,7 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
   }
   const RAMP = ['--seq-4', '--seq-3', '--seq-2', '--seq-1'];
   function distBar(dd, c) {
-    if (!dd.n) return '<div class=dist></div>';
+    if (!dd.n || c.type === 'quote') return '<div class=dist></div>';
     const segs = dd.top.slice(0, 4).map((t, i) => [t[1], `var(${RAMP[i]})`]);
     const rest = dd.top.slice(4).reduce((a, t) => a + t[1], 0); if (rest) segs.push([rest, 'var(--dim)']);
     const txt = dd.top.slice(0, 3).map(t => vlab(c, t[0]) + ' ' + t[1]).join(', ');
@@ -170,9 +177,9 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
   /* ---------- page frame ---------- */
   const TITLE = {grid: 'Paper by paper', coverage: 'Who read what', holes: 'Holes'};
   const INFO = {
-    grid: `<b>What it shows</b>One row per paper, one column per field a miner records, each value with the sentence it was based on.<p><span class=k>How to read it.</span> Hover or focus a cell for its evidence. Click a value to keep only the papers that share it, and click again to drop the filter. Arrow keys move between cells; Enter opens the paper. The bar over a column is the spread of its values among the papers in view; the number under it counts empty cells. Filters on one column combine as "or", across columns as "and". Some miners record several rows per paper; the grid keeps the first.</p><p><span class=k>How it's computed.</span> ${esc(M.methods.grid)}</p>`,
+    grid: `<b>What it shows</b>One row per paper, one column per field a miner records, each value with the sentence it was based on.<p><span class=k>How to read it.</span> Hover or focus a cell for its evidence. Click a value to keep only the papers that share it, and click again to drop the filter. Arrow keys move between cells; Enter opens the paper. The bar over a column is the spread of its values among the papers in view; the number under it counts empty cells. Filters on one column combine as "or", across columns as "and". Pick a miner to see its fields. Some miners record several values per paper; the cell shows the first, with “+n more” and the full list on hover.</p><p><span class=k>How it's computed.</span> ${esc(M.methods.grid)}</p>`,
     coverage: `<b>What it shows</b>Which miner has read which paper.<p><span class=k>How to read it.</span> Each row is a miner, each thin column a paper, grouped by layer and then by month. Bright cells were also read by the check reading (${term('passB', 'pass B')}); dim cells were read once. Hover a cell or move through the map with the arrow keys to see the paper; Enter opens it. The table below lists the same counts and the papers each miner has not read.</p><p><span class=k>How it's computed.</span> ${esc(M.coverage.methods)}</p>`,
-    holes: `<b>What it shows</b>Where the extraction is thin.<p><span class=k>How to read it.</span> Each bar is a field, ranked by the share of the papers its miner read that have no value for it. Bars share one scale of papers. Quote fields, which hold a sentence rather than a code, are left out unless you include them. Click a bar to see those papers in the grid, where the field is part of it.</p><p><span class=k>How it's computed.</span> ${esc(M.holes.methods)}</p>`};
+    holes: `<b>What it shows</b>Where the extraction is thin.<p><span class=k>How to read it.</span> Each bar is a coded field, ranked by the share of the papers its miner read that have no usable value. Red: nothing recorded. Grey: the miner answered “not determinable”, “not stated”, “unclear” or “other”. Bars share one scale of papers. Secondary fields and free text are left out. Click a bar to see those papers in the grid.</p><p><span class=k>How it's computed.</span> ${esc(M.holes.methods)}</p>`};
 
   function frame() {
     main.innerHTML = `${header({kicker: `Mining · ${fmt((M.coverage.miners || []).length)} ${term('miner', 'miners')} · first reading, ${term('passA', 'pass A')}`, title: 'Extracted data', level: 1,
@@ -195,23 +202,23 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     let filled = 0; const emp = {}; for (const c of cols) emp[c.k] = 0;
     for (const r of rows) for (const c of cols) { if (cell(r, c)) filled++; else emp[c.k]++; }
     const worst = cols.slice().sort((a, b) => emp[b.k] - emp[a.k])[0];
-    return `<b>${fmt(rows.length)}</b> papers; <b>${Math.round(100 * filled / (rows.length * cols.length))}%</b> of cells filled. Emptiest column: <b>${esc(worst.label)}</b>, ${fmt(emp[worst.k])} blank.`;
+    return `<b>${fmt(rows.length)}</b> papers; <b>${Math.round(100 * filled / (rows.length * cols.length))}%</b> of cells filled. Emptiest column: <b>${esc(worst.label)}</b>, ${fmt(emp[worst.k])} blank.${G.not_read ? ` ${fmt(G.not_read)} included papers were not read by this miner and are not listed.` : ''}`;
   }
   function drawGrid() {
     const rows = filtered(), cols = visCols(); cur = {rows, cols};
     const pages = Math.max(1, Math.ceil(rows.length / PS)); if (S.page >= pages) S.page = pages - 1;
     const pr = rows.slice(S.page * PS, S.page * PS + PS); cur.page = pr;
     S.cur.r = Math.min(S.cur.r, Math.max(0, pr.length - 1)); S.cur.c = Math.min(S.cur.c, Math.max(0, cols.length - 1));
-    const groups = []; for (const c of cols) { const g = groups[groups.length - 1]; if (g && g.m === c.m) g.n++; else groups.push({m: c.m, n: 1}); }
+    const groups = []; for (const c of cols) { const g = groups[groups.length - 1]; if (g && g.m === c.group) g.n++; else groups.push({m: c.group, n: 1}); }
     const dists = cols.map(c => dist(rows, c));
     const sc = $('.dgwrap'), sl = sc ? sc.scrollLeft : 0;
     $('#lead').innerHTML = leadGrid(rows, cols);
-    $('#chips').innerHTML = (S.minerMissing ? `<span class=meta>This miner's fields are not in the grid yet. Showing the main fields instead.</span>` : '') +
+    $('#chips').innerHTML = (S.minerMissing ? `<span class=meta>That miner has no recorded values. Showing ${esc(mname(S.miner))} instead.</span>` : '') +
       S.filters.map((f, i) => `<button class=chip aria-pressed=true data-rm=${i} aria-label="Remove filter ${esc(filtLabel(f))}">${esc(filtLabel(f))} <span class=x>×</span></button>`).join('') + (S.filters.length > 1 ? '<button class=chip data-clear>Clear all</button>' : '');
-    $('#pickBtn').textContent = `Columns (${cols.length} of ${COLS.length})`;
+    if ($('#pickBtn')) $('#pickBtn').textContent = `Columns (${cols.length} of ${COLS.length})`;
     const sortMark = k => S.sort && S.sort.col === k ? (S.sort.dir > 0 ? '↑' : '↓') : '⇅';
     view().innerHTML = `<div class=dgwrap><table class=dg role=grid aria-label="Extracted data, one row per paper"><thead>
-      <tr class=g><th class=t1 style="background:var(--raised)"></th>${groups.map(g => `<th colspan=${g.n}>${esc(mname(g.m))}</th>`).join('')}</tr>
+      <tr class=g><th class=t1 style="background:var(--raised)"></th>${groups.map(g => `<th colspan=${g.n}>${esc(g.m ? H.pretty(g.m) : mname(S.miner))}</th>`).join('')}</tr>
       <tr class=c><th class=t1><div class=nm><span>Paper</span><button class=srt data-sort="__title" ${S.sort && S.sort.col === '__title' ? 'data-on' : ''} aria-label="Sort by title">${sortMark('__title')}</button></div><div class=em>${fmt(rows.length)} papers</div></th>
       ${cols.map((c, i) => `<th scope=col><div class=nm><span title="${esc(c.label)}">${esc(c.label)}</span><button class=srt data-sort="${c.k}" ${S.sort && S.sort.col === c.k ? 'data-on' : ''} aria-label="Sort by ${esc(c.label)}">${sortMark(c.k)}</button></div>${distBar(dists[i], c)}<div class=em>— ${fmt(dists[i].emp)}</div></th>`).join('')}</tr></thead>
       <tbody>${pr.map((r, ri) => `<tr><td class=t1><a href="#" data-open="${esc(r.id)}">${esc(r.title)}</a></td>${cols.map((c, ci) => td(r, c, ri, ci)).join('')}</tr>`).join('') || `<tr><td colspan=${cols.length + 1} style="height:120px;text-align:center;color:var(--mut)">No paper matches. <a href="#" data-clear>Clear the filters</a></td></tr>`}</tbody></table></div>
@@ -301,29 +308,39 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
   }
 
   /* ---------- holes view ---------- */
-  let holesAll = false;
-  const QUOTE = new Set(catalogue.filter(c => c.type === 'quote').map(c => c.key));
-  const holeRows = () => (M.holes.fields || []).filter(f => f.read > 0 && (holesAll || !QUOTE.has(f.key))).map(f => Object.assign({label: fname(f.field)}, f)).sort((a, b) => (b.share_of_read - a.share_of_read) || (b.missing - a.missing) || a.key.localeCompare(b.key));
+  const holeRows = () => (M.holes.fields || []).filter(f => f.primary && f.read > 0).map(f => Object.assign({label: fname(f.field), tot: f.missing + f.undetermined}, f))
+    .sort((a, b) => (b.tot / b.read - a.tot / a.read) || (b.tot - a.tot) || a.key.localeCompare(b.key));
   function drawHoles() {
-    const pool = (M.holes.fields || []).filter(f => f.read > 0), nReq = pool.filter(f => !QUOTE.has(f.key)).length, all = holeRows(), thin = all.filter(f => f.missing > 0), full = all.length - thin.length, mx = Math.max(...all.map(f => f.read), 1);
-    const shown = holesAll ? thin.concat(all.filter(f => !f.missing)).slice(0, 60) : thin.slice(0, 20), top = thin[0];
-    $('#lead').innerHTML = top ? `The thinnest field is <b>${esc(top.label)}</b> (${esc(mname(top.miner))}), empty for ${fmt(top.missing)} of the ${fmt(top.read)} papers read. <b>${fmt(full)}</b> of the ${fmt(all.length)} ${holesAll ? '' : 'coded '}fields are complete.` : 'Every coded field has a value for every paper read.';
+    const all = holeRows(), thin = all.filter(f => f.tot > 0), top = thin[0], mx = Math.max(...all.map(f => f.read), 1);
+    const near = all.filter(f => f.tot <= Math.max(3, 0.01 * f.read)).length;
+    $('#lead').innerHTML = top ? `The thinnest field is <b>${esc(top.label)}</b> (${esc(mname(top.miner))}): ${fmt(top.tot)} of the ${fmt(top.read)} papers it read have no value or an undetermined one (${Math.round(100 * top.tot / top.read)}%). <b>${fmt(near)}</b> of the ${fmt(all.length)} coded fields are nearly complete.` : 'Every coded field has a usable value for every paper read.';
     const wk = M.holes.works || [];
-    view().innerHTML = `<div class=dleg><span><i style="background:var(--exc)"></i>Papers read with no value</span></div>
-      <div class=card style="padding:10px 8px">${shown.map(f => {
-        const inGrid = !!COL[f.key], tag = inGrid ? 'button' : 'div';
-        return `<${tag} class=hbar ${inGrid ? `data-hole="${f.key}" aria-label="${esc(f.label)}: ${f.missing} papers with no value. Show them in the grid"` : ''}><span class=lab>${esc(f.label)}<small>${esc(mname(f.miner))} · ${fmt(f.read)} read${f.required ? ' · required' : ''}</small></span><span class=trk><i style="width:${100 * f.missing / mx}%"></i></span><span class="num tnum">${fmt(f.missing)} <span class=meta>(${(100 * f.missing / f.read).toFixed(1)}%)</span></span></${tag}>`;
-      }).join('') || '<p class=meta style="padding:8px">No field has a gap.</p>'}</div>
-      ${pool.length > nReq ? `<p><button class=btn data-allholes>${holesAll ? 'Coded fields only' : `Include the ${fmt(pool.length - nReq)} quote fields`}</button></p>` : ''}
-      ${wk.length ? `<h3 class=h3 style="margin-top:22px">Papers missing most required fields</h3><ul>${wk.map(w => `<li><a href="#" data-open="${esc(w.id)}">${esc(w.title)}</a> <span class=meta>${fmt(w.missing.length)} fields</span></li>`).join('')}</ul>` : ''}`;
+    view().innerHTML = `<div class=dleg><span><i style="background:var(--exc)"></i>No value</span><span><i style="background:var(--dim)"></i>Not determinable, not stated, unclear or other</span></div>
+      <div class=card style="padding:10px 8px">${thin.map(f => `<button class=hbar data-hole="${esc(f.key)}" aria-label="${esc(f.label)}: ${f.tot} papers with no usable value. Show them in the grid"><span class=lab>${esc(f.label)}<small>${esc(mname(f.miner))} · ${fmt(f.read)} read${f.required ? ' · required' : ''}</small></span><span class=trk><i style="width:${100 * f.missing / mx}%;background:var(--exc)"></i><i style="width:${100 * f.undetermined / mx}%;background:var(--dim)"></i></span><span class="num tnum">${fmt(f.tot)} <span class=meta>(${(100 * f.tot / f.read).toFixed(1)}%)</span></span></button>`).join('') || '<p class=meta style="padding:8px">No field has a gap.</p>'}</div>
+      ${wk.length ? `<h3 class=h3 style="margin-top:22px">Papers missing most coded fields</h3><ul>${wk.map(w => `<li><a href="#" data-open="${esc(w.id)}">${esc((byId.get(w.id) || {}).title || w.title)}</a> <span class=meta>${fmt(w.missing.length)} empty · ${fmt(w.undetermined.length)} undetermined</span></li>`).join('')}</ul>` : ''}`;
   }
 
   /* ---------- controls and render ---------- */
+  const loadingGrid = () => S.view === 'grid' && S.miner && (!G || G.miner !== S.miner);
   function render() {
     frame();
     const grid = S.view === 'grid';
-    $('#ctl').innerHTML = (grid ? `<div class=picker id=picker><button class=btn id=pickBtn aria-expanded=false></button><div class=panel id=panel>${[...new Set(COLS.map(c => c.m))].map(m => `<h4>${esc(mname(m))}</h4>${COLS.filter(c => c.m === m).map(c => `<label><input type=checkbox data-col="${c.k}" ${S.hidden.has(c.k) ? '' : 'checked'}> ${esc(c.label)}</label>`).join('')}`).join('')}${otherFields ? `<p class=meta style="margin:10px 0 0">${fmt(otherFields)} more recorded fields are not in the grid yet.</p>` : ''}</div></div>` : '') + `<button class=btn id=csv>Download CSV</button>`;
+    if (grid && !S.miner) { $('#lead').textContent = 'No miner has recorded values yet.'; return; }
+    if (loadingGrid()) {
+      $('#ctl').innerHTML = '';
+      view().innerHTML = '<p class=meta role=status style="padding:24px 0">Loading the fields…</p>';
+      const want = S.miner;
+      loadGrid(want).then(g => { if (S.miner !== want) return; setGrid(g); applyHash(); render(); })
+        .catch(e => { view().innerHTML = `<p class=meta>The fields could not be loaded: ${esc(e.message)}</p>`; });
+      return;
+    }
+    const sel = `<select class=btn id=minerSel aria-label="Miner">${MAN.map(g => `<option value="${esc(g.miner)}" ${g.miner === S.miner ? 'selected' : ''}>${esc(mname(g.miner))} · ${fmt(g.works_read)} papers</option>`).join('')}</select>`;
+    $('#ctl').innerHTML = (grid ? sel + `<div class=picker id=picker><button class=btn id=pickBtn aria-expanded=false></button><div class=panel id=panel>${[...new Set(COLS.map(c => c.group))].map(gp => `<h4>${esc(gp ? H.pretty(gp) : mname(S.miner))}</h4>${COLS.filter(c => c.group === gp).map(c => `<label><input type=checkbox data-col="${esc(c.k)}" ${S.hidden.has(c.k) ? '' : 'checked'}> ${esc(c.label)}</label>`).join('')}`).join('')}</div></div>` : '') + `<button class=btn id=csv>Download CSV</button>`;
     if (grid) drawGrid(); else if (S.view === 'coverage') drawCov(); else drawHoles();
+  }
+  function pickMiner(m, filters) {
+    S.miner = m; S.minerMissing = false; S.hidden = new Set(); S.sort = null; S.filters = filters || []; S.page = 0; S.cur = {r: 0, c: 0}; hashPending = null;
+    G = null; writeHash(); render();
   }
 
   main.addEventListener('click', e => {
@@ -334,23 +351,22 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     if (t.closest('[data-clear]')) { e.preventDefault(); S.filters = []; S.page = 0; writeHash(); drawGrid(); return; }
     const so = t.closest('[data-sort]'); if (so) { const k = so.dataset.sort; if (!S.sort || S.sort.col !== k) S.sort = {col: k, dir: 1}; else if (S.sort.dir === 1) S.sort.dir = -1; else S.sort = null; writeHash(); drawGrid(); return; }
     const pg = t.closest('[data-pg]'); if (pg) { S.page += +pg.dataset.pg; S.cur.r = 0; writeHash(); drawGrid(); $('.dgwrap').scrollTop = 0; return; }
-    const hb = t.closest('[data-hole]'); if (hb) { S.view = 'grid'; S.hidden.delete(hb.dataset.hole); S.filters = [{col: hb.dataset.hole, val: '__empty'}]; S.page = 0; writeHash(); render(); return; }
-    if (t.closest('[data-allholes]')) { holesAll = !holesAll; drawHoles(); return; }
+    const hb = t.closest('[data-hole]'); if (hb) { S.view = 'grid'; pickMiner(hb.dataset.hole.split('.')[0], [{col: hb.dataset.hole, val: '__gap'}]); return; }
     const ub = t.closest('[data-unread]'); if (ub) { showUnread(+ub.dataset.unread, ub); return; }
-    const c = t.closest('td[data-r]'); if (c) { const r = cur.page[+c.dataset.r], col = cur.cols[+c.dataset.c]; S.cur = {r: +c.dataset.r, c: +c.dataset.c}; const v = cv(r, col); toggleFilter(col.k, v == null ? '__empty' : v); const n = document.querySelector(`td[data-r="${S.cur.r}"][data-c="${S.cur.c}"]`); if (n) n.focus({preventScroll: true}); return; }
+    const c = t.closest('td[data-r]'); if (c) { const r = cur.page[+c.dataset.r], col = cur.cols[+c.dataset.c]; S.cur = {r: +c.dataset.r, c: +c.dataset.c}; if (col.type === 'quote') return; const v = cv(r, col); toggleFilter(col.k, v == null ? '__empty' : v); const n = document.querySelector(`td[data-r="${S.cur.r}"][data-c="${S.cur.c}"]`); if (n) n.focus({preventScroll: true}); return; }
     if (t.closest('#csv')) download();
   });
   main.addEventListener('change', e => {
+    if (e.target.id === 'minerSel') { pickMiner(e.target.value); return; }
     const c = e.target.dataset.col; if (!c) return;
     if (e.target.checked) S.hidden.delete(c); else S.hidden.add(c);
-    S.miner = null; S.minerMissing = false;
     S.filters = S.filters.filter(f => !S.hidden.has(f.col)); if (S.sort && S.hidden.has(S.sort.col)) S.sort = null;
     writeHash(); drawGrid();
   });
   function cellTip(c) {
     const r = cur.page[+c.dataset.r], col = cur.cols[+c.dataset.c]; if (!r || !col) return '';
     const e = cell(r, col);
-    return e ? `<b>${esc(vlab(col, e.v))}</b> <span class=meta>· ${esc(col.label)}</span>${e.q ? `<div class=quote style="font-size:13px;margin:6px 0 0">“${esc(e.q)}”</div>` : '<div class=meta>No quotation recorded.</div>'}` : `<b>${esc(col.label)}</b><div class=meta>No value recorded for this paper.</div>`;
+    return e ? `<b>${esc(vlab(col, e.v))}</b> <span class=meta>· ${esc(col.label)}</span>${e.n > 1 ? `<div class=meta style="margin-top:6px">${fmt(e.n)} values recorded for this paper</div>` + e.all.map(x => `<div>${esc(vlab(col, x))}</div>`).join('') : ''}${e.q ? `<div class=quote style="font-size:13px;margin:6px 0 0">“${esc(e.q)}”</div>` : '<div class=meta>No quotation recorded.</div>'}` : `<b>${esc(col.label)}</b><div class=meta>No value recorded for this paper.</div>`;
   }
   main.addEventListener('mouseover', e => {
     const c = e.target.closest('td[data-r]'); if (c) { H.tip(cellTip(c), e); return; }
@@ -388,13 +404,13 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     let out, name;
     if (S.view === 'grid') {
       const rows = filtered(), cols = visCols();
-      out = [['id', 'title', ...cols.flatMap(c => [c.label, c.label + ' evidence'])], ...rows.map(r => [r.id, r.title, ...cols.flatMap(c => { const e = cell(r, c); return [e ? e.v : '', e ? e.q || '' : '']; })])];
+      out = [['id', 'title', ...cols.flatMap(c => [c.label, c.label + ' evidence', c.label + ' all values'])], ...rows.map(r => [r.id, r.title, ...cols.flatMap(c => { const e = cell(r, c); return [e ? e.v : '', e ? e.q || '' : '', e && e.all ? e.all.join('; ') : '']; })])];
       name = 'extracted-data-grid.csv';
     } else if (S.view === 'coverage') {
       out = [['id', 'title', 'layer', 'month', ...covRows.map(m => mname(m.n))], ...CW.map(w => [w.id, w.title, w.layer, w.month, ...covRows.map(m => m.B.has(w.id) ? 'read and checked' : m.A.has(w.id) ? 'read' : '')])];
       name = 'extracted-data-coverage.csv';
     } else {
-      out = [['field', 'miner', 'papers_read', 'no_value', 'share_of_read'], ...holeRows().map(f => [f.key, f.miner, f.read, f.missing, f.share_of_read])];
+      out = [['field', 'miner', 'papers_read', 'no_value', 'undetermined', 'share_no_usable_value'], ...holeRows().map(f => [f.key, f.miner, f.read, f.missing, f.undetermined, f.tot / f.read])];
       name = 'extracted-data-holes.csv';
     }
     const b = new Blob([out.map(r => r.map(q).join(',')).join('\n')], {type: 'text/csv'}), a = document.createElement('a');

@@ -126,6 +126,11 @@ class HubContext:
             lambda: hub_mining.load_mining_data(self.project, sets=self.flow_data.sets),
         )
 
+    @property
+    def grids(self) -> dict[str, dict[str, Any]]:
+        """`grid-<miner>` payloads from the loaded mining data, computed once."""
+        return self._once("grids", lambda: hub_mining.grid_payloads(self.mining_data))
+
     def role_cells(self, dim_key: str) -> dict[str, tuple[str, str] | None]:
         """The first pass-A (value, quote) of a profile dimension for every included work."""
         return self._once(
@@ -369,7 +374,7 @@ def build_living(ctx: HubContext) -> dict[str, Any]:
 
 
 def build_mining(ctx: HubContext) -> dict[str, Any]:
-    return hub_mining.mining_payload_from(ctx.mining_data)
+    return hub_mining.mining_payload_from(ctx.mining_data, ctx.grids)
 
 
 def build_findings(ctx: HubContext) -> dict[str, Any]:
@@ -471,6 +476,12 @@ def build_journeys(ctx: HubContext) -> dict[str, Any]:
     return payload
 
 
+def _grid_builder(name: str) -> Callable[[HubContext], dict[str, Any]]:
+    return lambda ctx: ctx.grids[name]
+
+
+GRID_FAMILY = "grid"  # `--only grid` builds every `grid-<miner>` payload
+
 BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "shell": build_shell,
     "overview": build_overview,
@@ -518,21 +529,43 @@ def build_static(
 
     ``only`` limits the payload names (unknown names raise ValueError before anything is
     written); pages are written when every payload they need was built in this run."""
-    if only is not None:
-        unknown = sorted(set(only) - set(BUILDERS))
+    only_set = None if only is None else set(only)
+    if only_set is not None:
+        unknown = sorted(
+            n
+            for n in only_set
+            if n not in BUILDERS and n != GRID_FAMILY and not n.startswith(hub_mining.GRID_PREFIX)
+        )
         if unknown:
             raise ValueError(
-                f"unknown payload(s): {', '.join(unknown)}; known: {', '.join(BUILDERS)}"
+                f"unknown payload(s): {', '.join(unknown)}; known: {', '.join(BUILDERS)}, "
+                f"{GRID_FAMILY}, {hub_mining.GRID_PREFIX}<miner>"
             )
-    names = [n for n in BUILDERS if only is None or n in only]
+    names = [n for n in BUILDERS if only_set is None or n in only_set]
     ctx = HubContext(project)
     report = BuildReport()
+    builders: dict[str, Callable[[HubContext], dict[str, Any]]] = {n: BUILDERS[n] for n in names}
+    wanted_grids = only_set is None or GRID_FAMILY in only_set
+    specific = sorted(n for n in (only_set or ()) if n.startswith(hub_mining.GRID_PREFIX))
+    if wanted_grids or specific:
+        try:
+            grids = ctx.grids
+        except Exception as exc:
+            report.errors[GRID_FAMILY] = f"{type(exc).__name__}: {exc}"
+            grids = {}
+        missing_grids = [n for n in specific if n not in grids]
+        if missing_grids and not report.errors:
+            raise ValueError(f"unknown grid payload(s): {', '.join(missing_grids)}")
+        for gname in grids:
+            if wanted_grids or gname in specific:
+                builders[gname] = _grid_builder(gname)
+                names.append(gname)
     data_dir = out_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     for name in names:
         started = time.perf_counter()
         try:
-            text = dumps(BUILDERS[name](ctx))
+            text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
             continue
@@ -551,7 +584,7 @@ def build_static(
     version = hub_ui.asset_version()
     for spec in hub_ui.PAGES.values():
         missing = [n for n in spec.payloads if n not in report.payloads]
-        if only is not None and not set(spec.payloads) <= set(names):
+        if only_set is not None and not set(spec.payloads) <= set(names):
             continue
         if missing:
             report.skipped_pages[spec.id] = missing
