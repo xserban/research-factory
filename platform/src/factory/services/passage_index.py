@@ -12,7 +12,8 @@ Invariants:
   is written for every indexed conversion, also one with no indexed passage, so such a conversion
   is not re-cut on every call. Marker rows of other conversions of a work are removed with them.
 - Passages whose section kind is related or back are not indexed (appendices are, tagged);
-  they are counted in `IndexReport.excluded_passages` (for the conversions indexed in that call only).
+  they are counted in `IndexReport.excluded_passages` (for the conversions indexed in that
+  call only).
 - Rows are a pure function of the Markdown, the chunker and the work title at index time.
 - The sidecar's layout carries `SCHEMA_VERSION` in SQLite's `user_version`. A sidecar of another
   version has this module's tables (`passages`, `passages_fts`, `conversions`) dropped and

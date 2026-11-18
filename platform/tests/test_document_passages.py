@@ -208,7 +208,7 @@ def test_empty_document() -> None:
         (("Method", "Evaluation"), SectionKind.RESULTS),
         (("Experiments", "Plain heading"), SectionKind.RESULTS),
         # the innermost heading naming a kind decides; ancestors do not taint
-        (("Method", "Related work"), SectionKind.RELATED),
+        (("Method", "Related work"), SectionKind.METHOD),  # nested: a stage (2026-11-18 ruling)
         (("Related work", "Method"), SectionKind.METHOD),
         (("Related work", "Plain heading"), SectionKind.RELATED),
         # an appendix ancestor wins
