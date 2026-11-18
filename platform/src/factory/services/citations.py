@@ -95,6 +95,36 @@ def _meta(data: str) -> tuple[str, int | None, frozenset[str], int | None]:
     return str(d.get("title") or ""), year, names, ext if isinstance(ext, int) else None
 
 
+def cited_by_counts(project: Project) -> dict[str, int | None]:
+    """`WorkCitations.cited_by` of every work, without the report's candidates (the costly part).
+
+    Invariant: equal to `{w.work_id: w.cited_by for w in citation_report(...).works}`."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        ids = [str(r[0]) for r in conn.execute(text("SELECT work_id FROM works"))]
+        extractions = int(
+            conn.execute(
+                text("SELECT COUNT(DISTINCT work_id) FROM reference_extractions WHERE live = 1")
+            ).scalar()
+            or 0
+        )
+        links = conn.execute(
+            text(
+                "SELECT x.work_id, l.work_id FROM reference_links l "
+                "JOIN reference_extractions x USING (extraction_id) WHERE x.live = 1 "
+                "AND l.state = :resolved AND l.work_id IS NOT NULL"
+            ),
+            {"resolved": LinkState.RESOLVED.value},
+        ).all()
+    if extractions == 0:
+        return {w: None for w in sorted(ids)}
+    citers: dict[str, set[str]] = {}
+    for citing, cited in links:
+        if citing != cited:
+            citers.setdefault(str(cited), set()).add(str(citing))
+    return {w: len(citers.get(w, ())) for w in sorted(ids)}
+
+
 def citation_report(project: Project, *, as_of_year: int) -> CitationReport:
     """Per-work in-corpus citation counts, denominators and snowball candidates."""
     project.index.sync()

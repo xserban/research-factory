@@ -270,9 +270,7 @@ class PayloadService:
             return
         self.prewarm_check()
         if self._watcher is None or not self._watcher.is_alive():
-            self._watcher = threading.Thread(
-                target=self._watch, name="hub-ui-prewarm", daemon=True
-            )
+            self._watcher = threading.Thread(target=self._watch, name="hub-ui-prewarm", daemon=True)
             self._watcher.start()
 
     def stop(self) -> None:
@@ -294,7 +292,7 @@ class PayloadService:
             if self._prewarmed == fp:
                 return False
             self._prewarmed = fp
-        names = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
+        names: list[str] = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
         names += [n for n in hub_build.BUILDERS if n not in names]
         names = [n for n in names if self._read(n, fp) is None]
         grids = sorted(self._dir.glob("grid-*.fp")) if self._dir.is_dir() else []

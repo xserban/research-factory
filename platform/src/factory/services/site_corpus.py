@@ -17,13 +17,12 @@ import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
-from factory.services.citations import citation_report
+from factory.services.citations import cited_by_counts
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
 from factory.services.work_layers import WorkLayer, layers_of
@@ -147,7 +146,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
 
     A work is in scope when a listed miner has a live pass-A row for it. Documents carry the media
     type and the stored file, so a product can link to the original. `cited_in_corpus` is the
-    in-corpus citation count of `citation_report` (computed once per payload); None when no
+    in-corpus citation count of `cited_by_counts` (computed once per payload); None when no
     reference list was extracted, so an unknown count is never shown as 0."""
     profile = load_profile(project)
     listed = _listed_schemas(project)
@@ -158,8 +157,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
     works_data: dict[str, dict[str, Any]] = {}
     edges: list[tuple[str, str]] = []
     n_ext = 0
-    report = citation_report(project, as_of_year=datetime.now(UTC).year)
-    in_corpus = {w.work_id: w.cited_by for w in report.works}
+    in_corpus = cited_by_counts(project)
     with project.index.connect() as conn:
         for schema in schemas:
             for eid, wid in conn.execute(
