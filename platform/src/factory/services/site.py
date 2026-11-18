@@ -9,7 +9,8 @@ hand.
 Invariants:
 
 - A product's **fingerprint** is computed from the event log (the count and the last id of the event
-  types it reads, plus its own version). A product is stale when its recorded fingerprint differs.
+  types it reads), its own version and the hub code its build reaches
+  (`product_code_hash`). A product is stale when its recorded fingerprint differs.
 - `site/manifest.json` is a cache. It is not an event, no event reads it, and deleting it only
   forces a rebuild.
 - One product failing to build never stops the others: the error is recorded in the manifest, the
@@ -21,10 +22,13 @@ Invariants:
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import html
+import inspect
 import json
 import shutil
+import textwrap
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -608,10 +612,77 @@ def code_hash() -> str:
     return digest.hexdigest()[:12]
 
 
+_SERVICES: Final = "factory.services"
+
+
+def _code_files() -> dict[str, Path]:
+    """The hub code set, by module name: what `code_hash` covers."""
+    here = Path(__file__).parent
+    names = [*here.glob("site*.py"), here / "miner_info.py", here / "pages.py"]
+    return {path.stem: path for path in names if path.is_file()}
+
+
+def _imports(tree: ast.AST, *, top_only: bool) -> set[str]:
+    """The `factory.services` module names a tree imports (only its top level with `top_only`)."""
+    nodes = getattr(tree, "body", []) if top_only else ast.walk(tree)
+    out: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module == _SERVICES:
+                out.update(alias.name for alias in node.names)
+            elif node.module.startswith(_SERVICES + "."):
+                out.add(node.module[len(_SERVICES) + 1 :].split(".")[0])
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(_SERVICES + "."):
+                    out.add(alias.name[len(_SERVICES) + 1 :].split(".")[0])
+    return out
+
+
+_PRODUCT_CODE: dict[tuple[object, object], str] = {}
+
+
+def product_code_hash(product: Product) -> str:
+    """A hash of the hub code one product's build reaches (IDEA-96): `site.py` with its top-level
+    imports, and every hub module imported, directly or through another hub module, by the
+    product's `build` and `stamp` functions or by the module that defines them. Code outside the
+    hub code set is not followed, as in `code_hash`. When a function's source cannot be read the
+    whole set is used. Cached per process: a process runs the code it loaded at start."""
+    key = (product.build, product.stamp)
+    cached = _PRODUCT_CODE.get(key)
+    if cached is not None:
+        return cached
+    files = _code_files()
+    seen: set[str] = {"site"}
+    todo = set(_imports(ast.parse(files["site"].read_text(encoding="utf-8")), top_only=True))
+    for fn in (product.build, product.stamp):
+        if fn is None:
+            continue
+        try:
+            todo |= _imports(ast.parse(textwrap.dedent(inspect.getsource(fn))), top_only=False)
+        except (OSError, TypeError, SyntaxError):
+            todo |= set(files)
+        home = getattr(fn, "__module__", "") or ""
+        if home.startswith(_SERVICES + "."):
+            todo.add(home[len(_SERVICES) + 1 :])
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in files:
+            continue
+        seen.add(name)
+        todo |= _imports(ast.parse(files[name].read_text(encoding="utf-8")), top_only=False)
+    digest = hashlib.sha256()
+    for name in sorted(seen):
+        digest.update(files[name].name.encode())
+        digest.update(files[name].read_bytes())
+    _PRODUCT_CODE[key] = found = digest.hexdigest()[:12]
+    return found
+
+
 def fingerprint(project: Project, product: Product) -> str:
-    """The product's version, the build code and, per input pattern, the count and last id of
-    matching events."""
-    parts: list[str] = [f"{product.id}@{product.version}", f"code:{code_hash()}"]
+    """The product's version, the code its build reaches (`product_code_hash`) and, per input
+    pattern, the count and last id of matching events."""
+    parts: list[str] = [f"{product.id}@{product.version}", f"code:{product_code_hash(product)}"]
     with project.index.connect() as conn:
         for pattern in product.inputs:
             row = conn.execute(
