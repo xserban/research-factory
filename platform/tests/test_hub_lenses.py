@@ -42,8 +42,10 @@ def test_chains_columns_sum_and_rest():
     assert c.columns[1] == [("p", 2), (L.REST, 2)]
     for col in c.columns:
         assert sum(n for _, n in col) == 4
-    assert sum(n for *_, n in c.links[0]) == 4
-    assert ("x", "p", 1) in c.links[0] and (L.REST, L.REST, 1) in c.links[0]
+    assert sum(n for _, _, n, _ in c.links[0]) == 4
+    assert all(len(ids) == n for _, _, n, ids in c.links[0])
+    assert ("x", "p", 1) == c.links[0][0][:3] or any(k[:3] == ("x", "p", 1) for k in c.links[0])
+    assert any(k[:3] == (L.REST, L.REST, 1) for k in c.links[0])
 
 
 def test_trends_year_half_undated():
@@ -117,6 +119,7 @@ def test_adoption():
     assert [c.works for c in a.cells if c.technique == "t1" and c.period == "2024H1"] == [1]
     assert a.works_with_records == 3 and a.undated_records == 1 and a.labels["t1"] == "One"
     assert "3 works" in a.coverage_note and a.unlisted == []
+    assert [c.ids for c in a.cells if c.technique == "t1" and c.period == "2024H1"] == [["w1"]]
 
 
 def test_similar_ordering_and_breakdown():
@@ -159,3 +162,21 @@ def test_payload_json_safe():
         adoption_records=[("w1", "s", "t", 2024, 1)],
     )
     assert json.loads(json.dumps(p))["n"] == 9
+
+
+def test_payload_matrices_for_every_pair_and_icicle_dims():
+    p = L.lenses_payload(
+        FIX,
+        matrix_dims=("a", "b"),
+        chain_dims=["a", "b"],
+        trend_dim="a",
+        icicle_dims=["a", "b"],
+        assoc_dims=["a", "b"],
+        matrix_pair_dims=("a", "b", "layer"),
+    )
+    assert set(p["matrices"]) == {"a|b", "b|a", "a|layer", "layer|a", "b|layer", "layer|b"}
+    m = p["matrices"]["a|b"]
+    assert m["row_dim"] == "a" and m["col_dim"] == "b" and m["n"] == 9
+    assert p["matrices"]["b|a"]["observed"] != [] and p["matrix"] == m
+    assert p["icicle"]["dims"] == ["a", "b"]
+    assert all(len(ids) == n for col in p["chains"]["links"] for _, _, n, ids in col)

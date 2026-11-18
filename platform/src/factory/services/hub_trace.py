@@ -13,8 +13,10 @@ Registry (`FIGURE_KINDS`):
   decisions, resolutions and audit items citing it).
 - `work.<work id>.screening`: the work, forward, keeping the decisions, resolutions, audits and
   criteria met (what was decided about it, with the criterion cited).
-- `work.<work id>.field.<miner>.<field>`: the latest live extraction row of that miner for the
-  work that carries the field, back (conversion, anchors, task, work).
+- `work.<work id>.field.<miner>.<field>`: the row the hub shows: the first live pass-A row of
+  that miner (extraction id order) with a non-empty value of the field, for the work itself or,
+  when only an absorbed duplicate was read, for that duplicate (the title says so); back
+  (conversion, anchors, task, work).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
+from factory.services.dedup import active_merges
 from factory.services.protocol import current_protocol
 from factory.services.trace import TraceNode, trace
 from factory.services.work_ref import resolve_work_id
@@ -114,23 +117,45 @@ def _plan(project: Project, figure_id: str) -> _Plan:
         work_id, miner, field = m.groups()
         project.index.sync()
         work = _work(project, work_id)
+        source = _mined_source(project, work, miner)
         with project.index.connect() as conn:
             row = conn.execute(
                 text(
                     "SELECT r.extraction_id FROM extraction_rows r JOIN extraction_fields f "
                     "ON f.extraction_id = r.extraction_id WHERE r.scope = :s AND r.work_id = :w "
-                    "AND r.superseded_by IS NULL AND f.field = :f ORDER BY r.event_id DESC LIMIT 1"
+                    "AND r.pass_label = 'A' AND r.superseded_by IS NULL AND f.field = :f "
+                    "AND COALESCE(f.value, '') != '' ORDER BY r.extraction_id ASC LIMIT 1"
                 ),
-                {"s": miner, "w": work, "f": field},
+                {"s": miner, "w": source, "f": field},
             ).first()
         if row is None:
             raise _refuse("no such mined value")
-        return _Plan(str(row[0]), "back", None, f"{field} of {work} read by {miner}")
+        via = "" if source == work else f" (shown on {work}, read under its duplicate {source})"
+        return _Plan(str(row[0]), "back", None, f"{field} of {source} read by {miner}{via}")
     if (m := _SCREENING_RE.match(figure_id)) is not None:
         project.index.sync()
         work = _work(project, m.group(1))
         return _Plan(work, "forward", SCREENING_KINDS, f"Screening of {work}")
     raise _refuse("unknown figure")
+
+
+def _mined_source(project: Project, work: str, miner: str) -> str:
+    """The work id whose pass-A rows the hub shows for `work`: its own when it has any, else the
+    first absorbed duplicate that has (the rule of `hub_payloads.Sets.miner_source`)."""
+    absorbed = sorted({a for m in active_merges(project) if m.primary == work for a in m.absorbed})
+    wanted = [work, *absorbed]
+    with project.index.connect() as conn:
+        have = {
+            str(w)
+            for (w,) in conn.execute(
+                text(
+                    "SELECT DISTINCT work_id FROM extraction_rows WHERE scope = :s "
+                    "AND pass_label = 'A' AND superseded_by IS NULL"
+                ),
+                {"s": miner},
+            )
+        }
+    return next((w for w in wanted if w in have), work)
 
 
 def _work(project: Project, work_id: str) -> str:

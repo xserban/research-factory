@@ -119,11 +119,6 @@ HUB.load(['shell', 'findings']).then(d => {
   H.GLOSSARY.stage = ['Stage', 'One step of the research cycle: reading the literature, forming a hypothesis, designing and running experiments, analysing results, writing and checking the paper.'];
   H.GLOSSARY.automated = ['Automated', 'The system does this stage on its own. Stages where a person does the work, or that the paper only mentions, are not counted.'];
   H.GLOSSARY.core = ['Core papers', 'The papers at the centre of the review (layer: core). Technique miners were run on these only.'];
-  const RULE_TITLE = {
-    no_human: 'Human role', full_lifecycle: 'Full research cycle', least_automated_stage: 'Least automated stage',
-    most_varied_stage: 'Most varied stage', iterative_loop: 'Iterative loops', benchmark_validation: 'Validation',
-    compare_with_humans: 'Comparison with humans', data_release: 'Data release',
-  };
   const RELCOL = { released: '--inc', partial: '--h-feedback', promised: '--h-none', no: '--exc', ns: '--h-null', other: '--line' };
   const pctN = (a, b) => b ? Math.round(100 * a / b) : 0;
   const cic = id => (byId.get(id) || {}).cic || 0;
@@ -139,11 +134,23 @@ HUB.load(['shell', 'findings']).then(d => {
   const popText = p => p ? `${fmt(p.with_value)} of ${fmt(p.of_included)} included papers have this coded${p.complete ? '' : '; the rest were not read for it'}` : '';
 
   /* ---------- charts ---------- */
-  function waffle(share, hiLabel) {
-    const n = Math.round(share * 100);
-    const cells = Array.from({ length: 100 }, (_, i) => `<i class="${i < n ? 'h' : ''}"></i>`).join('');
+  const CAT = ['--h-goal', '--h-collab', '--h-review', '--h-physical', '--h-feedback', '--h-none'];
+  const NULLV = new Set(['not-determinable', 'not-stated', 'unclear', 'other', 'not-compared']);
+  /* one square per percent, split between the field's values by largest remainder; each value has its own colour */
+  function waffle(dist, labelOf, colorOf) {
+    const tot = dist.reduce((a, d) => a + d.n, 0) || 1;
+    const q = dist.map(d => ({ d, k: Math.floor(100 * d.n / tot), r: (100 * d.n / tot) % 1 }));
+    let left = 100 - q.reduce((a, x) => a + x.k, 0);
+    [...q].sort((a, b) => b.r - a.r).forEach(x => { if (left > 0) { x.k++; left--; } });
+    const cells = q.flatMap(x => Array.from({ length: x.k }, () => `<i style="background:var(${colorOf(x.d)})"></i>`)).join('');
     return `<div class="waf" role="img" aria-label="Waffle chart: each square is 1% of papers">${cells}</div>` +
-      `<div class="cap"><span><span class="sw h"></span>${esc(hiLabel)}</span><span><span class="sw"></span>all others</span></div>`;
+      `<div class="cap">${dist.map(d => `<span data-tip="${esc(labelOf(d.value))}: ${fmt(d.n)} (${pctN(d.n, tot)}%)"><span class="sw" style="background:var(${colorOf(d)})"></span>${esc(labelOf(d.value))} ${fmt(d.n)}</span>`).join('')}</div>`;
+  }
+  /* hit values take the palette in order; values that say nothing take the neutral colour */
+  function distWaffle(c, labelOf, colorFor) {
+    let i = 0;
+    const col = d => colorFor ? colorFor(d.value) : NULLV.has(d.value) ? '--h-null' : (d._c ??= CAT[i++ % CAT.length]);
+    return waffle(c.distribution || [], labelOf, col);
   }
   function stack(segs, hiKey) {
     const tot = segs.reduce((a, s) => a + s.n, 0), hi = segs.find(s => s.key === hiKey);
@@ -160,14 +167,14 @@ HUB.load(['shell', 'findings']).then(d => {
     const ev = (c.evidence || []).map(e => [e.work, e.quote]);
     m.list = { ids: c.ids, ev, tag: () => '' };
     switch (c.rule) {
-      case 'no_human': m.chart = waffle(c.share, 'No human in the loop'); m.list.tag = id => H.humanLabel(H.val(byId.get(id), 'human')); break;
+      case 'no_human': m.chart = distWaffle(c, H.humanLabel, v => (H.HUMAN.find(h => h[0] === v) || [, , '--h-null'])[2]); m.list.tag = id => H.humanLabel(H.val(byId.get(id), 'human')); break;
       case 'full_lifecycle':
-        m.chart = waffle(c.share, 'Full research cycle');
+        m.chart = distWaffle(c, pretty);
         if (ex.alternative) m.line += ` · most common alternative: ${pretty(ex.alternative.value)} (${fmt(ex.alternative.n)})`;
         m.list.tag = () => 'Full research cycle'; break;
       case 'least_automated_stage': {
         const ss = cyc.stages || [], max = Math.max(1, ...ss.map(s => s.share || 0));
-        m.rows = ss.map(s => ({ l: s.label.split(/ and | /)[0], full: s.label, v: s.share || 0, txt: pctN(s.automated, s.of) + '%', hi: s.stage === ex.stage, ids: s.ids, tag: () => 'Automates it' }));
+        m.rows = ss.map(s => ({ l: s.label.split(/ and | /)[0], full: s.label, v: s.share || 0, txt: pctN(s.automated, s.of) + '%', hi: s.stage === ex.stage, ids: s.ids, quotes: s.quotes, tag: () => 'Automates it' }));
         m.max = max; m.chart = rowsChart(m.rows, max);
         if (ex.most_automated) m.line += ` · most automated: ${lower(stageLabel(ex.most_automated.stage))} (${pctN(ex.most_automated.n, c.denominator)}%)`;
         m.list.tag = () => 'Automates it'; break; }
@@ -178,16 +185,16 @@ HUB.load(['shell', 'findings']).then(d => {
         m.big = c.numerator; m.unit = ''; m.max = max; m.chart = rowsChart(m.rows, max);
         m.line = `Among the ${term('core', fmt(cyc.core) + ' core papers')}` + (ex.fewest ? ` · fewest: ${lower(stageLabel(ex.fewest.stage))} (${fmt(ex.fewest.n)})` : '');
         m.list.quotes = (m.rows.find(r => r.hi) || {}).quotes; break; }
-      case 'iterative_loop': m.chart = waffle(c.share, 'Iterative loop'); m.list.tag = () => 'Iterative loop'; break;
+      case 'iterative_loop': m.chart = distWaffle(c, pretty); m.list.tag = () => 'Iterative loop'; break;
       case 'benchmark_validation': {
         const segs = (clm.columns || []).map(k => ({ key: k.key, label: k.label, n: (clm.column_totals || {})[k.key] || 0 }));
-        m.chart = segs.length ? stack(segs, 'simulation-or-benchmark') : waffle(c.share, 'Benchmark or simulation');
+        m.chart = segs.length ? stack(segs, 'simulation-or-benchmark') : '';
         m.line += ` · real experiment ${fmt((ex.real_experiment || {}).n || 0)}, deployment ${fmt((ex.deployment || {}).n || 0)}`;
         m.list.tag = () => 'Benchmark or simulation'; break; }
-      case 'compare_with_humans': m.chart = waffle(c.share, 'Compare with humans'); m.list.tag = () => 'Compares with humans'; break;
+      case 'compare_with_humans': m.chart = distWaffle(c, pretty); m.list.tag = () => 'Compares with humans'; break;
       case 'data_release': {
         const g = (opn.groups || [])[0], segs = g ? g.data.segments : [];
-        m.chart = segs.length ? stack(segs, 'released') : waffle(c.share, 'Data released');
+        m.chart = segs.length ? stack(segs, 'released') : '';
         if (ex.code_released) m.line = `${fmt(c.numerator)} of ${fmt(c.denominator)} papers with a release record · code ${fmt(ex.code_released.n)}`;
         m.list.tag = () => 'Data released'; break; }
     }
@@ -238,7 +245,7 @@ HUB.load(['shell', 'findings']).then(d => {
   const stagesInfo = `<b>What it shows</b>The seven stages of a research project, and how far the systems in this review automate each.<p><span class=k>How to read it.</span> Colour is the share of papers that do the stage on their own, from pale (few) to strong (many). Select a stage for the techniques used in it.</p><p><span class=k>How it’s computed.</span> ${esc(F.methods.cycle || '')}</p>`;
   const cardHtml = c => {
     const m = M.get(c.rule);
-    if (!c.available) return `<article class="fc na" data-f="${esc(c.rule)}"><div class="top"><div class="big">–</div>${info(`<b>How this is computed</b>${esc(c.how)}`, 'How this number is computed')}</div><p class="say">${esc(RULE_TITLE[c.rule] || pretty(c.rule))}</p><p class="say" style="font-size:var(--t-s)">Not enough data yet</p></article>`;
+    if (!c.available) return `<article class="fc na" data-f="${esc(c.rule)}"><div class="top"><div class="big">–</div>${info(`<b>How this is computed</b>${esc(c.how)}`, 'How this number is computed')}</div><p class="say">${esc(c.title || pretty(c.rule))}</p><p class="say" style="font-size:var(--t-s)">Not enough data yet</p></article>`;
     return `<article class="fc" data-f="${esc(c.rule)}">
       <div class="top"><div class="big">${fmt(m.big)}<small>${m.unit}</small></div>${info(`<b>How this is computed</b>${esc(c.how)}<p>${esc(popText(c.population))}.</p>`, 'How this number is computed')}</div>
       <p class="say">${sayHtml(c)}</p>

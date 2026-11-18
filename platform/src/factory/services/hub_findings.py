@@ -34,8 +34,10 @@ from factory.services.work_layers import layers_of
 
 EVIDENCE_LIMIT = 5
 MIN_QUOTE = 40
+UNLAYERED = site_corpus.UNLAYERED  # a work with no layer; its own group so layer groups sum
 TECH_FIELD = "category"
-TECH_MINER = "m-tech-{stage}"
+TECH_MINER_PREFIX = "m-tech-"  # technique miners are named m-tech-<stage>
+TECH_MINER = TECH_MINER_PREFIX + "{stage}"
 
 STAGES: tuple[tuple[str, str], ...] = (
     ("literature-review", "Literature review"),
@@ -96,6 +98,17 @@ RELEASE_OF: dict[str, str] = {
     "not-stated": "ns",
 }
 COMPARES = ("comparable", "system-better", "humans-better")
+
+CARD_TITLES: dict[str, str] = {
+    "no_human": "Human role",
+    "full_lifecycle": "Full research cycle",
+    "least_automated_stage": "Least automated stage",
+    "most_varied_stage": "Most varied stage",
+    "iterative_loop": "Iterative loops",
+    "benchmark_validation": "Validation",
+    "compare_with_humans": "Comparison with humans",
+    "data_release": "Data release",
+}
 
 METHODS: dict[str, str] = {
     "cards": (
@@ -184,14 +197,17 @@ class _Ctx:
                 out[w] = c
         return out
 
+    def layer(self, work: str) -> str:
+        return self.layers.get(work) or UNLAYERED
+
     def order(self, ids: Iterable[str]) -> list[str]:
         return sorted(set(ids), key=lambda w: (-self.rank.get(w, 0), w))
 
     def population(self, miners: Sequence[str], with_value: int) -> dict[str, Any]:
         read = {w for m in miners for w in self.a(m)}
-        layer_set = {self.layers.get(w) for w in read}
+        layer_set = {self.layer(w) for w in read}
         only = next(iter(layer_set)) if len(layer_set) == 1 else None
-        layer = only if read else None
+        layer = only if read and only != UNLAYERED else None
         who = f"{layer} papers" if layer else "papers"
         txt = f"{len(read)} {who} read by {', '.join(miners)}"
         if len(read) < self.included:
@@ -248,10 +264,12 @@ def _card(
     population: dict[str, Any],
     source: list[dict[str, str]],
     extra: dict[str, Any] | None = None,
+    distribution: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     available = denominator > 0
     return {
         "rule": rule,
+        "title": CARD_TITLES.get(rule, rule),
         "template": template,
         "params": params if available else {},
         "say": template.format(**params) if available else None,
@@ -265,6 +283,7 @@ def _card(
         "source": source,
         "how": how,
         "extra": (extra or {}) if available else {},
+        "distribution": (distribution or []) if available else [],
     }
 
 
@@ -292,7 +311,18 @@ def _share_card(
         evidence=ctx.evidence(hit, ctx.field_pointer(key, cells)),
         population=ctx.population([miner], d),
         source=[{"miner": miner, "field": name}],
+        distribution=_distribution(cells, match),
     )
+
+
+def _distribution(cells: Mapping[str, Cell], match: Callable[[str], bool]) -> list[dict[str, Any]]:
+    """Every value of the field with its paper count, largest first (ties by name); `hit` marks
+    the values the rule counts. The counts sum to the number of papers with a value."""
+    count = Counter(c.value for c in cells.values())
+    return [
+        {"value": v, "n": n, "hit": match(v)}
+        for v, n in sorted(count.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
 
 
 # ------------------------------------------------------------------ stages and techniques
@@ -396,6 +426,11 @@ def _cycle(ctx: _Ctx, st: _Stages, techs: Mapping[str, _Tech]) -> dict[str, Any]
                 "of": st.stage_works,
                 "share": n / st.stage_works if st.stage_works else None,
                 "ids": st.automated[stage],
+                "quotes": {
+                    w: st.quote[(stage, w)].quote
+                    for w in st.automated[stage]
+                    if st.quote[(stage, w)].quote.strip()
+                },
                 "techniques_listed": len(t.listed),
                 "techniques_used": sum(1 for x in t.listed if x["n"]),
                 "techniques": t.listed,
@@ -492,8 +527,16 @@ def _stage_cards(ctx: _Ctx, st: _Stages, techs: Mapping[str, _Tech]) -> list[dic
             "fewest": {"stage": fewest[0], "n": fewest[1]},
         },
     )
-    if not any(t.listed for t in techs.values()):
-        varied = {**varied, "available": False, "say": None, "ids": [], "evidence": [], "extra": {}}
+    if not any(x["n"] for t in techs.values() for x in t.listed):
+        varied = {
+            **varied,
+            "available": False,
+            "say": None,
+            "params": {},
+            "ids": [],
+            "evidence": [],
+            "extra": {},
+        }
     return [least, varied]
 
 
@@ -507,8 +550,10 @@ def _release_group(value: str) -> str:
 def _openness(ctx: _Ctx) -> dict[str, Any]:
     data, code = ctx.values("data"), ctx.values("code")
     covered = set(data) | set(code)
-    present = {ctx.layers[w] for w in covered if w in ctx.layers}
+    present = {ctx.layer(w) for w in covered} - {UNLAYERED}
     layers = [k for k in LAYER_ORDER if k in present] + sorted(present - set(LAYER_ORDER))
+    if any(ctx.layer(w) == UNLAYERED for w in covered):
+        layers.append(UNLAYERED)
 
     def bar(cells: Mapping[str, Cell], works: set[str]) -> dict[str, Any]:
         by: dict[str, list[str]] = defaultdict(list)
@@ -522,7 +567,7 @@ def _openness(ctx: _Ctx) -> dict[str, Any]:
         return {"n": sum(s["n"] for s in segs), "segments": segs}
 
     groups = [("all", "All papers", covered)] + [
-        (k, k, {w for w in covered if ctx.layers.get(w) == k}) for k in layers
+        (k, k, {w for w in covered if ctx.layer(w) == k}) for k in layers
     ]
     miner = ctx.fields["data"][0]
     return {
@@ -721,6 +766,11 @@ def findings_payload(
     """`findings_from` the project's data, with layers from `work_layers`, cited-here counts for
     evidence order and the site profile's columns."""
     data = data or hm.load_mining_data(project, sets=sets, with_platform=False)
-    layers = {w: wl.layer for w, wl in layers_of(project).items() if wl.layer is not None}
+    found = layers_of(project)
+    layers: dict[str, str] = {}
+    for w in data.sets.included:
+        wl = found.get(w) or found.get(data.sets.miner_source(w))
+        if wl is not None and wl.layer is not None:
+            layers[w] = wl.layer
     rank = {w: c.count for w, c in cited_here(project, data.sets.included).items()}
     return findings_from(data, layers=layers, rank=rank, fields=profile_fields(project))

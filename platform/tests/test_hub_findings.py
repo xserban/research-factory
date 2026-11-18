@@ -467,3 +467,76 @@ def test_findings_payload_uses_layers_cited_here_and_profile(
     c = card(p, "no_human")
     assert c["ids"] == ["w03", "w01", "w02"]  # w03 is cited most here
     assert c["population"]["layer"] is None  # layers are mixed or missing
+
+
+def test_share_cards_carry_the_full_value_distribution(payload: dict[str, Any]) -> None:
+    for rule, total in (
+        ("no_human", 8),
+        ("full_lifecycle", 7),
+        ("iterative_loop", 5),
+        ("compare_with_humans", 6),
+    ):
+        c = card(payload, rule)
+        dist = c["distribution"]
+        assert sum(d["n"] for d in dist) == c["denominator"] == total, rule
+        assert sum(d["n"] for d in dist if d["hit"]) == c["numerator"], rule
+        assert [d["n"] for d in dist] == sorted((d["n"] for d in dist), reverse=True), rule
+    human = {d["value"]: d for d in card(payload, "no_human")["distribution"]}
+    assert human["none"]["n"] == 3 and human["none"]["hit"] is True
+    assert human["feedback"] == {"value": "feedback", "n": 5, "hit": False}
+
+
+def test_card_titles_come_from_the_payload(payload: dict[str, Any]) -> None:
+    titles = {c["rule"]: c["title"] for c in payload["cards"]}
+    assert titles["no_human"] == "Human role" and titles["data_release"] == "Data release"
+    assert all(titles.values())
+
+
+def test_cycle_stage_rows_carry_per_paper_quotes(payload: dict[str, Any]) -> None:
+    cyc = {s["stage"]: s for s in payload["cycle"]["stages"]}
+    assert cyc["literature-review"]["quotes"] == {"w01": LONG}
+    assert cyc["paper-writing"]["quotes"] == {"w02": LONG}
+    assert set(cyc["ideation-hypothesis"]["quotes"]) <= set(cyc["ideation-hypothesis"]["ids"])
+
+
+def test_most_varied_stage_is_unavailable_when_no_technique_is_used() -> None:
+    d = fixture_data()
+    d = hm.MiningData(
+        miners=d.miners,
+        rows={k: v for k, v in d.rows.items() if not k.startswith("m-tech-")},
+        models=d.models,
+        sets=d.sets,
+        titles=d.titles,
+        codebook=d.codebook,
+    )
+    c = card(hf.findings_from(d), "most_varied_stage")
+    assert c["available"] is False and c["say"] is None and c["ids"] == []
+
+
+def test_works_without_a_layer_form_an_unlayered_group_so_layers_sum() -> None:
+    layers = {w: "core" for w in W[:2]}  # w03, w04 have release rows and no layer
+    p = hf.findings_from(fixture_data(), layers=layers)
+    groups = {g["key"]: g for g in p["openness"]["groups"]}
+    assert list(groups) == ["all", "core", "unlayered"]
+    assert groups["unlayered"]["n"] == 2
+    assert sum(g["n"] for k, g in groups.items() if k != "all") == groups["all"]["n"]
+    for part in ("data", "code"):
+        assert sum(groups[k][part]["n"] for k in ("core", "unlayered")) == groups["all"][part]["n"]
+
+
+def test_findings_payload_looks_layers_up_through_the_duplicate_source(
+    project: Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses
+
+    @dataclass
+    class WL:
+        layer: str | None
+
+    monkeypatch.setattr(hf, "layers_of", lambda _p: {"w05": WL("applied")})
+    monkeypatch.setattr(hf, "cited_here", lambda _p, _ids: {})
+    data = fixture_data()
+    data = dataclasses.replace(data, sets=dataclasses.replace(data.sets, sources={"w01": "w05"}))
+    p = hf.findings_payload(project, data=data)
+    groups = {g["key"]: g["n"] for g in p["openness"]["groups"]}
+    assert groups == {"all": 4, "applied": 1, "unlayered": 3}

@@ -114,6 +114,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       if (f === 'top') { ws = [...ws].sort(byCic).slice(0, +v); parts.push('Top ' + v + ' most cited'); }
       else if (f === 'cin' || f === 'cout') { const w0 = EBY.get(v); ws = ws.filter(w => ((f === 'cin' ? cIn : cOut).get(v) || []).includes(w.id)); parts.push((f === 'cin' ? 'Built on by: ' : 'Builds on: ') + short(w0 ? w0.title : v, 48)); }
       else if (f === 'ctx') { const [id, h] = v.split('/'); const L = lineage(id, +h || 2); const ids = new Set([...L.left.flat(), ...L.right.flat()].map(w => w.id)); ws = ws.filter(w => ids.has(w.id)); parts.push('Lineage of ' + short((EBY.get(id) || {}).title || id, 40)); }
+      else if (f === 'cell') { const [t, per] = v.split('/'); const c = LZ.adoption.cells.find(x => x.technique === t && x.period === per); const ids = new Set(c ? c.ids : []); ws = ws.filter(w => ids.has(w.id)); parts.push((LZ.adoption.labels[t] || t) + ', ' + per.replace('H', ' H')); }
       else if (f === 'period') { ws = ws.filter(w => raw(w, v.length === 4 ? 'year' : 'half') === v); parts.push('Published ' + v.replace('H', ' H')); }
       else { ws = ws.filter(w => matchCond(w, f, v)); parts.push((FLD[f] || f) + ': ' + lab(f, v)); conds.push([f, v]); }
     }
@@ -163,21 +164,13 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
   const infoPanel = (what, read, comp) => `<b>What it shows</b> ${what}<p><span class=k>How to read it.</span> ${read}</p><p><span class=k>How it’s computed.</span> ${comp}</p>`;
 
   /* ================= 1. design space ================= */
-  /* matrix model: payload for its own pair; any other pair is counted from the paper rows with the same formula */
+  /* matrix model: every ordered pair of fields is computed server-side (`matrices`, keyed "row|col") */
   function matrixFor(rf, cf) {
-    const P = LZ.matrix;
-    if (rf === P.row_dim && cf === P.col_dim) return { ...P, fromPayload: true, rowDim: rf, colDim: cf };
-    const pairs = EW.map(w => [catName(w, rf), catName(w, cf)]);
-    const order = (vals, f) => [...new Set(vals)].sort((a, b) => (a === NC) - (b === NC) || a.localeCompare(b));
-    const rows = order(pairs.map(p => p[0])), cols = order(pairs.map(p => p[1]));
-    const obs = rows.map(r => cols.map(c => pairs.filter(p => p[0] === r && p[1] === c).length));
-    const rt = obs.map(l => l.reduce((a, b) => a + b, 0)), ct = cols.map((_, j) => obs.reduce((a, l) => a + l[j], 0)), n = pairs.length;
-    const exp = rows.map((_, i) => cols.map((_, j) => rt[i] * ct[j] / n));
-    const res = rows.map((_, i) => cols.map((_, j) => (obs[i][j] - exp[i][j]) / Math.sqrt(exp[i][j])));
-    return { rows, cols, observed: obs, expected: exp, residuals: res, row_totals: rt, col_totals: ct, n, row_dim: rf, col_dim: cf, rowDim: rf, colDim: cf };
+    const M = LZ.matrices[rf + '|' + cf] || LZ.matrix;
+    return { ...M, rowDim: M.row_dim, colDim: M.col_dim };
   }
   build.matrix = p => {
-    const dims = Object.keys(FLD);
+    const dims = Object.keys(FLD).filter(d => LZ.matrices[d + '|' + LZ.matrix.row_dim] || d === LZ.matrix.row_dim);
     const rf = dims.includes(p.get('rows')) ? p.get('rows') : LZ.matrix.row_dim;
     let cf = dims.includes(p.get('cols')) ? p.get('cols') : LZ.matrix.col_dim; if (cf === rf) cf = dims.find(x => x !== rf);
     const M = matrixFor(rf, cf);
@@ -268,7 +261,6 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       lead: top ? `<b>${esc(FLD[top.a] || top.a)}</b> and <b>${esc(lc(FLD[top.b] || top.b))}</b> go together most: V is <b>${top.v.toFixed(2)}</b> across ${fmt(top.n)} papers.${low && low !== top ? ` The weakest pair is ${esc(lc(FLD[low.a] || low.a))} and ${esc(lc(FLD[low.b] || low.b))}, at ${low.v.toFixed(2)}.` : ''}` : '',
       controls: '',
       side: `<h3 class="h3">Pairs by strength</h3><ul class="sidelist">${A.map(x => `<li><button data-go="matrix" data-rows="${x.a}" data-cols="${x.b}">${esc(FLD[x.a] || x.a)} × ${esc(lc(FLD[x.b] || x.b))}<span class="e">V ${x.v.toFixed(2)} · ${fmt(x.n)} papers</span><span class="bar" style="width:${Math.max(3, x.v * 100)}%"></span></button></li>`).join('')}</ul>`,
-      noList: true,
       draw(host, W) {
         const avail = host.clientWidth || W, narrow = avail < 520, n = order.length;
         const lw = narrow ? 100 : 130, cs = Math.max(44, Math.min(86, Math.floor((avail - lw - 4) / n))), hdr = 28;
@@ -446,7 +438,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
             const h0 = mode === 'share' ? TR.shares[per][v] : n, y1 = y(acc + h0), y0 = y(acc); acc += h0;
             const dimmed = selV && lab(dim, selV[1]) !== lab(dim, v);
             const r = mk('rect', { x, y: y1, width: bw, height: Math.max(1, y0 - y1 - .8), style: 'fill:' + colorOf(v), opacity: dimmed ? .25 : .92 }, svg);
-            if (y0 - y1 > 16) tx(svg, x + bw / 2, (y0 + y1) / 2 + 4, n, 'lbl', { 'text-anchor': 'middle', fill: isLight() ? '#fff' : '#101114', 'pointer-events': 'none', style: 'font-weight:600' });
+            if (y0 - y1 > 16) tx(svg, x + bw / 2, (y0 + y1) / 2 + 4, n, 'lbl', { 'text-anchor': 'middle', fill: 'var(--bg)', 'pointer-events': 'none', style: 'font-weight:600' });
             act(r, { kb: true, label: `${lab(dim, v)}, ${pLab(per)}: ${n} papers`, tip: `<b>${esc(lab(dim, v))}</b> · ${esc(pLab(per))}<br>${n} paper${n === 1 ? '' : 's'} of ${TR.totals[per]} (${shareTxt(TR.shares[per][v])})`, click: () => pick(spec1(dim, v) + '|period:' + per) });
           }
           tx(svg, x + bw / 2, Tm + Hh + 18, pLab(per), 'axis', { 'text-anchor': 'middle' });
@@ -483,7 +475,6 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       title: 'Technique adoption', info,
       lead: `<b>${esc(tl(busiest))}</b> is the most used technique. The newest to appear is <b>${esc(tl(newest))}</b>, first seen in ${esc((A.first_seen[newest] || '').replace('H', ' H'))}.`,
       controls: `<span class="meta">${esc(A.coverage_note)}</span>`,
-      noList: true,
       draw(host, W) {
         const avail = host.clientWidth || W, narrow = avail < 520, lw = narrow ? 130 : 230, np = A.periods.length;
         const cs = Math.max(34, Math.min(64, Math.floor((avail - lw - 8) / np))), rh = 30, hdr = 26;
@@ -502,7 +493,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
               mk('rect', { x: x + 1.5, y: y + 1.5, width: cs - 3, height: rh - 3, rx: 3, style: 'fill:' + (n ? mixc('var(--seq-4)', 'var(--seq-0)', pcnt) : 'var(--raised)'), opacity: n ? 1 : .5 }, gcell);
               if (n) tx(gcell, x + cs / 2, y + rh / 2 + 4, n, 'lbl', { 'text-anchor': 'middle', fill: INK(pcnt), style: 'font-weight:600' });
               if (first) mk('rect', { x: x + 0.5, y: y + 0.5, width: cs - 1, height: rh - 1, rx: 4, fill: 'none', stroke: cv('--acc'), 'stroke-width': 2 }, gcell);
-              act(gcell, { tip: `<b>${esc(tl(t))}</b> · ${esc(per.replace('H', ' H'))}<br>${n} paper${n === 1 ? '' : 's'}${first ? '<br><span class="meta">First seen here</span>' : ''}`, kb: true, label: `${tl(t)}, ${per}: ${n} papers${first ? ', first seen' : ''}`, click: () => {} });
+              act(gcell, { tip: `<b>${esc(tl(t))}</b> · ${esc(per.replace('H', ' H'))}<br>${n} paper${n === 1 ? '' : 's'}${first ? '<br><span class="meta">First seen here</span>' : ''}`, kb: true, label: `${tl(t)}, ${per}: ${n} papers${first ? ', first seen' : ''}`, click: () => { if (c) pick('cell:' + t + '/' + per); } });
             });
             y += rh;
           }
@@ -513,8 +504,8 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
   };
 
   /* ================= 7. taxonomy ================= */
-  const LV = ['layer', 'technique', 'architecture'];
   build.icicle = p => {
+    const LV = LZ.icicle.dims;
     const z = (p.get('z') || '').split('/').filter(Boolean).slice(0, LV.length - 1);
     let node = LZ.icicle; for (const nm of z) node = (node.children || []).find(c => c.name === nm) || node;
     const k = z.length, kids = node.children || [];

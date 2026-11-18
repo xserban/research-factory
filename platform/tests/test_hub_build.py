@@ -446,3 +446,18 @@ def test_journeys_payload_carries_the_journey_index(world: Project, tmp_path: Pa
     )
     assert any(len(stop) == 9 for stops in idx["works"].values() for stop in stops)
     assert report.payloads["journeys"].bytes < 3_000_000
+
+
+def test_adoption_records_read_technique_miners_by_their_m_tech_names() -> None:
+    from types import SimpleNamespace
+
+    from tests.test_hub_findings import fixture_data
+
+    data = fixture_data()
+    ctx = SimpleNamespace(mining_data=data, year_month=lambda w: (2024, 3))
+    recs = hb.adoption_records(ctx)  # type: ignore[arg-type]
+    assert recs, "technique miners named m-tech-<stage> must reach the adoption records"
+    assert ("w01", "literature-review", "lr-01", 2024, 3) in recs
+    assert {r[2] for r in recs} <= set(data.codebook)
+    adoption = hb.hub_lenses.technique_adoption(recs, {}).cells
+    assert adoption and all(c.ids for c in adoption)

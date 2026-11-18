@@ -171,11 +171,12 @@ def design_matrix(works: Sequence[LensWork], row_dim: str, col_dim: str) -> Desi
 
 @dataclass(frozen=True)
 class Chains:
-    """Invariant: every column sums to n and every link layer sums to n."""
+    """Invariant: every column sums to n and every link layer sums to n. A link is (value in one
+    field, value in the next, count, sorted ids of those works); count == len(ids)."""
 
     dims: list[str]
     columns: list[list[tuple[str, int]]]
-    links: list[list[tuple[str, str, int]]]
+    links: list[list[tuple[str, str, int, list[str]]]]
     n: int
 
 
@@ -193,10 +194,12 @@ def chains(works: Sequence[LensWork], dims: Sequence[str], top_k: int) -> Chains
         for v, c in cnt.items():
             pooled[maps[j][v]] += c
         columns.append(sorted(pooled.items(), key=lambda kv: (kv[0] == REST, -kv[1], kv[0])))
-    links: list[list[tuple[str, str, int]]] = []
+    links: list[list[tuple[str, str, int, list[str]]]] = []
     for j in range(len(dims) - 1):
-        lc = Counter((maps[j][v[j]], maps[j + 1][v[j + 1]]) for v in vals)
-        links.append([(a, b, c) for (a, b), c in sorted(lc.items())])
+        lw: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for w, v in zip(works, vals, strict=True):
+            lw[(maps[j][v[j]], maps[j + 1][v[j + 1]])].append(w.id)
+        links.append([(a, b, len(ids), sorted(ids)) for (a, b), ids in sorted(lw.items())])
     return Chains(list(dims), columns, links, len(works))
 
 
@@ -386,6 +389,7 @@ class AdoptionCell:
     technique: str
     period: str
     works: int
+    ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -416,7 +420,9 @@ def technique_adoption(records: Iterable[AdoptionRecord], codebook: Mapping[str,
             undated += 1
             continue
         cell_works[(stage, code, p)].add(wid)
-    cells = [AdoptionCell(s, t, p, len(ws)) for (s, t, p), ws in sorted(cell_works.items())]
+    cells = [
+        AdoptionCell(s, t, p, len(ws), sorted(ws)) for (s, t, p), ws in sorted(cell_works.items())
+    ]
     first: dict[str, str] = {}
     for c in cells:
         if c.technique not in first or c.period < first[c.technique]:
@@ -499,15 +505,23 @@ def lenses_payload(
     adoption_records: Iterable[AdoptionRecord] = (),
     codebook: Mapping[str, str] | None = None,
     top_k: int = 8,
+    matrix_pair_dims: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """JSON-safe payload for the Lenses page; every number is computed here."""
+    """JSON-safe payload for the Lenses page; every number is computed here.
+
+    `matrices` holds the design matrix of every ordered pair of `matrix_pair_dims`, keyed
+    "<row>|<col>"; `icicle.dims` names the field of each level below the root."""
+    pairs = [(a, b) for a in matrix_pair_dims for b in matrix_pair_dims if a != b]
+    icy = asdict(icicle(works, icicle_dims))
+    icy["dims"] = list(icicle_dims)
     return {
         "n": len(works),
         "methods": dict(METHODS),
         "matrix": asdict(design_matrix(works, *matrix_dims)),
+        "matrices": {f"{a}|{b}": asdict(design_matrix(works, a, b)) for a, b in pairs},
         "chains": asdict(chains(works, chain_dims, top_k)),
         "trends": {by: asdict(trends(works, trend_dim, by)) for by in ("year", "half")},
-        "icicle": asdict(icicle(works, icicle_dims)),
+        "icicle": icy,
         "influence": asdict(influence(works, cites)),
         "association": [asdict(p) for p in association(works, assoc_dims)],
         "adoption": asdict(technique_adoption(adoption_records, codebook or {})),

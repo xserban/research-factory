@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from collections.abc import Callable, Mapping
 
 import pytest
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
+from factory.model.extraction import ExtractedRowInput
 from factory.model.screening import PassLabel
 from factory.services import hub_trace as ht
 from factory.services.context import Project
@@ -155,3 +158,74 @@ def test_mined_field_traces_back_to_its_row(
     with pytest.raises(FactoryValidationError) as raised:
         ht.trace_figure(project, f"work.{worked[0]}.field.{VISION_NAME}.nofield")
     assert raised.value.issues[0].field == "figure_id"
+
+
+def _row(*, without: str | None = None) -> ExtractedRowInput:
+    """The fixture row, optionally without one field (so that row has no cell of it)."""
+    return ExtractedRowInput(
+        fields={k: v for k, v in mine_row().fields.items() if k != without}
+    )
+
+
+def _row_ids(project: Project, work: str, label: str) -> list[str]:
+    with project.index.connect() as conn:
+        return [
+            str(e)
+            for (e,) in conn.execute(
+                text(
+                    "SELECT extraction_id FROM extraction_rows WHERE work_id = :w "
+                    "AND pass_label = :p AND superseded_by IS NULL ORDER BY extraction_id"
+                ),
+                {"w": work, "p": label},
+            )
+        ]
+
+
+def test_field_traces_the_first_non_empty_pass_a_cell(
+    project: Project,
+    agent: Actor,
+    world: list[str],  # noqa: F811
+) -> None:
+    list_miner(project, agent)
+    mina = miner_actor(SESSION_M1, "claude-opus-5-5")
+    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row(without="direction"), _row()])
+    work = worked[0]
+    first, second = _row_ids(project, work, "A")[:2]
+    view = ht.trace_figure(project, f"work.{work}.field.{VISION_NAME}.direction")
+    assert view.entries[0].id == second != first  # the empty cell is skipped
+    view = ht.trace_figure(project, f"work.{work}.field.{VISION_NAME}.metric")
+    assert view.entries[0].id == first  # extraction id order, first non-empty
+
+
+def test_field_ignores_pass_b_rows(
+    project: Project,
+    agent: Actor,
+    world: list[str],  # noqa: F811
+) -> None:
+    list_miner(project, agent)
+    mina = miner_actor(SESSION_M1, "claude-opus-5-5")
+    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row(without="direction")])
+    mine_pass(project, mina, PassLabel.B, lambda w: [_row()])
+    figure = f"work.{worked[0]}.field.{VISION_NAME}.direction"
+    assert _row_ids(project, worked[0], "B")  # a pass-B row with the value exists
+    with pytest.raises(FactoryValidationError):
+        ht.trace_figure(project, figure)
+
+
+def test_field_of_a_duplicate_mapped_work_traces_the_duplicates_row(
+    project: Project,
+    agent: Actor,
+    world: list[str],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    mina = miner_actor(SESSION_M1, "claude-opus-5-5")
+    works = sorted(world)
+    canonical, dup = works[0], works[1]
+    mine_pass(project, mina, PassLabel.A, lambda w: [mine_row()] if w == dup else [])
+    monkeypatch.setattr(
+        ht, "active_merges", lambda _p: [SimpleNamespace(primary=canonical, absorbed=[dup])]
+    )
+    view = ht.trace_figure(project, f"work.{canonical}.field.{VISION_NAME}.metric")
+    assert view.entries[0].id in _row_ids(project, dup, "A")
+    assert dup in view.title and "duplicate" in view.title

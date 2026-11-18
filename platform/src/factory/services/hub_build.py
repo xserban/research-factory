@@ -340,7 +340,7 @@ def adoption_records(ctx: HubContext) -> list[hub_lenses.AdoptionRecord]:
     atts = hub_mining.attributions(data)
     out: list[hub_lenses.AdoptionRecord] = []
     for miner, att in sorted(atts.items()):
-        if not miner.startswith(hub_mining.TECH_PREFIX):
+        if not miner.startswith(hub_findings.TECH_MINER_PREFIX):
             continue
         for w, rows in sorted(att.by_pass.get("A", {}).items()):
             year, month = ctx.year_month(w)
@@ -363,6 +363,7 @@ def build_lenses(ctx: HubContext) -> dict[str, Any]:
         trend_dim="technique",
         icicle_dims=("layer", "technique", "architecture"),
         assoc_dims=(*LENS_DIMS, "layer"),
+        matrix_pair_dims=(*LENS_DIMS, "layer"),
         cites=lens_cites(ctx),
         adoption_records=adoption_records(ctx),
         codebook={k: v["label"] for k, v in sorted(ctx.mining_data.codebook.items())},
@@ -378,7 +379,7 @@ def build_mining(ctx: HubContext) -> dict[str, Any]:
 
 
 def build_findings(ctx: HubContext) -> dict[str, Any]:
-    layers = {w: v for w, v in ctx.layer_of.items() if v != hp.UNLAYERED}
+    layers = dict(ctx.layer_of)
     rank = {w: c.count for w, c in ctx.cited_here.items()}
     return hub_findings.findings_from(
         ctx.mining_data,
