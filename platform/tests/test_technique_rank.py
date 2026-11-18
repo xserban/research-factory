@@ -267,3 +267,15 @@ def test_gaps_empty_and_deterministic() -> None:
     assert gaps(inputs([])).total == 0
     d = inputs(GAPROWS)
     assert gaps(d).model_dump_json() == gaps(d).model_dump_json()
+
+
+def test_a_pairs_score_does_not_depend_on_the_threshold_when_the_pool_maximum_is_fixed() -> None:
+    rows = [*BASE, *users("lit-02", "qr")]  # a two-work approach drops out at min_works=3
+    wide = combos(inputs(rows), min_works=2)
+    narrow = combos(inputs(rows), min_works=3)
+    by_wide = {(c.a.id, c.b.id): c.score for c in wide.combinations}
+    assert narrow.total < wide.total
+    for c in narrow.combinations:
+        assert by_wide[(c.a.id, c.b.id)] == c.score
+    kept = [(c.a.id, c.b.id) for c in wide.combinations if min(c.works_a, c.works_b) >= 3]
+    assert kept == [(c.a.id, c.b.id) for c in narrow.combinations]

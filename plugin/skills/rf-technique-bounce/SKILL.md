@@ -45,10 +45,16 @@ a candidate, the second a date rule.
    show none at another; `from_stage`, `to_stage`, `min_works`), `technique_combinations`
    (well-used pairs no work uses together) and `technique_challenges` (reported as failing in one
    work and supported in another, settings possibly different). Each result is a list of
-   hypotheses to check, not findings. Choose at most a few that fit the idea, and for each say
+   hypotheses to check, not findings. `technique_gaps` and `technique_combinations` return a
+   RANKED list (default `rank_by=composite`, `top=50`): start from the top of the list, read each
+   candidate's score components (popularity, stage relation, citation bridge, evidence share,
+   generic penalty; weights are a v1 heuristic, not a measure of novelty) and say which
+   component put it there; use `rank_by` to look at one component. The first five candidates
+   carry one verbatim quote per side. Choose at most a few that fit the idea, and for each say
    why it may be empty (a stage a paper does not describe, a pair that does not combine) before
    proposing it.
-6. Check each hypothesis you keep against the verified quotes of both sides: the work ids and
+6. Check each hypothesis you keep against the verified quotes of both sides (the quotes the
+   ranked list returned, and for lower ranks the rows of `technique_view`): the work ids and
    rows the tool returned, opened with `document_read`. A candidate whose quotes do not show what
    the statement says is discarded.
 7. Record only what the researcher says to record, with the existing tools, labelled in the
