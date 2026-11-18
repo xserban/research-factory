@@ -659,7 +659,19 @@ def agreement_lines(agreement: ExtractionAgreement) -> list[str]:
         lines.append("no unresolved disagreements")
     for item in agreement.disagreements:
         lines += disagreement_lines(item)
+    lines += tolerated_pending_lines(agreement.tolerated_pending, "not in the agreement")
     return lines
+
+
+def tolerated_pending_lines(tolerated: Sequence[str], where: str) -> list[str]:
+    """The works a step went ahead without, within the protocol's `pending_tolerance`
+    (decision 138); `where` says what happened to them. Empty when there are none."""
+    if not tolerated:
+        return []
+    return [
+        f"tolerated: {len(tolerated)} work(s) left out, within pending_tolerance ({where}): "
+        f"{', '.join(tolerated)}"
+    ]
 
 
 def audit_item_lines(report: AuditReport) -> list[str]:

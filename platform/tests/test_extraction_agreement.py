@@ -999,3 +999,80 @@ def test_an_extra_row_of_one_pass_is_one_slot(
     n = len(world)
     assert (ag.unmatched_slots, ag.overall) == (1, 1.0)
     assert ag.overall_all_rows == pytest.approx(6 * n / (6 * n + 6))
+
+
+# --- Declared pending tolerance for leftover units (decision 138) ---
+
+
+def _tolerate_pending(monkeypatch: pytest.MonkeyPatch, fewer_than: int) -> None:
+    import factory.services.tolerance as tolerance
+    from factory.model.protocol import UnscreenedTolerance
+
+    monkeypatch.setattr(
+        tolerance,
+        "pending_tolerance",
+        lambda _p: UnscreenedTolerance(fewer_than=fewer_than, fraction=0.0),
+    )
+
+
+def _run_some(project: Project, actor: Actor, label: PassLabel, count: int) -> None:
+    """Serve and close `count` tasks of the pass, leaving the others unserved (queued)."""
+    for _ in range(count):
+        batch = extract_next(project, actor, label).batch
+        assert batch is not None
+        assert extract_record(project, actor, batch.task_id, [_r()], finish=True).completed
+
+
+def test_queued_leftover_within_tolerance_is_listed_not_blocking(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _run(project, ext_a, PassLabel.A, _same_rows)
+    _run_some(project, ext_b, PassLabel.B, len(world) - 1)
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_agreement(project, human)  # no tolerance: today's refusal
+    assert "queued" in e.value.issues[0].reason
+    _tolerate_pending(monkeypatch, 2)
+    before = len(_events(project))
+
+    agreement = extraction_agreement(project, human)
+
+    [left] = [s.work_id for s in extraction.unit_states(project) if s.state != "current"]
+    assert agreement.tolerated_pending == [left]
+    assert len(_events(project)) == before
+
+
+def test_queued_leftover_beyond_tolerance_still_blocks(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _run(project, ext_a, PassLabel.A, _same_rows)
+    _run_some(project, ext_b, PassLabel.B, len(world) - 1)
+    _tolerate_pending(monkeypatch, 1)  # one leftover is not fewer than one
+    with pytest.raises(FactoryValidationError):
+        extraction_agreement(project, human)
+
+
+def test_claimed_unit_blocks_even_within_tolerance(
+    project: Project,
+    human: Actor,
+    monkeypatch: pytest.MonkeyPatch,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+) -> None:
+    _run(project, ext_a, PassLabel.A, _same_rows)
+    _run_some(project, ext_b, PassLabel.B, len(world) - 1)
+    assert extract_next(project, ext_b, PassLabel.B).batch is not None  # work in progress
+    _tolerate_pending(monkeypatch, 5)
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_agreement(project, human)
+    assert "open" in e.value.issues[0].reason

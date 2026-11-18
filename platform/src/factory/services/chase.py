@@ -32,7 +32,6 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection, ChaseRoundStarted
-from factory.model.protocol import UnscreenedTolerance
 from factory.model.references import FORWARD_ROUND_RE
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.agreement import Outcome, final_outcomes
@@ -49,6 +48,7 @@ from factory.services.search import (
     register_query,
     run_query,
 )
+from factory.services.tolerance import tolerated_within
 from factory.sources.registry import SourceFactory
 
 _CHASE_SOURCE = "openalex"
@@ -323,21 +323,6 @@ def run_chase(
             runs.append(run_query(project, query_id, sources=sources, actor=actor))
             reporter.update(len(runs))
     return runs
-
-
-def pending_tolerance(project: Project) -> UnscreenedTolerance | None:
-    """The protocol's declared `pending_tolerance` (decision 138); None tolerates none."""
-    protocol = current_protocol(project)
-    return None if protocol is None else protocol.spec.pending_tolerance
-
-
-def tolerated_within(project: Project, missing: Sequence[str], size: int) -> tuple[str, ...]:
-    """The sorted `missing` works when the declared tolerance allows that many among `size`
-    works, else empty (the caller then refuses). With no tolerance, or no missing work, empty."""
-    tolerance = pending_tolerance(project)
-    if tolerance is None or not missing or not tolerance.allows(len(missing), size):
-        return ()
-    return tuple(sorted(missing))
 
 
 def pending_ordinary(project: Project) -> tuple[list[str], int]:

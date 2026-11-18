@@ -617,3 +617,64 @@ def test_tolerated_unscreened_work_is_reported_in_the_flow(
     )
     assert "declared tolerance" in statement and "1 were, listed in the report" in statement
     assert "declared tolerance" not in render_methods(report)
+
+
+# --- Declared pending tolerance for pass B works without a decision (decision 138) ---
+
+
+def _pending_tolerant(monkeypatch: pytest.MonkeyPatch, fewer_than: int) -> None:
+    import factory.services.tolerance as tolerance
+
+    monkeypatch.setattr(
+        tolerance,
+        "pending_tolerance",
+        lambda _p: UnscreenedTolerance(fewer_than=fewer_than, fraction=0.0),
+    )
+
+
+def _leave_b_pending(project: Project, agent: Actor, protocol_id: str) -> str:
+    """Decide every ordinary work in pass A and all but one in pass B; return the one."""
+    for work in _ordinary(project):
+        _decide(project, agent, work, "A", "screening", "include", None, protocol_id)
+    *others, last = sorted(_b_queue(project))
+    for work in others:
+        _decide(project, agent, work, "B", "screening", "include", None, protocol_id)
+    return last
+
+
+def test_pass_b_missing_within_pending_tolerance_goes_ahead_and_is_returned(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protocol_id = _ready(project, agent, human, mock_sources)
+    last = _leave_b_pending(project, agent, protocol_id)
+    _pending_tolerant(monkeypatch, 2)
+    before = len(_events(project))
+
+    agreement = screen_agreement(project, agent)
+
+    assert agreement.tolerated_pending == [last]
+    assert last not in {d.work_id for d in agreement.disagreements}
+    assert passes_settled(project)
+    assert len(_events(project)) == before
+
+
+def test_pass_b_missing_beyond_or_without_tolerance_still_blocks(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    protocol_id = _ready(project, agent, human, mock_sources)
+    _leave_b_pending(project, agent, protocol_id)
+    with pytest.raises(FactoryValidationError) as exc:
+        screen_agreement(project, agent)
+    assert "still lack" in _reasons(exc)
+    _pending_tolerant(monkeypatch, 1)  # one missing work is not fewer than one
+    with pytest.raises(FactoryValidationError):
+        screen_agreement(project, agent)
+    assert not passes_settled(project)

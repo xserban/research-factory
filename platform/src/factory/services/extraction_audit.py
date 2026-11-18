@@ -56,6 +56,7 @@ from factory.services.extraction_agreement import extraction_agreement, final_ro
 from factory.services.human_channel import require_human_channel
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
+from factory.services.tolerance import tolerated_within
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
@@ -190,6 +191,8 @@ def extraction_audit_sample(
     0..2**32-1 (`random_seed`); the refusals of `extraction_agreement` (a session that extracts,
     unfinished or unopened passes, a missing schema); an unresolved disagreement (`passes`); no
     agreed value (`passes`); an audit of the scope's current agreed set already open (`passes`).
+    Unresolved disagreements within the protocol's `pending_tolerance` do not refuse: their works
+    (and those of tolerated stale or queued units) are recorded on the event as `tolerated_pending`.
     The event of a contribution audit carries `pack: contribution`.
     """
     seed, seed_issues = audit_core.validate_seed(random_seed)
@@ -200,17 +203,22 @@ def extraction_audit_sample(
         issues.extend(seed_issues)
         if issues:
             raise FactoryValidationError(issues)
+        tolerated: tuple[str, ...] = ()
         if scope is CardScope.CARD:
             protocol, fraction, minimum = _card_parameters(project)
         else:
             protocol, schema, _ = require_schema(project, scope=scope)
             if not _imported_only(project, scope):  # no pass of its own to wait for
                 agreement = extraction_agreement(project, actor, scope=scope)
-                if agreement.disagreements:
-                    raise _refuse(
-                        f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
-                        "resolve them before the audit"
-                    )
+                disputed = {d.work_id for d in agreement.disagreements}
+                if disputed:
+                    within = tolerated_within(project, disputed, agreement.dual_works)
+                    if not within:
+                        raise _refuse(
+                            f"{len(agreement.disagreements)} disagreement(s) are unresolved; "
+                            "resolve them before the audit"
+                        )
+                tolerated = tuple(sorted(disputed | set(agreement.tolerated_pending)))
             fraction, minimum = schema.audit_fraction, schema.audit_minimum
         population = _scoped_population(project, scope)
         if not population:
@@ -230,6 +238,7 @@ def extraction_audit_sample(
             population_digest=digest,
             protocol_id=protocol.protocol_id,
             pack=_pack_tag(scope),
+            tolerated_pending=tolerated,
         )
         project.record([project.events.make("extraction.audit_sampled", payload, actor)])
     return payload
