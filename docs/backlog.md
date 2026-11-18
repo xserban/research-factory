@@ -934,3 +934,10 @@ Status: built and merged into main 2026-11-17 (commits 85fcf6ec and merge 73378e
 **Why:** the address is the researcher's private contact detail; outside services did not ask for it. Consequence: no polite-pool rate limits and no workaround planned.
 **Rigour notes:** read-only change to outbound requests; redaction kept; throttle, retry and the outbound guard unchanged.
 **Open questions:** reword `docs/specs/slice-5-teams-deployment.md:126` (binding spec), `docs/runbook-pdf-pilot.md:12` and about eight older plans that still mention the address; a decision-log entry for the ruling; whether to rename the constructors' `mailto` parameters (redaction only) and drop the unused `settings` argument of `default_http`.
+
+### IDEA-96 — Hub products built on open, not all at start
+Status: built, not reviewed (branch `hub-on-demand`, plan [2026-11-18-hub-on-demand](plans/2026-11-18-hub-on-demand.md)); untested (test pause) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: the site hub (plan 2026-11-10-site-hub), IDEA-55
+**What:** `factory site serve` builds a product when it is opened and its fingerprint changed, one at a time, and keeps it until its inputs change; the eager loop (every stale product, every `--every` seconds) stays behind `--eager`. Each product's fingerprint hashes only the code its build reaches, not every hub module; the hub page moves to its own module so editing it rebuilds no product.
+**Why:** the server rebuilt about 25 products at every start (one code hash for all hub code; miner and feed events touch most products), and the hub froze or ran slow while it did.
+**Rigour notes:** products stay rebuildable projections; a product is never served as current when its fingerprint differs (an "updating" page stands in while it builds); a failed build is shown, not retried in a loop; `factory site build` still builds everything for a static copy.
+**Open questions:** whether a product whose build takes minutes (dashboard snapshot) should show the old page with a banner instead of the updating page.
