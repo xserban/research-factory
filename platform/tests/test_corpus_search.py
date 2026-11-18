@@ -188,7 +188,8 @@ class Kinded(Anchored):
     """A document with front, method, related, appendix and back sections.
 
     The paragraph under "References" is parsed as a bibliography entry, not a passage, so only
-    the related and appendix passages are excluded (two per work).
+    the related passage is excluded (one per work); the appendix is indexed, tagged (researcher,
+    2026-11-18: appendices hold ablations and extended results).
     """
 
     def to_markdown(self, raw: bytes, media_type: str) -> tuple[str, tuple[str, ...]]:
@@ -216,10 +217,18 @@ class Kinded(Anchored):
 def test_unindexed_kinds_and_kinds_filter(project: Project, screened: list[str]) -> None:
     convert_documents(project, ConverterRegistry([Kinded()]), override=True)
     result = _hits(project, ["quokka"], limit=200, per_work_limit=10)
-    assert {h.passage_id for h in result.hits} == {"s1.p1", "s3.p1"}
-    assert result.index.excluded_passages == 2 * len({h.work_id for h in result.hits})
+    assert {h.passage_id for h in result.hits} == {"s1.p1", "s3.p1", "s4.p1"}
+    assert result.index.excluded_passages == len({h.work_id for h in result.hits})
     kinds = {h.passage_id: h.section_kind for h in result.hits}
-    assert kinds == {"s1.p1": SectionKind.FRONT, "s3.p1": SectionKind.METHOD}
+    assert kinds == {
+        "s1.p1": SectionKind.FRONT,
+        "s3.p1": SectionKind.METHOD,
+        "s4.p1": SectionKind.APPENDIX,
+    }
+    appendix = corpus_search(
+        project, ["quokka"], SelectionSpec(), kinds=[SectionKind.APPENDIX], per_work_limit=10
+    )
+    assert {h.passage_id for h in appendix.hits} == {"s4.p1"}
     only = corpus_search(
         project, ["quokka"], SelectionSpec(), kinds=[SectionKind.METHOD], per_work_limit=10
     )

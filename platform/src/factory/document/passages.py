@@ -195,6 +195,9 @@ def _heading_kind(heading: str, after_back: bool, exact: bool) -> SectionKind | 
     return None
 
 
+_BODY_KINDS = frozenset({SectionKind.METHOD, SectionKind.RESULTS, SectionKind.DISCUSSION})
+
+
 def section_kind(
     section_path: tuple[str, ...],
     after_back: tuple[bool, ...] | None = None,
@@ -218,7 +221,9 @@ def section_kind(
       of contents, contents, reporting summary, broader impact(s), impact statement.
     - Related: starts with related work(s), prior work, previous work, literature review,
       background and related work, related literature; or is exactly "background".
-      "Background and Motivation" is not related (front, by "motivation").
+      "Background and Motivation" is not related (front, by "motivation"). A related heading
+      nested under a method, results or discussion heading is not related: it names a stage of
+      the system ("3 Key Designs > 3.2 Literature Review"); the next heading out decides.
     - Otherwise the first matching group of whole-word stems decides: discussion > results >
       method > front ("Results and Discussion" is discussion). No match gives `OTHER`.
     - `title_first`: path[0] is the document's first heading (normally the paper title); it
@@ -230,7 +235,10 @@ def section_kind(
     kinds = [_heading_kind(h, flags[i], title_first and i == 0) for i, h in enumerate(section_path)]
     if SectionKind.APPENDIX in kinds:
         return SectionKind.APPENDIX
-    for kind in reversed(kinds):
+    for i in range(len(kinds) - 1, -1, -1):
+        kind = kinds[i]
+        if kind is SectionKind.RELATED and _BODY_KINDS.intersection(kinds[:i]):
+            continue  # a related-work heading inside a system section names a stage of it
         if kind is not None:
             return kind
     return SectionKind.OTHER

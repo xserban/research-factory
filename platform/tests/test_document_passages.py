@@ -368,3 +368,23 @@ def test_embedding_windows_long_sentence_split_by_words() -> None:
     assert mixed[0] == short
     assert mixed[-1] == short
     assert all(len(w.split()) <= 10 for w in mixed)
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        # A related-work heading nested in a system section names a stage of the system.
+        (("3 Key Designs", "3.2 Literature Review"), SectionKind.METHOD),
+        (("4 Experiments", "4.1 Related Work Retrieval"), SectionKind.RESULTS),
+        (("5 Discussion", "5.1 Prior work"), SectionKind.DISCUSSION),
+        # At the top, or under a front or untyped heading, it stays related.
+        (("2 Related Work",), SectionKind.RELATED),
+        (("2 Related Work", "2.1 End-to-End Research Automation"), SectionKind.RELATED),
+        (("Abstract", "2. Related Work"), SectionKind.RELATED),
+        (("Paper title", "2 Background"), SectionKind.RELATED),
+    ],
+)
+def test_related_only_outside_method_results_discussion(
+    path: tuple[str, ...], kind: SectionKind
+) -> None:
+    assert section_kind(path) is kind

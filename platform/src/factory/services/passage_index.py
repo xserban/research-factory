@@ -11,8 +11,8 @@ Invariants:
   from the `conversions` marker row held; otherwise its rows are reused unchanged. The marker row
   is written for every indexed conversion, also one with no indexed passage, so such a conversion
   is not re-cut on every call. Marker rows of other conversions of a work are removed with them.
-- Passages whose section kind is related, appendix or back are not indexed; they are counted in
-  `IndexReport.excluded_passages` (for the conversions indexed in that call only).
+- Passages whose section kind is related or back are not indexed (appendices are, tagged);
+  they are counted in `IndexReport.excluded_passages` (for the conversions indexed in that call only).
 - Rows are a pure function of the Markdown, the chunker and the work title at index time.
 - The sidecar's layout carries `SCHEMA_VERSION` in SQLite's `user_version`. A sidecar of another
   version has this module's tables (`passages`, `passages_fts`, `conversions`) dropped and
@@ -50,8 +50,10 @@ __all__ = [
 TARGET_WORDS = 250
 _TITLE_SEP = " \u203a "  # joins title and section path
 MIN_WORDS = 30
-UNINDEXED_KINDS = frozenset({SectionKind.RELATED, SectionKind.APPENDIX, SectionKind.BACK})
-CHUNKER_VERSION = f"3:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
+UNINDEXED_KINDS = frozenset({SectionKind.RELATED, SectionKind.BACK})
+"""Appendices are indexed, tagged: they hold ablations and extended results (researcher,
+2026-11-18)."""
+CHUNKER_VERSION = f"4:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
 """Bumped when the passage cutter or its target size changes; forces a re-index."""
 
 SCHEMA_VERSION = 3
