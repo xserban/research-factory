@@ -21,6 +21,7 @@ HUB.load(['shell', 'overview']).then(d => {
 .ov-next .btn{height:40px;justify-content:space-between;width:100%;text-decoration:none}
 .ov-next .btn .n{font-family:var(--f-mono);font-size:var(--t-xs);opacity:.8}
 .ov-todo{display:block;text-align:left;border:1px solid var(--hair);border-radius:var(--r,6px);padding:8px 12px;color:var(--fg);background:none;font:inherit;cursor:pointer}
+.ov-wait{margin:8px 0 32px}.ov-waitgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:6px}
 .ov-todo:hover{background:var(--raised)}
 .ov-todo .row{display:flex;justify-content:space-between;gap:8px;font:400 var(--t-s) var(--f-ui)}
 .ov-todo .cmd{display:block;margin-top:2px;color:var(--dim);font:400 var(--t-xs) var(--f-mono);overflow-wrap:anywhere}
@@ -94,9 +95,9 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
     <a class="btn" href="flow.html">Open the flow <span class="n">${fmt(lead.identified)} → ${fmt(lead.included)}</span></a>
     <a class="btn" href="explore.html">Explore papers</a>
     <a class="btn" href="lenses.html">Lenses</a>
-    ${nextHtml ? `<div class="ov-grp" style="margin-top:14px">Waiting for you</div>${nextHtml}` : ''}
   </nav>
 </section>
+${nextHtml ? `<section class="ov-wait" aria-label="Waiting for you"><div class="ov-grp">Waiting for you</div><div class="ov-waitgrid">${nextHtml}</div></section>` : ''}
 
 ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How many records survive each screening step, and what each step removed.<p><span class=k>How to read it.</span> Each bar is the step's count as a share of the ${fmt(lead.identified)} records identified, drawn from zero. A red line is what that step removed.</p><p><span class=k>How it's computed.</span> Counts come from the screening flow; the arithmetic is checked on the <a href="flow.html">flow page</a>.</p>` })}
 <section class="ov-strip" id="ovStrip" aria-label="Where the records went"></section>

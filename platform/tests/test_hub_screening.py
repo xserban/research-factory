@@ -96,6 +96,14 @@ def test_per_criterion_and_same_criterion_among_both_excluded() -> None:
     assert result.kappa_by_criterion["EX01"] == pytest.approx(0.5)
     assert result.kappa_by_criterion["EX03"] is None
     assert set(result.kappa_by_criterion) == {"EX01", "EX02", "EX03"}
+    # the 2x2 counts carry their work ids
+    assert result.table_works == {
+        "both_proceed": ("w4",),
+        "only_a_proceeds": ("w3",),
+        "only_b_proceeds": (),
+        "neither_proceeds": ("w1", "w2"),
+    }
+    assert {k: len(v) for k, v in result.table_works.items()} == result.table
 
 
 def test_disagreements_carry_both_sides_sorted_and_calibration_is_separate() -> None:
@@ -183,6 +191,7 @@ def test_reasons_wall_counts_examples_and_labels() -> None:
     assert [e.work_id for e in first.examples] == ["w1", "w2"]
     assert wall[1].label is None
     assert hs.reasons_wall(rows, k=0)[0].examples == ()
+    assert first.works == ("w1", "w2", "w3")  # every excluded work, not only the examples
 
 
 def test_superseded_decisions_are_ignored(

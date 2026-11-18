@@ -179,3 +179,6 @@ table.t{width:100%;border-collapse:collapse;font-size:var(--t-s)}
 .theme-pick{font:500 var(--t-s) var(--f-ui);height:34px}
 .rail-sep{width:32px;height:1px;background:var(--line);margin:6px 0}
 @media (max-width:760px){.rail-sep{display:none}}
+
+.sx-hint{display:none;margin:6px 2px 0;color:var(--mut);font:400 var(--t-xs) var(--f-ui)}
+@media (max-width:760px){.sx-hint{display:block}}

@@ -40,6 +40,8 @@ const PRED = {
   'not-retrieved': IDS('not_retrieved'), pending: IDS('ft_pending'), assessed: IDS('ft_excluded', 'included'),
   'ft-excluded': IDS('ft_excluded'), included: IDS('included'),
 };
+/* record.source is the ledger's source group: arxiv-only, openalex-only, both, other */
+SRC.forEach(([k]) => PRED['src-' + k] = (k in (F.identified_databases || {})) ? (r => r.source === k + '-only' || r.source === 'both') : (r => r.source === 'other'));
 EXK.forEach(k => PRED['ta-' + k] = r => r.fate === 'ta_excluded' && r.criterion === k);
 FXK.forEach(k => PRED['ft-' + k] = r => r.fate === 'ft_excluded' && r.criterion === k);
 const eqs = (parts, got, expect) => `<span>${parts} = ${fmt(got)} <span class="${got === expect ? 'okc' : 'badc'}">${got === expect ? '✓' : '✗'}</span></span>`;
@@ -104,6 +106,7 @@ svg.sk{display:block;min-width:820px;width:100%;height:auto}
 .curve .mk{fill:var(--bg);stroke:var(--acc);stroke-width:2}.curve .gl{stroke:var(--hair)}.curve .stp{stroke:var(--exc);stroke-width:1.5}
 .shares{display:flex;flex-wrap:wrap;gap:8px 28px}.shares div{font-size:var(--t-s);color:var(--mut)}.shares b{font:500 var(--t-l) var(--f-ui);color:var(--fg);margin-right:4px}
 .two{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:28px;align-items:start}
+details.idl{margin-top:8px}details.idl summary{cursor:pointer;font:500 var(--t-s) var(--f-ui)}details.idl ul{margin:6px 0 0;padding-left:18px;max-height:220px;overflow:auto;font-size:var(--t-xs)}
 table.mx{border-collapse:separate;border-spacing:4px;font-size:var(--t-s)}.mx th{font-weight:500;color:var(--mut);padding:4px 6px;text-align:left}
 .mx td{padding:0}.mx button{all:unset;display:block;width:100%;box-sizing:border-box;cursor:pointer;text-align:center;font:500 var(--t-m) var(--f-mono);padding:14px 10px;border-radius:var(--r-s);background:var(--acc-soft);color:var(--fg)}
 .mx button:hover,.mx button:focus-visible{box-shadow:inset 0 0 0 1px var(--acc)}.mx .plain{padding:14px 10px;text-align:center;font:500 var(--t-m) var(--f-mono);border-radius:var(--r-s);background:var(--raised)}
@@ -136,7 +139,7 @@ const topLoss = Object.entries(F.excluded).sort((a, b) => b[1] - a[1])[0];
 $('#main').innerHTML = `
 <section class="fhead">
   ${H.header({ kicker: `${H.term('prisma', 'PRISMA flow')} · ${protoTerm} <span class="mono">${esc(F.protocol_id || '')}</span>`, title: 'Flow', level: 1 })}
-  <p class="lead">${fmt(st.identified)} records came in and ${fmt(st.inc)} papers made it through. The biggest loss: ${topLoss ? `${H.term(topLoss[0], topLoss[0])} (${esc(critLabel(topLoss[0]).toLowerCase())}), ${fmt(topLoss[1])} records` : 'none'}.${H.info(`<b>What it shows</b>How the records the searches found became the papers the review is about.<p><span class=k>How it's computed.</span> ${fmt(st.inc)} of ${fmt(st.identified)} is ${(100 * st.inc / st.identified).toFixed(1)}%. The biggest loss is the exclusion criterion with the most records at title and abstract. ${esc(d.flow.methods.fates)}</p>`, 'How these figures are computed')}</p>
+  <p class="lead">${fmt(st.identified)} records came in and ${fmt(st.inc)} papers made it through. The biggest loss: ${topLoss ? `${H.term(topLoss[0], topLoss[0])} (${esc(critLabel(topLoss[0]).toLowerCase())}), ${fmt(topLoss[1])} records` : 'none'}.${H.info(`<b>What it shows</b>How the records the searches found became the papers the review is about.<p><span class=k>How it's computed.</span> ${fmt(st.inc)} of ${fmt(st.identified)} is ${(100 * st.inc / st.identified).toFixed(1)}%. The biggest loss is the exclusion criterion with the most records at title and abstract. ${esc(d.flow.methods.fates)}</p><p>${fmt(st.identified - R.length)} of the ${fmt(st.identified)} records were merged into another before getting a ledger row of their own; they count in the totals but have no row in the record lists (this count is computed as identified minus listed).</p>`, 'How these figures are computed')}</p>
 </section>
 <div class="bar"><div class="seg" role="group" aria-label="Flow views" id="tabs">${TABS.map(t => `<button data-t="${t[0]}">${t[1]}</button>`).join('')}</div></div>
 <div id="pane"></div>
@@ -251,6 +254,7 @@ function drawPanel() {
   if (!pred) { pn.innerHTML = head + '<div class="empty">The record list is not split by source, so there is no list behind this count.</div>'; return; }
   const base = R.filter(pred); let note = '';
   if (S.node === 'identified') note = `The list holds the ${fmt(base.length)} records that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
+  if (S.node.startsWith('src-')) note = `The list holds the ${fmt(base.length)} records of this source that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
   if (S.node === 'duplicates') note = `${fmt(base.length)} duplicates kept a record of their own and are listed; the other ${fmt(i.n - base.length)} were merged away before getting one.`;
   const isW = base.filter(r => H.byId.has(r.id)).length * 2 > base.length;
   const fdefs = FACETS.filter(f => (isW || (f[0] !== 'layer' && f[0] !== 'human'))).map(f => { const m = new Map(); base.forEach(r => { const v = f[2](r); if (v != null) m.set(v, (m.get(v) || 0) + 1); }); return { f, m }; }).filter(x => x.m.size > 1);
@@ -266,7 +270,7 @@ function drawPanel() {
     ${fdefs.map(x => `<div class="fg"><span class="fl">${x.f[1]}</span><div class="chips">${[...x.m].sort((a, b) => order(x, a, b)).map(([v, n]) => chip(x, v, n)).join('')}</div></div>`).join('')}</div>
    <div><div class="actives"><b class="num" style="margin-right:6px">${fmt(rows.length)}</b><span class="meta">of ${fmt(base.length)} records${act.length ? ', filtered by' : ''}</span>${act.map(([k, v, l]) => `<span class="chip" aria-pressed="true">${esc(l)} <button data-rm="${k}" data-v="${esc(v)}" aria-label="Remove filter ${esc(l)}" style="all:unset;cursor:pointer">×</button></span>`).join('')}${act.length ? '<button class="chip" data-clear="1">Clear</button>' : ''}
      <input type="search" id="rq" placeholder="Search titles" aria-label="Search titles" value="${esc(S.q)}" style="margin-left:auto;min-width:180px"></div>
-   ${rows.length ? `<div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
+   ${rows.length ? `<p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
       return `<tr tabindex="0" data-id="${esc(r.id)}"><td class="ti">${esc(clip(r.title, 160))}</td><td>${esc(outcomeOf(r))}</td>${isW ? `<td>${w ? `<span class="dot" style="background:${H.layerColor(w.layer)};margin-right:6px"></span>${esc(H.layerLabel(w.layer))}` : ''}</td>` : ''}<td class="r">${esc(r.year)}</td>${isW ? `<td class="r">${w ? w.cic : ''}</td>` : ''}<td><a href="#lanes=${encodeURIComponent(r.id)}" data-lane="${esc(r.id)}">See path</a></td></tr>`; }).join('')}</tbody></table></div>
      ${rows.length > S.more ? `<p><button class="btn" data-more="1">Show ${Math.min(100, rows.length - S.more)} more</button> <span class="meta">${fmt(S.more)} of ${fmt(rows.length)} shown</span></p>` : ''}`
      : `<div class="empty"><b>No records match these filters.</b> <button class="chip" data-clear="1">Show all</button></div>`}</div></div>`;
@@ -285,7 +289,7 @@ function tabWhere(p) {
   const lens = () => { document.querySelectorAll('.seg [data-v]').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.view)); const L = $('#lens');
     if (S.view === 'flow') {
       $('#lensq').innerHTML = H.header({ title: 'Records at each step', infoHtml: infoPanel('How many records survive each stage, and why the rest leave.', 'Band width is proportional to the record count, on one scale for every column. Click a band or box to list its records below.', `Every band is drawn at ${(st.identified ? 470 / st.identified * 1000 : 0).toFixed(0)} px per 1,000 records; bands under 2 px are drawn at 2 px. The checks under the figure are recomputed from the counts.`) });
-      L.innerHTML = `<div class="card" style="padding:16px 12px"><div class="scroll"><svg class="sk" id="sk" role="img" aria-label="PRISMA flow, band width proportional to record count"></svg></div></div><div class="eqs">${['identified', 'screened', 'ta-included', 'sought', 'assessed', 'included'].map(k => EQ[k]).join('')}</div>`; drawSankey();
+      L.innerHTML = `<div class="card" style="padding:16px 12px"><div class="scroll"><svg class="sk" id="sk" role="img" aria-label="PRISMA flow, band width proportional to record count"></svg></div><p class="sx-hint">Scroll sideways to see the rest →</p></div><div class="eqs">${['identified', 'screened', 'ta-included', 'sought', 'assessed', 'included'].map(k => EQ[k]).join('')}</div>`; drawSankey();
     } else { L.innerHTML = '<div class="card wf" id="wf"></div>'; const ip = drawWaffle(); $('#lensq').innerHTML = H.header({ title: 'Every record', sub: `<span class="meta">${fmt(st.screened)} records screened</span>`, infoHtml: ip }); }
     markSel(); };
   p.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; saveHash(); lens(); });
@@ -297,6 +301,7 @@ function tabWhere(p) {
 /* ================= tab 2: screening ================= */
 const clip = (t, n = 120) => t.length > n ? t.slice(0, n - 1) + '\u2026' : t;
 const recLink = id => H.byId.has(id) ? `<a href="#" data-open="${esc(id)}" title="${esc(titleOf(id))}">${esc(clip(titleOf(id)))}</a>` : `<span title="${esc(titleOf(id))}">${esc(clip(titleOf(id)))}</span>`;
+const idList = (ids, label) => ids && ids.length ? `<details class="idl"><summary>${esc(label)} <span class="meta">${fmt(ids.length)}</span></summary><ul>${ids.slice(0, 200).map(id => `<li>${recLink(id)}</li>`).join('')}</ul>${ids.length > 200 ? `<p class="meta">First 200 of ${fmt(ids.length)}.</p>` : ''}</details>` : '';
 const wireOpen = root => root.querySelectorAll('[data-open]').forEach(a => a.onclick = e => { e.preventDefault(); H.openDrawer(a.dataset.open); });
 function curveSvg(rc) {
   const W = 920, Ht = 380, m = { l: 62, r: 20, t: 20, b: 66 }, pts = rc.points, N = pts.length, Y = rc.included_total || pts[N - 1] || 1;
@@ -327,6 +332,7 @@ function tabScreening(p) {
   <section>${H.header({ title: 'Reasons for exclusion', sub: 'Why records were left out, with the reader’s own words.', infoHtml: infoPanel('Each exclusion criterion, how many records cited it, and examples of the reasoning.', 'Every example shows the reader’s rationale and the sentence it was based on. Counts are records with an exclude verdict from either screener, so they can differ slightly from the final counts in the flow.', esc(SC.methods.reasons_wall)) })}
    ${wallStages.map(sg => `<h3 class="h3" style="margin:18px 0 10px">${lbl(sg)}</h3><div class="wall">${SC.reasons_wall.filter(w => w.stage === sg).map(w => `<article class="wc"><div class="hd">${H.term(w.criterion, w.criterion)}<b>${esc(w.label || '')}</b><span class="cn">${fmt(w.count)}</span></div>
      <p class="rule">${esc(w.rule || '')}</p>${w.examples.map(e => `<div class="ex"><span class="meta">${recLink(e.work_id)} · screener ${esc(e.pass_label)}</span>${esc(e.rationale)}${e.quote ? `<blockquote class="quote">“${esc(e.quote)}”</blockquote>` : ''}</div>`).join('')}
+     ${idList(w.works, 'All records excluded under this criterion')}
      ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section></div>`;
   const cv = $('#curve'), hv = $('#cvh');
   hv.onmousemove = e => { const b = cv.getBoundingClientRect(), f = Math.min(1, Math.max(0, ((e.clientX - b.left) / b.width * 920 - 62) / (920 - 62 - 20))), i = Math.max(1, Math.round(f * N));
@@ -346,6 +352,7 @@ function twoBody(t) {
   $('#twoBody').innerHTML = `<div class="two"><div>
     <div class="stats"><span><span class="big">${t.kappa == null ? 'n/a' : t.kappa.toFixed(2)}</span> <span class="h3">${H.term('kappa', 'κ')}</span></span><span class="meta">${fmt(t.n)} records read by both · ${Math.round(100 * t.agreement)}% same outcome</span></div>
     <table class="mx" style="margin-top:12px"><thead><tr><th></th><th>B keeps</th><th>B excludes</th></tr></thead><tbody><tr><th>A keeps</th>${cell(tb.both_proceed)}${cell(tb.only_a_proceeds, 'oa')}</tr><tr><th>A excludes</th>${cell(tb.only_b_proceeds, 'ob')}${cell(tb.neither_proceeds)}</tr></tbody></table>
+    ${[['both_proceed', 'Both keep'], ['only_a_proceeds', 'Only A keeps'], ['only_b_proceeds', 'Only B keeps'], ['neither_proceeds', 'Neither keeps']].map(([k, l]) => idList((t.table_works || {})[k], l)).join('')}
     <p class="meta">Among the ${fmt(t.both_excluded)} both excluded, ${fmt(t.same_criterion)} cite the same criterion.</p></div>
    <div><h3 class="h3" style="margin-bottom:8px">κ by criterion</h3><div class="kb">${crit.map(([k, v]) => `<span>${H.term(k, k)} <span class="meta">${esc(critLabel(k))}</span></span><div class="bx"><i style="width:${v == null ? 0 : Math.max(0, v) * 100}%"></i></div><span class="v">${v == null ? 'n/a' : v.toFixed(2)}</span>`).join('')}</div></div></div>
    <div class="bar" style="margin:22px 0 10px"><h3 class="h3">Disagreements</h3><div class="legend">${Object.entries(F2).map(([k, v]) => `<button class="chip" data-df="${k}" aria-pressed="${k === S.dfilter}">${v[0]} <span class="n">${dis.filter(v[1]).length}</span></button>`).join('')}</div></div>
@@ -428,7 +435,7 @@ function tabPaths(p) {
   p.innerHTML = `<div class="fpane"><section>${H.header({ title: ids.length === 1 && real[0] ? 'Path of one paper' : 'Paths', sub: 'One lane per paper on a shared time axis.', infoHtml: infoPanel('The route each chosen paper took through the review, and where the routes parted.', 'Time runs left to right on one axis for every paper. Each dot is a stop: hover or focus it for the stage, who acted, the outcome and the evidence. A ring marks where a path first differs from what most of the papers did at that stage. Open the list under a lane for every stop with the time spent between them.', esc(d.journeys.methods.swimlanes)) })}
    <div class="bar" style="margin:12px 0"><div class="picker"><input type="search" id="pk" placeholder="Add a paper by title" aria-label="Add a paper to compare" autocomplete="off"><ul id="pkl" hidden></ul></div>
     <div class="actives" id="lch">${lanes.map(l => `<span class="chip" aria-pressed="true">${esc((l.title || l.id).length > 48 ? (l.title || l.id).slice(0, 47) + '\u2026' : (l.title || l.id))} <button data-rm="${esc(l.id)}" aria-label="Remove ${esc(l.title || l.id)}" style="all:unset;cursor:pointer">×</button></span>`).join('')}${ids.length ? '<button class="chip" id="clr">Clear</button>' : ''}</div></div>
-   <div id="lanes">${ids.length ? '' : '<div class="empty">Pick one or more papers to see their paths. Links from a paper’s panel, from Corpus and from Explore bring you here with the papers filled in.</div>'}</div></section></div>`;
+   ${ids.length ? '<p class="sx-hint" style="margin-top:0">Scroll sideways to see the rest →</p>' : ''}<div id="lanes">${ids.length ? '' : '<div class="empty">Pick one or more papers to see their paths. Links from a paper’s panel, from Corpus and from Explore bring you here with the papers filled in.</div>'}</div></section></div>`;
   const edit = f => { S.lanes = f(S.lanes).slice(0, 20); saveHash(); showTab('paths', true); };
   p.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => edit(a => a.filter(x => x !== b.dataset.rm)));
   const clr = $('#clr'); if (clr) clr.onclick = () => edit(() => []);

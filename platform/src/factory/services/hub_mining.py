@@ -77,10 +77,16 @@ METHODS: dict[str, str] = {
         "secondary label agrees when it equals the other pass's primary or secondary, and free "
         "text and quotes are not compared. It is computed on the same included works."
     ),
+    "anatomy": (
+        "The counts come from the miner's field list; the check comes from its regime and the "
+        "second reading."
+    ),
     "platform": (
         "The rates the platform records for the miner (`mine status`): all rows, where a row "
         "only one pass wrote counts against it, and aligned rows only. They cover every read "
-        "work, not only the included ones."
+        "work, not only the included ones. A miner has no rate when it has no second reading "
+        "to compare, or when its two readings are held apart by pass; the page then shows no "
+        "platform rate for it."
     ),
     "by_model": (
         "Passes are grouped by the model that read them (the sessions that joined the pass). "

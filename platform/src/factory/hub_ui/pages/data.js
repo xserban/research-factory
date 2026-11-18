@@ -66,9 +66,10 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
 .cvt th{color:var(--mut);font-weight:600;font-size:12px}
 .cvt td.n{text-align:right;font-family:var(--f-mono)}
 .cvt th.n{text-align:right}
-.unread{background:var(--surface);border-radius:var(--r);padding:12px 16px;margin-top:10px}
-.unread ul{margin:6px 0 0;padding-left:18px;columns:2;column-gap:28px;font-size:var(--t-s)}
-.unread li{margin:2px 0;break-inside:avoid}
+.unread{background:var(--surface);border-radius:var(--r);padding:8px 12px;margin-top:6px}
+.unread{padding:8px 12px}.unread ul{margin:4px 0 0;padding-left:16px;columns:2;column-gap:28px;font-size:var(--t-xs);line-height:1.35;max-height:180px;overflow:auto}
+.unread li{margin:0;break-inside:avoid;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
 .dfoot{margin:28px 0 0}
 @media (max-width:760px){.dg .t1,.dg td.t1{width:150px;min-width:150px;max-width:150px}.hbar{grid-template-columns:1fr 90px}.hbar .trk{grid-column:1/3;grid-row:2}.unread ul{columns:1}}`;
     document.head.appendChild(st);
@@ -217,7 +218,7 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
       S.filters.map((f, i) => `<button class=chip aria-pressed=true data-rm=${i} aria-label="Remove filter ${esc(filtLabel(f))}">${esc(filtLabel(f))} <span class=x>×</span></button>`).join('') + (S.filters.length > 1 ? '<button class=chip data-clear>Clear all</button>' : '');
     if ($('#pickBtn')) $('#pickBtn').textContent = `Columns (${cols.length} of ${COLS.length})`;
     const sortMark = k => S.sort && S.sort.col === k ? (S.sort.dir > 0 ? '↑' : '↓') : '⇅';
-    view().innerHTML = `<div class=dgwrap><table class=dg role=grid aria-label="Extracted data, one row per paper"><thead>
+    view().innerHTML = `<p class="sx-hint">Scroll sideways to see the rest →</p><div class=dgwrap><table class=dg role=grid aria-label="Extracted data, one row per paper"><thead>
       <tr class=g><th class=t1 style="background:var(--raised)"></th>${groups.map(g => `<th colspan=${g.n}>${esc(g.m ? H.pretty(g.m) : mname(S.miner))}</th>`).join('')}</tr>
       <tr class=c><th class=t1><div class=nm><span>Paper</span><button class=srt data-sort="__title" ${S.sort && S.sort.col === '__title' ? 'data-on' : ''} aria-label="Sort by title">${sortMark('__title')}</button></div><div class=em>${fmt(rows.length)} papers</div></th>
       ${cols.map((c, i) => `<th scope=col><div class=nm><span title="${esc(c.label)}">${esc(c.label)}</span><button class=srt data-sort="${c.k}" ${S.sort && S.sort.col === c.k ? 'data-on' : ''} aria-label="Sort by ${esc(c.label)}">${sortMark(c.k)}</button></div>${distBar(dists[i], c)}<div class=em>— ${fmt(dists[i].emp)}</div></th>`).join('')}</tr></thead>
