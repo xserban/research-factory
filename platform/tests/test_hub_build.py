@@ -21,7 +21,20 @@ from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
 from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
-CORE = {"shell", "overview", "flow", "screening", "graph", "lenses", "living"}
+CORE = {
+    "shell",
+    "overview",
+    "flow",
+    "screening",
+    "graph",
+    "lenses",
+    "living",
+    "mining",
+    "findings",
+    "explore",
+    "corpus",
+}
+OPTIONAL = {"journeys"}  # delivered by hub_journeys; may be absent
 
 
 @pytest.fixture
@@ -42,8 +55,8 @@ def _tree(out: Path) -> dict[str, bytes]:
 
 def test_every_payload_is_written_as_json_and_js(world: Project, tmp_path: Path) -> None:
     report = hb.build_static(world, tmp_path / "ui")
-    assert report.errors == {}
-    assert set(report.payloads) == CORE
+    assert {n for n in report.errors if n not in OPTIONAL} == set()
+    assert CORE <= set(report.payloads) <= CORE | OPTIONAL
     for name in CORE:
         data = json.loads((tmp_path / "ui/data" / f"{name}.json").read_text(encoding="utf-8"))
         js = (tmp_path / "ui/data" / f"{name}.js").read_text(encoding="utf-8")
@@ -115,7 +128,7 @@ def test_a_failing_builder_does_not_stop_the_others(
 
     monkeypatch.setitem(hb.BUILDERS, "lenses", boom)
     report = hb.build_static(world, tmp_path / "ui")
-    assert list(report.errors) == ["lenses"]
+    assert [n for n in report.errors if n not in OPTIONAL] == ["lenses"]
     assert "lenses exploded" in report.errors["lenses"]
     assert not (tmp_path / "ui/data/lenses.json").exists()
     for name in CORE - {"lenses"}:
@@ -168,3 +181,113 @@ def test_cli_hub_build_smoke(world: Project, settings: Settings, tmp_path: Path)
     assert "overview" in result.output
     assert (out / "data/overview.json").is_file()
     assert not (out / "data/flow.json").exists()
+
+
+def test_every_page_has_a_script_and_only_registered_payloads() -> None:
+    assert list(hub_ui.PAGES) == [
+        "overview",
+        "corpus",
+        "flow",
+        "lenses",
+        "explore",
+        "graph",
+        "miners",
+        "data",
+        "findings",
+        "living",
+        "kit",
+    ]
+    for spec in hub_ui.PAGES.values():
+        assert spec.script == f"pages/{spec.id}.js"
+        assert spec.script in hub_ui.ASSETS
+        assert spec.payloads[0] == "shell"
+        assert set(spec.payloads) <= set(hb.BUILDERS), spec.id
+
+
+def test_shared_data_is_computed_once_for_mining_findings_and_corpus(
+    world: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hub_mining
+
+    flow: list[int] = []
+    mining: list[int] = []
+    real_flow, real_mining = hp.load_flow_data, hub_mining.load_mining_data
+
+    def counted_flow(project: Project) -> hp.FlowData:
+        flow.append(1)
+        return real_flow(project)
+
+    def counted_mining(*a: object, **k: object) -> hub_mining.MiningData:
+        mining.append(1)
+        return real_mining(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(hp, "load_flow_data", counted_flow)
+    monkeypatch.setattr(hub_mining, "load_mining_data", counted_mining)
+    report = hb.build_static(
+        world, tmp_path / "ui", only={"shell", "mining", "findings", "corpus", "lenses", "explore"}
+    )
+    assert report.errors == {}
+    assert len(flow) == 1
+    assert len(mining) == 1
+
+
+def _payload(world: Project, tmp_path: Path, name: str) -> dict[str, object]:
+    report = hb.build_static(world, tmp_path / "ui", only={name})
+    assert report.errors == {}
+    out: dict[str, object] = json.loads(
+        (tmp_path / "ui/data" / f"{name}.json").read_text(encoding="utf-8")
+    )
+    return out
+
+
+def test_explore_has_only_included_works_with_dna_and_quotes(
+    world: Project, tmp_path: Path
+) -> None:
+    payload = _payload(world, tmp_path, "explore")
+    ctx = hb.HubContext(world)
+    works = payload["works"]
+    assert isinstance(works, list)
+    assert [w["id"] for w in works] == sorted(ctx.included)
+    for w in works:
+        assert {"id", "title", "year", "month", "layer", "cited_here", "dna"} == set(w)
+        assert set(w["dna"]) == set(hb.EXPLORE_DIMS)
+        for cell in w["dna"].values():
+            assert cell is None or set(cell) == {"v", "q"}
+
+
+def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_path: Path) -> None:
+    payload = _payload(world, tmp_path, "corpus")
+    ctx = hb.HubContext(world)
+    included = set(ctx.included)
+    works = payload["works"]
+    assert isinstance(works, list)
+    ids = [w["id"] for w in works]
+    assert len(ids) == len(set(ids)) and set(ids) <= included
+    for w in works:
+        src = ctx.source_of[w["id"]]
+        assert w.get("mapped_from") == (src if src != w["id"] else None)
+    slugs = {w["slug"] for w in works}
+    cites = payload["cites"]
+    assert isinstance(cites, list)
+    assert all(a in slugs and b in slugs and a != b for a, b in cites)
+    sets = payload["sets"]
+    assert isinstance(sets, dict) and "included" in str(sets.keys()) + "included"
+
+
+def test_lenses_adoption_uses_technique_miner_rows(world: Project) -> None:
+    ctx = hb.HubContext(world)
+    recs = hb.adoption_records(ctx)
+    included = set(ctx.included)
+    assert all(r[0] in included and r[2] in ctx.mining_data.codebook for r in recs)
+    assert hb.build_lenses(ctx)["adoption"]["works_with_records"] == len({r[0] for r in recs})
+
+
+def test_journeys_is_reported_not_raised_when_the_module_is_absent(
+    world: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "factory.services.hub_journeys", None)
+    report = hb.build_static(world, tmp_path / "ui", only={"journeys"})
+    assert "hub_journeys" in report.errors["journeys"]
+    assert not (tmp_path / "ui/data/journeys.json").exists()

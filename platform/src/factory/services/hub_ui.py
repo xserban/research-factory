@@ -163,6 +163,16 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "kit.css": ("hub_ui/kit.css", "text/css; charset=utf-8"),
     "shell.js": ("hub_ui/shell.js", "text/javascript; charset=utf-8"),
     "pages/overview.js": ("hub_ui/pages/overview.js", "text/javascript; charset=utf-8"),
+    "pages/corpus.js": ("hub_ui/pages/corpus.js", "text/javascript; charset=utf-8"),
+    "pages/flow.js": ("hub_ui/pages/flow.js", "text/javascript; charset=utf-8"),
+    "pages/lenses.js": ("hub_ui/pages/lenses.js", "text/javascript; charset=utf-8"),
+    "pages/explore.js": ("hub_ui/pages/explore.js", "text/javascript; charset=utf-8"),
+    "pages/graph.js": ("hub_ui/pages/graph.js", "text/javascript; charset=utf-8"),
+    "pages/miners.js": ("hub_ui/pages/miners.js", "text/javascript; charset=utf-8"),
+    "pages/data.js": ("hub_ui/pages/data.js", "text/javascript; charset=utf-8"),
+    "pages/findings.js": ("hub_ui/pages/findings.js", "text/javascript; charset=utf-8"),
+    "pages/living.js": ("hub_ui/pages/living.js", "text/javascript; charset=utf-8"),
+    "pages/kit.js": ("hub_ui/pages/kit.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -346,6 +356,16 @@ class PageSpec:
 
 PAGES: Final[dict[str, PageSpec]] = {
     "overview": PageSpec("overview", "Overview", "pages/overview.js", ("shell", "overview")),
+    "corpus": PageSpec("corpus", "Corpus", "pages/corpus.js", ("shell", "corpus")),
+    "flow": PageSpec("flow", "Flow", "pages/flow.js", ("shell", "flow", "screening", "journeys")),
+    "lenses": PageSpec("lenses", "Lenses", "pages/lenses.js", ("shell", "lenses")),
+    "explore": PageSpec("explore", "Explore", "pages/explore.js", ("shell", "explore")),
+    "graph": PageSpec("graph", "Graph", "pages/graph.js", ("shell", "graph")),
+    "miners": PageSpec("miners", "Miners", "pages/miners.js", ("shell", "mining")),
+    "data": PageSpec("data", "Extracted data", "pages/data.js", ("shell", "mining")),
+    "findings": PageSpec("findings", "Findings", "pages/findings.js", ("shell", "findings")),
+    "living": PageSpec("living", "Living review", "pages/living.js", ("shell", "living")),
+    "kit": PageSpec("kit", "Brand kit", "pages/kit.js", ("shell",)),
 }
 
 

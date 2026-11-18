@@ -123,3 +123,24 @@ def test_shell_palette_points_at_hub_pages() -> None:
         assert f"'{page}.html'" in shell, page
     assert "explorer/index.html" not in shell
     assert "results.html" not in shell
+
+
+def test_rail_and_palette_list_exactly_the_registered_pages() -> None:
+    shell = _read("shell.js")
+    ids = list(hub_ui.PAGES)
+    rail = re.search(r"const nav = \[(.*?)\];", shell, re.S)
+    assert rail is not None
+    rail_ids = re.findall(r"\['(\w+)','[^']*','(\w+)\.html'\]", rail.group(1))
+    assert all(a == b for a, b in rail_ids)
+    assert [a for a, _ in rail_ids] == [i for i in ids if i != "kit"]  # kit is design, off the rail
+    pal = re.search(r"const PAGES = \[(.*?)\n\];", shell, re.S)
+    assert pal is not None
+    assert sorted(re.findall(r"'(\w+)\.html'", pal.group(1))) == sorted(ids)
+
+
+def test_every_page_script_calls_load_init_and_mount() -> None:
+    for spec in hub_ui.PAGES.values():
+        src = _read(spec.script)
+        assert "HUB.load([" in src and "HUB.init(d.shell)" in src and ".mount(" in src, spec.id
+        for name in spec.payloads:
+            assert f"'{name}'" in src, (spec.id, name)

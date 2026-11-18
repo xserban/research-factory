@@ -434,34 +434,43 @@ def _load_publication(project: Project, ids: Iterable[str]) -> dict[str, tuple[s
     return out
 
 
-def _load_role_field(
+def _load_role_cells(
     project: Project, source_of: Mapping[str, str], dim_key: str
-) -> dict[str, str | None]:
-    """The first pass-A value of a profile dimension (role + field) of each work's source."""
+) -> dict[str, tuple[str, str] | None]:
+    """The first pass-A (value, quote) of a profile dimension of each work's source, or None."""
     profile = site_corpus.load_profile(project)
     dim = next((d for d in profile.dims if d[0] == dim_key), None)
-    values: dict[str, str | None] = dict.fromkeys(source_of)
+    out: dict[str, tuple[str, str] | None] = dict.fromkeys(source_of)
     if dim is None:
-        return values
+        return out
     listed = site_corpus._listed_schemas(project)
     schema = listed.get(profile.roles.get(dim[2], ""))
     if schema is None:
-        return values
+        return out
     sources = set(source_of.values())
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT r.work_id, f.value FROM extraction_rows r JOIN extraction_fields f "
+                "SELECT r.work_id, f.value, f.quote FROM extraction_rows r "
+                "JOIN extraction_fields f "
                 "USING (extraction_id) WHERE r.pass_label = 'A' AND r.superseded_by IS NULL "
                 "AND r.schema_ref = :s AND f.field = :f ORDER BY r.extraction_id"
             ),
             {"s": schema, "f": dim[3]},
         ).all()
-    first: dict[str, str] = {}
-    for w, v in rows:
+    first: dict[str, tuple[str, str]] = {}
+    for w, v, q in rows:
         if str(w) in sources and v:
-            first.setdefault(str(w), str(v))
+            first.setdefault(str(w), (str(v), str(q or "")))
     return {w: first.get(src) for w, src in source_of.items()}
+
+
+def _load_role_field(
+    project: Project, source_of: Mapping[str, str], dim_key: str
+) -> dict[str, str | None]:
+    """The first pass-A value of a profile dimension (role + field) of each work's source."""
+    cells = _load_role_cells(project, source_of, dim_key)
+    return {w: (c[0] if c else None) for w, c in cells.items()}
 
 
 def pipeline_strip(d: FlowData) -> list[dict[str, Any]]:

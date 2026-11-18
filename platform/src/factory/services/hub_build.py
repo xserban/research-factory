@@ -22,7 +22,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from factory.services import hub_graph, hub_lenses, hub_living, hub_screening, hub_ui
+from factory.services import (
+    hub_findings,
+    hub_graph,
+    hub_lenses,
+    hub_living,
+    hub_mining,
+    hub_screening,
+    hub_ui,
+    site_corpus,
+)
 from factory.services import hub_payloads as hp
 from factory.services.context import Project
 from factory.services.work_layers import layers_of
@@ -101,6 +110,22 @@ class HubContext:
         return self._once(
             "cited",
             lambda: hp.cited_here(self.project, self.included, self.graph),
+        )
+
+    @property
+    def mining_data(self) -> hub_mining.MiningData:
+        """Miner rows, models, titles and codebook, loaded once with the flow data's sets (the
+        ledger is not recomputed)."""
+        return self._once(
+            "mining",
+            lambda: hub_mining.load_mining_data(self.project, sets=self.flow_data.sets),
+        )
+
+    def role_cells(self, dim_key: str) -> dict[str, tuple[str, str] | None]:
+        """The first pass-A (value, quote) of a profile dimension for every included work."""
+        return self._once(
+            f"cells:{dim_key}",
+            lambda: hp._load_role_cells(self.project, self.source_of, dim_key),
         )
 
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
@@ -195,6 +220,31 @@ def lens_cites(ctx: HubContext) -> dict[str, Collection[str]]:
     return {a: sorted(b) for a, b in sorted(out.items())}
 
 
+def adoption_records(ctx: HubContext) -> list[hub_lenses.AdoptionRecord]:
+    """Technique miner rows as (work, stage, technique code, year, month), pass A, included works.
+
+    The stage is the codebook's stage of the code; a code outside the codebook (not-stated,
+    other) is not a technique and is left out."""
+    data = ctx.mining_data
+    codebook = data.codebook
+    atts = hub_mining.attributions(data)
+    out: list[hub_lenses.AdoptionRecord] = []
+    for miner, att in sorted(atts.items()):
+        if not miner.startswith(hub_mining.TECH_PREFIX):
+            continue
+        for w, rows in sorted(att.by_pass.get("A", {}).items()):
+            year, month = ctx.year_month(w)
+            codes = {
+                c.value.rsplit("/", 1)[-1]
+                for r in rows
+                if (c := r.cells.get(hub_findings.TECH_FIELD)) is not None and c.value
+            }
+            for code in sorted(codes):
+                if code in codebook:
+                    out.append((w, codebook[code]["stage"], code, year, month))
+    return out
+
+
 def build_lenses(ctx: HubContext) -> dict[str, Any]:
     return hub_lenses.lenses_payload(
         lens_works(ctx),
@@ -204,6 +254,8 @@ def build_lenses(ctx: HubContext) -> dict[str, Any]:
         icicle_dims=("layer", "technique", "architecture"),
         assoc_dims=(*LENS_DIMS, "layer"),
         cites=lens_cites(ctx),
+        adoption_records=adoption_records(ctx),
+        codebook={k: v["label"] for k, v in sorted(ctx.mining_data.codebook.items())},
     )
 
 
@@ -211,8 +263,112 @@ def build_living(ctx: HubContext) -> dict[str, Any]:
     return hub_living.living_payload(ctx.project)
 
 
-# Hook: `mining`, `findings` and `corpus` register here once their services exist, e.g.
-# BUILDERS["mining"] = build_mining. A page lists the names it needs in hub_ui.PAGES.
+def build_mining(ctx: HubContext) -> dict[str, Any]:
+    return hub_mining.mining_payload_from(ctx.mining_data)
+
+
+def build_findings(ctx: HubContext) -> dict[str, Any]:
+    layers = {w: v for w, v in ctx.layer_of.items() if v != hp.UNLAYERED}
+    rank = {w: c.count for w, c in ctx.cited_here.items()}
+    return hub_findings.findings_from(
+        ctx.mining_data,
+        layers=layers,
+        rank=rank,
+        fields=hub_findings.profile_fields(ctx.project),
+    )
+
+
+EXPLORE_DIMS = ("technique", "architecture", "span", "human")
+
+
+def build_explore(ctx: HubContext) -> dict[str, Any]:
+    """Per included work: id, title, date, layer, cited-here count and the DNA dimensions, each
+    as {"v": value, "q": quote} (null when the work has no value). Nothing else is included."""
+    cells = {k: ctx.role_cells(k) for k in EXPLORE_DIMS}
+    cited = ctx.cited_here
+    works = []
+    for w in sorted(ctx.included):
+        year, month = ctx.year_month(w)
+        dna: dict[str, dict[str, str] | None] = {}
+        for k in EXPLORE_DIMS:
+            c = cells[k].get(w)
+            dna[k] = {"v": c[0], "q": c[1]} if c else None
+        works.append(
+            {
+                "id": w,
+                "title": ctx.publication.get(w, (w, ""))[0],
+                "year": year,
+                "month": month,
+                "layer": ctx.layer_of[w],
+                "cited_here": cited[w].count,
+                "dna": dna,
+            }
+        )
+    return {"works": works, "dims": list(EXPLORE_DIMS), "layer_order": _layer_order()}
+
+
+def _layer_order() -> list[str]:
+    from factory.services.site_layers import LAYER_ORDER  # imports site_corpus
+
+    return list(LAYER_ORDER)
+
+
+def build_corpus(ctx: HubContext) -> dict[str, Any]:
+    """`site_corpus.corpus_payload` restricted to the included set (plan 4.1).
+
+    corpus_payload reads the index for works with live miner rows (excluded ones too), so it is
+    called and post-filtered: a work stays only if included; a canonical work with no rows of its
+    own takes the rows of the duplicate that holds them (marked `mapped_from`); citation pairs are
+    mapped to included ids, self-links and repeats dropped. `sets` lists the differences."""
+    raw = site_corpus.corpus_payload(ctx.project)
+    by_id = {w["id"]: w for w in raw["works"]}
+    source_of = ctx.source_of
+    layer_of = ctx.layer_of
+    works: list[dict[str, Any]] = []
+    to_included: dict[str, str] = {}
+    for w in sorted(ctx.included):
+        entry = by_id.get(source_of[w])
+        if entry is None:
+            continue
+        to_included[entry["id"]] = w
+        item = dict(entry)
+        item["id"] = w
+        item["slug"] = site_corpus.slug_of(w)
+        item["layer"] = layer_of[w]
+        if source_of[w] != w:
+            item["mapped_from"] = source_of[w]
+        works.append(item)
+    slug_to_id = {e["slug"]: e["id"] for e in raw["works"]}
+    slug_of_included = {w["id"]: w["slug"] for w in works}
+    pairs: set[tuple[str, str]] = set()
+    for a, b in raw["cites"]:
+        ia, ib = to_included.get(slug_to_id[a]), to_included.get(slug_to_id[b])
+        if ia and ib and ia != ib:
+            pairs.add((slug_of_included[ia], slug_of_included[ib]))
+    return {
+        "dims": raw["dims"],
+        "works": works,
+        "layer_order": raw["layer_order"],
+        "cites": sorted([a, b] for a, b in pairs),
+        "refs_done": raw["refs_done"],
+        "sets": hp.sets_payload(ctx.flow_data.sets),
+    }
+
+
+def build_journeys(ctx: HubContext) -> dict[str, Any]:
+    """Per-work journeys and replay frames; the module is delivered separately, so it is imported
+    when the payload is built and its absence is reported as this payload's error."""
+    import importlib
+
+    try:
+        mod = importlib.import_module("factory.services.hub_journeys")
+        fn = mod.journeys_payload
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(f"hub_journeys.journeys_payload is not available: {exc}") from exc
+    payload: dict[str, Any] = fn(ctx.project)
+    return payload
+
+
 BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "shell": build_shell,
     "overview": build_overview,
@@ -221,6 +377,11 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "graph": build_graph,
     "lenses": build_lenses,
     "living": build_living,
+    "mining": build_mining,
+    "findings": build_findings,
+    "explore": build_explore,
+    "corpus": build_corpus,
+    "journeys": build_journeys,
 }
 
 
