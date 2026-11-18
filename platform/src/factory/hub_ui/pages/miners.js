@@ -227,9 +227,8 @@ HUB.load(['shell', 'mining']).then(d => {
         + `<div class=meta style="margin-top:6px">${m.multi_row ? 'rows' : 'papers'}. Select a value to list its papers.</div><div class=vl data-vl="${esc(m.name + '|' + f.name)}"></div>`;
     } else if (f.type === 'enum') body = `<div class=empty>No values recorded yet.</div>`;
     else body = `<div class=meta>${f.type === 'quote' ? 'Records a sentence from the paper.' : 'Records a figure as printed.'}</div>`;
-    const allowed = (f.values || []).length ? infoPop(flab(f.name), `<p><span class=k>Allowed values.</span> ${f.values.map(v => esc(lab(v))).join(', ')}</p>`) : '';
-    const desc = f.desc ? `<p class=meta style="margin:4px 0 8px">${esc(f.desc)}</p>` : '';
-    return `<div class=fc><div class=fh><b>${esc(flab(f.name))}</b><span class=tchip>${esc(cap(f.type))}</span><span class=rq>${esc(cap(f.group))}</span>${f.required ? '<span class=rq>required</span>' : ''}${f.compared ? '' : '<span class=rq>not compared</span>'}${allowed}</div>${desc}${body}</div>`;
+    const allowed = (f.values || []).length || f.desc ? infoPop(flab(f.name), (f.desc ? `<p>${esc(f.desc)}</p>` : '') + ((f.values || []).length ? `<p><span class=k>Allowed values.</span> ${f.values.map(v => esc(lab(v))).join(', ')}</p>` : '')) : '';
+    return `<div class=fc><div class=fh><b>${esc(flab(f.name))}</b><span class=tchip>${esc(cap(f.type))}</span><span class=rq>${esc(cap(f.group))}</span>${f.required ? '<span class=rq>required</span>' : ''}${f.compared ? '' : '<span class=rq>not compared</span>'}${allowed}</div>${body}</div>`;
   }
   function track(r, thr, alt, col) {
     const [lo, hi] = wilson(r.a, r.c), L = p => (100 * p).toFixed(2) + '%';
