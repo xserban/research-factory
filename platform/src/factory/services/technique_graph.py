@@ -751,7 +751,12 @@ def build_gaps(
     scored = [
         (
             rank.gap_score(
-                rank_by=rank_by, works=len(u), covered=len(c), pool_max=pool_max, links=links
+                rank_by=rank_by,
+                works=len(u),
+                covered=len(c),
+                pool_max=pool_max,
+                links=links,
+                to_works=len(to_works),
             ),
             a,
             u,

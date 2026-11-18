@@ -290,32 +290,37 @@ def test_a_pairs_score_does_not_depend_on_the_threshold_when_the_pool_maximum_is
 # --- log-scale bridge and name lookalikes ------------------------------------------------------
 
 
-def test_bridge_is_log_scaled_and_does_not_saturate_at_one_link_per_work() -> None:
+def test_bridge_is_log_scaled_over_the_possible_pairs_and_does_not_saturate() -> None:
     import math
 
     assert tr.bridge_norm(0, 5) == 0.0 and tr.bridge_norm(3, 0) == 0.0
-    assert tr.bridge_norm(1, 3) == pytest.approx(math.log(2) / math.log(4))
-    assert tr.bridge_norm(2, 3) < 1.0  # the old min(1, links/works) gave 0.67; 3 of 3 is 1.0
-    assert tr.bridge_norm(2, 3) > tr.bridge_norm(1, 3)
-    assert tr.bridge_norm(30, 100) < 1.0  # the old form gave 0.3, a link per 3 works
-    assert tr.bridge_norm(99, 3) == 1.0  # capped
+    assert tr.bridge_norm(1, 9) == pytest.approx(math.log(2) / math.log(10))
+    assert tr.bridge_norm(3, 3) == 1.0  # only links >= the possible pairs reach 1.0
+    assert tr.bridge_norm(99, 9) == 1.0  # safety clamp
+    assert tr.bridge_norm(8, 9) < 1.0  # the old min(1, links/min(works)) gave 1.0 for 3 works
+    assert tr.bridge_norm(2, 9) > tr.bridge_norm(1, 9)
     cites = tuple(("rf:a", f"rf:{w}", f"e{w}") for w in "kl")
     top = combos(inputs(BASE, cites), rank_by="bridge").combinations[0]
-    assert top.score is not None and top.score.bridge == pytest.approx(math.log(3) / math.log(4))
+    assert top.score is not None and top.score.bridge == pytest.approx(math.log(3) / math.log(10))
+    # no pair of the fixture is at exactly 1.0: links never reach works_a * works_b
+    out = combos(inputs(BASE, cites), max_co_works=9)
+    assert all(c.score is not None and c.score.bridge < 1.0 for c in out.combinations)
 
 
-def test_gap_bridge_is_log_scaled() -> None:
+def test_gap_bridge_is_log_scaled_over_works_times_to_stage_works() -> None:
     import math
 
     cites = (("rf:e", "rf:a", "e1"), ("rf:f", "rf:x", "e2"), ("rf:a", "rf:x", "e3"))
     out = gaps(inputs(GAPROWS, cites), rank_by="bridge")
     by = {g.approach.id: g.score for g in out.gaps}
+    # to-stage works are {a, x}: 2 of them
     assert by["ide-02"] is not None and by["ide-02"].bridge == pytest.approx(
-        math.log(3) / math.log(3)
+        math.log(3) / math.log(1 + 2 * 2)
     )
     assert by["ide-01"] is not None and by["ide-01"].bridge == pytest.approx(
-        math.log(2) / math.log(5)
+        math.log(2) / math.log(1 + 4 * 2)
     )
+    assert all(g.score is not None and g.score.bridge < 1.0 for g in out.gaps)
 
 
 def test_name_tokens_and_jaccard() -> None:

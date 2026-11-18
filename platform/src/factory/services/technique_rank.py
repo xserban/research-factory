@@ -11,9 +11,12 @@ Combination components, each in 0..1:
 - `stage`: the stage relation of the two approaches in the lifecycle order below
   (`STAGE_FACTORS`: adjacent stages 1.0, same stage 0.6, distant 0.3, unordered 0.3);
 - `bridge`: distinct live resolved `cites` links between the two work sets (either direction),
-  on a log scale: log(1 + links) / log(1 + min(works_a, works_b)), capped at 1: the two
-  communities know each other. The first version, min(1, links / min(works)), saturated: on the
-  pilot corpus 3,247 of 9,506 pairs scored exactly 1.0 and could no longer be told apart;
+  on a log scale over the possible pairs: log(1 + links) / log(1 + works_a * works_b), clamped
+  at 1: the two communities know each other. Earlier forms saturated: min(1, links / min(works))
+  scored exactly 1.0 for 3,247 of 9,506 pilot pairs, and log(1 + links) / log(1 + min(works))
+  kept the same 3,247 at 1.0 because the cap, not the linear scale, caused it. The product is
+  the number of work pairs that could cite each other, so 1.0 needs a link for every such pair;
+  the log keeps a few links from reading as nothing;
 - `evidence`: the mean over the two approaches of the share of their rows whose evidence is
   supportive (independent-test, own-ablation, own-comparison); `not-stated` counts as not
   supportive;
@@ -25,8 +28,9 @@ The composite is the weighted sum of popularity, stage, bridge and evidence, tim
 
 Gap components: `popularity` (works of the approach at the from stage over the pool maximum),
 `strength` (share of those works with no row at the to stage), `bridge` (distinct citation links
-between those works and the works with a row at the to stage: log(1 + links) / log(1 + number of
-those works), capped at 1). The composite is their weighted sum (`GAP_WEIGHTS`).
+between those works and the works with a row at the to stage: log(1 + links) /
+log(1 + works * to-stage works), the same possible-pairs denominator as above, clamped at 1). The
+composite is their weighted sum (`GAP_WEIGHTS`).
 
 Flags (never part of the score): `same-name-across-stages` and `lookalike-across-stages` (an
 approach of the pair has a name-token Jaccard of at least `LOOKALIKE_MIN` with an approach of
@@ -189,11 +193,12 @@ def links_between(
     return len(seen)
 
 
-def bridge_norm(links: int, works: int) -> float:
-    """log(1 + links) / log(1 + works), capped at 1; 0.0 without works."""
-    if works < 1 or links < 1:
+def bridge_norm(links: int, pairs: int) -> float:
+    """log(1 + links) / log(1 + pairs), clamped to 1; `pairs` is the number of work pairs that
+    could be linked. 0.0 without links or pairs."""
+    if pairs < 1 or links < 1:
         return 0.0
-    return min(1.0, log(1 + links) / log(1 + works))
+    return min(1.0, log(1 + links) / log(1 + pairs))
 
 
 def name_tokens(name: str) -> frozenset[str]:
@@ -272,7 +277,7 @@ def combination_score(
     popularity = low / pool_max if pool_max else 0.0
     relation = stage_relation(stage_a, stage_b)
     stage = STAGE_FACTORS[relation]
-    bridge = bridge_norm(links, low)
+    bridge = bridge_norm(links, works_a * works_b)
     evidence = (evidence_a + evidence_b) / 2
     generic = (idf(works_a, total_works) + idf(works_b, total_works)) / 2
     w = COMBINATION_WEIGHTS
@@ -316,10 +321,11 @@ def gap_score(
     covered: int,
     pool_max: int,
     links: int,
+    to_works: int,
 ) -> Score:
     popularity = works / pool_max if pool_max else 0.0
     strength = 1 - covered / works if works else 0.0
-    bridge = bridge_norm(links, works)
+    bridge = bridge_norm(links, works * to_works)
     w = GAP_WEIGHTS
     composite = _round(
         w["popularity"] * popularity + w["strength"] * strength + w["bridge"] * bridge
