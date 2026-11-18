@@ -1,0 +1,262 @@
+{
+ "cites": [],
+ "dims": [
+  {
+   "field": "technique_primary",
+   "key": "technique",
+   "label": "Technique",
+   "src": "cls"
+  },
+  {
+   "field": "field_primary",
+   "key": "field",
+   "label": "Field of science",
+   "src": "cls"
+  },
+  {
+   "field": "data_primary",
+   "key": "data",
+   "label": "Data",
+   "src": "cls"
+  },
+  {
+   "field": "architecture_primary",
+   "key": "architecture",
+   "label": "Architecture",
+   "src": "cls"
+  },
+  {
+   "field": "evaluation_primary",
+   "key": "evaluation",
+   "label": "Evaluation",
+   "src": "cls"
+  },
+  {
+   "field": "human_position",
+   "key": "human",
+   "label": "Human position",
+   "src": "map"
+  },
+  {
+   "field": "process_shape",
+   "key": "process",
+   "label": "Process shape",
+   "src": "map"
+  },
+  {
+   "field": "automated_span",
+   "key": "span",
+   "label": "Automated span",
+   "src": "map"
+  },
+  {
+   "field": "idea_assessment_method",
+   "key": "assess",
+   "label": "Idea assessment",
+   "src": "map"
+  },
+  {
+   "field": "month",
+   "key": "year",
+   "label": "Month",
+   "src": "meta"
+  }
+ ],
+ "layer_order": [
+  "core",
+  "benchmark",
+  "applied",
+  "adjacent",
+  "background",
+  "off-topic"
+ ],
+ "refs_done": 0,
+ "sets": {
+  "duplicate_mapped": [],
+  "duplicate_of_excluded": [],
+  "included": [
+   "rf:zhou2020-paper-1-b82ed975",
+   "rf:zhou2020-paper-2-5d247d23",
+   "rf:zhou2020-paper-3-d3b73473",
+   "rf:zhou2020-random-0001-5274b5ff",
+   "rf:zhou2020-random-0002-e4aaafe1",
+   "rf:zhou2020-random-0003-c1364f67"
+  ],
+  "methods": "Included is the PRISMA final set: the works included at full text (at title and abstract when the protocol has no full-text stage). Read in full is the set of works with a live first-pass row of a listed miner. Where they differ, every work is listed by id: a duplicate record that was read under its own id is shown on the canonical record; a work that was read but excluded is listed with its exclusion criterion and not shown in corpus views; a work read under a duplicate record whose canonical record is not included is listed apart as 'duplicate of an excluded work' and not shown in corpus views; an included work with no rows of its own or of a merged duplicate is 'not read yet'.",
+  "mined_but_excluded": [],
+  "not_read_yet": [
+   "rf:zhou2020-paper-1-b82ed975",
+   "rf:zhou2020-paper-2-5d247d23",
+   "rf:zhou2020-paper-3-d3b73473",
+   "rf:zhou2020-random-0001-5274b5ff",
+   "rf:zhou2020-random-0002-e4aaafe1",
+   "rf:zhou2020-random-0003-c1364f67"
+  ],
+  "read_in_full": [],
+  "sources": {}
+ },
+ "works": [
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/p1",
+   "id": "rf:zhou2020-paper-1-b82ed975",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-paper-1-b82ed975",
+   "stages": [],
+   "sum": {},
+   "title": "Paper 1",
+   "venue": "",
+   "year": "2020"
+  },
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/p2",
+   "id": "rf:zhou2020-paper-2-5d247d23",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-paper-2-5d247d23",
+   "stages": [],
+   "sum": {},
+   "title": "Paper 2",
+   "venue": "",
+   "year": "2020"
+  },
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/p3",
+   "id": "rf:zhou2020-paper-3-d3b73473",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-paper-3-d3b73473",
+   "stages": [],
+   "sum": {},
+   "title": "Paper 3",
+   "venue": "",
+   "year": "2020"
+  },
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/r1",
+   "id": "rf:zhou2020-random-0001-5274b5ff",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-random-0001-5274b5ff",
+   "stages": [],
+   "sum": {},
+   "title": "Random 0001",
+   "venue": "",
+   "year": "2020"
+  },
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/r2",
+   "id": "rf:zhou2020-random-0002-e4aaafe1",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-random-0002-e4aaafe1",
+   "stages": [],
+   "sum": {},
+   "title": "Random 0002",
+   "venue": "",
+   "year": "2020"
+  },
+  {
+   "abstract": "",
+   "arxiv": null,
+   "authors": [
+    "Ada Zhou"
+   ],
+   "cited_by": null,
+   "cited_in_corpus": 0,
+   "cls": {},
+   "desc": {},
+   "design": [],
+   "doc": null,
+   "doi": "10.1000/r3",
+   "id": "rf:zhou2020-random-0003-c1364f67",
+   "layer": "unlayered",
+   "map": {},
+   "month": "2020-01",
+   "n_design": 0,
+   "not_read_yet": true,
+   "published": "2020-01-01",
+   "slug": "zhou2020-random-0003-c1364f67",
+   "stages": [],
+   "sum": {},
+   "title": "Random 0003",
+   "venue": "",
+   "year": "2020"
+  }
+ ]
+}

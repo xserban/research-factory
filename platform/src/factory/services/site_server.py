@@ -1043,6 +1043,7 @@ class Slot:
         """Write the project's hub page, so a served project is never without its hub."""
         self.root.mkdir(parents=True, exist_ok=True)
         site_service.render_hub(self.project)
+        self.ui.prewarm()  # queues every hub v2 payload; a no-op when FACTORY_HUB_PREWARM=0
 
 
 class Mount(NamedTuple):
@@ -1311,6 +1312,10 @@ def _handler_class(
                 self._send(200, found.body, found.content_type, {})
             elif rest.startswith("data/") and rest.endswith(".json"):
                 self._payload(rest[len("data/") : -len(".json")], slot)
+            elif rest == "fresh":
+                name = dict(parse_qsl(query)).get("name", "")
+                self._cache = "no-store"
+                self._json(200, {"fresh": slot.ui.is_fresh(name)})
             elif rest == "trace":
                 try:
                     payload = hub_serve.trace(slot.project, dict(parse_qsl(query)))
@@ -1341,6 +1346,14 @@ def _handler_class(
                 )
             elif isinstance(answer, hub_serve.Failed):
                 self._json(500, {"error": "build failed", "payload": answer.name})
+            elif isinstance(answer, hub_serve.Stale):
+                self._cache = "no-store"
+                self._send(
+                    200,
+                    answer.body,
+                    "application/json; charset=utf-8",
+                    {"X-Hub-Stale": "1"},
+                )
             else:
                 self._cache = "private, max-age=0, must-revalidate"
                 seen = {

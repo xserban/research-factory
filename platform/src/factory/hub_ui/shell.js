@@ -301,9 +301,33 @@ function fetchPayload(n){
       return new Promise(res => setTimeout(res, pause)).then(attempt);
     }
     if (!r.ok) throw new Error(n + ': HTTP ' + r.status);
+    if (r.headers.get('X-Hub-Stale')) watchFresh(n);
     return r.json();
   });
   return attempt().finally(() => { if (started) updating(false); });
+}
+/* A payload served from an older build: say so quietly, then ask every 20 s (at most 10 min) whether
+   the fresh one is ready and offer a refresh link; the page itself is never swapped under the reader. */
+const STALE_POLL_MS = 20000, STALE_CAP_MS = 600000;
+let staleWatch = 0;
+function watchFresh(n){
+  if (staleWatch++) return;
+  const el = document.createElement('div'); el.id = 'hub-stale'; el.setAttribute('role', 'status');
+  el.style.cssText = 'position:fixed;right:16px;bottom:14px;z-index:50;padding:6px 12px;border-radius:999px;background:var(--raised,#222);color:var(--mut,#999);font:400 12px var(--f-ui,sans-serif)';
+  el.textContent = 'Updating in the background'; document.body.appendChild(el);
+  let waited = 0;
+  const tick = () => {
+    waited += STALE_POLL_MS;
+    fetch('fresh?name=' + encodeURIComponent(n), {cache: 'no-store'}).then(r => r.json()).then(j => {
+      if (j.fresh) {
+        el.textContent = 'Newer data ready \u2014 ';
+        const a = document.createElement('a'); a.href = '#'; a.textContent = 'refresh';
+        a.style.color = 'inherit'; a.onclick = e => { e.preventDefault(); location.reload(); };
+        el.appendChild(a);
+      } else if (waited < STALE_CAP_MS) setTimeout(tick, STALE_POLL_MS); else el.remove();
+    }).catch(() => { if (waited < STALE_CAP_MS) setTimeout(tick, STALE_POLL_MS); else el.remove(); });
+  };
+  setTimeout(tick, STALE_POLL_MS);
 }
 function loadOne(n){
   const D = window.HUB_DATA;
