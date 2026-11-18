@@ -42,4 +42,4 @@ def test_set_options_are_dumped() -> None:
 )
 def test_options_are_bounded(bad: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
-        SnowballPlan(**BASE, **bad)  # type: ignore[arg-type]
+        SnowballPlan(**BASE, **bad)
