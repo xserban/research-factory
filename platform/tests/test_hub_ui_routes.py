@@ -481,9 +481,12 @@ def test_the_pages_reach_the_existing_mine_and_export_routes(
     port, _ = served
     auth = {"X-Factory-Token": _token(port), "Origin": f"http://127.0.0.1:{port}"}
     seen: list[Any] = []
-    monkeypatch.setattr(
-        work_layers, "request_mining", lambda p, a, **kw: seen.append(kw) or "req-1"
-    )
+
+    def fake_request(p: Any, a: Any, **kw: Any) -> str:
+        seen.append(kw)
+        return "req-1"
+
+    monkeypatch.setattr(work_layers, "request_mining", fake_request)
     status, _, data = _req(
         port, "POST", "/p/demo/api/mine/work", {"work_id": "rf:a-00000000"}, auth
     )
