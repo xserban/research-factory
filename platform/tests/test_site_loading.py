@@ -29,7 +29,7 @@ def test_with_bar_pages_carry_the_progress_bar_the_script_and_the_reduced_motion
 
 
 def test_the_project_hub_header_carries_the_bar_script() -> None:
-    src = (Path(__file__).parents[1] / "src/factory/services/site.py").read_text()
+    src = (Path(__file__).parents[1] / "src/factory/services/site_hub_page.py").read_text()
     assert "+ CHROME_SCRIPT" in src and f"<script>{CHROME_JS}</script>" == CHROME_SCRIPT
 
 
