@@ -846,17 +846,20 @@ _HUB_CSS: Final = (
 _HUB_JS: Final = """
 const items=[...document.querySelectorAll('nav a.i')];const frame=document.getElementById('frame');
 const home=document.getElementById('home');
+let cur=null;
 function show(){const id=(location.hash||'#home').slice(1);
  items.forEach(a=>a.classList.toggle('on',a.dataset.id===id));
  const a=items.find(x=>x.dataset.id===id);
  if(!a||a.dataset.id==='home'||!a.dataset.src){home.style.display='block';frame.style.display='none';return;}
  home.style.display='none';frame.style.display='block';
- if(frame.getAttribute('src')!==a.dataset.src)frame.setAttribute('src',a.dataset.src);}
+ if(cur!==a.dataset.src){const first=cur===null;cur=a.dataset.src;
+  if(first)frame.setAttribute('src',cur);else frame.contentWindow.location.replace(cur);}}
 window.addEventListener('hashchange',show);show();
 document.querySelectorAll('[data-go]').forEach(r=>r.onclick=()=>{location.hash=r.dataset.go;});
 const WORD={ok:'Nominal',stale:'Stale',bad:'Fault'};
 async function live(){if(!location.protocol.startsWith('http'))return;
- try{const r=await fetch('api/status',{cache:'no-store'});const s=await r.json();
+ const ac=new AbortController();const t=setTimeout(()=>ac.abort(),8000);
+ try{const r=await fetch('api/status',{cache:'no-store',signal:ac.signal});const s=await r.json();
   s.products.forEach(p=>{const st=p.error?'bad':(p.stale||!p.built)?'stale':'ok';
    const a=items.find(x=>x.dataset.id===p.id);
    if(a){a.querySelector('.led').className='led '+(st==='ok'?'':st);if(p.built)a.dataset.src=p.id+'/'+p.entry;}
@@ -864,8 +867,9 @@ async function live(){if(!location.protocol.startsWith('http'))return;
    const pn=document.querySelector('.pn[data-go="'+p.id+'"]');
    if(pn){const b=pn.querySelector('.tg');if(b){b.className='tg '+(st==='ok'?'ok':st==='stale'?'warn':'bad');b.textContent=WORD[st];}
     const m=pn.querySelector('.when');if(m)m.textContent=p.built_at?'built '+p.built_at:'not built yet';}});
-  document.getElementById('live').textContent=s.building?'REBUILDING':'LIVE';}catch(e){}}
-setInterval(live,10000);live();
+  document.getElementById('live').textContent=s.building?'REBUILDING':'LIVE';}catch(e){}
+ finally{clearTimeout(t);setTimeout(live,10000);}}
+live();
 document.getElementById('q').addEventListener('input',e=>{const q=e.target.value.toLowerCase();
  items.forEach(a=>{a.style.display=!q||a.textContent.toLowerCase().includes(q)?'':'none';});});
 """

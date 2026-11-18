@@ -774,12 +774,16 @@ def _handler_class(
                     self._html(text.replace("</body>", PORTAL_LINK + "</body>", 1))
                     return
             if url == "/api/status":
+                # never wait for a rebuild (it holds the lock for minutes): a waiting poll keeps
+                # one of the browser's six connections to the host, and enough of them stall
+                # every navigation; while building, answer at once with no product rows
+                tried = slot.rebuilder.try_statuses()
                 self._json(
                     200,
                     {
-                        "building": slot.rebuilder.building,
+                        "building": tried is None or slot.rebuilder.building,
                         "error": slot.rebuilder.last_error,
-                        "products": [s.model_dump(mode="json") for s in slot.rebuilder.statuses()],
+                        "products": [s.model_dump(mode="json") for s in tried or []],
                     },
                 )
                 return
