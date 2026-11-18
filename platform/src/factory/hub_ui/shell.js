@@ -47,7 +47,7 @@ const sum = o => Object.values(o||{}).reduce((a,b)=>a+b,0);
 /* ---------- glossary: plain definitions behind dotted terms ---------- */
 const GLOSSARY = {
   included:['Included','A paper that passed every screening step: title and abstract, then full text. These are the papers the review is about.'],
-  mined:['Read in full','A paper whose full text a miner has read and recorded fields for, each with the sentence it was based on. Nearly the same set as the included papers.'],
+  mined:['Read in full','A paper whose full text a miner has read and recorded fields for, each with the sentence it was based on. Usually close to the included set; the Flow page lists every difference by id.'],
   miner:['Miner','An extraction agent that reads a paper and records set fields (technique, human role, …), each with a quotation from the paper. A miner records; it does not judge inclusion.'],
   layer:['Layer','How central a paper is to the question. Core: builds an AI scientist. Benchmark: tests one. Applied: uses one in a field. Adjacent and background: related work.'],
   human:['Human role','What part a person plays in the system, from none (fully automated) to running the physical lab steps.'],
@@ -61,16 +61,16 @@ const GLOSSARY = {
   duplicates:['Duplicates','The same paper found more than once (in arXiv and OpenAlex, or as two versions). Kept once.'],
   cap:['Rapid-review cap','To keep the review feasible, full texts were sought only for the highest-ranked records; the rest are reported as not sought, not as excluded.'],
   notretrieved:['Not retrieved','A full text was sought but no copy could be obtained (no open-access PDF, no arXiv source).'],
-  criteria:['Exclusion criteria','The protocol\'s reasons to exclude a record, EX01 to EX07. Each excluded record carries exactly one.'],
+  criteria:['Exclusion criteria','The protocol\'s reasons to exclude a record, each with an EX-prefixed id. Each excluded record carries exactly one.'],
   protocol:['Protocol','The registered plan of the review: question, sources, criteria and stop rules. Changes are recorded as amendments.'],
-  stoprule:['Stop rule','Screening of a ranked list stops after 30 exclusions in a row; the unscreened rest is reported, not hidden.'],
+  stoprule:['Stop rule','Screening of a ranked list stops after the run of consecutive exclusions the protocol sets; the unscreened rest is reported, not hidden.'],
   dna:['Paper DNA','A strip of six colours, one per field: technique, architecture, automated span, human role, layer and half-year. Similar strips mean similar systems.'],
   similar:['Similar','Papers ranked by how many field values they share with this one, plus how many cited papers they share. A plain count; no model is involved.'],
   gap:['Gap','A combination no paper has. Ranked by how many papers we would expect there if the two fields were unrelated.'],
   passA:['First reading','Pass A: a miner reads every paper in scope and records its fields with quotes.'],
   passB:['Check reading','Pass B: a second, independent reading of a sample of papers, usually by a different model, to test pass A.'],
   agreement:['Agreement','Share of checked papers where both readings recorded the same value. Exact matching here; it understates agreement on free-text fields.'],
-  hole:['Hole','A paper the miner read but left a field empty, or marked it not determinable or other.'],
+  hole:['Hole','A paper the miner read but left a field empty, or gave a gap value (not-determinable, none-stated, not-stated, other, unclear) instead of a finding.'],
 };
 
 /* term: dotted word with a definition on hover/focus.  info: an (i) button with an explanation panel. */

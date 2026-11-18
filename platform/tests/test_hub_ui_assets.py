@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from factory.services import hub_ui
+from factory.services.hub_mining import GAP_VALUES
 from factory.services.hub_ui import ASSETS, GLOSSARY, LABELS, asset_bytes, asset_version
 
 _HUB_DIR = Path(str(resources.files("factory").joinpath("hub_ui")))
@@ -144,3 +145,12 @@ def test_every_page_script_calls_load_init_and_mount() -> None:
         assert "HUB.load([" in src and "HUB.init(d.shell)" in src and ".mount(" in src, spec.id
         for name in spec.payloads:
             assert f"'{name}'" in src, (spec.id, name)
+
+
+def test_glossary_has_no_typed_figures_and_hole_names_every_gap_value() -> None:
+    for key, (_title, definition) in GLOSSARY.items():
+        assert not re.search(r"\d", definition), key  # figures come from the data, not the text
+    for value in GAP_VALUES:
+        assert value in GLOSSARY["hole"][1]
+    hole = next(ln for ln in _read("shell.js").splitlines() if ln.lstrip().startswith("hole:"))
+    assert all(v in hole for v in GAP_VALUES)  # the script's copy names them too

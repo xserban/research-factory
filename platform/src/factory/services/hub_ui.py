@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Final
 
+from factory.services.hub_mining import GAP_VALUES
+
 _HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
@@ -198,7 +200,8 @@ GLOSSARY: Final[dict[str, tuple[str, str]]] = {
     "mined": (
         "Read in full",
         "A paper whose full text a miner has read and recorded fields for, each with the "
-        "sentence it was based on. Nearly the same set as the included papers.",
+        "sentence it was based on. Usually close to the included set; the Flow page lists "
+        "every difference by id.",
     ),
     "miner": (
         "Miner",
@@ -267,8 +270,8 @@ GLOSSARY: Final[dict[str, tuple[str, str]]] = {
     ),
     "criteria": (
         "Exclusion criteria",
-        "The protocol's reasons to exclude a record, EX01 to EX07. Each excluded record "
-        "carries exactly one.",
+        "The protocol's reasons to exclude a record, each with an EX-prefixed id. Each "
+        "excluded record carries exactly one.",
     ),
     "protocol": (
         "Protocol",
@@ -277,8 +280,8 @@ GLOSSARY: Final[dict[str, tuple[str, str]]] = {
     ),
     "stoprule": (
         "Stop rule",
-        "Screening of a ranked list stops after 30 exclusions in a row; the unscreened rest "
-        "is reported, not hidden.",
+        "Screening of a ranked list stops after the run of consecutive exclusions the protocol "
+        "sets; the unscreened rest is reported, not hidden.",
     ),
     "dna": (
         "Paper DNA",
@@ -311,7 +314,9 @@ GLOSSARY: Final[dict[str, tuple[str, str]]] = {
     ),
     "hole": (
         "Hole",
-        "A paper the miner read but left a field empty, or marked it not determinable or other.",
+        "A paper the miner read but left a field empty or gave a gap value ("
+        + ", ".join(sorted(GAP_VALUES))
+        + ") instead of a finding.",
     ),
 }
 
