@@ -238,3 +238,35 @@ def test_field_of_a_duplicate_mapped_work_traces_the_duplicates_row(
     view = ht.trace_figure(project, f"work.{canonical}.field.{VISION_NAME}.metric")
     assert view.entries[0].id in _row_ids(project, dup, "A")
     assert dup in view.title and "duplicate" in view.title
+
+
+def _insert_decision(
+    project: Project, protocol_id: str, did: str, stage: str, verdict: str
+) -> None:
+    with project.index._engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO decisions (decision_id, work_id, pass_label, phase, stage, verdict, "
+                "quote, rationale, protocol_id, task_id, event_id) VALUES (:d, 'w', 'A', "
+                "'screening', :s, :v, 'q', 'r', :p, 't', 'e')"
+            ),
+            {"d": did, "s": stage, "v": verdict, "p": protocol_id},
+        )
+
+
+def test_prisma_figures_narrow_their_decisions(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, _first, decision = _screened(project, agent, human, mock_sources)
+    screened = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
+    assert decision in screened.decisions and len(screened.decisions) == 2
+    # no full-text decision: the title/abstract includes are the included figure; none here
+    assert ht.trace_figure(project, "prisma.included", limit=ht.MAX_PAGE).decisions == ()
+    _insert_decision(project, protocol_id, "dec_ta_in", "title-abstract", "include")
+    _insert_decision(project, protocol_id, "dec_ft_in", "full-text", "include")
+    _insert_decision(project, protocol_id, "dec_ft_out", "full-text", "exclude")
+    screened = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
+    assert "dec_ta_in" in screened.decisions and "dec_ft_in" not in screened.decisions
+    included = ht.trace_figure(project, "prisma.included", limit=ht.MAX_PAGE)
+    assert included.decisions == ("dec_ft_in",)
+    assert "full-text include" in included.title

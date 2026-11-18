@@ -8,7 +8,10 @@ malformed figure id is refused with `figure_id` named; nothing is read past the 
 
 Registry (`FIGURE_KINDS`):
 - `prisma.screened`, `prisma.included`: the current protocol, forward (its criteria, queries and
-  everything downstream: the chain behind the PRISMA counts).
+  everything downstream: the chain behind the PRISMA counts), with the decision nodes narrowed:
+  `screened` keeps live title/abstract decisions; `included` keeps live full-text include
+  decisions (title/abstract includes when no full-text decision exists). Other node kinds of the
+  chain are not narrowed, and the title says so.
 - `prisma.excluded.<criterion>` (`EX03`): that criterion of the current protocol, forward (the
   decisions, resolutions and audit items citing it).
 - `work.<work id>.screening`: the work, forward, keeping the decisions, resolutions, audits and
@@ -39,8 +42,10 @@ PAGE = 50
 MAX_PAGE = 500
 SCREENING_KINDS = frozenset({"decision", "resolution", "audit", "criterion"})
 FIGURE_KINDS: dict[str, str] = {
-    "prisma.screened": "Records screened (current protocol, everything downstream)",
-    "prisma.included": "Works included (current protocol, everything downstream)",
+    "prisma.screened": "Records screened: the current protocol's chain, its decisions limited "
+    "to title and abstract",
+    "prisma.included": "Works included: the current protocol's chain, its decisions limited to "
+    "full-text include decisions (title and abstract includes when there is no full-text stage)",
     "prisma.excluded.<criterion>": "Works excluded under one criterion",
     "work.<id>.screening": "Screening decisions about one work",
     "work.<id>.field.<miner>.<field>": "One mined value and where it was read",
@@ -57,6 +62,8 @@ class _Plan:
     direction: Literal["back", "forward"]
     kinds: frozenset[str] | None
     title: str
+    decisions: frozenset[str] | None = None
+    """When set, only these decision ids are kept among the `decision` nodes."""
 
 
 @dataclass(frozen=True)
@@ -105,7 +112,10 @@ def _protocol_id(project: Project) -> str:
 def _plan(project: Project, figure_id: str) -> _Plan:
     """The reference, direction and filter of a figure id; refused when it is not registered."""
     if figure_id in ("prisma.screened", "prisma.included"):
-        return _Plan(_protocol_id(project), "forward", None, FIGURE_KINDS[figure_id])
+        project.index.sync()
+        protocol_id = _protocol_id(project)
+        ids = _stage_decisions(project, protocol_id, included=figure_id == "prisma.included")
+        return _Plan(protocol_id, "forward", None, FIGURE_KINDS[figure_id], ids)
     if (m := _EXCLUDED_RE.match(figure_id)) is not None:
         protocol_id = _protocol_id(project)
         current = current_protocol(project)
@@ -137,6 +147,24 @@ def _plan(project: Project, figure_id: str) -> _Plan:
         work = _work(project, m.group(1))
         return _Plan(work, "forward", SCREENING_KINDS, f"Screening of {work}")
     raise _refuse("unknown figure")
+
+
+def _stage_decisions(project: Project, protocol_id: str, *, included: bool) -> frozenset[str]:
+    """Live decision ids behind a PRISMA figure: title/abstract decisions for `screened`; for
+    `included` the full-text include decisions (title/abstract includes when no full-text decision
+    exists, the protocol having no full-text stage)."""
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT decision_id, stage, verdict FROM decisions "
+                "WHERE protocol_id = :p AND superseded_by IS NULL"
+            ),
+            {"p": protocol_id},
+        ).all()
+    if not included:
+        return frozenset(str(d) for d, stage, _v in rows if stage == "title-abstract")
+    stage = "full-text" if any(st == "full-text" for _d, st, _v in rows) else "title-abstract"
+    return frozenset(str(d) for d, st, v in rows if st == stage and v == "include")
 
 
 def _mined_source(project: Project, work: str, miner: str) -> str:
@@ -211,7 +239,8 @@ def trace_figure(
     nodes = [
         (depth, node)
         for depth, node in _flatten(root)
-        if plan.kinds is None or depth == 0 or node.kind in plan.kinds
+        if (plan.kinds is None or depth == 0 or node.kind in plan.kinds)
+        and (plan.decisions is None or node.kind != "decision" or node.id in plan.decisions)
     ]
     page = nodes[offset : offset + limit]
     events = _events(project, [n.event_id for _, n in page])
