@@ -221,3 +221,29 @@ def test_unknown_kind_refused(project: Project, screened: list[str]) -> None:
     with pytest.raises(FactoryValidationError) as err:
         corpus_search(project, ["x"], SelectionSpec(), kinds=["nonsense"])  # type: ignore[list-item]
     assert err.value.issues[0].field == "kinds"
+
+
+def test_sidecar_of_an_older_schema_is_rebuilt(project: Project, screened: list[str]) -> None:
+    # A sidecar written before a schema change (here: v1, without `section_kind`) must not break
+    # indexing; observed 2026-11-18 on the pilot copy after T3c. Other tables are left alone.
+    import sqlite3
+
+    _convert(project)
+    path = index_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        "CREATE TABLE passages(conversion_id TEXT, work_id TEXT, passage_id TEXT, "
+        "anchors_json TEXT, section_path_json TEXT, text TEXT, chunker_version TEXT, "
+        "markdown_hash TEXT, PRIMARY KEY (conversion_id, passage_id));"
+        "INSERT INTO passages VALUES ('c', 'w', 'p', '[]', '[]', 'old', '1', 'h');"
+        "CREATE TABLE keep_me(x INTEGER); INSERT INTO keep_me VALUES (7);"
+    )
+    conn.commit()
+    conn.close()
+    result = _hits(project, ["attention"])
+    assert {h.work_id for h in result.hits} == set(screened)
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT count(*) FROM passages WHERE work_id = 'w'").fetchone() == (0,)
+    assert conn.execute("SELECT x FROM keep_me").fetchone() == (7,)
+    conn.close()

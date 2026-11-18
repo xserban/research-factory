@@ -12,6 +12,9 @@ Invariants:
 - Passages whose section kind is related, appendix or back are not indexed; they are counted in
   `IndexReport.excluded_passages` (for the conversions indexed in that call only).
 - Rows are a pure function of the Markdown, the chunker and the work title at index time.
+- The sidecar's layout carries `SCHEMA_VERSION` in SQLite's `user_version`. A sidecar of another
+  version has this module's tables (`passages`, `passages_fts`) dropped and recreated on open, so
+  a schema change never breaks an existing sidecar; tables of other modules are left alone.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from factory.services.selection import SelectedWork
 
 __all__ = [
     "CHUNKER_VERSION",
+    "SCHEMA_VERSION",
     "TARGET_WORDS",
     "UNINDEXED_KINDS",
     "IndexReport",
@@ -46,6 +50,9 @@ MIN_WORDS = 30
 UNINDEXED_KINDS = frozenset({SectionKind.RELATED, SectionKind.APPENDIX, SectionKind.BACK})
 CHUNKER_VERSION = f"2:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
 """Bumped when the passage cutter or its target size changes; forces a re-index."""
+
+SCHEMA_VERSION = 2
+"""Bumped when the sidecar tables change shape; an older sidecar's tables are recreated."""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS passages(
@@ -89,6 +96,11 @@ def open_index(project: Project) -> Iterator[sqlite3.Connection]:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            conn.executescript(
+                "DROP TABLE IF EXISTS passages_fts; DROP TABLE IF EXISTS passages;"
+                f" PRAGMA user_version = {SCHEMA_VERSION};"
+            )
         conn.executescript(_SCHEMA)
         yield conn
         conn.commit()
