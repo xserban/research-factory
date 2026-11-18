@@ -4,6 +4,23 @@
    with the verbatim quote and anchor, loaded only when an approach is opened). Every figure is counted in this
    script from the rows or read from the payload; nothing is typed. The lens (layer, evidence, status) is
    recomputed here from the rows; candidates, co-use and agreement are the server's, default lens. */
+/*ego-layout-begin*/
+/* Ego-graph geometry, a pure function of the neighbour count: two label columns (right and left of the centre),
+   neighbours dealt alternately, evenly spaced from top to bottom, so no label touches another or a line's end.
+   Returns one {x, y, tx, anchor, side} per neighbour; same count, same numbers. */
+const EGO = { W: 760, H: 440, colDx: 150, pad: 28, chars: 26, cw: 6.4, lineH: 26 };
+function egoLayout(n) {
+  const right = Math.ceil(n / 2), left = n - right, out = [];
+  const ys = k => i => k <= 1 ? EGO.H / 2 : EGO.pad + i * (EGO.H - 2 * EGO.pad) / (k - 1);
+  const yr = ys(right), yl = ys(left);
+  for (let i = 0; i < n; i++) {
+    const isRight = i % 2 === 0, k = i >> 1;
+    const x = EGO.W / 2 + (isRight ? EGO.colDx : -EGO.colDx), y = (isRight ? yr : yl)(k);
+    out.push({ x, y, tx: x + (isRight ? 9 : -9), anchor: isRight ? 'start' : 'end', side: isRight ? 'right' : 'left' });
+  }
+  return out;
+}
+/*ego-layout-end*/
 HUB.load(['shell']).then(d => {
   const H = HUB.init(d.shell);
   const main = H.mount({ page: 'landscape', crumb: 'Landscape' });
@@ -51,14 +68,15 @@ HUB.load(['shell']).then(d => {
 .ls .crumbs{font-size:var(--t-s);margin-bottom:10px}
 .ls .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:start}
 .ls .scrollx{overflow-x:auto}
-.ls svg.ego{width:100%;height:auto;max-width:720px;background:var(--surface);border-radius:var(--r)}
+.ls svg.ego{width:100%;height:auto;max-width:800px;background:var(--surface);border-radius:var(--r)}
 .ls svg.ego text{fill:var(--fg);font:400 11px var(--f-ui)}
 .ls svg.ego .dimt{fill:var(--mut)}
 .ls svg.ego .ed{stroke:var(--mut);fill:none}
 .ls svg.ego .nd{fill:var(--raised);stroke:var(--line)}
 .ls svg.ego .cn{fill:var(--acc-soft);stroke:var(--acc);stroke-width:1.5}
-.ls svg.ego a{cursor:pointer}
+.ls svg.ego a{cursor:pointer;text-decoration:none}
 .ls svg.ego a:hover text{text-decoration:underline}
+.ls svg.ego .dot{fill:var(--acc)}
 .ls .empty{color:var(--mut);padding:10px 0;font-size:var(--t-s)}
 .ls td.q{max-width:520px}
 .ls .t td.r{white-space:nowrap}
@@ -257,16 +275,15 @@ HUB.load(['shell']).then(d => {
 
     /* ---------- one approach ---------- */
     function ego(a, neigh) {
-      const NS = 'http://www.w3.org/2000/svg', Wd = 640, Ht = 380, cx = Wd / 2, cy = Ht / 2;
+      const NS = 'http://www.w3.org/2000/svg', Wd = EGO.W, Ht = EGO.H, cx = Wd / 2, cy = Ht / 2;
       const mk = (tag, at, par) => { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); if (par) par.appendChild(e); return e; };
       const svg = mk('svg', { viewBox: `0 0 ${Wd} ${Ht}`, class: 'ego', role: 'img', 'aria-label': 'Approaches used together with ' + a.name }, null);
-      const n = neigh.length, rx = 230, ry = 135, maxW = neigh.reduce((m, x) => Math.max(m, x.weight), 1);
-      neigh.forEach((x, i) => { const ang = -Math.PI / 2 + 2 * Math.PI * i / Math.max(n, 1);
-        x.x = cx + rx * Math.cos(ang); x.y = cy + ry * Math.sin(ang);
-        mk('line', { x1: cx, y1: cy, x2: x.x, y2: x.y, class: 'ed', 'stroke-width': (1 + 4 * x.weight / maxW).toFixed(1) }, svg); });
-      neigh.forEach(x => { const g = mk('a', { href: '#a=' + encodeURIComponent(x.id), 'data-go': x.id }, svg);
-        const t = mk('text', { x: x.x, y: x.y - 8, 'text-anchor': 'middle' }, g); t.textContent = short(x.name, 26);
-        const t2 = mk('text', { x: x.x, y: x.y + 6, 'text-anchor': 'middle', class: 'dimt' }, g); t2.textContent = `${x.weight} paper${x.weight === 1 ? '' : 's'} together`;
+      const maxW = neigh.reduce((m, x) => Math.max(m, x.weight), 1), lay = egoLayout(neigh.length);
+      neigh.forEach((x, i) => mk('line', { x1: cx, y1: cy, x2: lay[i].x, y2: lay[i].y, class: 'ed', 'stroke-width': (1 + 4 * x.weight / maxW).toFixed(1) }, svg));
+      neigh.forEach((x, i) => { const L = lay[i], g = mk('a', { href: '#a=' + encodeURIComponent(x.id), 'data-go': x.id, class: 'eg' }, svg);
+        mk('circle', { cx: L.x, cy: L.y, r: 4, class: 'dot' }, g);
+        const t = mk('text', { x: L.tx, y: L.y - 3, 'text-anchor': L.anchor }, g); t.textContent = short(x.name, EGO.chars);
+        const t2 = mk('text', { x: L.tx, y: L.y + 10, 'text-anchor': L.anchor, class: 'dimt' }, g); t2.textContent = `${x.weight} paper${x.weight === 1 ? '' : 's'} together`;
         mk('title', {}, g).textContent = x.name; });
       const c = mk('g', {}, svg); mk('rect', { x: cx - 78, y: cy - 20, width: 156, height: 40, rx: 8, class: 'nd' }, c); mk('rect', { x: cx - 78, y: cy - 20, width: 156, height: 40, rx: 8, class: 'cn' }, c);
       const ct = mk('text', { x: cx, y: cy + 4, 'text-anchor': 'middle' }, c); ct.textContent = short(a.name, 22);

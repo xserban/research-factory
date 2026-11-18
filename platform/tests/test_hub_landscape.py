@@ -570,3 +570,59 @@ def test_the_phone_rail_has_a_token_based_scroll_cue() -> None:
     block = css[css.index("scroll cue") :]
     assert "overflow-x:auto" in css and "background-attachment:local,local,scroll,scroll" in block
     assert "var(--line)" in block and not re.search(r"#[0-9a-fA-F]{3,6}\b", block)
+
+
+def _ego_boxes(n: int) -> list[dict[str, Any]]:
+    """The label boxes of the ego graph for `n` neighbours, from the page's own `egoLayout`, run
+    in node (skipped when node is absent). Box width uses a fixed character width."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not on PATH")
+    js = _script()
+    code = js[js.index("/*ego-layout-begin*/") : js.index("/*ego-layout-end*/")]
+    prog = code + (f"const L = egoLayout({n}); console.log(JSON.stringify({{EGO, L}}));")
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True).stdout
+    found = json.loads(out)
+    e = found["EGO"]
+    boxes = []
+    for L in found["L"]:
+        w = e["chars"] * e["cw"]
+        x0, x1 = (L["tx"], L["tx"] + w) if L["anchor"] == "start" else (L["tx"] - w, L["tx"])
+        boxes.append(
+            {
+                "x0": x0,
+                "x1": x1,
+                "y0": L["y"] - e["lineH"] / 2,
+                "y1": L["y"] + e["lineH"] / 2,
+                "L": L,
+                "E": e,
+            }
+        )
+    return boxes
+
+
+@pytest.mark.parametrize("n", [1, 2, 5, 12, 16])
+def test_ego_labels_do_not_overlap_and_stay_inside_the_picture(n: int) -> None:
+    boxes = _ego_boxes(n)
+    assert len(boxes) == n
+    for b in boxes:
+        e = b["E"]
+        assert b["x0"] >= 0 and b["x1"] <= e["W"] and b["y0"] >= 0 and b["y1"] <= e["H"]
+        # the centre box (156 x 40) is clear of every label
+        cx, cy = e["W"] / 2, e["H"] / 2
+        assert b["x1"] < cx - 78 or b["x0"] > cx + 78 or b["y1"] < cy - 20 or b["y0"] > cy + 20
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1 :]:
+            apart = (
+                a["x1"] <= b["x0"] or b["x1"] <= a["x0"] or a["y1"] <= b["y0"] or b["y1"] <= a["y0"]
+            )
+            assert apart, (n, a["L"], b["L"])
+
+
+def test_the_ego_layout_is_deterministic_and_the_anchors_have_no_underline() -> None:
+    assert _ego_boxes(16) == _ego_boxes(16)
+    js = _script()
+    assert "svg.ego a{cursor:pointer;text-decoration:none}" in js
