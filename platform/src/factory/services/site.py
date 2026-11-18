@@ -793,10 +793,13 @@ def _write_manifest(project: Project, manifest: dict[str, dict[str, str | None]]
     tmp.replace(root / MANIFEST)
 
 
-def status(project: Project, registry: Sequence[Product] | None = None) -> list[ProductStatus]:
-    """Every registered product with its build time, staleness and last error."""
+def status(
+    project: Project, registry: Sequence[Product] | None = None, counts: TypeCounts | None = None
+) -> list[ProductStatus]:
+    """Every registered product with its build time, staleness and last error (`counts`: the
+    event counts when the caller read them already)."""
     manifest = _read_manifest(project)
-    counts = type_counts(project)
+    counts = type_counts(project) if counts is None else counts
     out: list[ProductStatus] = []
     for product in registry if registry is not None else products():
         fp = fingerprint(project, product, counts)
@@ -820,7 +823,7 @@ def status(project: Project, registry: Sequence[Product] | None = None) -> list[
                 needs_model=product.needs_model,
                 built_seconds=_number(entry.get("seconds")),
                 built_events=_whole(entry.get("events")),
-                built_code=entry.get("code"),
+                built_code=str(entry["code"]) if entry.get("code") is not None else None,
             )
         )
     return out
@@ -836,6 +839,11 @@ def _number(value: object) -> float | None:
 def _whole(value: object) -> int | None:
     found = _number(value)
     return None if found is None else int(found)
+
+
+def code_version_ready() -> str | None:
+    """`code_version` when this process has read it already, else None (never runs git)."""
+    return code_version() if code_version.cache_info().currsize else None
 
 
 @lru_cache(maxsize=1)

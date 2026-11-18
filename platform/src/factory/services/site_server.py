@@ -701,11 +701,6 @@ def page_badge(
     return f"<div id=rf-stale style='{style}'>{text}</div>{script}"
 
 
-def events_total(project: Project) -> int:
-    """How many events the project has (the data version shown beside a page's own)."""
-    return sum(n for n, _ in site_service.type_counts(project).values())
-
-
 def build_progress(
     project: Project, pid: str, last_seconds: float | None, queue: list[str]
 ) -> dict[str, object]:
@@ -850,6 +845,8 @@ class Rebuilder:
 
     def start(self) -> None:
         self._started = True
+        # read the code version (git) off the request path: `/api/status` never waits for it
+        threading.Thread(target=site_service.code_version, name="code-version", daemon=True).start()
         self._worker.start()
         if self._eager:
             self._thread.start()
@@ -868,13 +865,22 @@ class Rebuilder:
         """The registered product `pid`, or None."""
         return self._products.get(pid)
 
-    def ensure(self, pid: str) -> tuple[Freshness, site_service.ProductStatus | None]:
-        """How product `pid` may be served now, with its status (None for what is no product, or
-        before `start`). Queues a build when one is due. Never waits for a build."""
+    def ensure(self, pid: str) -> tuple[Freshness, site_service.ProductStatus | None, int | None]:
+        """How product `pid` may be served now, with its status and the project's event count
+        (None, None for what is no product, or before `start`). Queues a build when one is due.
+        Never waits for a build. One grouped count read serves both."""
         product = self._products.get(pid)
         if not self._started or product is None:
-            return "fresh", None
-        state = site_service.status(self._project, [product])[0]
+            return "fresh", None, None
+        counts = site_service.type_counts(self._project)
+        events = sum(n for n, _ in counts.values())
+        found = self._ensure(pid, product, counts)
+        return found[0], found[1], events
+
+    def _ensure(
+        self, pid: str, product: site_service.Product, counts: site_service.TypeCounts
+    ) -> tuple[Freshness, site_service.ProductStatus]:
+        state = site_service.status(self._project, [product], counts)[0]
         with self._wake:
             if pid in self._queue:
                 return ("queued" if state.built else "building"), state
@@ -1181,7 +1187,7 @@ def _handler_class(
                         "queued": queued,
                         "progress": progress,
                         "progress_text": {k: progress_text(v) for k, v in progress.items()},
-                        "code": site_service.code_version(),
+                        "code": site_service.code_version_ready(),
                         "error": slot.rebuilder.last_error,
                         "products": [s.model_dump(mode="json") for s in tried or []],
                     },
@@ -1263,10 +1269,12 @@ def _handler_class(
             product = slot.rebuilder.product(pid)
             if product is None or not url.startswith(f"/{pid}/") or rest not in ("", product.entry):
                 return False
-            state, status = slot.rebuilder.ensure(pid)
+            state, status, events_now = slot.rebuilder.ensure(pid)
             if status is None:
                 return False
             entry = slot.root / pid / product.entry
+            if state == "fresh" and not entry.is_file():
+                return False  # the static handler answers (404)
             progress = (
                 build_progress(slot.project, pid, status.built_seconds, slot.rebuilder.queued())
                 if state in ("queued", "building")
@@ -1280,7 +1288,7 @@ def _handler_class(
                 pid,
                 state,
                 status,
-                events_now=events_total(slot.project),
+                events_now=events_now,
                 settle=slot.rebuilder.settle,
                 progress=progress,
             )

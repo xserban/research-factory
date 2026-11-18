@@ -177,11 +177,13 @@ def screening_live(project: Project) -> dict[str, JsonValue]:
 
 
 _DONE: ContextVar[int] = ContextVar("dashboard_parts_done", default=0)
+_DEPTH: ContextVar[int] = ContextVar("dashboard_guard_depth", default=0)
 
 
 def _guard(build: Callable[[], JsonValue], empty: JsonValue) -> JsonValue:
     """`build()`, or `empty` (with an `error` note in a dict) when the data is absent or refused.
     Each call is one step of the build progress (`site_progress`; a no-op outside a site build)."""
+    _DEPTH.set(_DEPTH.get() + 1)
     try:
         return build()
     except FactoryValidationError as exc:
@@ -189,8 +191,10 @@ def _guard(build: Callable[[], JsonValue], empty: JsonValue) -> JsonValue:
     except Exception as exc:  # a panel must never take the page down
         note = f"{type(exc).__name__}: {exc}"
     finally:
-        _DONE.set(_DONE.get() + 1)
-        site_progress.report(min(_DONE.get(), DASHBOARD_PARTS), DASHBOARD_PARTS, "sections")
+        _DEPTH.set(_DEPTH.get() - 1)
+        if _DEPTH.get() == 0:  # only the top-level parts are steps; some parts guard inner reads
+            _DONE.set(_DONE.get() + 1)
+            site_progress.report(min(_DONE.get(), DASHBOARD_PARTS), DASHBOARD_PARTS, "sections")
     return {"error": note[:300]} if isinstance(empty, dict) else empty
 
 
