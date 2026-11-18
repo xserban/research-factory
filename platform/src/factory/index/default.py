@@ -70,7 +70,7 @@ from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "87"
+PROJECTION_VERSION = "88"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:

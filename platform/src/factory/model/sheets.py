@@ -72,6 +72,8 @@ class SheetArgumentRecorded(StrictModel):
     claim: str = Field(min_length=1, max_length=CLAIM_MAX)
     claim_row_key: str | None = None
     """The m-claims row the argument rests on, when it rests on one."""
+    claim_row_version: int | None = None
+    """The miner version the row key was served from (the listed one, or an older fallback)."""
     strength: Strength
     """The writer's judgement of how strongly the quote bears on the hypothesis."""
 

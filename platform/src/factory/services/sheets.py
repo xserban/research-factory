@@ -129,6 +129,7 @@ class ArgumentView:
     quote: str
     claim: str
     claim_row_key: str | None
+    claim_row_version: int | None
     strength: str
     conversion_id: str
     markdown_hash: str
@@ -280,6 +281,8 @@ def _state_issues(
 ) -> list[ValidationIssue]:
     if stance == "against" and row["against_closed"]:
         return [ValidationIssue("stance", "the section against is closed")]
+    if row["mode"] == "prepare" and session is None:
+        return [ValidationIssue("session", "in prepare mode the session must be known")]
     if stance == "for":
         if not row["against_closed"]:
             return [ValidationIssue("stance", "close the section against before the case for")]
@@ -351,7 +354,7 @@ def record_arguments(
                 {"s": sheet_id},
             )
         }
-    claim_keys: dict[str, set[str]] = {}
+    claim_keys: dict[str, dict[str, int]] = {}
     checks: list[tuple[int, str]] = []
     for i, a in enumerate(arguments):
         at = f"arguments[{i}]"
@@ -428,6 +431,26 @@ def record_arguments(
         late = _state_issues(
             row, stance, actor.session, _wrote_against(project, sheet_id, actor.session)
         )
+        again = resolve_selection_cached(project, _spec_of(_loads(row["selection"])))
+        if again.digest != row["selection_digest"]:
+            late.append(
+                ValidationIssue(
+                    "sheet_id", "the selection changed since the sheet opened; open a new sheet"
+                )
+            )
+        with project.index.connect() as conn:
+            members = {
+                str(w)
+                for (w,) in conn.execute(
+                    text("SELECT work_id FROM sheet_candidates WHERE sheet_id = :s"),
+                    {"s": sheet_id},
+                )
+            }
+        late.extend(
+            ValidationIssue("arguments", f"{v.item.work_id}: not in the sheet's selection")
+            for v in verdicts.values()
+            if v.item.work_id not in members
+        )
         if late:
             raise FactoryValidationError(late)
         events = []
@@ -444,6 +467,11 @@ def record_arguments(
                 markdown_hash=str(verdict.markdown_hash),
                 claim=a.claim.strip(),
                 claim_row_key=a.claim_row_key or None,
+                claim_row_version=(
+                    claim_keys[verdict.item.work_id].get(a.claim_row_key)
+                    if a.claim_row_key
+                    else None
+                ),
                 strength=a.strength,
             )
             recorded.append(payload)
@@ -468,12 +496,14 @@ def _loads(raw: str) -> dict[str, Any]:
     return value
 
 
-def _claim_keys(project: Project, work_id: str) -> set[str]:
+def _claim_keys(project: Project, work_id: str) -> dict[str, int]:
+    """The m-claims rows served for the work (listed version, else the older fallback), each key
+    with the version it was served from."""
     version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
     if version is None:
-        return set()
+        return {}
     rows, _ = load_miner_work_rows(project, CLAIMS_MINER, version, [work_id])
-    return {r.row_key for r in rows.get(work_id, [])}
+    return {r.row_key: r.version for r in rows.get(work_id, [])}
 
 
 def close_section(
@@ -612,6 +642,7 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             quote=a["quote"],
             claim=a["claim"],
             claim_row_key=a["claim_row_key"],
+            claim_row_version=a["claim_row_version"],
             strength=a["strength"],
             conversion_id=a["conversion_id"],
             markdown_hash=a["markdown_hash"],

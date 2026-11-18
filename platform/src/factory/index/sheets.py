@@ -8,7 +8,9 @@ An event is folded only when it is consistent with what `services/sheets.py` enf
 fails stays in the log and changes nothing (no service writes one, so it was written by hand):
 - an argument needs an opened sheet and an agent actor; an argument against needs the section
   against open; one for needs the section against closed and the section for open; in `prepare`
-  mode the session of an argument for has recorded none against;
+  mode an argument has a session, and the session of an argument for has recorded none against;
+  an argument is of a work among the sheet's candidates (its quote and claim row key are checked
+  by the service only; the fold cannot read the conversions or the miner rows);
 - a section closes once, `for` only after `against`;
 - a rating needs a human actor and a folded argument of that sheet.
 
@@ -85,6 +87,7 @@ def sheet_tables(metadata: MetaData) -> SheetTables:
         Column("markdown_hash", String, nullable=False),
         Column("claim", String, nullable=False),
         Column("claim_row_key", String),
+        Column("claim_row_version", Integer),
         Column("strength", String, nullable=False),
         Column("session", String),
         Column("actor", String, nullable=False),
@@ -158,13 +161,24 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
         ).first()
         if sheet is None:
             return
+        in_sheet = conn.execute(
+            text("SELECT 1 FROM sheet_candidates WHERE sheet_id = :s AND work_id = :w"),
+            {"s": payload.sheet_id, "w": payload.work_id},
+        ).first()
+        if in_sheet is None:
+            return
         mode, against_closed, for_closed = str(sheet[0]), bool(sheet[1]), bool(sheet[2])
+        if mode == "prepare" and event.actor.session is None:
+            return  # the split of the two sections cannot be shown without a session
         if payload.stance == "against" and against_closed:
             return
         if payload.stance == "for":
             if not against_closed or for_closed:
                 return
-            if mode == "prepare" and _wrote_against(conn, payload.sheet_id, event.actor.session):
+            if mode == "prepare" and (
+                event.actor.session is None
+                or _wrote_against(conn, payload.sheet_id, event.actor.session)
+            ):
                 return
         conn.execute(
             sqlite_insert(tables.arguments)
@@ -179,6 +193,7 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
                 markdown_hash=payload.markdown_hash,
                 claim=payload.claim,
                 claim_row_key=payload.claim_row_key,
+                claim_row_version=payload.claim_row_version,
                 strength=payload.strength,
                 session=event.actor.session,
                 actor=event.actor.id,

@@ -203,7 +203,7 @@ def test_claim_row_key_must_be_a_claims_row(
         r.row_key for r in live_rows(project, scope=MinerScope("m-claims")) if r.work_id == work
     )
     [ok] = sh.record_arguments(project, agent, sheet, [_arg(work, claim_row_key=key)])
-    assert ok.claim_row_key == key
+    assert ok.claim_row_key == key and ok.claim_row_version == 1
 
 
 def test_rating_is_human_only_latest_stands(
@@ -259,3 +259,110 @@ def test_rebuild_keeps_the_sheet(
     before = sh.view_sheet(project, sheet)
     project.index.rebuild()
     assert sh.view_sheet(project, sheet) == before
+
+
+def _forge(project: Project, actor: Actor, payload: SheetArgumentRecorded) -> None:
+    blob = project.blobs.put_json({"forged": True})
+    with project.index.exclusive():
+        project.record(
+            [project.events.make("sheet.argument_recorded", payload, actor, input_blob=blob)]
+        )
+
+
+def test_projection_ignores_argument_for_a_work_outside_the_sheet(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    """The fold checks (sheet, work) membership; quote and row-key checks are service-only."""
+    sheet = _open(project, agent, world)
+    [real] = sh.record_arguments(project, agent, sheet, [_arg(sorted(world)[0])])
+    outside = real.model_copy(update={"argument_id": "arg_" + "1" * 26, "work_id": "w_nowhere"})
+    before = sh.view_sheet(project, sheet).coverage
+    _forge(project, agent, outside)
+    assert _count(project, "sheet_arguments") == 1
+    assert sh.view_sheet(project, sheet).coverage == before
+
+
+def test_argument_records_the_version_its_row_was_served_from(
+    project: Project,
+    agent: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.model.extraction import MinerScope
+    from factory.model.screening import PassLabel
+    from factory.services import paper_profile as pp
+    from factory.services.extraction import live_rows
+
+    list_miner(project, agent, claims_spec())
+    mina = miner_actor("01JZ9Q3K5M7N8P0R2S4T6V8W1E", "claude-opus-5-5")
+    mine_pass(
+        project, mina, PassLabel.A, lambda w: [claim_row("finding", QUOTES[0])], name="m-claims"
+    )
+    sheet = _open(project, agent, world)
+    work = sorted(world)[0]
+    rows = [r for r in live_rows(project, scope=MinerScope("m-claims")) if r.work_id == work]
+    key = rows[0].row_key
+    [listed] = sh.record_arguments(project, agent, sheet, [_arg(work, claim_row_key=key)])
+    assert listed.claim_row_version == 1
+    labels = {r.extraction_id: 0 for r in live_rows(project, scope=MinerScope("m-claims"))}
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: labels)
+    [older] = sh.record_arguments(project, agent, sheet, [_arg(work, claim_row_key=key)])
+    assert older.claim_row_version == 0
+    views = {a.argument_id: a for a in sh.view_sheet(project, sheet).arguments}
+    assert views[listed.argument_id].claim_row_version == 1
+    assert views[older.argument_id].claim_row_version == 0
+
+
+def test_stale_selection_refused_nothing_written(
+    project: Project, agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    sheet = _open(project, agent, world)
+    real = sh.resolve_selection_cached
+    monkeypatch.setattr(sh, "resolve_selection_cached", lambda p, s: replace(real(p, s), digest="x"))
+    before = _events(project)
+    with pytest.raises(FactoryValidationError) as err:
+        sh.record_arguments(project, agent, sheet, [_arg(sorted(world)[0])])
+    assert "selection changed" in err.value.issues[0].reason
+    assert _events(project) == before and _count(project, "sheet_arguments") == 0
+
+
+def test_projection_prepare_split_ignores_for_by_the_session_that_wrote_against(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _open(project, agent, world, mode="prepare")
+    work = sorted(world)[0]
+    [real] = sh.record_arguments(project, agent, sheet, [_arg(work)])
+    sh.close_section(project, agent, sheet, "against")
+    same = real.model_copy(update={"argument_id": "arg_" + "2" * 26, "stance": "for"})
+    _forge(project, agent, same)
+    assert _count(project, "sheet_arguments") == 1
+    other = real.model_copy(update={"argument_id": "arg_" + "3" * 26, "stance": "for"})
+    _forge(project, agent_other, other)
+    assert _count(project, "sheet_arguments") == 2
+
+
+def test_projection_ignores_for_before_against_is_closed(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _open(project, agent, world, mode="prepare")
+    [real] = sh.record_arguments(project, agent, sheet, [_arg(sorted(world)[0])])
+    early = real.model_copy(update={"argument_id": "arg_" + "4" * 26, "stance": "for"})
+    _forge(project, agent_other, early)
+    assert _count(project, "sheet_arguments") == 1
+
+
+def test_prepare_mode_without_a_session_is_not_split_safe(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    sheet = _open(project, agent, world, mode="prepare")
+    work = sorted(world)[0]
+    [real] = sh.record_arguments(project, agent, sheet, [_arg(work)])
+    sh.close_section(project, agent, sheet, "against")
+    nameless = agent.model_copy(update={"session": None})
+    with pytest.raises(FactoryValidationError) as err:
+        sh.record_arguments(project, nameless, sheet, [_arg(work, "for")])
+    assert err.value.issues[0].field == "session"
+    # (an event with no session does not even parse, so the fold's None guard is defensive only)
+    assert _count(project, "sheet_arguments") == 1 and real.sheet_id == sheet
