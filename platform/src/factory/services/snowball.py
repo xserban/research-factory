@@ -680,13 +680,24 @@ def _arxiv(arxiv: str | None, doi: str | None) -> str | None:
     return arxiv or (arxiv_id_from_doi(doi) if doi else None)
 
 
-def _route(candidate: RoundCandidate) -> tuple[str, str] | None:
+def selects_backward(rule: SnowballPlan | None) -> bool:
+    """The plan sets a backward selection option, so its backward rounds are selected rounds."""
+    return rule is not None and (
+        rule.backward_published_from is not None
+        or rule.backward_min_cited_by is not None
+        or rule.backward_min_similarity is not None
+    )
+
+
+def _route(candidate: RoundCandidate, selected: bool = False) -> tuple[str, str] | None:
     """(query family, id) naming the candidate, or None when no query can name it: no usable
-    identifier, a DOI the filter syntax cannot carry, or an id too long for one query."""
+    identifier, a DOI the filter syntax cannot carry, or an id too long for one query. Only in a
+    `selected` backward round is a stored candidate served offline from its stored record
+    (decision 135); otherwise it is asked of a network source as before."""
     route: tuple[str, str] | None = None
     if candidate.no_source_record:
         route = "reflist", candidate.work_key
-    elif candidate.stored and candidate.work_id is not None:
+    elif selected and candidate.stored and candidate.work_id is not None:
         route = "stored", candidate.work_id
     elif candidate.openalex:
         route = "openalex", candidate.openalex
@@ -699,9 +710,9 @@ def _route(candidate: RoundCandidate) -> tuple[str, str] | None:
     return route
 
 
-def unqueryable_keys(candidates: Sequence[RoundCandidate]) -> list[str]:
+def unqueryable_keys(candidates: Sequence[RoundCandidate], selected: bool = False) -> list[str]:
     """Keys of the candidates no query can name, in the given order (listed, never dropped)."""
-    return [c.work_key for c in candidates if _route(c) is None]
+    return [c.work_key for c in candidates if _route(c, selected) is None]
 
 
 _FAMILIES: tuple[tuple[str, str, QueryKind, str, str], ...] = (
@@ -733,12 +744,14 @@ def _pack(ids: Sequence[str], prefix: str, separator: str) -> list[str]:
     return texts
 
 
-def snowball_queries(candidates: Sequence[RoundCandidate]) -> list[QuerySpec]:
+def snowball_queries(
+    candidates: Sequence[RoundCandidate], selected: bool = False
+) -> list[QuerySpec]:
     """The chase-purpose queries that retrieve `candidates`: OpenAlex `openalex:` then `doi:`
     filters, arXiv `id_list`, then `reflist` entry keys; ids sorted within each family."""
     ids: dict[str, set[str]] = {family: set() for family, *_ in _FAMILIES}
     for candidate in candidates:
-        route = _route(candidate)
+        route = _route(candidate, selected)
         if route is not None:
             ids[route[0]].add(route[1])
     return [
@@ -948,8 +961,9 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
         )
     if direction is Direction.BACKWARD:
         candidates = snowball_candidates(project, sources)
-        queries = snowball_queries(candidates)
-        unqueryable = unqueryable_keys(candidates)
+        selected = selects_backward(rule)
+        queries = snowball_queries(candidates, selected)
+        unqueryable = unqueryable_keys(candidates, selected)
         if not candidates:
             refusals.append(
                 ValidationIssue("candidates", "no resolved reference outside the corpus")
@@ -1405,7 +1419,6 @@ class _Chosen:
     taken: tuple[str, ...]
     selection: BackwardSelection
     references: tuple[str, ...]
-    weights_hash: str | None
 
 
 def _choose_backward(project: Project, embedder: Embedder | None) -> _Chosen | None:
@@ -1416,19 +1429,20 @@ def _choose_backward(project: Project, embedder: Embedder | None) -> _Chosen | N
     `backward_published_from` (a candidate with no known date is dropped and counted), cited by at
     least `backward_min_cited_by` source works, and a maximum cosine to the development seed
     references of at least `backward_min_similarity` (`services.ranking`; only the survivors are
-    embedded; a candidate with no stored work is dropped and counted). The similarity step needs
+    embedded; a candidate with no stored work, a `no-source-record` one, is dropped and counted as
+    unscored, as an undated one is by the date step). The similarity step needs
     the ranker, and is refused with the remedy when its extra or weights are missing. A plan that
     refuses returns None here, so the refusal is reported by the plan itself. The embedding runs
-    outside the write lock, so the caller compares the references and weights again under it."""
+    outside the write lock, so the caller compares the candidates and references again under it.
+    A dry run with `backward_min_similarity` runs the embedder but writes no events. Stored records
+    are served as stored (they may lack an abstract), only in selected rounds."""
     project.index.sync()
     rule = _plan_rule(project)
-    if rule is None or (
-        rule.backward_published_from is None
-        and rule.backward_min_cited_by is None
-        and rule.backward_min_similarity is None
-    ):
+    if rule is None or not selects_backward(rule):
         return None
     plan = plan_round(project, Direction.BACKWARD)
+    if plan.state.refusals:
+        return None
     survivors = list(plan.candidates)
     considered = tuple(c.work_key for c in survivors)
     before_window = undated = low_cited = 0
@@ -1506,15 +1520,15 @@ def _choose_backward(project: Project, embedder: Embedder | None) -> _Chosen | N
         taken=tuple(t.work_key for t in taken),
         selection=selection,
         references=references,
-        weights_hash=None if identity is None else identity[1],
     )
 
 
 def _apply_chosen(project: Project, plan: RoundPlan, chosen: _Chosen) -> RoundPlan:
     """`plan` narrowed to the chosen candidates, under the lock that computed it.
 
-    Refused, writing nothing, when the candidates, the reference seeds or the ranker's weights
-    changed since the choice was made, or when the selection took nothing. A plan that already
+    Refused, writing nothing, when the candidates or the reference seeds changed since the choice
+    was made, or when the selection took nothing. (The ranker's weights are not rechecked: only the
+    seeds and the candidates are.) A plan that already
     refuses is returned as it is, so its refusals are reported."""
     if plan.state.refusals:
         return plan
@@ -1529,19 +1543,19 @@ def _apply_chosen(project: Project, plan: RoundPlan, chosen: _Chosen) -> RoundPl
         )
     if chosen.selection.min_similarity is not None:
         now_refs = tuple(w.id for w in reference_works(project)[0])
-        if now_refs != chosen.references or chosen.weights_hash != chosen.selection.weights_hash:
+        if now_refs != chosen.references:
             raise FactoryValidationError(
                 [
                     ValidationIssue(
                         "seeds",
-                        "the reference seeds or the ranker's weights changed while candidates "
+                        "the reference seeds changed while candidates "
                         "were ranked; rank again by running the round again",
                     )
                 ]
             )
     taken = set(chosen.taken)
     candidates = [c for c in plan.candidates if c.work_key in taken]
-    queries = snowball_queries(candidates)
+    queries = snowball_queries(candidates, True)
     refusals = list(plan.state.refusals)
     if not candidates:
         refusals.append(ValidationIssue("candidates", "the selection took no candidate"))
@@ -1552,7 +1566,7 @@ def _apply_chosen(project: Project, plan: RoundPlan, chosen: _Chosen) -> RoundPl
         update={
             "candidates": candidates,
             "queries": queries,
-            "unqueryable": unqueryable_keys(candidates),
+            "unqueryable": unqueryable_keys(candidates, True),
             "state": state,
         }
     )

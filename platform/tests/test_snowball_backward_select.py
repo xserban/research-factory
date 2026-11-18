@@ -86,6 +86,16 @@ def test_a_plan_without_options_takes_every_candidate(project: Project, agent: A
     _planned(project, agent)
     result = _round(project, agent, dry_run=True)
     assert len(result.candidates) == 3 and result.backward_selection is None
+    # an unselected round routes as before: network sources, never `stored`
+    assert {q.source for q in result.queries} == {"openalex", "arxiv", "reflist"}
+
+
+def test_selected_round_routes_stored_candidates_to_stored_and_no_source_to_reflist(
+    project: Project, agent: Actor
+) -> None:
+    _planned(project, agent, backward_min_cited_by=1)
+    result = _round(project, agent, dry_run=True)
+    assert {q.source for q in result.queries} == {"stored", "reflist"}
 
 
 def test_published_window_drops_before_and_undated_candidates(
