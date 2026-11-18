@@ -45,7 +45,9 @@ METHODS: dict[str, str] = {
         "first-pass row of a listed miner. Where they differ, every work is listed by id: a "
         "duplicate record that was read under its own id is shown on the canonical record; a work "
         "that was read but excluded is listed with its exclusion criterion and not shown in "
-        "corpus views; an included work with no rows of its own or of a merged duplicate is "
+        "corpus views; a work read under a duplicate record whose canonical record is not included is "
+        "listed apart as 'duplicate of an excluded work' and not shown in corpus views; an "
+        "included work with no rows of its own or of a merged duplicate is "
         "'not read yet'."
     ),
     "fates": (
@@ -71,7 +73,8 @@ METHODS: dict[str, str] = {
     ),
     "papers_per_month": (
         "Included works counted by the month of their publication date; months with none are "
-        "shown as zero between the first and the last."
+        "shown as zero between the first and the last. Works dated to a year only, and works "
+        "with no usable date, are not placed in a month and are counted apart."
     ),
     "composition": (
         "Included works grouped by layer (the researcher's move, else the layer miner's final "
@@ -129,6 +132,9 @@ class Sets:
     not_read_yet: tuple[str, ...]
     sources: Mapping[str, str] = field(default_factory=dict)
     """Included work id -> the work id whose miner rows it shows, where that is not its own."""
+    duplicate_of_excluded: tuple[DuplicateMapped, ...] = ()
+    """Works read under an absorbed duplicate whose canonical record is not in the included set;
+    not shown in corpus views, listed here by id."""
 
     def miner_source(self, work_id: str) -> str:
         """The work id whose miner rows to show for `work_id` (itself unless a duplicate holds
@@ -150,11 +156,13 @@ def reconcile_sets(
     inc_set = set(inc)
     mined_set = set(mined)
     fates = fate_of or {}
-    dup = [
+    all_dup = [
         DuplicateMapped(m, canonical_of[m], canonical_of[m] in mined_set)
         for m in sorted(mined_set)
         if m in canonical_of
     ]
+    dup = [d for d in all_dup if d.canonical_id in inc_set]
+    dup_excluded = [d for d in all_dup if d.canonical_id not in inc_set]
     excluded = []
     for m in sorted(mined_set):
         if m in inc_set or m in canonical_of:
@@ -174,6 +182,7 @@ def reconcile_sets(
         mined_but_excluded=tuple(excluded),
         not_read_yet=tuple(unread),
         sources=sources,
+        duplicate_of_excluded=tuple(dup_excluded),
     )
 
 
@@ -279,6 +288,7 @@ def sets_payload(sets: Sets) -> dict[str, Any]:
         "duplicate_mapped": [asdict(d) for d in sets.duplicate_mapped],
         "mined_but_excluded": [asdict(e) for e in sets.mined_but_excluded],
         "not_read_yet": list(sets.not_read_yet),
+        "duplicate_of_excluded": [asdict(d) for d in sets.duplicate_of_excluded],
         "sources": dict(sorted(sets.sources.items())),
         "methods": METHODS["sets"],
     }
@@ -399,10 +409,22 @@ def human_share(values: Mapping[str, str | None]) -> dict[str, Any]:
 
 
 def month_counts(months: Iterable[str]) -> dict[str, Any]:
-    """Counts per `YYYY-MM`, continuous from the first to the last month, plus the busiest."""
-    ms = sorted(m for m in months if len(m) == 7 and m[4] == "-")
+    """Counts per `YYYY-MM`, continuous from the first to the last month, plus the busiest.
+
+    Every input is accounted for: dated to the month (in `counts`), `year_only` (`YYYY`) or
+    `unknown_date` (empty or unparseable)."""
+    given = list(months)
+    ms = sorted(m for m in given if len(m) == 7 and m[4] == "-" and m[:4].isdigit())
+    year_only = sum(1 for m in given if len(m) == 4 and m.isdigit())
+    unknown = len(given) - len(ms) - year_only
     if not ms:
-        return {"months": [], "counts": [], "busiest": None, "unknown_date": 0}
+        return {
+            "months": [],
+            "counts": [],
+            "busiest": None,
+            "unknown_date": unknown,
+            "year_only": year_only,
+        }
     c = Counter(ms)
     y, m = int(ms[0][:4]), int(ms[0][5:])
     ye, me = int(ms[-1][:4]), int(ms[-1][5:])
@@ -416,6 +438,8 @@ def month_counts(months: Iterable[str]) -> dict[str, Any]:
         "months": labels,
         "counts": counts,
         "busiest": {"month": labels[top], "n": counts[top]},
+        "unknown_date": unknown,
+        "year_only": year_only,
     }
 
 
@@ -479,7 +503,7 @@ def pipeline_strip(d: FlowData) -> list[dict[str, Any]]:
     ft = p.full_text
     identified = sum(p.identified_databases.values()) + sum(p.identified_other.values())
     included = len(d.sets.included)
-    return [
+    head: list[dict[str, Any]] = [
         {"key": "identified", "n": identified, "of": None, "loss": {}},
         {
             "key": "screened",
@@ -487,6 +511,18 @@ def pipeline_strip(d: FlowData) -> list[dict[str, Any]]:
             "of": identified,
             "loss": {"duplicates": p.duplicates_removed},
         },
+    ]
+    if not ft.stage_run:
+        # No full-text stage has run: the included set is the title-and-abstract one, and the
+        # steps between are stated as not run rather than shown as zero.
+        return [
+            *head,
+            {"key": "sought", "n": None, "of": None, "loss": {}, "not_run": True},
+            {"key": "assessed", "n": None, "of": None, "loss": {}, "not_run": True},
+            {"key": "included", "n": included, "of": p.screened, "loss": {}},
+        ]
+    return [
+        *head,
         {
             "key": "sought",
             "n": ft.sought,
@@ -536,7 +572,7 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
             "human": humans,
         },
         "pipeline": pipeline_strip(d),
-        "papers_per_month": month_counts(pub[w][1][:7] for w in inc if w in pub),
+        "papers_per_month": month_counts(pub[w][1][:7] if w in pub else "" for w in inc),
         "composition": {
             "layer": dict(sorted(by_layer.items())),
             "human": dict(sorted(by_human.items())),

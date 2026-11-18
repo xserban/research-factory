@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import text
@@ -111,6 +113,41 @@ def test_month_counts_are_continuous_and_name_the_busiest() -> None:
     assert m["counts"] == [3, 0, 2]
     assert m["busiest"] == {"month": "2025-11", "n": 3}
     assert hp.month_counts([])["months"] == []
+    assert m["unknown_date"] == 1 and m["year_only"] == 0
+
+
+def test_month_counts_account_for_year_only_and_unknown_dates() -> None:
+    m = hp.month_counts(["2025-11", "2025", "2024", "", "garbage"])
+    assert (m["year_only"], m["unknown_date"], sum(m["counts"])) == (2, 2, 1)
+    only = hp.month_counts(["2025", ""])  # nothing dated to a month: still stated
+    assert only["months"] == [] and (only["year_only"], only["unknown_date"]) == (1, 1)
+    assert hp.month_counts([])["unknown_date"] == 0
+
+
+def test_pipeline_strip_without_a_full_text_stage_states_it() -> None:
+    ft = SimpleNamespace(stage_run=False, sought=0, assessed=0)
+    prisma = SimpleNamespace(
+        full_text=ft,
+        identified_databases={"x": 10},
+        identified_other={},
+        screened=8,
+        duplicates_removed=2,
+        included=5,
+    )
+    sets = SimpleNamespace(included=("a", "b", "c"))
+    strip = {
+        s["key"]: s for s in hp.pipeline_strip(cast(Any, SimpleNamespace(prisma=prisma, sets=sets)))
+    }
+    assert strip["sought"]["not_run"] and strip["assessed"]["not_run"]
+    assert strip["sought"]["n"] is None and strip["included"]["of"] == 8
+    assert strip["included"]["n"] == 3
+
+
+def test_self_loops_are_dropped_by_the_guard_itself() -> None:
+    # built without make_graph, so the loop is still in the edges
+    g = CitationGraph({"a": None, "b": None}, (("a", "a"), ("b", "a")))
+    got = hp.cited_here_from(g, ["a", "b"])
+    assert got["a"].count == 1 and got["a"].citers == ("b",)
 
 
 # ---------------------------------------------------------------- on a screened project

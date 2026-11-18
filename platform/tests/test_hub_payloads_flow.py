@@ -73,6 +73,16 @@ def test_duplicate_of_a_work_outside_included_is_not_a_source() -> None:
     assert s.mined_but_excluded == ()
 
 
+def test_duplicate_of_a_non_included_canonical_goes_to_a_stated_list() -> None:
+    s = hp.reconcile_sets(["a"], ["d", "e"], {"d": "x", "e": "a"})
+    assert [(d.mined_id, d.canonical_id) for d in s.duplicate_of_excluded] == [("d", "x")]
+    assert [(d.mined_id, d.canonical_id) for d in s.duplicate_mapped] == [("e", "a")]
+    assert s.miner_source("a") == "e" and s.mined_but_excluded == ()
+    payload = hp.sets_payload(s)
+    assert payload["duplicate_of_excluded"][0]["mined_id"] == "d"
+    assert "duplicate of an excluded" in payload["methods"]
+
+
 def test_included_ids_follow_the_stage() -> None:
     rows = [
         row("a", ft_state="retrieved", ft_outcome="included"),
