@@ -1,6 +1,15 @@
 """Tests for cutting anchored Markdown into search passages."""
 
-from factory.document.passages import BOILERPLATE, Passage, cut_passages
+import pytest
+
+from factory.document.passages import (
+    BOILERPLATE,
+    Passage,
+    SectionKind,
+    cut_passages,
+    embedding_windows,
+    section_kind,
+)
 
 
 def _doc(*parts: str) -> str:
@@ -35,8 +44,8 @@ def test_packs_paragraphs_up_to_target() -> None:
 
 
 def test_target_words_respected() -> None:
-    md = _doc(_h("s1", "A"), *[_p(f"s1.p{i}", _words(10)) for i in range(1, 7)])
-    for target in (10, 20, 35):
+    md = _doc(_h("s1", "A"), *[_p(f"s1.p{i}", _words(30)) for i in range(1, 7)])
+    for target in (30, 60, 95):
         for p in cut_passages(md, target_words=target):
             assert len(p.text.split()) <= target
 
@@ -56,11 +65,11 @@ def test_no_passage_crosses_a_heading() -> None:
 def test_long_paragraph_alone() -> None:
     md = _doc(
         _h("s1", "A"),
-        _p("s1.p1", _words(5)),
-        _p("s1.p2", _words(30)),
-        _p("s1.p3", _words(5)),
+        _p("s1.p1", _words(30)),
+        _p("s1.p2", _words(40)),
+        _p("s1.p3", _words(30)),
     )
-    result = cut_passages(md, target_words=20)
+    result = cut_passages(md, target_words=35)
     assert [p.anchors for p in result] == [("s1.p1",), ("s1.p2",), ("s1.p3",)]
 
 
@@ -118,17 +127,30 @@ def test_bibliography_pages_equations_never_passages() -> None:
 def test_table_and_caption_are_own_passages() -> None:
     md = _doc(
         _h("s1", "A"),
-        _p("s1.p1", "Before the table text."),
+        _p("s1.p1", _words(30)),
         '<a id="t1"></a>\n| a | b |\n|---|---|\n| 1 | **2** |',
-        _p("f1.cap", "Figure 1. A *caption* here."),
-        _p("s1.p2", "After the table text."),
+        _p("f1.cap", "Figure 1. A *caption* here " + _words(30)),
+        _p("s1.p2", _words(30)),
     )
-    result = cut_passages(md)
-    assert [p.anchors for p in result] == [("s1.p1",), ("t1",), ("f1.cap",), ("s1.p2",)]
-    assert result[1].text == "a | b | 1 | 2"
-    assert result[2].text == "Figure 1. A caption here."
+    result = cut_passages(md, target_words=40)
+    assert [p.anchors for p in result] == [("s1.p1", "t1"), ("f1.cap",), ("s1.p2",)]
+    assert result[0].text.endswith(" a | b | 1 | 2")  # 7 words: merged into the paragraph
+    assert result[1].text == "Figure 1. A caption here " + _words(30)
     assert result[1].section_anchor == "s1"
-    assert result[2].section_path == ("A",)
+    assert result[1].section_path == ("A",)
+
+
+def test_long_table_is_own_passage() -> None:
+    header = "| " + " | ".join(f"h{i}" for i in range(30)) + " |"
+    sep = "|" + "---|" * 30
+    md = _doc(
+        _h("s1", "A"),
+        _p("s1.p1", _words(30)),
+        f'<a id="t1"></a>\n{header}\n{sep}',
+        _p("s1.p2", _words(30)),
+    )
+    result = cut_passages(md, target_words=40)
+    assert [p.anchors for p in result] == [("s1.p1",), ("t1",), ("s1.p2",)]
 
 
 def test_section_path_nested_and_s0() -> None:
@@ -156,3 +178,115 @@ def test_deterministic() -> None:
 
 def test_empty_document() -> None:
     assert cut_passages("") == []
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ((), SectionKind.OTHER),
+        (("References",), SectionKind.BACK),
+        (("Acknowledgements",), SectionKind.BACK),
+        (("Statement on AI use",), SectionKind.BACK),
+        (("Appendix B",), SectionKind.APPENDIX),
+        (("A.1 Prompts",), SectionKind.APPENDIX),
+        (("B.2.3 Details",), SectionKind.APPENDIX),
+        (("Prompt listings",), SectionKind.APPENDIX),
+        (("2 Related Work",), SectionKind.RELATED),
+        (("Background",), SectionKind.RELATED),
+        (("1 Introduction",), SectionKind.FRONT),
+        (("Abstract",), SectionKind.FRONT),
+        (("3.1 Method",), SectionKind.METHOD),
+        (("System architecture",), SectionKind.METHOD),
+        (("4 Experiments",), SectionKind.RESULTS),
+        (("Ablation study",), SectionKind.RESULTS),
+        (("5 Discussion",), SectionKind.DISCUSSION),
+        (("Conclusion",), SectionKind.DISCUSSION),
+        (("Experiments and Discussion",), SectionKind.DISCUSSION),
+        (("Method and results",), SectionKind.RESULTS),
+        (("Something else",), SectionKind.OTHER),
+        # innermost matching heading decides
+        (("Method", "Evaluation"), SectionKind.RESULTS),
+        (("Experiments", "Plain heading"), SectionKind.RESULTS),
+        # back, appendix and related win at any depth, in that priority
+        (("Method", "Related work"), SectionKind.RELATED),
+        (("Related work", "Method"), SectionKind.RELATED),
+        (("Appendix", "Related work", "Results"), SectionKind.APPENDIX),
+        (("References", "Appendix"), SectionKind.BACK),
+    ],
+)
+def test_section_kind(path: tuple[str, ...], kind: SectionKind) -> None:
+    assert section_kind(path) is kind
+
+
+def test_passage_carries_section_kind() -> None:
+    md = _doc(_h("s1", "Method"), _p("s1.p1", _words(40)))
+    assert cut_passages(md)[0].section_kind is SectionKind.METHOD
+
+
+def test_short_passage_merges_into_previous_in_section() -> None:
+    md = _doc(
+        _h("s1", "A"),
+        _p("s1.p1", _words(40)),
+        _p("s1.p2", _words(5)),
+    )
+    result = cut_passages(md, target_words=40)
+    assert [p.anchors for p in result] == [("s1.p1", "s1.p2")]
+    assert result[0].passage_id == "s1.p1~s1.p2"
+    assert result[0].text == _words(40) + " " + _words(5)
+
+
+def test_short_first_passage_merges_into_next() -> None:
+    md = _doc(
+        _h("s1", "A"),
+        _p("s1.p1", _words(5)),
+        _p("s1.p2", _words(40)),
+    )
+    result = cut_passages(md, target_words=40)
+    assert [p.anchors for p in result] == [("s1.p1", "s1.p2")]
+
+
+def test_short_never_crosses_section_and_lone_short_stays() -> None:
+    md = _doc(
+        _h("s1", "One"),
+        _p("s1.p1", _words(40)),
+        _h("s2", "Two"),
+        _p("s2.p1", _words(5)),
+    )
+    result = cut_passages(md)
+    assert [p.anchors for p in result] == [("s1.p1",), ("s2.p1",)]
+
+
+def test_short_table_merges_and_skipped_kept() -> None:
+    md = _doc(
+        _h("s1", "A"),
+        _p("s1.p1", _words(40)),
+        _p("s1.p2", "12345"),
+        _p("s1.p3", _words(5)),
+    )
+    result = cut_passages(md, target_words=40)
+    assert len(result) == 1
+    assert result[0].skipped == ("s1.p2",)
+    assert result[0].anchors == ("s1.p1", "s1.p3")
+
+
+def test_embedding_windows_short_text_whole() -> None:
+    assert embedding_windows("One. Two.") == ["One. Two."]
+    assert embedding_windows("") == [""]
+
+
+def test_embedding_windows_split_at_sentences() -> None:
+    s = _words(4) + "."
+    text = " ".join([s] * 6)
+    windows = embedding_windows(text, max_words=10)
+    assert windows == [" ".join([s, s]), " ".join([s, s]), " ".join([s, s])]
+    assert embedding_windows(text, max_words=10) == windows
+
+
+def test_embedding_windows_long_sentence_split_by_words() -> None:
+    windows = embedding_windows(_words(25), max_words=10)
+    assert [len(w.split()) for w in windows] == [10, 10, 5]
+    short = "Hi there."
+    mixed = embedding_windows(short + " " + _words(25) + ". " + short, max_words=10)
+    assert mixed[0] == short
+    assert mixed[-1] == short
+    assert all(len(w.split()) <= 10 for w in mixed)

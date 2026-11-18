@@ -12,11 +12,20 @@ Invariants:
   fewer than four words are packed like any other.
 - Bibliography entries, page anchors, equations and table cells are never passages.
 - A table is its own passage (cell texts joined with " | "); a figure caption is its own
-  passage. Either closes the passage being packed, so passages stay in document order.
+  passage. Either closes the passage being packed, so passages stay in document order. Tables
+  and captions stay their own passage only if they have `MIN_WORDS` words or more.
+- A passage (of any type) with fewer than `MIN_WORDS` words merges into the previous passage of
+  the same section, else into the next passage of the same section; it stays alone only if it is
+  the only passage of its section. A merged passage keeps all anchors in document order, joins
+  texts with a space and skipped lists in order, and takes its id from the first and last anchor.
+  Merging never crosses a section.
+- `section_kind` of a passage is a pure function of its section path (see `section_kind`).
 - The output depends only on the input.
 """
 
+import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 from factory.document.anchors import Anchor, AnchorKind, parse_manifest
 from factory.document.quotes import element_plain_text
@@ -24,6 +33,146 @@ from factory.document.quotes import element_plain_text
 BOILERPLATE: frozenset[str] = frozenset(
     {"skip to main content", "references", "acknowledgements", "acknowledgments"}
 )
+
+
+MIN_WORDS = 30
+"""Passages with fewer words merge into a neighbour of the same section."""
+
+
+class SectionKind(StrEnum):
+    """The role of a section in a paper, from its heading path."""
+
+    FRONT = "front"
+    METHOD = "method"
+    RESULTS = "results"
+    DISCUSSION = "discussion"
+    RELATED = "related"
+    APPENDIX = "appendix"
+    BACK = "back"
+    OTHER = "other"
+
+
+_BACK = (
+    "reference",
+    "bibliograph",
+    "acknowledg",
+    "author contribution",
+    "funding",
+    "competing",
+    "ethic",
+    "availability",
+    "statement on ai",
+    "contents",
+)
+_APPENDIX = ("appendix", "supplement", "prompt")
+_RELATED = ("related work", "background", "prior work", "literature review")
+# Checked in this order for one heading: the first group with a match decides.
+_BODY: tuple[tuple[SectionKind, tuple[str, ...]], ...] = (
+    (
+        SectionKind.DISCUSSION,
+        (
+            "discussion",
+            "limitation",
+            "failure",
+            "error",
+            "lesson",
+            "conclusion",
+            "future work",
+            "threat",
+        ),
+    ),
+    (
+        SectionKind.RESULTS,
+        (
+            "result",
+            "experiment",
+            "evaluat",
+            "analys",
+            "ablation",
+            "benchmark",
+            "case stud",
+            "human stud",
+            "user stud",
+            "finding",
+        ),
+    ),
+    (
+        SectionKind.METHOD,
+        (
+            "method",
+            "approach",
+            "framework",
+            "architecture",
+            "system",
+            "design",
+            "implementation",
+            "model",
+            "setup",
+        ),
+    ),
+    (SectionKind.FRONT, ("abstract", "introduction", "overview", "motivation")),
+)
+_LETTERED = re.compile(r"^[A-H](\.\d+)*\.?\s")
+_NUMBER = re.compile(r"^\d+(\.\d+)*\.?\s+")
+
+
+def section_kind(section_path: tuple[str, ...]) -> SectionKind:
+    """The kind of a section from its heading texts (case-insensitive).
+
+    Back, appendix and related headings win at any depth, in that priority. Otherwise the
+    innermost heading matching front/method/results/discussion decides (discussion > results >
+    method > front when one heading matches several). No match gives `OTHER`.
+    """
+    plain = [_NUMBER.sub("", h).lower() for h in section_path]
+    if any(k in h for h in plain for k in _BACK):
+        return SectionKind.BACK
+    if any(k in h for h in plain for k in _APPENDIX) or any(
+        _LETTERED.match(h) for h in section_path
+    ):
+        return SectionKind.APPENDIX
+    if any(k in h for h in plain for k in _RELATED):
+        return SectionKind.RELATED
+    for heading in reversed(plain):
+        for kind, words in _BODY:
+            if any(k in heading for k in words):
+                return kind
+    return SectionKind.OTHER
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def embedding_windows(text: str, max_words: int = 350) -> list[str]:
+    """Sub-windows of `text` for vectors only; the passage and its anchors stay whole.
+
+    A text of at most `max_words` words is `[text]`. A longer one is split at sentence ends into
+    consecutive windows of at most `max_words` words; a single sentence longer than `max_words`
+    is split by words, and its pieces stand alone. Deterministic.
+    """
+    if len(text.split()) <= max_words:
+        return [text]
+    windows: list[str] = []
+    current: list[str] = []
+    count = 0
+    for sentence in _SENTENCE_END.split(text.strip()):
+        n = len(sentence.split())
+        if n > max_words:
+            if current:
+                windows.append(" ".join(current))
+                current, count = [], 0
+            words = sentence.split()
+            windows.extend(
+                " ".join(words[i : i + max_words]) for i in range(0, len(words), max_words)
+            )
+            continue
+        if current and count + n > max_words:
+            windows.append(" ".join(current))
+            current, count = [], 0
+        current.append(sentence)
+        count += n
+    if current:
+        windows.append(" ".join(current))
+    return windows
 
 
 @dataclass(frozen=True)
@@ -36,6 +185,7 @@ class Passage:
     section_path: tuple[str, ...]
     text: str
     skipped: tuple[str, ...]
+    section_kind: SectionKind
 
 
 def _is_filtered(text: str) -> bool:
@@ -54,7 +204,50 @@ def _make(
     path: tuple[str, ...],
 ) -> Passage:
     names = tuple(anchors)
-    return Passage(_passage_id(names), names, section, path, " ".join(texts), tuple(skipped))
+    return Passage(
+        _passage_id(names),
+        names,
+        section,
+        path,
+        " ".join(texts),
+        tuple(skipped),
+        section_kind(path),
+    )
+
+
+def _merge(a: Passage, b: Passage) -> Passage:
+    names = a.anchors + b.anchors
+    return Passage(
+        _passage_id(names),
+        names,
+        a.section_anchor,
+        a.section_path,
+        a.text + " " + b.text,
+        a.skipped + b.skipped,
+        a.section_kind,
+    )
+
+
+def _merge_short(passages: list[Passage]) -> list[Passage]:
+    """Merge passages under `MIN_WORDS` words into a neighbour of the same section."""
+    out: list[Passage] = []
+    carry: Passage | None = None  # short passage waiting for the next one of its section
+    for p in passages:
+        if carry is not None:
+            if carry.section_anchor == p.section_anchor:
+                p, carry = _merge(carry, p), None
+            else:
+                out.append(carry)
+                carry = None
+        if len(p.text.split()) >= MIN_WORDS:
+            out.append(p)
+        elif out and out[-1].section_anchor == p.section_anchor:
+            out[-1] = _merge(out[-1], p)
+        else:
+            carry = p
+    if carry is not None:
+        out.append(carry)
+    return out
 
 
 def cut_passages(markdown: str, *, target_words: int = 250) -> list[Passage]:
@@ -103,6 +296,7 @@ def cut_passages(markdown: str, *, target_words: int = 250) -> list[Passage]:
                 last.section_path,
                 last.text,
                 last.skipped + tuple(skipped),
+                last.section_kind,
             )
         skipped = []
 
@@ -132,4 +326,4 @@ def cut_passages(markdown: str, *, target_words: int = 250) -> list[Passage]:
             if text.strip():
                 out.append(_make([a.id], [text], [], sec, path_of(sec)))
     close_section()
-    return out
+    return _merge_short(out)
