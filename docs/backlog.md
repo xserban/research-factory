@@ -923,3 +923,10 @@ Status: new · Added: 2026-11-17 · Slice: — · Depends on: —
 **Why:** run reports expire after 90 days; MAP.md must be regenerated after every merge and is easy to forget.
 **Rigour notes:** COCOMO is "equivalent conventional effort", not real effort, and is labelled so wherever shown.
 **Open questions:** where the history file lives (repository, a data branch, or a hub page).
+
+### IDEA-100 — Pending tolerance across workflows
+Status: built, not reviewed (decision 138, branch `pending-tolerance`, 2026-11-18) · Added: 2026-11-18 · Slice: — · Depends on: IDEA-46, decision 138
+**What:** a protocol `pending_tolerance` (`fewer_than`, `fraction`) lets a snowball or chase round go ahead while a few ordinary works are still pending or unextracted; the tolerated works are recorded in the round's event. Done for the backward and forward snowball gates and the chase round. Still to do, each needing an event field that records the tolerated works: `screen_agreement` pass B and open screening tasks (`services/agreement.py:223-241`), the extraction audit refusing on unresolved disagreements (`services/extraction_audit.py:206-213`), extraction agreement waiting on open units (`services/extraction_agreement.py:997-1001`).
+**Why:** one non-English paper that stays `unsure` must not stop a whole round; a few percent of leftovers is an accepted error.
+**Rigour notes:** never silent: every tolerated work is listed in the event and the plan render; the tolerance is a hashed protocol section, so it is amended and versioned like any other rule.
+**Open questions:** whether the size should be the full-text promoted set rather than all ordinary works at full-text stages; whether tolerated works should appear in the PRISMA flow as "not completed".

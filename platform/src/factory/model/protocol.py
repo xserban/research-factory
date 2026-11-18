@@ -87,6 +87,7 @@ _OMITTED_WHEN_NONE = frozenset(
         "hypothesis_plan",
         "grey_sources",
         "appraisal_instrument",
+        "pending_tolerance",
     }
 )
 """Optional sections left out of every hash while unset, so protocols that predate them keep
@@ -244,7 +245,8 @@ class UnscreenedTolerance(StrictModel):
     """Pass A works that may stay without a live decision (IDEA-46): they are reported as
     unscreened, not blocked on. A number `k` of such works is within the tolerance when
     `k < fewer_than` or `k <= fraction * (size of the pass A queue)`; the two are alternatives
-    (a researcher's ruling, defaults 3 records or 1 percent). Pass A only."""
+    (a researcher's ruling, defaults 3 records or 1 percent). Used for pass A (IDEA-46) and, as
+    `ProtocolSpec.pending_tolerance`, for works left pending or unextracted at a round (138)."""
 
     fewer_than: int = Field(default=3, ge=0)
     fraction: float = Field(default=0.01, ge=0, le=1)
@@ -444,6 +446,10 @@ class ProtocolSpec(StrictModel):
     appraisal_instrument: AppraisalInstrument | None = None
     """The per-paper appraisal instrument (IDEA-21, R-41). Absent (None) until declared; left out
     of the hash while unset, so protocols that predate it keep their versions."""
+    pending_tolerance: UnscreenedTolerance | None = None
+    """Works that may stay incomplete (screening pending, included but not extracted) without
+    blocking a snowball or chase round (decision 138). The tolerated works are recorded in the
+    round's event. None tolerates none; left out of the hash while unset."""
     rationale: str = ""
 
     @model_validator(mode="after")
@@ -519,6 +525,7 @@ AMENDABLE_FIELDS = (
     "hypothesis_plan",
     "grey_sources",
     "appraisal_instrument",
+    "pending_tolerance",
 )
 """Top-level hashed fields other than criteria, which an amendment reports as `other_changes`."""
 

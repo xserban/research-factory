@@ -107,6 +107,49 @@ def test_chase_refused_while_pending(
     assert len(_events(project)) == before
 
 
+def test_chase_within_pending_tolerance_records_the_tolerated_work(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import factory.services.chase as chase_module
+    from factory.model.protocol import UnscreenedTolerance
+
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    ordinary = _ordinary(project)
+    _settle(project, agent, human, protocol_id, leave=ordinary[0])
+    monkeypatch.setattr(
+        chase_module, "pending_tolerance", lambda _p: UnscreenedTolerance(fewer_than=2)
+    )
+
+    summary = search_chase(
+        project,
+        human,
+        [ChaseDirection.BACKWARD],
+        sources=mock_sources(openalex=[_citing(900)]),
+    )
+
+    assert summary.tolerated_pending == [ordinary[0]]
+    [event] = _of_type(project, "chase.round_started")
+    assert event.payload["tolerated_pending"] == [ordinary[0]]
+
+
+def test_chase_without_tolerated_works_omits_the_field(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id = _corpus(project, agent, human, mock_sources)
+    _settle(project, agent, human, protocol_id)
+
+    search_chase(
+        project, human, [ChaseDirection.BACKWARD], sources=mock_sources(openalex=[_citing(900)])
+    )
+
+    [event] = _of_type(project, "chase.round_started")
+    assert "tolerated_pending" not in event.payload
+
+
 def test_chase_refused_without_includes(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:

@@ -112,13 +112,15 @@ from factory.services.calibration import calibration_items
 from factory.services.chase import (
     ChaseStart,
     _forward_limit_issues,
-    _pending_issues,
+    _pending_gate,
     chase_queries,
     chase_rounds,
     forward_chase_rounds,
+    pending_ordinary,
     round_limit_issue,
     run_chase,
     start_chase,
+    tolerated_within,
 )
 from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
@@ -196,6 +198,9 @@ class RoundPlan(StrictModel):
     unextracted: list[tuple[str, str]]
     no_document: int = 0
     """How many of `unextracted` have no obtainable document: listed, never blocking."""
+    tolerated_pending: list[str] = Field(default_factory=list)
+    """Works pending or unextracted that the protocol's `pending_tolerance` lets the round go
+    past (decision 138); recorded in the round's event."""
 
 
 class RoundResult(StrictModel):
@@ -212,6 +217,8 @@ class RoundResult(StrictModel):
     runs: list[RunSummary]
     new_works: int
     no_document: int = 0
+    tolerated_pending: list[str] = Field(default_factory=list)
+    """The works the round went ahead without, within `pending_tolerance` (decision 138)."""
     chase_round_id: str | None = None
     """The delegated `search_chase` round of a recorded forward round."""
     selection: ForwardSelection | None = None
@@ -911,19 +918,33 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
                         f"{last.round_id} yielded no newly included work; the plan stops here",
                     )
                 )
+    tolerated: set[str] = set()
     pending = _pending(project)
     if pending:
-        refusals.append(
-            ValidationIssue("screening", f"{len(pending)} works still pending: {_named(pending)}")
-        )
+        within = tolerated_within(project, pending, pending_ordinary(project)[1])
+        if within:
+            tolerated.update(within)
+        else:
+            refusals.append(
+                ValidationIssue(
+                    "screening", f"{len(pending)} works still pending: {_named(pending)}"
+                )
+            )
     blocking = [w for w, reason in unextracted if reason == NOT_EXTRACTED]
     if blocking:
-        refusals.append(
-            ValidationIssue(
-                "unextracted",
-                f"included works with a document and no current extraction: {_named(blocking)}",
-            )
+        size = len(blocking) + sum(
+            current_extraction(project, w) is not None for w in included_works(project)
         )
+        within = tolerated_within(project, blocking, size)
+        if within:
+            tolerated.update(within)
+        else:
+            refusals.append(
+                ValidationIssue(
+                    "unextracted",
+                    f"included works with a document and no current extraction: {_named(blocking)}",
+                )
+            )
     if direction is Direction.BACKWARD:
         candidates = snowball_candidates(project, sources)
         queries = snowball_queries(candidates)
@@ -983,6 +1004,7 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
         unqueryable=unqueryable,
         unextracted=unextracted,
         no_document=_no_document(unextracted),
+        tolerated_pending=sorted(tolerated),
     )
 
 
@@ -1128,6 +1150,7 @@ def snowball_round(
                 queries=tuple(spec.text for spec in specs),
                 rule=rule,
                 unextracted=_unextracted(plan),
+                tolerated_pending=tuple(plan.tolerated_pending),
             )
             project.record([_ledger_event(project, actor, payload)])
         else:
@@ -1161,6 +1184,7 @@ def snowball_round(
                 rule=rule,
                 unextracted=_unextracted(plan),
                 selection=None if picked is None else picked.selection,
+                tolerated_pending=tuple(plan.tolerated_pending),
             )
             project.record([chase.event, _ledger_event(project, actor, payload)])
 
@@ -1243,7 +1267,8 @@ def _pick_forward(
     held = set(openalex.values())
     suffix = _topic_suffix(rule)
     # Every refusal that does not depend on the fetched works comes before the first request.
-    gate = _pending_issues(project) + _forward_limit_issues(project, [ChaseDirection.FORWARD])
+    gate, _ = _pending_gate(project)
+    gate += _forward_limit_issues(project, [ChaseDirection.FORWARD])
     gate += search_authorization(
         project,
         _GATE_PLACEHOLDER,
@@ -1390,4 +1415,5 @@ def _result(
         runs=runs,
         new_works=new_works,
         no_document=plan.no_document,
+        tolerated_pending=plan.tolerated_pending,
     )

@@ -175,3 +175,18 @@ def test_models_reject_unknown_fields_and_bad_ranges() -> None:
         ScreeningPlan(passes=1, kappa_floor=1.5, reviewers=())
     with pytest.raises(ValidationError):
         Reviewer.model_validate({"role": "reviewer-of-record", "actor": "a", "kind": "robot"})
+
+
+def test_pending_tolerance_is_left_out_of_the_hash_while_unset() -> None:
+    """Decision 138: an unset `pending_tolerance` changes no dump and no version; a set one does."""
+    from factory.model.protocol import UnscreenedTolerance
+
+    spec = _spec()
+    assert spec.pending_tolerance is None
+    declared = _spec(pending_tolerance=UnscreenedTolerance(fewer_than=3, fraction=0.03))
+    assert protocol_version(declared) != protocol_version(spec)
+    assert declared.model_dump(mode="json")["pending_tolerance"] == {
+        "fewer_than": 3,
+        "fraction": 0.03,
+    }
+    assert protocol_version(_spec(pending_tolerance=None)) == protocol_version(spec)

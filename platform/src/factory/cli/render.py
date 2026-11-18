@@ -943,6 +943,16 @@ def _candidate_line(c: RoundCandidate) -> str:
     return f"  cited by {c.cited_by_included} included work(s): {c.work_key}{flag}"
 
 
+def _tolerated_lines(tolerated: list[str]) -> list[str]:
+    """The works a round goes ahead without, within the protocol's `pending_tolerance`."""
+    if not tolerated:
+        return []
+    return [
+        f"  tolerated: {len(tolerated)} work(s) pending or unextracted, within pending_tolerance "
+        f"(recorded in the round): {', '.join(tolerated)}"
+    ]
+
+
 def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationIssue]) -> list[str]:
     """A dry run: whether the round is allowed and why not, the plan's gaps, the candidates
     ranked by how many included works cite them, and the queries."""
@@ -951,6 +961,7 @@ def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationI
     lines = [f"{direction} round {state.round_no}: {verdict}"]
     lines += [f"  {i.field}: {i.reason}" for i in state.refusals]
     lines += [f"  note: {n}" for n in state.notes]
+    lines += _tolerated_lines(result.tolerated_pending)
     lines += [f"  plan gap {i.field}: {i.reason}" for i in gaps]
     lines.append(f"{len(result.candidates)} candidate(s)")
     lines += [_candidate_line(c) for c in result.candidates]
@@ -965,6 +976,7 @@ def round_result_lines(result: RoundResult) -> list[str]:
     lines = [
         f"round {result.round_id}: {len(result.runs)} queries run, {result.new_works} new works"
     ]
+    lines += _tolerated_lines(result.tolerated_pending)
     selection = result.selection
     if selection is not None:
         lines.append(
