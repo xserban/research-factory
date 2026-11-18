@@ -471,22 +471,58 @@ def _layer_order() -> list[str]:
     return [*LAYER_ORDER, hp.UNLAYERED]
 
 
+def _unread_entry(ctx: HubContext, work_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """A corpus entry for an included work no miner has read: its record only, no coded values,
+    marked `not_read_yet` so the Corpus lists every included work (plan 4.1)."""
+    title, published = ctx.publication.get(work_id, (work_id, ""))
+    return {
+        "id": work_id,
+        "slug": site_corpus.slug_of(work_id),
+        "title": title or work_id,
+        "authors": meta.get("authors", []),
+        "published": published,
+        "year": published[:4],
+        "month": published[:7],
+        "venue": meta.get("venue", ""),
+        "doi": meta.get("doi"),
+        "arxiv": meta.get("arxiv"),
+        "cited_by": None,
+        "cited_in_corpus": c.count if (c := ctx.cited_here.get(work_id)) else None,
+        "abstract": meta.get("abstract", ""),
+        "cls": {},
+        "map": {},
+        "sum": {},
+        "desc": {},
+        "stages": [],
+        "design": [],
+        "n_design": 0,
+        "doc": None,
+        "layer": ctx.layer_of[work_id],
+        "not_read_yet": True,
+    }
+
+
 def build_corpus(ctx: HubContext) -> dict[str, Any]:
     """`site_corpus.corpus_payload` restricted to the included set (plan 4.1).
 
     corpus_payload reads the index for works with live miner rows (excluded ones too), so it is
     called and post-filtered: a work stays only if included; a canonical work with no rows of its
     own takes the rows of the duplicate that holds them (marked `mapped_from`); citation pairs are
-    mapped to included ids, self-links and repeats dropped. `sets` lists the differences."""
+    mapped to included ids, self-links and repeats dropped. An included work no miner has read is
+    listed from its record, marked `not_read_yet`, so every included work appears. `sets` lists the
+    differences."""
     raw = site_corpus.corpus_payload(ctx.project)
     by_id = {w["id"]: w for w in raw["works"]}
     source_of = ctx.source_of
     layer_of = ctx.layer_of
     works: list[dict[str, Any]] = []
     to_included: dict[str, str] = {}
+    unread = [w for w in sorted(ctx.included) if by_id.get(source_of[w]) is None]
+    meta = work_meta(ctx.project, unread)
     for w in sorted(ctx.included):
         entry = by_id.get(source_of[w])
         if entry is None:
+            works.append(_unread_entry(ctx, w, meta.get(w, {})))
             continue
         to_included[entry["id"]] = w
         item = dict(entry)

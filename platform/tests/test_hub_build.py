@@ -285,6 +285,20 @@ def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_
     assert isinstance(sets, dict) and "included" in str(sets.keys()) + "included"
 
 
+def test_corpus_lists_every_included_work_and_marks_the_unread(
+    world: Project, tmp_path: Path
+) -> None:
+    payload = _payload(world, tmp_path, "corpus")
+    ctx = hb.HubContext(world)
+    works = payload["works"]
+    assert isinstance(works, list)
+    assert {w["id"] for w in works} == set(ctx.included)
+    unread = [w for w in works if w.get("not_read_yet")]
+    assert unread, "the fixture holds included works no miner has read"
+    for w in unread:
+        assert w["title"] and w["cls"] == {} and w["stages"] == []
+
+
 def test_lenses_adoption_uses_technique_miner_rows(world: Project) -> None:
     ctx = hb.HubContext(world)
     recs = hb.adoption_records(ctx)
