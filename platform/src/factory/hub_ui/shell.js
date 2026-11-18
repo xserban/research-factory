@@ -282,13 +282,23 @@ function updating(on){
     el.textContent = 'Updating…'; document.body.appendChild(el);
   } else if (waiting <= 0 && el) el.remove();
 }
+/* Total wait is capped at about five minutes; the pause grows gently from Retry-After to 15 s. */
+const WAIT_CAP_MS = 300000;
 function fetchPayload(n){
-  let started = false;
+  let started = false, waited = 0, pause = 0;
   const attempt = () => fetch('data/' + n + '.json').then(r => {
     if (r.status === 503) {
       if (!started) { started = true; updating(true); }
       const s = Math.max(1, parseInt(r.headers.get('Retry-After') || '2', 10));
-      return new Promise(res => setTimeout(res, s * 1000)).then(attempt);
+      pause = pause ? Math.min(pause * 1.5, 15000) : s * 1000;
+      if (waited + pause > WAIT_CAP_MS) {
+        const el = document.getElementById('hub-updating');
+        if (el) el.textContent = 'Still updating \u2014 reload later';
+        started = false; /* skip the decrement: the note stays up and we stop asking */
+        throw new Error(n + ': still updating');
+      }
+      waited += pause;
+      return new Promise(res => setTimeout(res, pause)).then(attempt);
     }
     if (!r.ok) throw new Error(n + ': HTTP ' + r.status);
     return r.json();

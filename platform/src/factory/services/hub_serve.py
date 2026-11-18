@@ -13,7 +13,7 @@ Invariants:
 - Payloads are built on demand by one worker thread, one build at a time, all stale payloads that
   were asked for sharing one `HubContext` (the flow ledger takes about 80 s on the pilot). A request
   never waits for a build: it gets `Building` (the server answers 503 with `Retry-After`). A payload
-  that failed at a fingerprint is not tried again until the fingerprint changes.
+  that failed at a fingerprint is not tried again until the fingerprint changes or `FAILED_RETRY_SECONDS` pass.
 - The disk file `<name>.json` is written first, then `<name>.fp`; a payload without a matching
   `.fp` is stale.
 - No function here calls a model or the network.
@@ -22,9 +22,11 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -43,6 +45,10 @@ from factory.services.search import get_work, list_works
 from factory.services.site import site_dir, type_counts
 
 LINGER: float = 5.0
+# A build that failed at a fingerprint is served as 500 for this long; the next request after it
+# builds again (a transient fault, such as a locked file, then heals without a new event).
+FAILED_RETRY_SECONDS: Final = 60.0
+_LOG: Final = logging.getLogger(__name__)
 """Seconds the worker waits for another request after the queue empties before it exits and lets
 go of the shared context (the next page's payloads arrive within moments of the first)."""
 RETRY_AFTER: Final = 2
@@ -100,7 +106,10 @@ def code_hash() -> str:
 
 
 def fingerprint(project: Project) -> str:
-    """One version for every payload: the event log head and the hub code."""
+    """One version for every payload: the event log head and the hub code.
+
+    Reads the projected index (`type_counts`), not the log files: every writer projects on write,
+    so the index is current whenever an event has landed."""
     counts = type_counts(project)
     total = sum(n for n, _ in counts.values())
     last = max((m for _, m in counts.values()), default="")
@@ -124,7 +133,9 @@ class Building:
 
 @dataclass(frozen=True)
 class Failed:
-    error: str
+    """A build that failed recently; carries only the payload name (the detail is logged)."""
+
+    name: str
 
 
 @dataclass(frozen=True)
@@ -145,15 +156,16 @@ def known_name(name: str) -> bool:
 class PayloadService:
     """One project's payload cache and its on-demand builder (see the module docstring)."""
 
-    def __init__(self, project: Project) -> None:
+    def __init__(self, project: Project, clock: Callable[[], float] = time.monotonic) -> None:
         self._project = project
+        self._clock = clock
         self._dir = site_dir(project) / CACHE_DIR / "data"
         self._cond = threading.Condition()
         self._queue: list[str] = []
         self._current: str | None = None
         self._done = 0
         self._started: float | None = None
-        self._failed: dict[str, tuple[str, str]] = {}
+        self._failed: dict[str, tuple[str, float]] = {}  # name -> (fingerprint, time of failure)
         self._unknown: dict[str, str] = {}
         self._ctx: tuple[str, hub_build.HubContext] | None = None
         self._worker: threading.Thread | None = None
@@ -181,7 +193,9 @@ class PayloadService:
         with self._cond:
             failed = self._failed.get(name)
             if failed is not None and failed[0] == fp:
-                return Failed(failed[1])
+                if self._clock() - failed[1] < FAILED_RETRY_SECONDS:
+                    return Failed(name)
+                del self._failed[name]  # the window has passed: build it again
             if name not in self._queue and name != self._current:
                 self._queue.append(name)
             self._ensure_worker()
@@ -251,7 +265,8 @@ class PayloadService:
             tmp.replace(self._dir / f"{name}.json")
             (self._dir / f"{name}.fp").write_text(fp + "\n", encoding="utf-8")
         except Exception as exc:  # one broken payload never stops the others
-            self._failed[name] = (fp, f"{type(exc).__name__}: {exc}")
+            _LOG.exception("hub payload %s failed to build: %s", name, exc)
+            self._failed[name] = (fp, self._clock())
 
 
 # ---------------------------------------------------------------- trace

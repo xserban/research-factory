@@ -19,10 +19,12 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.reader import read_all
 from factory.model.screening import Channel
+from factory.model.search import QueryKind, QuerySpec
 from factory.services import hub_build as hb
 from factory.services import hub_serve, hub_ui, site_server, work_layers
 from factory.services import inbox as inbox_service
 from factory.services.context import Project, list_projects, open_project
+from factory.services.search import list_works, register_query, run_query
 from tests.helpers import SESSION
 
 UI = "/p/demo/ui"
@@ -234,9 +236,43 @@ def test_a_failing_payload_is_500_and_not_retried_at_the_same_fingerprint(
 
     monkeypatch.setitem(hb.BUILDERS, "overview", broken)
     status, _, body = _payload(port, "overview")
-    assert status == 500 and "boom" in json.loads(body)["error"]
+    assert status == 500 and "boom" not in body.decode()
+    assert json.loads(body) == {"error": "build failed", "payload": "overview"}
     assert _req(port, "GET", f"{UI}/data/overview.json")[0] == 500
     assert seen == [1]
+
+
+def test_a_failed_payload_is_tried_again_after_the_retry_window(
+    project: Project, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    now = [1000.0]
+    service = hub_serve.PayloadService(project, clock=lambda: now[0])
+    monkeypatch.setattr(hub_serve, "LINGER", 0.0)
+    seen: list[int] = []
+
+    def flaky(ctx: hb.HubContext) -> dict[str, Any]:
+        seen.append(1)
+        if len(seen) == 1:
+            raise RuntimeError("boom")
+        return {"ok": True}
+
+    monkeypatch.setitem(hb.BUILDERS, "overview", flaky)
+
+    def settle() -> hub_serve.Answer:
+        deadline = time.monotonic() + 20
+        while True:
+            answer = service.get("overview")
+            if not isinstance(answer, hub_serve.Building) or time.monotonic() > deadline:
+                return answer
+            time.sleep(0.02)
+
+    first = settle()
+    assert isinstance(first, hub_serve.Failed) and first.name == "overview"
+    assert "boom" in caplog.text  # the detail is logged, not served
+    now[0] += hub_serve.FAILED_RETRY_SECONDS - 1
+    assert isinstance(service.get("overview"), hub_serve.Failed) and seen == [1]
+    now[0] += 2
+    assert isinstance(settle(), hub_serve.Ready) and seen == [1, 1]
 
 
 def test_one_context_serves_every_payload_of_a_build(
@@ -350,6 +386,49 @@ def test_snowball_refuses_a_bad_work_and_writes_nothing(
         assert status == 400, body
         assert json.loads(data)["issues"]
     assert _events(project) == before
+
+
+def test_snowball_refuses_a_real_corpus_work_with_a_doi(
+    explore_project: Project,
+    fake_sources: Any,
+    settings: Settings,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = fake_sources(
+        [[{"title": "In corpus", "authors": ["Ada Zhou"], "year": 2024, "doi": "10.5555/incorpus"}]]
+    )
+    qid = register_query(
+        explore_project,
+        explore_project.human_actor(),
+        QuerySpec(source="fake", kind=QueryKind.KEYWORD, text="x"),
+        sources=sources,
+    )
+    run_query(explore_project, qid, sources=sources)
+    (work,) = list_works(explore_project)
+    assert work.identifiers.doi
+    monkeypatch.setattr(hub_serve, "LINGER", 0.0)
+    hub = site_server.MainHub(
+        settings.root,
+        lambda: list_projects(settings),
+        lambda slug: open_project(settings, slug, session=SESSION, clock=clock),
+        min_gap=300.0,
+        background=False,
+    )
+    httpd: ThreadingHTTPServer = site_server.make_main_server(hub, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        before = _events(explore_project)
+        status, _, data = _req(
+            port, "POST", SNOW, {"work_id": work.id}, {"X-Factory-Token": _token(port)}
+        )
+        assert status == 400 and "already in the corpus" in data.decode()
+        assert _events(explore_project) == before
+        assert _link_events(explore_project) == []
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_snowball_records_the_researchers_inbox_link_once(

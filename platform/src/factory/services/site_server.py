@@ -1340,7 +1340,7 @@ def _handler_class(
                     {"Retry-After": str(hub_serve.RETRY_AFTER)},
                 )
             elif isinstance(answer, hub_serve.Failed):
-                self._json(500, {"error": answer.error})
+                self._json(500, {"error": "build failed", "payload": answer.name})
             else:
                 self._cache = "private, max-age=0, must-revalidate"
                 seen = {
