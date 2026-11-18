@@ -12,6 +12,9 @@ Invariants:
   ranked.
 - Returned titles and texts pass the same held-out scrub as other tools that name works
   (`held_out_tokens(include_work_ids=False)`); the scrub replaces identifiers, never a hit.
+- `kinds` restricts hits to passages of those section kinds (None: every indexed kind; related,
+  appendix and back passages are never indexed). Strings are accepted; an unknown kind is refused
+  on field `kinds`.
 - An empty query, or more than `MAX_QUERIES` queries, is refused on field `queries`.
 """
 
@@ -19,9 +22,10 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
+from factory.document.passages import SectionKind
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.passage_index import IndexReport, ensure_indexed, open_index
@@ -51,6 +55,7 @@ class Hit:
     rank: int
     ranks_per_query: tuple[int | None, ...]
     conversion_id: str
+    section_kind: SectionKind
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,19 @@ def _validate(queries: Sequence[str]) -> list[str]:
     return [m for m in matches if m is not None]
 
 
+def _validate_kinds(kinds: Collection[SectionKind] | None) -> list[str] | None:
+    if kinds is None:
+        return None
+    values = {str(k) for k in kinds}
+    allowed = {k.value for k in SectionKind}
+    bad = sorted(values - allowed)
+    if bad:
+        raise FactoryValidationError(
+            [ValidationIssue("kinds", f"unknown section kind: {', '.join(bad)}")]
+        )
+    return sorted(values)
+
+
 def corpus_search(
     project: Project,
     queries: Sequence[str],
@@ -89,32 +107,38 @@ def corpus_search(
     *,
     limit: int = 20,
     per_work_limit: int = 3,
+    kinds: Collection[SectionKind] | None = None,
 ) -> SearchResult:
     """Search the pinned conversions of `spec` (see the module invariants)."""
     matches = _validate(queries)
+    kind_values = _validate_kinds(kinds)
     selection = resolve_selection(project, spec)
     report = ensure_indexed(project, selection.works)
     pinned = [w.conversion_id for w in selection.works]
     ranked: list[dict[tuple[str, str], int]] = []
-    rows: dict[tuple[str, str], tuple[str, str, str, str, str]] = {}
+    rows: dict[tuple[str, str], tuple[str, str, str, str, str, str]] = {}
     with open_index(project) as conn:
         conn.execute("CREATE TEMP TABLE pinned(conversion_id TEXT PRIMARY KEY)")
         conn.executemany("INSERT INTO pinned VALUES (?)", [(c,) for c in pinned])
+        conn.execute("CREATE TEMP TABLE wanted(kind TEXT PRIMARY KEY)")
+        if kind_values is not None:
+            conn.executemany("INSERT INTO wanted VALUES (?)", [(k,) for k in kind_values])
         for match in matches:
             found = conn.execute(
                 "SELECT p.conversion_id, p.passage_id, p.work_id, p.anchors_json, "
-                "p.section_path_json, p.text FROM passages_fts f "
+                "p.section_path_json, p.text, p.section_kind FROM passages_fts f "
                 "JOIN passages p ON p.rowid = f.rowid "
                 "WHERE passages_fts MATCH ? "
                 "AND p.conversion_id IN (SELECT conversion_id FROM pinned) "
+                "AND (? = 0 OR p.section_kind IN (SELECT kind FROM wanted)) "
                 "ORDER BY bm25(passages_fts, ?, 1.0), p.work_id, p.passage_id LIMIT ?",
-                (match, _TITLE_WEIGHT, CANDIDATES),
+                (match, int(kind_values is not None), _TITLE_WEIGHT, CANDIDATES),
             ).fetchall()
             ranks: dict[tuple[str, str], int] = {}
-            for position, (conv, pid, work, anchors, path, text) in enumerate(found, start=1):
+            for position, (conv, pid, work, anchors, path, text, kind) in enumerate(found, start=1):
                 key = (conv, pid)
                 ranks[key] = position
-                rows[key] = (work, anchors, path, text, conv)
+                rows[key] = (work, anchors, path, text, conv, kind)
             ranked.append(ranks)
 
     def score(key: tuple[str, str]) -> float:
@@ -126,7 +150,7 @@ def corpus_search(
     per_work: dict[str, int] = {}
     titles: dict[str, str] = {}
     for fused, key in enumerate(order, start=1):
-        work, anchors, path, text, conv = rows[key]
+        work, anchors, path, text, conv, kind = rows[key]
         if per_work.get(work, 0) >= per_work_limit:
             continue
         per_work[work] = per_work.get(work, 0) + 1
@@ -144,6 +168,7 @@ def corpus_search(
                 rank=fused,
                 ranks_per_query=tuple(r.get(key) for r in ranked),
                 conversion_id=conv,
+                section_kind=SectionKind(kind),
             )
         )
         if len(hits) >= limit:

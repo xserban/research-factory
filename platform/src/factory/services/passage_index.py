@@ -9,6 +9,8 @@ Invariants:
   other conversion of those works are removed, so a search never reads a superseded conversion.
 - A conversion is re-indexed when its `markdown_hash` or `CHUNKER_VERSION` differs from the rows
   held; otherwise its rows are reused unchanged.
+- Passages whose section kind is related, appendix or back are not indexed; they are counted in
+  `IndexReport.excluded_passages` (for the conversions indexed in that call only).
 - Rows are a pure function of the Markdown, the chunker and the work title at index time.
 """
 
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from factory.canonical import canonical_json
-from factory.document.passages import cut_passages
+from factory.document.passages import SectionKind, cut_passages
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.conversions import conversion_of
@@ -31,6 +33,7 @@ from factory.services.selection import SelectedWork
 __all__ = [
     "CHUNKER_VERSION",
     "TARGET_WORDS",
+    "UNINDEXED_KINDS",
     "IndexReport",
     "ensure_indexed",
     "index_path",
@@ -39,7 +42,9 @@ __all__ = [
 
 TARGET_WORDS = 250
 _TITLE_SEP = " \u203a "  # joins title and section path
-CHUNKER_VERSION = f"1:target_words={TARGET_WORDS}"
+MIN_WORDS = 30
+UNINDEXED_KINDS = frozenset({SectionKind.RELATED, SectionKind.APPENDIX, SectionKind.BACK})
+CHUNKER_VERSION = f"2:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
 """Bumped when the passage cutter or its target size changes; forces a re-index."""
 
 _SCHEMA = """
@@ -49,6 +54,7 @@ CREATE TABLE IF NOT EXISTS passages(
     passage_id TEXT NOT NULL,
     anchors_json TEXT NOT NULL,
     section_path_json TEXT NOT NULL,
+    section_kind TEXT NOT NULL,
     text TEXT NOT NULL,
     chunker_version TEXT NOT NULL,
     markdown_hash TEXT NOT NULL,
@@ -68,6 +74,7 @@ class IndexReport:
     indexed: int
     reused: int
     removed: int
+    excluded_passages: int = 0
 
 
 def index_path(project: Project) -> Path:
@@ -99,7 +106,7 @@ def _delete(conn: sqlite3.Connection, where: str, params: tuple[str, ...]) -> in
 def ensure_indexed(project: Project, works: Sequence[SelectedWork]) -> IndexReport:
     """Bring the sidecar in line with the pinned conversions of `works` (see the module
     invariants). Writes only the sidecar."""
-    indexed = reused = removed = 0
+    indexed = reused = removed = excluded = 0
     with open_index(project) as conn:
         for work in works:
             conversion = conversion_of(project, work.conversion_id)
@@ -125,14 +132,18 @@ def ensure_indexed(project: Project, works: Sequence[SelectedWork]) -> IndexRepo
             record = get_work(project, work.work_id)
             title = "" if record is None else record.title
             for passage in cut_passages(markdown, target_words=TARGET_WORDS):
+                if passage.section_kind in UNINDEXED_KINDS:
+                    excluded += 1
+                    continue
                 cursor = conn.execute(
-                    "INSERT INTO passages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO passages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         work.conversion_id,
                         work.work_id,
                         passage.passage_id,
                         canonical_json(list(passage.anchors)).decode("utf-8"),
                         canonical_json(list(passage.section_path)).decode("utf-8"),
+                        passage.section_kind.value,
                         passage.text,
                         CHUNKER_VERSION,
                         conversion.markdown_hash,
@@ -144,4 +155,4 @@ def ensure_indexed(project: Project, works: Sequence[SelectedWork]) -> IndexRepo
                     (cursor.lastrowid, title_path, passage.text),
                 )
             indexed += 1
-    return IndexReport(indexed, reused, removed)
+    return IndexReport(indexed, reused, removed, excluded)

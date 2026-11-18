@@ -4,6 +4,7 @@ converter that emits anchored Markdown, so passages are known."""
 # ruff: noqa: F811
 import pytest
 
+from factory.document.passages import SectionKind
 from factory.document.registry import ConverterRegistry
 from factory.errors import FactoryValidationError
 from factory.services import corpus_search as cs
@@ -58,8 +59,12 @@ def _convert(
     convert_documents(project, ConverterRegistry([Anchored(version, extra)]), override=override)
 
 
-def _hits(project: Project, queries: list[str], **kw: int) -> cs.SearchResult:
-    return corpus_search(project, queries, SelectionSpec(), **kw)
+def _hits(
+    project: Project, queries: list[str], *, limit: int = 20, per_work_limit: int = 3
+) -> cs.SearchResult:
+    return corpus_search(
+        project, queries, SelectionSpec(), limit=limit, per_work_limit=per_work_limit
+    )
 
 
 def test_index_built_then_reused(project: Project, screened: list[str]) -> None:
@@ -164,3 +169,55 @@ def test_deleted_sidecar_is_rebuilt(project: Project, screened: list[str]) -> No
     assert [(h.work_id, h.passage_id) for h in after.hits] == [
         (h.work_id, h.passage_id) for h in before.hits
     ]
+
+
+class Kinded(Anchored):
+    """A document with front, method, related, appendix and back sections.
+
+    The paragraph under "References" is parsed as a bibliography entry, not a passage, so only
+    the related and appendix passages are excluded (two per work).
+    """
+
+    def to_markdown(self, raw: bytes, media_type: str) -> tuple[str, tuple[str, ...]]:
+        def h(a: str, t: str) -> str:
+            return f'<a id="{a}"></a>\n## {t}'
+
+        def p(a: str, t: str) -> str:
+            return f'<a id="{a}"></a>\n{t} ' + " ".join(["filler"] * 30)
+
+        parts = [
+            h("s1", "Introduction"),
+            p("s1.p1", "Quokka intro."),
+            h("s2", "Related Work"),
+            p("s2.p1", "Quokka related."),
+            h("s3", "Method"),
+            p("s3.p1", "Quokka method."),
+            h("s4", "Appendix A"),
+            p("s4.p1", "Quokka appendix."),
+            h("s5", "References"),
+            p("s5.p1", "Quokka references."),
+        ]
+        return "\n\n".join(parts) + "\n", ()
+
+
+def test_unindexed_kinds_and_kinds_filter(project: Project, screened: list[str]) -> None:
+    convert_documents(project, ConverterRegistry([Kinded()]), override=True)
+    result = _hits(project, ["quokka"], limit=200, per_work_limit=10)
+    assert {h.passage_id for h in result.hits} == {"s1.p1", "s3.p1"}
+    assert result.index.excluded_passages == 2 * len({h.work_id for h in result.hits})
+    kinds = {h.passage_id: h.section_kind for h in result.hits}
+    assert kinds == {"s1.p1": SectionKind.FRONT, "s3.p1": SectionKind.METHOD}
+    only = corpus_search(
+        project, ["quokka"], SelectionSpec(), kinds=[SectionKind.METHOD], per_work_limit=10
+    )
+    assert {h.passage_id for h in only.hits} == {"s3.p1"}
+    by_text = corpus_search(project, ["quokka"], SelectionSpec(), kinds=["front"])  # type: ignore[list-item]
+    assert {h.passage_id for h in by_text.hits} == {"s1.p1"}
+    none = corpus_search(project, ["quokka"], SelectionSpec(), kinds=[SectionKind.RELATED])
+    assert none.hits == ()
+
+
+def test_unknown_kind_refused(project: Project, screened: list[str]) -> None:
+    with pytest.raises(FactoryValidationError) as err:
+        corpus_search(project, ["x"], SelectionSpec(), kinds=["nonsense"])  # type: ignore[list-item]
+    assert err.value.issues[0].field == "kinds"
