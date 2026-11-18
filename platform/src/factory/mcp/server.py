@@ -2021,7 +2021,9 @@ def build_server(
         none is served. The miner must be registered and listed in the protocol's `miners`
         section. The batch names the miner's fields and the rule of each kind, the work, the
         pinned conversion to read with `document_read` and the anchors the miner's selector
-        selects; `blocked` says why ordinary work waits. Joins this session to the miner's pass on
+        selects (`selection_fallback` is true when its headings matched under 10 % of the
+        paragraph words, so every section is served; `selection_matched_share` is that share);
+        `blocked` says why ordinary work waits. Joins this session to the miner's pass on
         its first call. With `calibration` the pass is the miner's calibration pass (pass A): the
         units of its drawn sample only, for a session that neither proposed the miner, nor took
         part in a production pass, nor recorded a gold label. A production pass is refused for a

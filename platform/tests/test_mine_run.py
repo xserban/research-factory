@@ -8,7 +8,7 @@ import pytest
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mining.spec import spec_to_json
+from factory.mining.spec import MinerSpec, spec_to_json
 from factory.model.extraction import ExtractedRowInput, FieldInput, MinerScope
 from factory.model.screening import Channel, PassLabel
 from factory.services.check import check
@@ -308,3 +308,54 @@ def test_mine_status_reads_each_ledger_once_per_scope(
         assert status.units == len(states)
         assert status.closed == sum(s.state == "current" for s in states)
         assert status.stale == sum(s.state == "stale" for s in states)
+
+
+# --- IDEA-99: selector fallback recorded on the task ---
+
+
+def _unmatched_miner() -> MinerSpec:
+    from dataclasses import replace
+
+    spec = method_vision()
+    return replace(spec, selector=replace(spec.selector, heading_patterns=("zzz-no-such",)))
+
+
+def test_fallback_is_recorded_on_the_new_task_and_quotes_verify(
+    project: Project, agent: Actor, mina: Actor, world: list[str]
+) -> None:
+    list_miner(project, agent, _unmatched_miner())
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
+    assert isinstance(batch, MineBatch)
+    assert batch.selection_fallback is True
+    assert batch.selection_matched_share == 0.0
+    assert "s3.p1" in batch.anchors and "t1" in batch.anchors  # every section is served
+    result = mine_record(project, mina, batch.task_id, [mine_row()], finish=True)
+    assert result.completed, result.rows.rejected  # a quote from a fallback anchor verifies
+
+
+def test_matched_selection_records_no_fallback(
+    project: Project, agent: Actor, mina: Actor, world: list[str]
+) -> None:
+    list_miner(project, agent)
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
+    assert isinstance(batch, MineBatch)
+    assert batch.selection_fallback is False
+    assert batch.selection_matched_share is not None and batch.selection_matched_share >= 0.10
+    assert batch.anchors == ("s3.p1", "t1")  # unchanged
+
+
+def test_task_content_written_before_the_change_still_validates_unaltered(
+    project: Project, agent: Actor, mina: Actor, world: list[str]
+) -> None:
+    from factory.services.extraction import MineBatchContent
+
+    list_miner(project, agent)
+    batch = mine_exploratory(project, mina, VISION_NAME, 1, A).batch
+    assert isinstance(batch, MineBatch)
+    old = batch.model_dump(mode="json")
+    old.pop("task_id")
+    old.pop("selection_fallback")
+    old.pop("selection_matched_share")  # the content of a task created before the change
+    content = MineBatchContent.model_validate(old)
+    assert content.selection_fallback is False and content.selection_matched_share is None
+    assert content.anchors == batch.anchors

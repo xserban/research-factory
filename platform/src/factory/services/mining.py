@@ -20,7 +20,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
 from factory.mining.compile import compile_miner, miner_digest
 from factory.mining.kinds import close_checks, kind_checks
-from factory.mining.select import selected_anchors
+from factory.mining.select import select_with_fallback
 from factory.mining.spec import (
     AnchorKindRef,
     CitationKind,
@@ -710,7 +710,7 @@ def mine_next(
 
     def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
         conversion = base.records[0]["conversion_id"]
-        anchors = selected_anchors(conversion_manifest(proj, conversion), spec.selector)
+        selection = select_with_fallback(conversion_manifest(proj, conversion), spec.selector)
         instructions = MINE_INSTRUCTIONS
         if spec.taxonomy is not None:
             from factory.mining.derive import DERIVED_FIELD_NAMES
@@ -730,7 +730,9 @@ def mine_next(
             miner=name,
             version=version,
             digest=digest,
-            anchors=anchors,
+            anchors=selection.anchors,
+            selection_fallback=selection.fallback,
+            selection_matched_share=round(selection.matched_share, 3),
             calibration_id=calibration_id,
             exploratory=exploratory,
             field_kinds=notes,

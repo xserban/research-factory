@@ -246,6 +246,11 @@ class MineBatchContent(ExtractBatchContent):
     version: int
     digest: str
     anchors: tuple[str, ...]
+    selection_fallback: bool = False
+    """The selector's headings matched under `SELECTION_FALLBACK_BELOW` of the paragraph words, so
+    `anchors` are every section of its kinds (IDEA-99). Absent (False) on tasks created earlier."""
+    selection_matched_share: float | None = None
+    """Share of paragraph words the selector matched, 3 decimals; None on tasks created earlier."""
     calibration_id: str | None = None
     exploratory: bool = False
     field_kinds: dict[str, str] = Field(default_factory=dict)
