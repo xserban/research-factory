@@ -5,6 +5,7 @@ import pytest
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.model.extraction import ExtractedRowInput
 from factory.model.screening import PassLabel
 from factory.services import claims_digest as cd
 from factory.services.claims_digest import claims_digest, render_claims_digest
@@ -30,7 +31,13 @@ def minb() -> Actor:
     return miner_actor(SESSION_M2, "claude-sonnet-5-5")
 
 
-def _mine(project: Project, agent: Actor, mina: Actor, by_index: dict[int, list], works: list[str]):
+def _mine(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    by_index: dict[int, list[ExtractedRowInput]],
+    works: list[str],
+) -> list[str]:
     list_miner(project, agent, claims_spec())
     order = sorted(works)
     mine_pass(
@@ -79,7 +86,10 @@ def test_gaps_no_rows_and_absence_only(
     digest = claims_digest(project, SelectionSpec())
     gaps = {p.code: p.gap for p in digest.papers}
     assert gaps["P01"] == "no-rows" and gaps["P02"] == "absence-only" and gaps["P03"] is None
-    assert digest.papers[1].rows and digest.gaps[:2] == (("P01", "no-rows"), ("P02", "absence-only"))
+    assert digest.papers[1].rows and digest.gaps[:2] == (
+        ("P01", "no-rows"),
+        ("P02", "absence-only"),
+    )
     text = render_claims_digest(digest)
     assert "GAP: no m-claims rows" in text and "GAP: only no-limitation-stated" in text
 

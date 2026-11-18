@@ -201,7 +201,7 @@ def claims_digest(
 def _line(row: ClaimRow) -> str:
     anchor = f" [{row.claim_anchor}]" if row.claim_anchor else ""
     line = (
-        f'- {row.claim_type} | {row.about} | {row.direction} | {row.evidence_type} | '
+        f"- {row.claim_type} | {row.about} | {row.direction} | {row.evidence_type} | "
         f'{row.strength}: "{row.claim_quote}"{anchor}'
     )
     if row.conditions:
@@ -217,13 +217,16 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
     `- type | about | direction | evidence | strength: "quote" [anchor] [conditions: "..."]`
     (`(pass-a-only)` appended for a row without final status), and a stated gap line for a paper
     with `gap`. Pure and deterministic."""
-    blocks = [f"# Claims digest: {digest.miner} v{digest.version}, selection {digest.selection_digest[:12]}"]
+    head = f"# Claims digest: {digest.miner} v{digest.version}"
+    blocks = [f"{head}, selection {digest.selection_digest[:12]}"]
     for paper in digest.papers:
         lines = [f"## {paper.code} {paper.work_id}", paper.title]
         lines.extend(_line(r) for r in paper.rows)
         if paper.gap == "no-rows":
             lines.append(f"GAP: no {digest.miner} rows for this paper")
         elif paper.gap == "absence-only":
-            lines.append("GAP: only no-limitation-stated; the paper states no limitation or other claim")
+            lines.append(
+                "GAP: only no-limitation-stated; the paper states no limitation or other claim"
+            )
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) + "\n"

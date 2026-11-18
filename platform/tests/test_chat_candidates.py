@@ -1,6 +1,8 @@
 """Candidate proposals: validation, tiers, the Explore cap, coverage (plan chat T6)."""
 
 # ruff: noqa: F811
+from typing import Any
+
 import pytest
 
 from factory.errors import FactoryValidationError
@@ -19,12 +21,12 @@ SPEC = SelectionSpec()
 
 def _p(work: str, source: str = "claims", stance: str = "against", **kw: str | None) -> C:
     quote = {"anchor": ANCHOR, "quote": QUOTE} if source in ("claims", "keyword") else {}
-    return C(work, source, stance, **{**quote, **kw})  # type: ignore[arg-type]
+    return C(work, source, stance, **{**quote, **kw})
 
 
-def _issues(project: Project, proposals: list[C], **kw: object) -> dict[str, str]:
+def _issues(project: Project, proposals: list[C], **kw: Any) -> dict[str, str]:
     with pytest.raises(FactoryValidationError) as err:
-        chat_candidates(project, SPEC, proposals, **kw)  # type: ignore[arg-type]
+        chat_candidates(project, SPEC, proposals, **kw)
     return {i.field: i.reason for i in err.value.issues}
 
 

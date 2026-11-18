@@ -37,8 +37,8 @@ from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.canonical import canonical_json
-from factory.events.reader import event_files
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.reader import event_files
 from factory.mining.spec import Population
 from factory.model.base import StrictModel
 from factory.services.context import Project

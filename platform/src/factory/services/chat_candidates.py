@@ -156,7 +156,9 @@ def chat_candidates(
             ok = False
         if has_quote != has_anchor:
             missing = "anchor" if has_quote else "quote"
-            issues.append(ValidationIssue(f"{at}.{missing}", f"{missing} is required with its pair"))
+            issues.append(
+                ValidationIssue(f"{at}.{missing}", f"{missing} is required with its pair")
+            )
             ok = False
         if ok and has_quote and has_anchor:
             assert p.anchor is not None and p.quote is not None
@@ -164,12 +166,14 @@ def chat_candidates(
         if ok:
             accepted.append((work, p))
     if checks:
-        for (i, _work, _item), result in zip(
+        for (i, _work, _item), verdict in zip(
             checks, chat_verify(project, [c[2] for c in checks]), strict=True
         ):
-            if result.status != "accepted":
+            if verdict.status != "accepted":
                 issues.append(
-                    ValidationIssue(f"proposals[{i}].quote", f"{result.status}: {result.item.anchor}")
+                    ValidationIssue(
+                        f"proposals[{i}].quote", f"{verdict.status}: {verdict.item.anchor}"
+                    )
                 )
     if issues:
         raise FactoryValidationError(issues)
