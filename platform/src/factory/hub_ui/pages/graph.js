@@ -267,8 +267,18 @@ svg text{user-select:none;font-family:var(--f-ui)}
       lead: top ? `The most leaned-on outside work, “${esc(short(nm(top.id), 70))}”, is cited by <b>${fmt(top.count)}</b> corpus papers, <b>${pcs(top.count, corpusN)}%</b> of the corpus.` : '',
       body: F.length ? F.map((f, i) => `<div class="frow"><span class="rk">${i + 1}</span><div class="nm">${esc(nm(f.id))}<span class="meta">Outside the corpus</span></div>
         <div class="fb"><div class="fbar" role="img" aria-label="${pcs(f.count, corpusN)}% of the corpus"><i style="width:${(f.share * 100).toFixed(1)}%"></i></div><div class="meta">${pcs(f.count, corpusN)}% of the corpus</div></div>
-        <button class="btn" disabled title="Available in the live hub">Add to snowball</button>
+        ${HUB.served ? `<span class="snow"><button type="button" class="btn" data-snow="${esc(f.id)}">Add to snowball</button><span class="snowmsg" aria-live="polite"></span></span>` : '<button class="btn" disabled title="Available in the live hub">Add to snowball</button>'}
         <details class="cit"><summary>Citing papers (${fmt(f.citing.length)})</summary><ul>${f.citing.map(c => BY.has(c) ? `<li><button type="button" class="lnk" data-open="${esc(c)}">${esc(short(nm(c), 90))}</button></li>` : '').join('')}</ul></details></div>`).join('') : '<p class="empty">No outside works are cited yet.</p>',
+      draw() {
+        /* Served only: the one write of this page. It puts the work in the inbox as your own link (nothing is fetched yet). */
+        main.querySelectorAll('[data-snow]').forEach(b => b.onclick = () => {
+          const host = b.parentElement.querySelector('.snowmsg'), id = b.dataset.snow;
+          HUB.confirm(host, 'Put this work in your inbox for snowballing?', () => HUB.act('/ui/act/snowball-add', {work_id: id}).then(r => r.json().then(j => {
+            host.textContent = !r.ok ? 'Refused: ' + HUB.issues(j) : j.duplicate ? 'Already in your inbox.' : 'Added to your inbox.';
+            if (r.ok) b.disabled = true;
+          })));
+        });
+      },
     };
   };
 

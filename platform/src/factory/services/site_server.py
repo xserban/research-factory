@@ -27,6 +27,10 @@ Invariants:
   written. `GET /api/layers` reads the latest scheme's layer ids and each work's layer. Any
   other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes
   nothing but the site folder, through `site.build`.
+- Hub v2 (plan hub-ui, `services/hub_serve.py`) is served at `<prefix>/ui/`: pages, versioned
+  assets, cached payloads (`data/<name>.json`, ETag, 503 while building) and `trace`, all read-only,
+  plus one act, `POST <prefix>/ui/act/snowball-add` (`work_id`: puts an outside work in the inbox as
+  the local human, `cli:inbox add`). The pages' other acts are the routes above.
 - `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
   runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
   deterministic steps look papers up and convert them and must not run in a request; the reply is
@@ -69,6 +73,7 @@ from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
+from urllib.parse import parse_qsl, unquote
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -80,12 +85,8 @@ from factory.model.screening import Channel
 from factory.services import activity as activity_service
 from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
-from factory.services import inbox as inbox_service
-from factory.services import pipeline as pipeline_service
-from factory.services import resume as resume_service
-from factory.services import runner as runner_service
-from factory.services import site as site_service
 from factory.services import (
+    hub_serve,
     site_auth,
     site_backlog,
     site_catalog_page,
@@ -98,6 +99,11 @@ from factory.services import (
     work_layers,
     work_queue,
 )
+from factory.services import inbox as inbox_service
+from factory.services import pipeline as pipeline_service
+from factory.services import resume as resume_service
+from factory.services import runner as runner_service
+from factory.services import site as site_service
 from factory.services import snapshots as snapshots_service
 from factory.services import watch_config as watch_config_service
 from factory.services.access import authorize_command, authorize_export_works
@@ -112,6 +118,10 @@ MAX_EXPORT_BODY: Final = 256 * 1024
 """The export route takes a list of work ids (up to the cap of 200 works, each id up to a few
 hundred characters), which the usual 16 KiB body limit would cut."""
 EXPORT_ROUTE: Final = "/api/export/works"
+UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
+UI_PREFIX: Final = "/ui"
+"""Hub v2 (plan hub-ui): `<prefix>/ui/` pages, `assets/`, `data/<payload>.json` and `trace`; the
+only write is the snowball act."""
 TOKEN_HEADER: Final = "X-Factory-Token"
 _ACTION_PAGES: Final = ("feed", "queue", "explorer", "updates", "activity")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
@@ -470,6 +480,18 @@ def move_layer(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, o
     return _layer_act(project, "cli:layers move", bad, act)
 
 
+def ui_snowball_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """The hub v2 "Add to snowball" act: an outside work goes to the inbox as the researcher's link
+    (`hub_serve.snowball_add`; authorised as `cli:inbox add`). Nothing else on `/ui/` writes."""
+    work_id = body.get("work_id")
+    return _layer_act(
+        project,
+        "cli:inbox add",
+        [],
+        lambda actor: hub_serve.snowball_add(project, actor, work_id),
+    )
+
+
 def layers_payload(project: Project) -> dict[str, object]:
     """The latest scheme's layer ids and each known work's layer (read-only; the page's selects)."""
     from factory.services.reference_layers import current_scheme
@@ -550,6 +572,7 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/mine/layer": mine_layer,
     "/api/layers/move": move_layer,
     EXPORT_ROUTE: export_works_zip,
+    UI_SNOWBALL_ROUTE: ui_snowball_add,
 }
 
 
@@ -1013,6 +1036,8 @@ class Slot:
         self.write_lock = threading.Lock()
         self.advance_gate = threading.Lock()
         self.resumer = ResumeRunner()
+        self.ui = hub_serve.PayloadService(project)
+        """The hub v2 payload cache and its on-demand builder (served at `/ui/`)."""
 
     def prepare(self) -> None:
         """Write the project's hub page, so a served project is never without its hub."""
@@ -1065,8 +1090,11 @@ def _handler_class(
             self.end_headers()
             self.wfile.write(body)
 
+        _cache: str | None = None
+
         def end_headers(self) -> None:
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", self._cache or "no-store")
+            self._cache = None
             super().end_headers()
 
         def _allowed(self, scope: site_auth.Scope, act: str) -> bool:
@@ -1152,6 +1180,9 @@ def _handler_class(
                 return
             slot = mount.slot
             url = mount.rel.split("?", 1)[0].split("#", 1)[0]
+            if url == UI_PREFIX or url.startswith(UI_PREFIX + "/"):
+                self._ui(url, mount.rel.partition("?")[2], slot, mount.prefix)
+                return
             if url in ("/settings", "/settings/"):
                 self._html(
                     _with_meta(
@@ -1238,6 +1269,92 @@ def _handler_class(
             self.directory = str(slot.root)
             self.path = mount.rel
             super().do_GET()
+
+        def _send(self, code: int, body: bytes, kind: str, headers: Mapping[str, str]) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _ui(self, url: str, query: str, slot: Slot, prefix: str) -> None:
+            """Hub v2 (`hub_serve`): read-only; the page, an asset, a payload or a trace."""
+            if url == UI_PREFIX:
+                self.send_response(301)
+                self.send_header(
+                    "Location", f"{prefix}{UI_PREFIX}/" + (f"?{query}" if query else "")
+                )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            rest = unquote(url[len(UI_PREFIX) + 1 :])
+            if rest in ("", "index.html") or (rest.endswith(".html") and "/" not in rest):
+                text = hub_serve.page_text("overview" if rest in ("", "index.html") else rest[:-5])
+                if text is None:
+                    self._deny(404, "not found")
+                    return
+                text = _with_meta(text, auth.page_credential(site_auth.Scope(slot.slug)), prefix)
+                text = text.replace("<head>", "<head><meta name='factory-served' content='1'>", 1)
+                self._cache = "no-cache"
+                self._html(text)
+            elif rest.startswith("assets/"):
+                version = dict(parse_qsl(query)).get("v")
+                found = hub_serve.asset(rest[len("assets/") :], version)
+                if found is None:
+                    self._deny(404, "not found")
+                    return
+                self._cache = (
+                    "public, max-age=31536000, immutable" if found.immutable else "no-cache"
+                )
+                self._send(200, found.body, found.content_type, {})
+            elif rest.startswith("data/") and rest.endswith(".json"):
+                self._payload(rest[len("data/") : -len(".json")], slot)
+            elif rest == "trace":
+                try:
+                    payload = hub_serve.trace(slot.project, dict(parse_qsl(query)))
+                except FactoryValidationError as exc:
+                    self._json(400, _issues(*exc.issues))
+                    return
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("trace", str(exc))))
+                    return
+                self._cache = "no-cache"
+                self._json(200, payload)
+            else:
+                self._deny(404, "not found")
+
+        def _payload(self, name: str, slot: Slot) -> None:
+            """A cached payload with its ETag (304 when the browser has it), or why not yet."""
+            answer = slot.ui.get(name)
+            if isinstance(answer, hub_serve.Unknown):
+                self._deny(404, "not found")
+            elif isinstance(answer, hub_serve.Building):
+                self._cache = "no-store"
+                body = json.dumps({"building": True, "progress": answer.progress}).encode()
+                self._send(
+                    503,
+                    body,
+                    "application/json; charset=utf-8",
+                    {"Retry-After": str(hub_serve.RETRY_AFTER)},
+                )
+            elif isinstance(answer, hub_serve.Failed):
+                self._json(500, {"error": "build failed", "payload": answer.name})
+            else:
+                self._cache = "private, max-age=0, must-revalidate"
+                seen = {
+                    t.strip().removeprefix("W/")
+                    for t in (self.headers.get("If-None-Match") or "").split(",")
+                }
+                if answer.etag in seen or "*" in seen:
+                    self.send_response(304)
+                    self.send_header("ETag", answer.etag)
+                    self.end_headers()
+                    return
+                self._send(
+                    200, answer.body, "application/json; charset=utf-8", {"ETag": answer.etag}
+                )
 
         def _lazy_item(self, url: str, slot: Slot) -> bool:
             """Serve an item page of a lazily built product, rendering it on its first request
@@ -1350,7 +1467,14 @@ def _handler_class(
                 return
             assert slot is not None and route is not None
             project = slot.project
-            if route in (feed_react, feed_configure, mine_work, mine_layer, move_layer):
+            if route in (
+                feed_react,
+                feed_configure,
+                mine_work,
+                mine_layer,
+                move_layer,
+                ui_snowball_add,
+            ):
                 with slot.write_lock:
                     code, payload = route(project, body)
             elif route is queue_resume:

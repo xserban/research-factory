@@ -307,6 +307,33 @@ const qb = o => o.q && o.q !== o.v ? `<blockquote class="quote">“${hl(o.q)}”
 const kv = o => Object.keys(o || {}).sort().map(k => `<div class="kv"><b>${esc(FL(k))}</b> ${esc(fv(k, o[k].v))}${qb(o[k])}</div>`).join('') || '<div class="meta">None recorded.</div>';
 const copy = c => `<div class="cmd"><code>${esc(c)}</code><button type="button" class="btn" data-copy="${esc(c)}">Copy</button></div>`;
 const off = t => `<button type="button" class="btn" disabled title="Available in the live hub">${t}</button>`;
+/* Researcher acts (served mode only): the existing mine / layer routes, each behind an inline confirmation. */
+const actsHTML = w => HUB.served
+  ? `<button type="button" class="btn" data-act="mine-work">Mine this work</button>
+     <select id="mvl" aria-label="Layer to move to"></select><input id="mvr" type="text" placeholder="Reason (required)" aria-label="Reason for moving" size="22">
+     <button type="button" class="btn" data-act="move">Move to layer</button>
+     <button type="button" class="btn" data-act="mine-layer"${w.layer && w.layer !== 'unlayered' ? '' : ' disabled'}>Mine this layer</button>
+     <div id="actmsg" class="meta" aria-live="polite"></div>`
+  : `${off('Mine this work')}${off('Move to layer')}${off('Mine this layer')}`;
+let LAYER_IDS = null;
+const say = (host, ok, j, what) => { host.textContent = ok ? what : 'Refused: ' + HUB.issues(j); };
+function wireActs(w) {
+  const p = $('#cdet'), host = p.querySelector('#actmsg'), sel = p.querySelector('#mvl');
+  if (!host || !sel) return;
+  (LAYER_IDS ? Promise.resolve(LAYER_IDS) : HUB.get('/api/layers').then(r => r.json()).then(j => (LAYER_IDS = j.layers || []))).then(ids => {
+    sel.innerHTML = ids.map(l => `<option value="${esc(l)}"${l === w.layer ? ' selected' : ''}>${esc(H.layerLabel(l))}</option>`).join('');
+  }).catch(() => { sel.disabled = true; });
+  const run = (path, body, done) => HUB.act(path, body).then(r => r.json().then(j => say(host, r.ok, j, done)));
+  p.querySelector('[data-act="mine-work"]').onclick = () =>
+    HUB.confirm(host, 'Ask for this paper to be mined?', () => run('/api/mine/work', {work_id: w.id}, 'Mining requested for this paper.'));
+  p.querySelector('[data-act="mine-layer"]').onclick = () =>
+    HUB.confirm(host, 'Ask for every included paper of this layer to be mined?', () => run('/api/mine/layer', {layer: w.layer}, 'Mining requested for the layer.'));
+  p.querySelector('[data-act="move"]').onclick = () => {
+    const reason = p.querySelector('#mvr').value.trim();
+    if (!reason) { host.textContent = 'Give a reason first; it is recorded with the move.'; return; }
+    HUB.confirm(host, 'Move this paper to “' + H.layerLabel(sel.value) + '”?', () => run('/api/layers/move', {work_id: w.id, layer: sel.value, reason}, 'Moved. The page shows it after the next update.'));
+  };
+}
 function detailHTML(w) {
   const s = w.sum || {}, o = OUT[w.slug] || [], i = INN[w.slug] || [], P = d.shell.slug || 'PROJECT';
   const L = l => l.map(x => slugMap.get(x)).filter(Boolean).map(x => `<li><a data-open="${esc(x.id)}">${esc(x.title)}</a> <span class="meta">${esc(dateOf(x))}</span></li>`).join('') || '<li class="meta">None found yet.</li>';
@@ -326,11 +353,12 @@ function detailHTML(w) {
   <h3 class="h3">Lifecycle stages</h3>${w.stages.map(x => `<div class="kv"><span class="tag">${esc(pretty(x.stage))}</span> <span class="meta">${esc(x.mode || '')}</span><blockquote class="quote">“${hl(x.quote)}” <span class="meta">${esc(x.anchor || '')}</span></blockquote></div>`).join('') || '<div class="meta">None recorded.</div>'}
   <h3 class="h3">Classification</h3>${kv(w.cls)}<h3 class="h3">Process, human role, blueprint</h3>${kv(w.map)}<h3 class="h3">Descriptors</h3>${kv(w.desc)}
   <h3 class="h3">Results ${w.n_design ? `<span class="meta">${fmt(w.n_design)} rows</span>` : ''}</h3>${w.design.slice(0, 12).map(r => `<div class="kv">${esc(r.system)} · ${esc(pretty(r.stage))} · ${esc(pretty(r.approach))} <span class="meta">${esc(pretty(r.system_role || ''))} · ${esc(pretty(r.evidence_grade || ''))}</span></div>`).join('') || '<div class="meta">No rows.</div>'}
-  <h3 class="h3">Mine and layer</h3><div class="acts">${off('Mine this work')}${off('Move to layer')}${off('Mine this layer')}</div>
+  <h3 class="h3">Mine and layer</h3><div class="acts">${actsHTML(w)}</div>
   <h3 class="h3">Commands</h3>${copy(`factory --project ${P} document read ${w.id}`)}${copy(`factory --project ${P} trace ${w.id}`)}`;
 }
 function openWork(w, silent) {
   if (!w) return; ST.id = w.id; const p = $('#cdet'); p.innerHTML = detailHTML(w); p.setAttribute('open', ''); p.scrollTop = 0; if (!silent) writeHash();
+  if (HUB.served) wireActs(w);
   $('#cdClose').onclick = closeWork; p.querySelectorAll('[data-open]').forEach(a => a.onclick = () => openWork(idMap.get(a.dataset.open)));
   p.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => { try { navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; } catch (e) { b.textContent = 'Select and copy'; } });
 }
@@ -360,7 +388,7 @@ $('#main').innerHTML = H.header({title: 'Corpus', level: 1, infoHtml: infoPage, 
  <label>Sort <select id="sortby">${SORTS.map(s => `<option value="${s[0]}">${s[1]}</option>`).join('')}</select></label><button type="button" class="btn" id="rev" aria-pressed="false">Reverse</button>
  <label>${HUB.term('cic', 'Cited here')} at least <input type="number" id="cite" min="0" step="1"></label><label><input type="checkbox" id="ft"> With full text</label></div>
 <div class="cbar" id="cbar"></div>
-<div class="csel"><button type="button" class="btn" id="xall">Select all in filter</button><button type="button" class="btn primary" id="xgo" disabled>Export selected (0)</button><button type="button" class="btn" id="xclr">Clear</button><span class="meta" id="xmsg"></span></div>
+<div class="csel"><button type="button" class="btn" id="xall">Select all in filter</button><button type="button" class="btn primary" id="xgo" disabled>Export selected (0)</button><button type="button" class="btn" id="xclr">Clear</button><span class="meta" id="xmsg"></span><span id="xact"></span></div>
 <div class="cwrap"><aside class="cside" id="cside" aria-label="Filters">${sideSkeleton()}</aside><section id="cv" aria-live="polite"></section></div>
 <p class="note cfoot">${HUB.info(esc(H.SETS_NOTE), 'About the paper sets')}<span class="meta">About these sets</span></p>`;
 document.body.insertAdjacentHTML('beforeend', '<aside id="cdet" aria-label="Paper"></aside>');
@@ -383,7 +411,24 @@ $('#rev').onclick = () => { ST.rev = !ST.rev; render(); }; $('#cite').oninput = 
 $('#ftog').onclick = () => side.classList.toggle('show');
 $('#xall').onclick = () => { W.filter(w => ok(w)).forEach(w => ST.sel.add(w.id)); $('#xmsg').dataset.keep = ''; render(); };
 $('#xclr').onclick = () => { ST.sel.clear(); $('#xmsg').dataset.keep = ''; render(); };
+/* Served: a zip of the converted Markdown and a manifest from the existing export route (optionally with the PDFs). */
+function serveExport() {
+  const host = $('#xact'), ids = [...ST.sel], box = document.createElement('label');
+  box.className = 'meta'; box.innerHTML = '<input type="checkbox" id="xpdf"> include the PDFs (licensed files)';
+  HUB.confirm(host, 'Export ' + fmt(ids.length) + ' selected paper' + (ids.length === 1 ? '' : 's') + ' as a zip?', () => {
+    const pdfs = box.querySelector('input').checked;
+    return HUB.act('/api/export/works', {work_ids: ids, pdfs, confirm: pdfs}).then(r => {
+      if (!r.ok) return r.json().then(j => { host.textContent = 'Refused: ' + HUB.issues(j); });
+      const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'export.zip';
+      return r.blob().then(b => {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        host.textContent = 'Saved ' + name + '.';
+      });
+    });
+  }, box);
+}
 $('#xgo').onclick = () => {
+  if (HUB.served) return serveExport();
   const ids = [...ST.sel], cmd = 'factory export works --from-file work-ids.txt --out export.zip';
   const txt = '# Work ids selected in the hub Corpus page. Export their converted documents with:\n# ' + cmd + '\n' + ids.join('\n') + '\n';
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], {type: 'text/plain'})); a.download = 'work-ids.txt'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
