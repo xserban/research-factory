@@ -22,6 +22,8 @@ from factory.sources.openalex import OpenAlexSource
 from factory.sources.pubmed import PubmedSource, ncbi_api_key
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import EntryReader, ReflistSource
+from factory.sources.stored import NAME as STORED
+from factory.sources.stored import StoredSource, WorkReader
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ INTERFACES: dict[str, str] = {
     "arxiv": "arXiv API (export.arxiv.org/api/query)",
     "pubmed": "PubMed via NCBI E-utilities (eutils.ncbi.nlm.nih.gov)",
     REFLIST: "Stored reference entries of the included documents (offline)",
+    STORED: "Stored records of works the project already holds (offline)",
     IMPORTLIST: "Stored records of an imported library export (offline)",
 }
 
@@ -60,6 +63,17 @@ def reflist_factory(read: EntryReader) -> SourceFactory:
     """
     return SourceFactory(
         ReflistSource.kinds, lambda _settings, clock: ReflistSource(read, clock=clock)
+    )
+
+
+def stored_factory(read: WorkReader) -> SourceFactory:
+    """The offline `stored` source over one project's stored works (decision 135).
+
+    Like `reflist` it is not in `default_sources`: its reader is bound to a project, so the
+    snowball service builds it for the round it runs (`services.snowball.round_sources`).
+    """
+    return SourceFactory(
+        StoredSource.kinds, lambda _settings, clock: StoredSource(read, clock=clock)
     )
 
 

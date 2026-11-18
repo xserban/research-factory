@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
 
@@ -347,6 +348,15 @@ class SnowballPlan(StrictModel):
     forward_max_per_work: int | None = Field(default=None, ge=1)
     """At most this many citing works are taken per source work of a forward round, ordered by
     similarity to the development seeds (decision 116); the rest are counted, not dropped."""
+    backward_min_cited_by: int | None = Field(default=None, ge=1)
+    """A backward round takes only candidates cited by at least this many source works
+    (decision 135). Left out of every dump while None."""
+    backward_min_similarity: float | None = Field(default=None, gt=0, le=1)
+    """A backward round takes only candidates whose maximum cosine to the development seed
+    references is at least this (needs the ranker extra and weights; decision 135)."""
+    backward_published_from: date | None = None
+    """A backward round takes only candidates published on or after this date; a candidate
+    without a known date is not taken (decision 135)."""
     background_sources: bool = False
     """A backward round also takes the works kept as background (an exclusion criterion with
     `background` true) as sources (IDEA-47). Left out of every dump while false."""
@@ -362,6 +372,12 @@ class SnowballPlan(StrictModel):
             data.pop("forward_topic_filter", None)
         if self.forward_max_per_work is None:
             data.pop("forward_max_per_work", None)
+        if self.backward_min_cited_by is None:
+            data.pop("backward_min_cited_by", None)
+        if self.backward_min_similarity is None:
+            data.pop("backward_min_similarity", None)
+        if self.backward_published_from is None:
+            data.pop("backward_published_from", None)
         if not self.background_sources:
             data.pop("background_sources", None)
         return data
