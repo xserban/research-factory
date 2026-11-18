@@ -188,6 +188,30 @@ class Neighbors(StrictModel):
     derives_from_lens: str = DERIVES_LENS_NOTE
 
 
+class Score(StrictModel):
+    """The components of a ranking score, each in 0..1 (`popularity_raw` and `bridge_links` are the
+    counts they come from), the weights used and the composite. Nothing here is a probability or a
+    measure of novelty: it orders a list of hypotheses to check. Components that do not apply to a
+    kind are None. `flags` name pairs to judge by hand (e.g. `same-name-across-stages`)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rank_by: str
+    value: float
+    popularity: float
+    popularity_raw: int
+    stage: float | None = None
+    stage_relation: str | None = None
+    strength: float | None = None
+    bridge: float
+    bridge_links: int
+    evidence: float | None = None
+    generic: float | None = None
+    composite: float
+    weights: dict[str, float]
+    flags: tuple[str, ...] = ()
+
+
 class GapCandidate(StrictModel):
     approach: Approach
     from_stage: str
@@ -196,6 +220,9 @@ class GapCandidate(StrictModel):
     works_with_to_stage: tuple[str, ...]
     statement: str
     label: str = CANDIDATE_SENTENCE
+    rank: int = 0
+    score: Score | None = None
+    quote: UseRow | None = None
 
 
 class CombinationCandidate(StrictModel):
@@ -206,6 +233,12 @@ class CombinationCandidate(StrictModel):
     works_b: int
     statement: str
     label: str = CANDIDATE_SENTENCE
+    rank: int = 0
+    score: Score | None = None
+    support_a: tuple[str, ...] = ()
+    support_b: tuple[str, ...] = ()
+    quote_a: UseRow | None = None
+    quote_b: UseRow | None = None
 
 
 class ChallengeCandidate(StrictModel):

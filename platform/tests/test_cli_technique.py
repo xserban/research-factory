@@ -45,6 +45,16 @@ def test_the_cli_equals_the_service_and_every_output_is_labelled(
         code, out, err = _run(settings.root, *args)
         assert code == 0, (args, err)
         assert out.startswith("EXPLORATORY:"), args
+    code, out, err = _run(
+        settings.root, "combinations", "--min-works", "1", "--rank-by", "bridge", "--top", "1",
+        "--format", "json",
+    )  # fmt: skip
+    assert code == 0, err
+    data = json.loads(out)
+    assert data["parameters"]["rank_by"] == "bridge" and len(data["combinations"]) <= 1
+    assert all("score" in c and "weights" in c["score"] for c in data["combinations"])
+    code, out, err = _run(settings.root, "combinations", "--rank-by", "novelty")
+    assert code != 0 and "rank_by" in (out + err)
     code, out, _ = _run(settings.root, "show", "ide-01")
     assert "Lorem ipsum dolor sit amet." in out and "s3.p1" in out
     code, out, err = _run(settings.root, "show", "nope")

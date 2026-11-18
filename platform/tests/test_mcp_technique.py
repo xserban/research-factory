@@ -57,3 +57,9 @@ async def test_an_empty_landscape_is_labelled_and_an_unknown_approach_is_refused
         combos = await client.call("technique_combinations", project="demo")
         assert combos["ok"] is True and combos["data"]["exploratory"] is True
         assert combos["data"]["total"] == 0
+        ranked = await client.call(
+            "technique_combinations", project="demo", rank_by="popularity", top=5
+        )
+        assert ranked["ok"] is True and ranked["data"]["parameters"]["rank_by"] == "popularity"
+        bad_rank = await client.call("technique_combinations", project="demo", rank_by="novelty")
+        assert bad_rank["ok"] is False and bad_rank["errors"][0]["field"] == "rank_by"
