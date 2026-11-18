@@ -38,7 +38,7 @@ __all__ = [
 ]
 
 TARGET_WORDS = 250
-_TITLE_SEP = " \u203a "  # title, then the section path, joined with " › "
+_TITLE_SEP = " \u203a "  # joins title and section path
 CHUNKER_VERSION = f"1:target_words={TARGET_WORDS}"
 """Bumped when the passage cutter or its target size changes; forces a re-index."""
 
