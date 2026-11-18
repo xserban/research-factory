@@ -192,3 +192,51 @@ def test_render_layout_and_size() -> None:
         "missing: m-c",
     ]
     assert profile_size("x" * 9) == 3 and PROFILE_CHARS_PER_TOKEN == 4
+
+
+def test_two_listed_versions_of_one_miner_are_profiled_once(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The protocol validator refuses two listed versions of a name, so the situation is built by
+    # handing `paper_profiles` a protocol that lists both (e.g. from older events).
+    from types import SimpleNamespace
+
+    from tests.miner_helpers import method_vision, use
+
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row()])
+    [before] = paper_profiles(project, world[:1])
+    v2 = method_vision()
+    uses = (use(v2), use(v2, version=2))
+    monkeypatch.setattr(
+        pp, "current_protocol", lambda _p: SimpleNamespace(spec=SimpleNamespace(miners=uses))
+    )
+    [after] = paper_profiles(project, world[:1])
+    assert len(after.rows) == len(before.rows) > 0
+    assert {r.version for r in after.rows} == {1}
+    assert after.missing_miners == ()
+
+
+def test_held_out_scrub_applied_to_title_and_values(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row()])
+    [plain] = paper_profiles(project, world[:1])
+    title_word = plain.title.split()[0]
+    monkeypatch.setattr(
+        pp, "held_out_tokens", lambda _p, include_work_ids=True: {title_word, "higher"}
+    )
+    [scrubbed] = paper_profiles(project, world[:1])
+    assert title_word not in scrubbed.title.split() and "[withheld]" in scrubbed.title
+    values = [v for r in scrubbed.rows for _, v in r.fields]
+    assert "higher" not in values and "[withheld]" in values
+    assert scrubbed.work_id == world[0]

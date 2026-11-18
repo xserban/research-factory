@@ -10,8 +10,12 @@ Invariants:
   (title and section path weighted below the text); queries are fused by reciprocal rank fusion
   (k = 60). Ties break by work id, then passage id. Per query at most `CANDIDATES` passages are
   ranked.
-- Returned titles and texts pass the same held-out scrub as other tools that name works
-  (`held_out_tokens(include_work_ids=False)`); the scrub replaces identifiers, never a hit.
+- Returned titles, section path elements and texts pass the same held-out scrub as other tools
+  that name works (`held_out_tokens(include_work_ids=False)`); the scrub replaces identifiers,
+  never a hit.
+- bm25 statistics (document frequencies, average length) are those of the whole sidecar, so a
+  rank is relative to the sidecar's contents (which works have been indexed so far); for a given
+  sidecar the order is deterministic. Rank values are not comparable across sidecars.
 - `kinds` restricts hits to passages of those section kinds (None: every indexed kind; related,
   appendix and back passages are never indexed). Strings are accepted; an unknown kind is refused
   on field `kinds`.
@@ -163,7 +167,7 @@ def corpus_search(
                 title=str(withhold(titles[work], tokens)),
                 passage_id=key[1],
                 anchors=tuple(json.loads(anchors)),
-                section_path=tuple(json.loads(path)),
+                section_path=tuple(str(withhold(h, tokens)) for h in json.loads(path)),
                 text=str(withhold(text, tokens)),
                 rank=fused,
                 ranks_per_query=tuple(r.get(key) for r in ranked),

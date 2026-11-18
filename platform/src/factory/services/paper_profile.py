@@ -8,7 +8,11 @@ keeps the field values only.
 Invariants:
 - Read-only: nothing is written. The index is synced before reading.
 - Miners included are those currently listed in the protocol's `miners` section, one entry per
-  listed `(name, version)`; rows are read from the miner's scope (`MinerScope(name)`).
+  miner NAME: its highest listed registered version only (a scope has no version, so profiling two
+  listed versions would read the same rows twice); rows are read from the miner's scope
+  (`MinerScope(name)`).
+- Held-out scrub: the title and every row value pass the same `withhold` of the held-out tokens
+  (`held_out_tokens(include_work_ids=False)`) as the corpus search; the work id is not scrubbed.
 - A miner's rows for a work are its final rows (`final_rows_restricted`) with status `final`.
   Final rows leave out every row until pass B of the miner has opened, so a work with no final
   row falls back to its live (not superseded) pass A rows, with status `pass-a-only`. A work with
@@ -24,7 +28,7 @@ Invariants:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.mining.spec import EnumKind, MinerSpec, QuoteKind
@@ -38,6 +42,7 @@ from factory.services.mining import registered_miner
 from factory.services.protocol import current_protocol
 from factory.services.search import get_work
 from factory.services.taxonomies import registered_taxonomy
+from factory.services.withholding import held_out_tokens, withhold
 
 __all__ = [
     "PROFILE_CHARS_PER_TOKEN",
@@ -143,6 +148,10 @@ def _row(
     return ProfileRow(spec.name, spec.version, status, row_key, tuple(fields))
 
 
+def _scrubbed(row: ProfileRow, tokens: set[str]) -> ProfileRow:
+    return replace(row, fields=tuple((k, str(withhold(v, tokens))) for k, v in row.fields))
+
+
 def _names_of(project: Project, spec: MinerSpec) -> dict[str, str]:
     if spec.taxonomy is None:
         return {}
@@ -163,9 +172,18 @@ def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfi
             [ValidationIssue("work_ids", f"unknown work id: {', '.join(unknown)}")]
         )
     protocol = current_protocol(project)
-    listed = sorted(
-        {(u.name, u.version) for u in (protocol.spec.miners or ())} if protocol else set()
-    )
+    versions: dict[str, list[int]] = {}
+    for use in (protocol.spec.miners or ()) if protocol else ():
+        versions.setdefault(use.name, []).append(use.version)
+    # one entry per name: the highest listed version that is registered (else the highest listed)
+    listed: list[tuple[str, int]] = []
+    for name in sorted(versions):
+        ordered_versions = sorted(versions[name], reverse=True)
+        chosen = next(
+            (v for v in ordered_versions if registered_miner(project, name, v) is not None),
+            ordered_versions[0],
+        )
+        listed.append((name, chosen))
     rows: dict[str, list[ProfileRow]] = {w: [] for w in unique}
     seen: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     for name, version in listed:
@@ -198,15 +216,19 @@ def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfi
             if found:
                 rows[work_id].extend(found)
                 seen[work_id].add((name, version))
+    tokens = held_out_tokens(project, include_work_ids=False)
     profiles: list[PaperProfile] = []
     for work_id in unique:
         work = works[work_id]
         assert work is not None
-        ordered = sorted(rows[work_id], key=lambda r: (r.miner, r.version, r.row_key))
+        ordered = sorted(
+            (_scrubbed(r, tokens) for r in rows[work_id]),
+            key=lambda r: (r.miner, r.version, r.row_key),
+        )
         profiles.append(
             PaperProfile(
                 work_id,
-                work.title,
+                str(withhold(work.title, tokens)),
                 str(work.dates.year or ""),
                 tuple(ordered),
                 tuple(m for m in listed if m not in seen[work_id]),

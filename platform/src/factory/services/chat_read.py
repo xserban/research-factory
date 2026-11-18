@@ -11,6 +11,8 @@ Invariants:
 - `chat_sections` lists the section anchors of the pinned conversion in document order. Depth is
   the number of dot-separated parts of the anchor id after `s`; `paragraphs` and `words` count only
   the paragraph anchors whose parent is that section.
+- Section headings pass the held-out scrub (`held_out_tokens(include_work_ids=False)`), as the
+  titles and texts of the corpus search do.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest, conversion_of
 from factory.services.document_read import default_conversion
+from factory.services.withholding import held_out_tokens, withhold
 
 __all__ = [
     "SectionEntry",
@@ -157,6 +160,7 @@ def chat_sections(project: Project, work_id: str, conversion_id: str | None = No
     pinned, markdown_hash = pin
     manifest = conversion_manifest(project, pinned)
     sections: list[SectionEntry] = []
+    tokens = held_out_tokens(project, include_work_ids=False)
     for anchor in manifest.anchors:
         if anchor.kind is not AnchorKind.SECTION:
             continue
@@ -166,7 +170,7 @@ def chat_sections(project: Project, work_id: str, conversion_id: str | None = No
         sections.append(
             SectionEntry(
                 anchor=anchor.id,
-                heading=_HEADING_MARK.sub("", anchor.text).strip(),
+                heading=str(withhold(_HEADING_MARK.sub("", anchor.text).strip(), tokens)),
                 depth=len(anchor.id.removeprefix("s").split(".")),
                 paragraphs=len(paragraphs),
                 words=sum(len(p.text.split()) for p in paragraphs),

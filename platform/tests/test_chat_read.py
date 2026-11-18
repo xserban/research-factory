@@ -130,3 +130,13 @@ def test_sections_refusals(project: Project) -> None:
     with pytest.raises(FactoryValidationError) as exc:
         chat_sections(project, work, "cv-foreign")
     assert exc.value.issues[0].field == "conversion_id"
+
+
+@pytest.mark.usefixtures("corpus")
+def test_section_headings_are_scrubbed(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+    from factory.services import chat_read as cr
+
+    work, _conv = _setup(project)
+    monkeypatch.setattr(cr, "held_out_tokens", lambda _p, include_work_ids=True: {"Detail"})
+    heads = [s.heading for s in chat_sections(project, work).sections]
+    assert heads == ["Study", "1 Method", "1.1 [withheld]", "2 Results"]
