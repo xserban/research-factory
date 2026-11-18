@@ -69,7 +69,7 @@ def test_stored_works_are_served_with_one_fresh_provenance_row() -> None:
     works = result.works  # type: ignore[attr-defined]
     assert sorted(w.id for w in works) == sorted([A.id, B.id])
     for served, original in zip(
-        sorted(works, key=lambda w: w.id), sorted([A, B], key=lambda w: w.id)
+        sorted(works, key=lambda w: w.id), sorted([A, B], key=lambda w: w.id), strict=True
     ):
         assert served.title == original.title and served.abstract == original.abstract
         assert served.identifiers == original.identifiers and served.dates == original.dates

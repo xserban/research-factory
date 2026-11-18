@@ -101,8 +101,8 @@ from factory.model.references import (
     ForwardSelection,
     LinkState,
     SnowballCandidate,
-    TakenCandidate,
     SnowballRoundStarted,
+    TakenCandidate,
     Unextracted,
     Via,
 )
@@ -1014,7 +1014,8 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
 def round_sources(
     project: Project, sources: Mapping[str, SourceFactory]
 ) -> dict[str, SourceFactory]:
-    """`sources` with the offline `reflist` and `stored` sources bound to this project, unless one is given."""
+    """`sources` with the offline `reflist` and `stored` sources bound to this project, unless
+    one is given."""
     out = dict(sources)
     out.setdefault(REFLIST, reflist_factory(lambda keys: reflist_entries(project, keys)))
     out.setdefault(STORED, stored_factory(lambda ids: stored_works(project, ids)))

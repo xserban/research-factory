@@ -17,7 +17,7 @@ from factory.model.intuition import (
     LayerHidden,
     StoredSource,
 )
-from factory.model.references import Decision, LinkState
+from factory.model.references import BackwardSelection, Decision, LinkState
 from factory.model.regions import EdgeBasis, RegionMemberProposed
 from factory.model.screening import PassLabel
 from factory.regions.rules import MemberType
@@ -943,6 +943,39 @@ def _candidate_line(c: RoundCandidate) -> str:
     return f"  cited by {c.cited_by_included} included work(s): {c.work_key}{flag}"
 
 
+TOP_TAKEN = 10
+"""Taken candidates listed under a backward selection (the best by score, then cited-by)."""
+
+
+def backward_selection_lines(selection: BackwardSelection) -> list[str]:
+    """A selected backward round (decision 135): the thresholds, what each step dropped, what was
+    taken and the best taken candidates. Counts are those recorded; the number not taken is
+    derived."""
+    bounds = [
+        f"published from {selection.published_from}" if selection.published_from else None,
+        f"cited by at least {selection.min_cited_by}" if selection.min_cited_by else None,
+        f"similarity at least {selection.min_similarity}" if selection.min_similarity else None,
+    ]
+    lines = [f"selection: {', '.join(b for b in bounds if b)}"]
+    if selection.model_id is not None and selection.weights_hash is not None:
+        lines.append(f"  model {selection.model_id}, weights {selection.weights_hash[:12]}")
+    lines.append(
+        f"  considered {selection.considered}; dropped before the window "
+        f"{selection.dropped_before_window}, undated {selection.dropped_undated}, below the "
+        f"cited-by floor {selection.dropped_cited_by}, not scorable {selection.dropped_unscored}, "
+        f"below the similarity {selection.dropped_similarity}; taken {len(selection.taken)}, "
+        f"not taken {selection.not_taken}"
+    )
+    best = sorted(
+        selection.taken,
+        key=lambda t: (-(t.score if t.score is not None else -2.0), -t.cited_by, t.work_key),
+    )[:TOP_TAKEN]
+    for t in best:
+        score = "-" if t.score is None else f"{t.score:.4f}"
+        lines.append(f"  taken {t.work_key}: score {score}, cited by {t.cited_by}")
+    return lines
+
+
 def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationIssue]) -> list[str]:
     """A dry run: whether the round is allowed and why not, the plan's gaps, the candidates
     ranked by how many included works cite them, and the queries."""
@@ -952,6 +985,8 @@ def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationI
     lines += [f"  {i.field}: {i.reason}" for i in state.refusals]
     lines += [f"  note: {n}" for n in state.notes]
     lines += [f"  plan gap {i.field}: {i.reason}" for i in gaps]
+    if result.backward_selection is not None:
+        lines += backward_selection_lines(result.backward_selection)
     lines.append(f"{len(result.candidates)} candidate(s)")
     lines += [_candidate_line(c) for c in result.candidates]
     lines.append(f"{len(result.queries)} query(ies), {len(result.unqueryable)} unqueryable")
@@ -965,6 +1000,8 @@ def round_result_lines(result: RoundResult) -> list[str]:
     lines = [
         f"round {result.round_id}: {len(result.runs)} queries run, {result.new_works} new works"
     ]
+    if result.backward_selection is not None:
+        lines += backward_selection_lines(result.backward_selection)
     selection = result.selection
     if selection is not None:
         lines.append(
