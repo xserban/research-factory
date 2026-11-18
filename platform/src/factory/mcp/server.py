@@ -6090,10 +6090,11 @@ def build_server(
     @server.tool()
     def sheet_list(project: str) -> dict[str, JsonValue]:
         """The argument sheets of the project with their section state and argument counts.
-        Read-only."""
+        Read-only. Refused to a session that has joined a pass."""
 
         def listing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
             data: dict[str, JsonValue] = {
                 "sheets": _plain([asdict(i) for i in sheets_service.list_sheets(opened)])
             }

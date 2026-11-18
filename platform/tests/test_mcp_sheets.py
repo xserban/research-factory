@@ -13,7 +13,8 @@ from factory.config import Settings
 from factory.services.context import Project
 from tests.cli_helpers import _env
 from tests.extraction_helpers import screened, world  # noqa: F401
-from tests.helpers import open_session
+from factory.mcp import sessions as mcp_sessions
+from tests.helpers import SESSION, open_session
 
 ACT = {"role": "spar-a", "model": "claude-opus-5-5", "skill": "rf-screen"}
 PROP = {"anchor": "s3.p1", "quote": "Lorem ipsum"}
@@ -91,3 +92,38 @@ async def test_sheet_tools_and_human_rating(
     assert view["data"]["arguments"][0]["rating"] == "sound"
     assert runner.invoke(app, ["sheets", "rate", argument, "great"], env=env).exit_code != 0
     assert "against closed" in runner.invoke(app, ["sheets", "list"], env=env).stdout
+
+
+_ARGUE = [{"stance": "against", "work_id": "w", "claim": "c", "strength": "weak", **PROP}]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("sheet_open", {"hypothesis": "h", "proposals": []}),
+        ("sheet_argue", {"sheet_id": "sht_X", "arguments": _ARGUE}),
+        ("sheet_close", {"sheet_id": "sht_X", "section": "against"}),
+        ("sheet_list", {}),
+        ("sheet_view", {"sheet_id": "sht_X"}),
+    ],
+)
+async def test_pass_session_is_refused_every_sheet_tool(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    args: dict[str, Any],
+) -> None:
+    class Ids:
+        def __init__(self, _clock: object) -> None: ...
+
+        def ulid(self) -> str:
+            return SESSION  # the session that screened: a pass member
+
+    monkeypatch.setattr(mcp_sessions, "IdGenerator", Ids)
+    extra = {} if tool in ("sheet_list", "sheet_view") else ACT
+    out = await _call(settings, clock, tool, **args, **extra)
+    assert out["ok"] is False and out["errors"][0]["field"] == "session", out
