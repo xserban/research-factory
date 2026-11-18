@@ -27,6 +27,7 @@ import hashlib
 import html
 import inspect
 import json
+import re
 import shutil
 import textwrap
 from collections.abc import Callable, Sequence
@@ -679,17 +680,41 @@ def product_code_hash(product: Product) -> str:
     return found
 
 
-def fingerprint(project: Project, product: Product) -> str:
-    """The product's version, the code its build reaches (`product_code_hash`) and, per input
-    pattern, the count and last id of matching events."""
-    parts: list[str] = [f"{product.id}@{product.version}", f"code:{product_code_hash(product)}"]
+TypeCounts = dict[str, tuple[int, str]]
+"""Per event type: how many events and the greatest id."""
+
+
+def type_counts(project: Project) -> TypeCounts:
+    """One grouped read of the event log, shared by the fingerprints of one status pass."""
     with project.index.connect() as conn:
-        for pattern in product.inputs:
-            row = conn.execute(
-                text("SELECT COUNT(*), COALESCE(MAX(id), '') FROM events WHERE type LIKE :p"),
-                {"p": pattern},
-            ).one()
-            parts.append(f"{pattern}:{row[0]}:{row[1]}")
+        rows = conn.execute(text("SELECT type, COUNT(*), MAX(id) FROM events GROUP BY type"))
+        return {str(r[0]): (int(r[1]), str(r[2] or "")) for r in rows}
+
+
+@lru_cache(maxsize=256)
+def _like(pattern: str) -> re.Pattern[str]:
+    """SQLite `LIKE` (no ESCAPE) as a regular expression: `%` any run, `_` one character, ASCII
+    case-insensitive."""
+    body = "".join(".*" if c == "%" else "." if c == "_" else re.escape(c) for c in pattern)
+    return re.compile(body, re.IGNORECASE | re.DOTALL)
+
+
+def _match(counts: TypeCounts, pattern: str) -> tuple[int, str]:
+    """`COUNT(*), COALESCE(MAX(id), '')` over the events whose type is `LIKE pattern`."""
+    rx = _like(pattern)
+    hits = [v for t, v in counts.items() if rx.fullmatch(t)]
+    return sum(n for n, _ in hits), max((m for _, m in hits), default="")
+
+
+def fingerprint(project: Project, product: Product, counts: TypeCounts | None = None) -> str:
+    """The product's version, the code its build reaches (`product_code_hash`) and, per input
+    pattern, the count and last id of matching events (from `counts` when given, read once per
+    status pass; the same values as one `LIKE` query per pattern)."""
+    parts: list[str] = [f"{product.id}@{product.version}", f"code:{product_code_hash(product)}"]
+    seen = counts if counts is not None else type_counts(project)
+    for pattern in product.inputs:
+        n, last = _match(seen, pattern)
+        parts.append(f"{pattern}:{n}:{last}")
     if product.stamp is not None:
         parts.append(f"files:{product.stamp(project)}")
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
@@ -725,9 +750,10 @@ def _write_manifest(project: Project, manifest: dict[str, dict[str, str | None]]
 def status(project: Project, registry: Sequence[Product] | None = None) -> list[ProductStatus]:
     """Every registered product with its build time, staleness and last error."""
     manifest = _read_manifest(project)
+    counts = type_counts(project)
     out: list[ProductStatus] = []
     for product in registry if registry is not None else products():
-        fp = fingerprint(project, product)
+        fp = fingerprint(project, product, counts)
         entry = manifest.get(product.id, {})
         built = (
             bool(entry.get("built_at"))
