@@ -126,3 +126,32 @@ def test_dormant_passes_are_one_collapsed_details_and_abandoned_has_a_column() -
     assert html.count("<details>") == 1 and "2 dormant passes" in html
     assert "m-x v2 pass B production: 3/5 done, 4 abandoned" in html
     assert "<th>Abandoned</th>" in html
+
+
+def test_session_trace_path_and_last_line_are_escaped() -> None:
+    from factory.services.activity import ActiveRow, Activity, TraceRow
+
+    row = ActiveRow(
+        session="x<i>s</i>&<b>ab",
+        actor="a",
+        task_id="t",
+        kind="demo",
+        scope="demo",
+        claimed_at="t",
+        minutes_held=1.0,
+        lease_minutes_left=29.0,
+        rows_recorded=0,
+        last_event_at=None,
+        stale=False,
+    )
+    trace = TraceRow(
+        path="n/<u>p</u>.live", modified_at="t", last_line="<script>alert(1)</script>", size=1
+    )
+    html = site_activity.panels(
+        Activity(now="t", active=[row], passes=[], dormant=[], operations=[], traces=[trace])
+    )
+    assert "<i>" not in html and "<b>" not in html and "<u>" not in html
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "n/&lt;u&gt;p&lt;/u&gt;.live" in html
+    assert "<th>Lease left (min)</th>" in html and "<td>29.0</td>" in html

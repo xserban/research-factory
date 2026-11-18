@@ -27,7 +27,8 @@ def format_activity(found: Activity) -> list[str]:
         state = f"STALE (no event for {STALE_MINUTES} min)" if a.stale else "active"
         lines.append(
             f"  {a.session[-6:]}  {task}  {a.title or a.work_id or '-'}  held {a.minutes_held} min"
-            f"  rows {a.rows_recorded}  last event {a.last_event_at or 'none'}  {state}"
+            f"  lease {a.lease_minutes_left} min left  rows {a.rows_recorded}"
+            f"  last event {a.last_event_at or 'none'}  {state}"
         )
     if not found.active:
         lines.append("  no task is held")

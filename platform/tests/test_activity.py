@@ -25,6 +25,7 @@ from factory.services.tasks import (
     claim_next,
     complete_task,
     create_tasks,
+    get_task,
     release_task,
 )
 from tests.helpers import T0
@@ -87,11 +88,9 @@ def test_a_completed_or_released_task_disappears(project: Project, agent: Actor)
     assert activity(project, T0).active == []
 
 
-def test_stale_at_the_threshold(
-    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # the lease equals the default threshold, so a held (valid-lease) task could never be stale
-    monkeypatch.setattr(activity_service, "STALE_MINUTES", 10)
+def test_stale_at_the_threshold(project: Project, agent: Actor) -> None:
+    # STALE_MINUTES (10) is shorter than the 30-minute lease, so a held task can be stale
+    assert activity_service.STALE_MINUTES == 10
     _make(project, "demo", {"n": 1})
     claim_next(project, agent, "demo")
     before = activity(project, T0 + timedelta(minutes=10) - timedelta(seconds=1))
@@ -99,6 +98,93 @@ def test_stale_at_the_threshold(
     assert before.active[0].stale is False
     assert at.active[0].stale is True
     assert at.active[0].minutes_held == 10.0
+    assert at.active[0].lease_minutes_left == 20.0
+
+
+def test_claimed_at_is_the_claim_event_time_whatever_the_lease(
+    project: Project, agent: Actor
+) -> None:
+    _make(project, "demo", {"n": 1})
+    claim_next(project, agent, "demo", lease=timedelta(minutes=45))
+    row = activity(project, T0 + timedelta(minutes=5)).active[0]
+    assert row.claimed_at.startswith("2026-10-31T12:00:00")
+    assert row.minutes_held == 5.0
+    assert row.lease_minutes_left == 40.0
+
+
+def test_a_mining_task_without_a_miner_name_uses_its_kind(project: Project, agent: Actor) -> None:
+    content = {"pass_label": "A", "version": 1, "records": [{"work_id": "w", "title": "T"}]}
+    _make(project, "mine_a", content)
+    claim_next(project, agent, "mine_a")
+    found = activity(project, T0 + timedelta(minutes=1))
+    assert found.active[0].scope == "mine_a"
+    assert found.passes[0].name == "mine_a"
+
+
+def test_a_missing_task_blob_gives_empty_content_not_an_error(
+    project: Project, agent: Actor
+) -> None:
+    _make(project, "mine_a", _mine("wrk_gone_blob"))
+    claim_next(project, agent, "mine_a")
+    with project.index.connect() as conn:
+        blob = str(conn.execute(text("SELECT content_blob FROM tasks")).scalar_one())
+    project.blobs.path(blob).unlink()
+    found = activity(project, T0 + timedelta(minutes=1))
+    assert len(found.active) == 1 and found.active[0].title is None
+    assert found.passes[0].total == 1
+
+
+def test_a_late_completion_is_not_counted(project: Project, agent: Actor, clock: Any) -> None:
+    from factory.model.task import TaskCompleted
+
+    ids = _make(project, "demo", {"n": 1}, {"n": 2})
+    claim_next(project, agent, "demo")
+    claim_next(project, agent, "demo")
+    complete_task(project, agent, ids[0])  # in time: counted
+    clock.advance(TASK_LEASE + timedelta(minutes=1))  # the lease of ids[1] has lapsed
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "task.completed",
+                    TaskCompleted(task_id=ids[1], result_refs=()),
+                    agent,
+                    refs=(ids[1],),
+                    input_blob=get_task(project, ids[1]).content_blob,  # type: ignore[union-attr]
+                )
+            ]
+        )
+    row = activity(project, clock.now()).passes[0]
+    assert row.done == 1  # the projector ignored the late completion
+    assert row.completed_recent == 0 and row.abandoned == 1
+    inside = activity(project, T0 + timedelta(minutes=1)).passes[0]
+    assert inside.completed_recent == 1
+
+
+def test_a_second_call_reads_no_task_blob_again(
+    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make(project, "mine_a", _mine("wrk_memo_unique_7731"), _mine("wrk_memo_unique_7732"))
+    activity(project, T0)
+    reads: list[str] = []
+    blob_type = type(project.blobs)
+    real = blob_type.get_json
+
+    def counting(self: Any, ref: str) -> Any:
+        reads.append(ref)
+        return real(self, ref)
+
+    monkeypatch.setattr(blob_type, "get_json", counting)
+    activity(project, T0)
+    assert reads == []
+
+
+def test_a_pass_with_only_abandoned_tasks_is_shown(project: Project, agent: Actor) -> None:
+    _make(project, "demo", {"n": 1})
+    claim_next(project, agent, "demo")
+    late = activity(project, T0 + timedelta(hours=30))
+    assert [p.kind for p in late.passes] == ["demo"] and late.passes[0].abandoned == 1
+    assert late.dormant == []
 
 
 def test_rows_recorded_by_the_holder_are_counted(project: Project, agent: Actor) -> None:

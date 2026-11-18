@@ -46,10 +46,10 @@ function fill(id,head,rows,empty){
   box.appendChild(t);
 }
 function render(d){
-  fill('active',['Session','Task','Paper','Held (min)','Rows','Last event','State'],
+  fill('active',['Session','Task','Paper','Held (min)','Lease left (min)','Rows','Last event','State'],
     d.active.map(function(a){
       var task=a.scope+(a.miner_version!=null?' v'+a.miner_version:'')+(a.pass_label?' pass '+a.pass_label:'')+(a.mode?' '+a.mode:'');
-      return [[a.session.slice(-6)],[task],[(a.title||a.work_id||'')],[a.minutes_held],[a.rows_recorded],[a.last_event_at||'none'],
+      return [[a.session.slice(-6)],[task],[(a.title||a.work_id||'')],[a.minutes_held],[a.lease_minutes_left],[a.rows_recorded],[a.last_event_at||'none'],
         [a.stale?'stale (no event for '+STALE+' min)':'active',a.stale?'stale':'']];}),
     'No task is held.');
   fill('passes',['Pass','Done','Total','Held','Abandoned','Done in 30 min','Rate (estimate, per hour)','Left (estimate, min)','Released'],
@@ -74,7 +74,8 @@ function poll(){
   fetch(API+'/api/activity').then(function(r){return r.json();}).then(render)
   .catch(function(e){var s=document.getElementById('live');if(s)s.textContent='Live update unavailable: '+e;});
 }
-poll();setInterval(poll,POLL);
+poll();setInterval(function(){if(!document.hidden)poll();},POLL);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)poll();});
 })();
 """.replace("@POLL@", str(POLL_SECONDS)).replace("@STALE@", str(STALE_MINUTES))
 
@@ -125,6 +126,7 @@ def panels(found: Activity) -> str:
             ),
             _td(a.title or a.work_id or ""),
             _td(a.minutes_held),
+            _td(a.lease_minutes_left),
             _td(a.rows_recorded),
             _td(a.last_event_at or "none"),
             _td(
@@ -169,7 +171,16 @@ def panels(found: Activity) -> str:
     return (
         "<h2>Held tasks</h2><div id=active>"
         + _table(
-            ["Session", "Task", "Paper", "Held (min)", "Rows", "Last event", "State"],
+            [
+                "Session",
+                "Task",
+                "Paper",
+                "Held (min)",
+                "Lease left (min)",
+                "Rows",
+                "Last event",
+                "State",
+            ],
             active,
             "No task is held.",
         )
