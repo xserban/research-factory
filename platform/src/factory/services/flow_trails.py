@@ -27,6 +27,7 @@ class TrailStep(StrictModel):
     at: str
     kind: str
     d: dict[str, Value]
+    event_id: str | None = None
 
 
 def _cut(text: str, limit: int = TEXT_LIMIT) -> str:
@@ -67,9 +68,10 @@ class _Trails:
         self.documents: dict[str, str] = {}
         self.merges: dict[str, tuple[str, tuple[str, ...]]] = {}
         self.counted: dict[tuple[str, str, str, str], list[object]] = {}
+        self.current: str | None = None  # id of the event being fed; None for derived steps
 
     def add(self, work_id: str, at: str, kind: str, d: dict[str, Value]) -> None:
-        self.steps[work_id].append(TrailStep(at=at, kind=kind, d=d))
+        self.steps[work_id].append(TrailStep(at=at, kind=kind, d=d, event_id=self.current))
 
     def count(self, work_id: str, kind: str, label: str, pass_label: str, at: str) -> None:
         entry = self.counted.setdefault((work_id, kind, label, pass_label), [at, 0])
@@ -78,7 +80,9 @@ class _Trails:
     def feed(self, event: Event) -> None:
         handler = getattr(self, "_" + event.type.replace(".", "_"), None)
         if handler is not None:
+            self.current = event.id
             handler(event, format_ts(event.ts), event.payload)
+            self.current = None
 
     def _dedup_merged(self, event: Event, at: str, p: dict[str, object]) -> None:
         raw = p.get("absorbed")
