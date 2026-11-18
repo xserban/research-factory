@@ -19,9 +19,15 @@ This module is pure. Services in `factory.services` decide when these events are
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Final, Self
+from typing import Annotated, Any, Final, Self
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 from factory.model.base import StrictModel
 from factory.model.identity import ULID_RE
@@ -58,9 +64,21 @@ class ChaseRoundStarted(StrictModel):
     from_works: tuple[WorkId, ...] = Field(min_length=1)
     unchasable: tuple[WorkId, ...]
     queries: tuple[NonBlank, ...]
+    tolerated_pending: tuple[WorkId, ...] = ()
+    """Sorted ordinary works still pending when the round started, within the protocol's
+    `pending_tolerance` (decision 138). Left out of the event while empty."""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_tolerated(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.tolerated_pending:
+            data.pop("tolerated_pending", None)
+        return data
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
+        if list(self.tolerated_pending) != sorted(set(self.tolerated_pending)):
+            raise ValueError("tolerated_pending must be sorted and unique")
         _no_repeats(self.directions, "directions")
         _no_repeats(self.unchasable, "unchasable")
         if list(self.from_works) != sorted(set(self.from_works)):

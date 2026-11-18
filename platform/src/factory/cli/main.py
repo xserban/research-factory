@@ -1538,6 +1538,11 @@ def search_chase_cmd(
         f"chase round {summary.round_id}: {len(summary.runs)} queries, "
         f"{summary.new_works} new works, {len(summary.unchasable)} unchasable"
     )
+    if summary.tolerated_pending:
+        typer.echo(
+            f"went ahead without {len(summary.tolerated_pending)} pending work(s) "
+            f"(pending_tolerance): {', '.join(summary.tolerated_pending)}"
+        )
 
 
 @search_app.command("slice")

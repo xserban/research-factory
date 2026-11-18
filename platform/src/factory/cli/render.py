@@ -976,6 +976,16 @@ def backward_selection_lines(selection: BackwardSelection) -> list[str]:
     return lines
 
 
+def _tolerated_lines(tolerated: list[str]) -> list[str]:
+    """The works a round goes ahead without, within the protocol's `pending_tolerance`."""
+    if not tolerated:
+        return []
+    return [
+        f"  tolerated: {len(tolerated)} work(s) pending or unextracted, within pending_tolerance "
+        f"(recorded in the round): {', '.join(tolerated)}"
+    ]
+
+
 def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationIssue]) -> list[str]:
     """A dry run: whether the round is allowed and why not, the plan's gaps, the candidates
     ranked by how many included works cite them, and the queries."""
@@ -984,6 +994,7 @@ def round_plan_lines(direction: str, result: RoundResult, gaps: list[ValidationI
     lines = [f"{direction} round {state.round_no}: {verdict}"]
     lines += [f"  {i.field}: {i.reason}" for i in state.refusals]
     lines += [f"  note: {n}" for n in state.notes]
+    lines += _tolerated_lines(result.tolerated_pending)
     lines += [f"  plan gap {i.field}: {i.reason}" for i in gaps]
     if result.backward_selection is not None:
         lines += backward_selection_lines(result.backward_selection)
@@ -1002,6 +1013,7 @@ def round_result_lines(result: RoundResult) -> list[str]:
     ]
     if result.backward_selection is not None:
         lines += backward_selection_lines(result.backward_selection)
+    lines += _tolerated_lines(result.tolerated_pending)
     selection = result.selection
     if selection is not None:
         lines.append(

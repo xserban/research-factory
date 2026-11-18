@@ -16,7 +16,12 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.chase import ChaseDirection, ChaseRoundStarted
 from factory.model.project import RigorMode
-from factory.model.protocol import ScreeningPlan, ScreeningStage, SnowballPlan
+from factory.model.protocol import (
+    ScreeningPlan,
+    ScreeningStage,
+    SnowballPlan,
+    UnscreenedTolerance,
+)
 from factory.model.references import Direction, LinkState, SnowballRoundStarted, Via
 from factory.model.screening import PassLabel
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec, RunStatus
@@ -321,6 +326,69 @@ def test_refused_while_pending(project: Project, agent: Actor, planned: tuple[st
     with pytest.raises(FactoryValidationError):
         snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     assert event_bytes(project) == before
+
+
+def _tolerate(monkeypatch: pytest.MonkeyPatch, fewer_than: int, fraction: float = 0.0) -> None:
+    """Declare a `pending_tolerance` as the protocol would (decision 138)."""
+    monkeypatch.setattr(
+        chase_service,
+        "pending_tolerance",
+        lambda _project: UnscreenedTolerance(fewer_than=fewer_than, fraction=fraction),
+    )
+
+
+def test_pending_within_tolerance_goes_ahead_and_is_recorded(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    pending = sorted(w for w, o in final_outcomes(project).items() if o is Outcome.PENDING)
+    assert pending
+    _tolerate(monkeypatch, len(pending) + 1)
+
+    plan = plan_round(project, Direction.BACKWARD)
+
+    assert "screening" not in [i.field for i in plan.state.refusals]
+    assert plan.tolerated_pending == pending
+
+
+def test_pending_beyond_tolerance_still_refuses(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    pending = [w for w, o in final_outcomes(project).items() if o is Outcome.PENDING]
+    _tolerate(monkeypatch, len(pending))
+
+    plan = plan_round(project, Direction.BACKWARD)
+
+    assert "screening" in [i.field for i in plan.state.refusals]
+    assert plan.tolerated_pending == []
+
+
+def test_unextracted_within_tolerance_is_tolerated(
+    project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    third = sorted(set(promoted_works(project)) - set(planned))[0]
+    fetched_document(project, third, bib_html(ENTRIES_B, BODY_B))
+    run_convert(project, make_registry())
+    _tolerate(monkeypatch, 2)
+
+    plan = plan_round(project, Direction.BACKWARD)
+
+    assert plan.state.allowed
+    assert plan.tolerated_pending == [third]
+    assert (third, "not-extracted") in plan.unextracted
+    result = snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    [event] = events_of_type(project, "snowball.round_started")
+    assert SnowballRoundStarted.model_validate(event.payload).tolerated_pending == (third,)
+    assert result.tolerated_pending == [third]
+
+
+def test_round_without_tolerated_works_omits_the_field(
+    project: Project, agent: Actor, planned: tuple[str, str]
+) -> None:
+    snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
+    [event] = events_of_type(project, "snowball.round_started")
+    assert "tolerated_pending" not in event.payload
 
 
 def test_refused_while_unextracted(

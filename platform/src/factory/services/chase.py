@@ -24,7 +24,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -32,6 +32,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection, ChaseRoundStarted
+from factory.model.protocol import UnscreenedTolerance
 from factory.model.references import FORWARD_ROUND_RE
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.services.agreement import Outcome, final_outcomes
@@ -62,6 +63,8 @@ class ChaseSummary(StrictModel):
     unchasable: list[str]
     runs: list[RunSummary]
     new_works: int
+    tolerated_pending: list[str] = Field(default_factory=list)
+    """Works still pending that `pending_tolerance` let the round go past (decision 138)."""
 
 
 def chase_sources(project: Project) -> tuple[list[str], list[str]]:
@@ -192,6 +195,7 @@ def search_chase(
         unchasable=list(start.payload.unchasable),
         runs=runs,
         new_works=after - before,
+        tolerated_pending=list(start.payload.tolerated_pending),
     )
 
 
@@ -208,8 +212,9 @@ def start_chase(
     """Validate a chase round and build its event, writing nothing; the caller holds
     `project.index.exclusive()` and records `event` (with any events of its own).
 
-    Refused when the directions are not one or two distinct ones, any ordinary work is pending,
-    a forward round would pass the `snowball_plan` maximum, no work is chasable, any query does
+    Refused when the directions are not one or two distinct ones, any ordinary work is pending
+    beyond the protocol's `pending_tolerance` (the tolerated ones are recorded), a forward round
+    would pass the `snowball_plan` maximum, no work is chasable, any query does
     not fit its source, or the protocol does not authorise the first query with the round's texts
     waived. `from_works`, when given, names the included
     works to chase from instead of all of them: it must be a non-empty subset of the
@@ -226,7 +231,8 @@ def start_chase(
             [ValidationIssue("directions", "name one or two distinct directions")]
         )
     project.index.sync()
-    issues = _pending_issues(project) + _forward_limit_issues(project, directions)
+    issues, tolerated = _pending_gate(project)
+    issues += _forward_limit_issues(project, directions)
     chasable, unchasable = chase_sources(project)
     if extra_sources:
         held = {w.id: w.identifiers.openalex for w in list_works(project)}
@@ -284,6 +290,7 @@ def start_chase(
         from_works=tuple(chasable),
         unchasable=tuple(unchasable),
         queries=tuple(round_texts),
+        tolerated_pending=tolerated,
     )
     directions_value: list[JsonValue] = [d.value for d in ordered]
     request: dict[str, JsonValue] = {"directions": directions_value}
@@ -318,17 +325,47 @@ def run_chase(
     return runs
 
 
-def _pending_issues(project: Project) -> list[ValidationIssue]:
-    """One issue when any ordinary (non-calibration) work has no final outcome yet."""
+def pending_tolerance(project: Project) -> UnscreenedTolerance | None:
+    """The protocol's declared `pending_tolerance` (decision 138); None tolerates none."""
+    protocol = current_protocol(project)
+    return None if protocol is None else protocol.spec.pending_tolerance
+
+
+def tolerated_within(project: Project, missing: Sequence[str], size: int) -> tuple[str, ...]:
+    """The sorted `missing` works when the declared tolerance allows that many among `size`
+    works, else empty (the caller then refuses). With no tolerance, or no missing work, empty."""
+    tolerance = pending_tolerance(project)
+    if tolerance is None or not missing or not tolerance.allows(len(missing), size):
+        return ()
+    return tuple(sorted(missing))
+
+
+def pending_ordinary(project: Project) -> tuple[list[str], int]:
+    """(ordinary works with no final outcome yet, sorted; the number of ordinary works with a
+    final outcome, which sizes the tolerance). Calibration works are left out of both."""
     calibration = set(calibration_items(project))
-    pending = sum(
-        1
-        for work, outcome in final_outcomes(project).items()
-        if outcome is Outcome.PENDING and work not in calibration
-    )
-    if pending == 0:
-        return []
-    return [ValidationIssue("screening", f"{pending} works still pending")]
+    outcomes = {w: o for w, o in final_outcomes(project).items() if w not in calibration}
+    pending = sorted(w for w, o in outcomes.items() if o is Outcome.PENDING)
+    return pending, len(outcomes)
+
+
+def _pending_gate(project: Project) -> tuple[list[ValidationIssue], tuple[str, ...]]:
+    """(the refusal, the tolerated works) when ordinary works have no final outcome yet: one
+    issue unless the declared `pending_tolerance` allows them, in which case no issue and the
+    works are returned to be recorded in the round's event."""
+    pending, size = pending_ordinary(project)
+    if not pending:
+        return [], ()
+    tolerated = tolerated_within(project, pending, size)
+    if tolerated:
+        return [], tolerated
+    return [ValidationIssue("screening", f"{len(pending)} works still pending")], ()
+
+
+def _pending_issues(project: Project) -> list[ValidationIssue]:
+    """One issue when any ordinary (non-calibration) work has no final outcome yet and the
+    protocol's `pending_tolerance` does not allow it."""
+    return _pending_gate(project)[0]
 
 
 def _strings(stored: object) -> list[str]:

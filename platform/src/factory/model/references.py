@@ -580,19 +580,26 @@ class SnowballRoundStarted(StrictModel):
     backward_selection: BackwardSelection | None = None
     """How a selected backward round chose its candidates (decision 135); absent for any other
     round."""
+    tolerated_pending: tuple[WorkId, ...] = ()
+    """Sorted ordinary works pending or unextracted when the round started, within the protocol's
+    `pending_tolerance` (decision 138). Left out of the event while empty."""
 
     @model_serializer(mode="wrap")
     def _omit_empty_selection(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A round without a selection serialises exactly as it did before capped rounds."""
+        """A round without a selection or tolerated works serialises exactly as it did before."""
         data: dict[str, Any] = handler(self)
         if self.selection is None:
             data.pop("selection", None)
         if self.backward_selection is None:
             data.pop("backward_selection", None)
+        if not self.tolerated_pending:
+            data.pop("tolerated_pending", None)
         return data
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
+        if list(self.tolerated_pending) != sorted(set(self.tolerated_pending)):
+            raise ValueError("tolerated_pending must be sorted and unique")
         if self.selection is not None and self.direction is not Direction.FORWARD:
             raise ValueError("only a forward round has a selection")
         if self.backward_selection is not None:
