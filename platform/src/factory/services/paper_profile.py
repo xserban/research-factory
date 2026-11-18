@@ -51,7 +51,10 @@ __all__ = [
     "VALUE_CHARS",
     "PaperProfile",
     "ProfileRow",
+    "RawMinerRow",
     "category_names",
+    "listed_miner_versions",
+    "load_miner_rows",
     "paper_profiles",
     "profile_size",
     "render_profile",
@@ -159,6 +162,68 @@ def _names_of(project: Project, spec: MinerSpec) -> dict[str, str]:
     return {} if taxonomy is None else category_names(taxonomy)
 
 
+@dataclass(frozen=True)
+class RawMinerRow:
+    """One stored row of a miner for a work, unshortened: `status` is `final` or `pass-a-only`;
+    `fields` maps a field name to `(value, unit, anchor, quote)`."""
+
+    status: str
+    row_key: str
+    fields: Mapping[str, tuple[str | int | float | bool, str | None, str | None, str | None]]
+
+
+def listed_miner_versions(project: Project) -> list[tuple[str, int]]:
+    """The protocol's listed miners, one `(name, version)` per name sorted by name: the highest
+    listed version that is registered (else the highest listed). Empty without a protocol."""
+    protocol = current_protocol(project)
+    versions: dict[str, list[int]] = {}
+    for use in (protocol.spec.miners or ()) if protocol else ():
+        versions.setdefault(use.name, []).append(use.version)
+    listed: list[tuple[str, int]] = []
+    for name in sorted(versions):
+        ordered_versions = sorted(versions[name], reverse=True)
+        chosen = next(
+            (v for v in ordered_versions if registered_miner(project, name, v) is not None),
+            ordered_versions[0],
+        )
+        listed.append((name, chosen))
+    return listed
+
+
+def load_miner_rows(
+    project: Project, name: str, work_ids: Sequence[str]
+) -> dict[str, list[RawMinerRow]]:
+    """The rows of miner `name` for each work of `work_ids` (every work a key). A work's rows are
+    its final rows (`final_rows_restricted`), else its live pass A rows (`pass-a-only`); the two
+    are never mixed. Unscrubbed, unsorted beyond the reader's order. Read-only; the caller has
+    synced the index."""
+    unique = list(dict.fromkeys(work_ids))
+    scope = MinerScope(name)
+    found: dict[str, list[RawMinerRow]] = {w: [] for w in unique}
+    for final in final_rows_restricted(
+        project, unique, scope=scope, ledger=scope_ledger(project, scope)
+    ):
+        found[final.work_id].append(
+            RawMinerRow(
+                "final",
+                final.row_key,
+                {k: (f.value, f.unit, f.anchor, f.quote) for k, f in final.fields.items()},
+            )
+        )
+    for work_id in unique:
+        if found[work_id]:
+            continue
+        for live in live_rows(project, PassLabel.A, work_id=work_id, scope=scope):
+            found[work_id].append(
+                RawMinerRow(
+                    "pass-a-only",
+                    live.row_key,
+                    {k: (f.value, f.unit, f.anchor, f.quote) for k, f in live.fields.items()},
+                )
+            )
+    return found
+
+
 def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfile]:
     """The profile of each work in `work_ids`, in the order given (duplicates once). Refused on
     field `work_ids`, with nothing read further, when an id is no work of the project. Read-only;
@@ -171,19 +236,8 @@ def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfi
         raise FactoryValidationError(
             [ValidationIssue("work_ids", f"unknown work id: {', '.join(unknown)}")]
         )
-    protocol = current_protocol(project)
-    versions: dict[str, list[int]] = {}
-    for use in (protocol.spec.miners or ()) if protocol else ():
-        versions.setdefault(use.name, []).append(use.version)
     # one entry per name: the highest listed version that is registered (else the highest listed)
-    listed: list[tuple[str, int]] = []
-    for name in sorted(versions):
-        ordered_versions = sorted(versions[name], reverse=True)
-        chosen = next(
-            (v for v in ordered_versions if registered_miner(project, name, v) is not None),
-            ordered_versions[0],
-        )
-        listed.append((name, chosen))
+    listed = listed_miner_versions(project)
     rows: dict[str, list[ProfileRow]] = {w: [] for w in unique}
     seen: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     for name, version in listed:
@@ -191,30 +245,18 @@ def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfi
         if spec is None:
             continue
         names = _names_of(project, spec)
-        scope = MinerScope(name)
-        finals: dict[str, list[ProfileRow]] = {}
-        for final in final_rows_restricted(
-            project, unique, scope=scope, ledger=scope_ledger(project, scope)
-        ):
-            stored = {k: (f.value, f.unit) for k, f in final.fields.items()}
-            finals.setdefault(final.work_id, []).append(
-                _row(spec, names, "final", final.row_key, stored)
-            )
-        for work_id in unique:
-            found = finals.get(work_id)
-            if not found:
-                found = [
+        for work_id, raw_rows in load_miner_rows(project, name, unique).items():
+            if raw_rows:
+                rows[work_id].extend(
                     _row(
                         spec,
                         names,
-                        "pass-a-only",
-                        live.row_key,
-                        {k: (f.value, f.unit) for k, f in live.fields.items()},
+                        r.status,
+                        r.row_key,
+                        {k: (v[0], v[1]) for k, v in r.fields.items()},
                     )
-                    for live in live_rows(project, PassLabel.A, work_id=work_id, scope=scope)
-                ]
-            if found:
-                rows[work_id].extend(found)
+                    for r in raw_rows
+                )
                 seen[work_id].add((name, version))
     tokens = held_out_tokens(project, include_work_ids=False)
     profiles: list[PaperProfile] = []
