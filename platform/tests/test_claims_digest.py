@@ -194,3 +194,16 @@ def test_calibration_works_use_gold_else_calibration_rows(
         ]
         assert by_work[work].gap is None
     assert "(gold)" in render_claims_digest(digest)
+
+
+def test_pass_b_reviewed_to_empty_is_a_gap_not_pass_a_only(
+    project: Project, agent: Actor, mina: Actor, minb: Actor, world: list[str]
+) -> None:
+    list_miner(project, agent, claims_spec())
+    mine_pass(project, mina, A, lambda w: [claim_row("finding")], name="m-claims")
+    before = claims_digest(project, SelectionSpec())
+    assert {r.status for p in before.papers for r in p.rows} == {"pass-a-only"}
+    mine_pass(project, minb, B, lambda w: [], name="m-claims")
+    digest = claims_digest(project, SelectionSpec())
+    assert all(p.rows == () and p.gap == "reviewed-empty" for p in digest.papers)
+    assert "GAP: pass B reviewed" in render_claims_digest(digest)

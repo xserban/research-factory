@@ -193,7 +193,10 @@ def event_log_signature(project: Project) -> tuple[int, float]:
 
 def resolve_selection_cached(project: Project, spec: SelectionSpec) -> Selection:
     """`resolve_selection`, reused while the event log is unchanged (see the module invariants).
-    A refused spec raises as `resolve_selection` does and is not cached."""
+    A refused spec raises as `resolve_selection` does and is not cached. The cache relies on
+    conversions and library changes being event-driven: a conversion, or a change of the default
+    conversion, is recorded as an event, so the log signature changes with it; a change made to
+    the library without an event would not end the cache."""
     key = (str(project.paths.dir), canonical_json(spec.model_dump(mode="json")))
     signature = event_log_signature(project)
     with _CACHE_LOCK:

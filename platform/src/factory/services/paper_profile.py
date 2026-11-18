@@ -16,9 +16,13 @@ Invariants:
 - A miner's rows for a work are its final rows (`final_rows_restricted`) with status `final`.
   Final rows leave out every row until pass B of the miner has opened, so a work with no final
   row falls back to its live (not superseded) pass A rows, with status `pass-a-only`. A work with
-  neither, and in the miner's calibration sample, takes the researcher's gold rows (status `gold`,
-  non-empty labels), else the calibration session's rows (status `calibration`). A work with none
+  neither, and in a calibration sample of the listed VERSION of the miner (calibrations of other
+  versions never count), takes the researcher's gold rows (status `gold`, non-empty labels of any
+  such calibration), else the calibration session's rows (status `calibration`). A work with none
   of these is in `missing_miners`. Rows of the one status are never mixed for a work and miner.
+- A work that pass B has reviewed (pass B opened, its passes current) and that ended with no final
+  row gets no rows of the miner: its pass A rows are not served as `pass-a-only`; the miner is in
+  `reviewed_empty`, not `missing_miners`.
 - Quote fields are omitted, except for miners in `QUOTED_MINERS`, whose quotes are kept cut to
   `QUOTE_CHARS` characters. Other values are cut to `VALUE_CHARS`.
 - A category of a miner derived from a taxonomy is shown by its category name, not its id.
@@ -42,7 +46,13 @@ from factory.model.extraction import MinerScope
 from factory.model.screening import PassLabel
 from factory.services.call_memo import entering
 from factory.services.context import Project
-from factory.services.extraction import calibration_task_ids, live_rows, scope_ledger
+from factory.services.extraction import (
+    calibration_task_ids,
+    live_rows,
+    pass_config,
+    scope_ledger,
+    unit_states,
+)
 from factory.services.extraction_agreement import final_rows_restricted
 from factory.services.miner_gold import calibration_labels
 from factory.services.mining import registered_miner
@@ -63,6 +73,7 @@ __all__ = [
     "choose_rows",
     "listed_miner_versions",
     "load_miner_rows",
+    "load_miner_work_rows",
     "paper_profiles",
     "profile_size",
     "render_profile",
@@ -94,13 +105,15 @@ class ProfileRow:
 @dataclass(frozen=True)
 class PaperProfile:
     """Everything the listed miners found in one work. `missing_miners` are the listed
-    `(name, version)` with no row at all for the work."""
+    `(name, version)` with no row at all for the work; `reviewed_empty` those whose pass B
+    reviewed the work and ended with no final row (their pass A rows are not served)."""
 
     work_id: str
     title: str
     year: str
     rows: tuple[ProfileRow, ...]
     missing_miners: tuple[tuple[str, int], ...]
+    reviewed_empty: tuple[tuple[str, int], ...] = ()
 
 
 def profile_size(text: str) -> int:
@@ -213,56 +226,77 @@ def _raw(status: str, row_key: str, fields: Mapping[str, Any]) -> RawMinerRow:
 
 
 def _calibration_units(
-    project: Project, name: str, work_ids: Sequence[str]
-) -> dict[str, tuple[str, int]]:
-    """For each work of `work_ids` in a calibration sample of miner `name`, the
-    `(calibration_id, version)` of the highest version that drew it."""
+    project: Project, name: str, version: int, work_ids: Sequence[str]
+) -> dict[str, list[str]]:
+    """For each work of `work_ids` in a calibration sample of miner `name` at `version`, the
+    ids of the calibrations of that version that drew it, oldest first."""
     wanted = set(work_ids)
     with project.index.connect() as conn:
         found = conn.execute(
             text(
-                "SELECT u.work_id, c.calibration_id, c.version FROM miner_calibration_units u "
+                "SELECT u.work_id, c.calibration_id FROM miner_calibration_units u "
                 "JOIN miner_calibrations c ON c.calibration_id = u.calibration_id "
-                "WHERE c.name = :n ORDER BY c.version, c.event_id"
+                "WHERE c.name = :n AND c.version = :v ORDER BY c.event_id"
             ),
-            {"n": name},
+            {"n": name, "v": version},
         ).all()
-    return {str(w): (str(c), int(v)) for w, c, v in found if str(w) in wanted}
+    units: dict[str, list[str]] = {}
+    for w, c in found:
+        if str(w) in wanted:
+            units.setdefault(str(w), []).append(str(c))
+    return units
 
 
 def _gold_and_calibration(
-    project: Project, name: str, scope: MinerScope, work_ids: Sequence[str]
+    project: Project, name: str, version: int, scope: MinerScope, work_ids: Sequence[str]
 ) -> tuple[dict[str, list[RawMinerRow]], dict[str, list[RawMinerRow]]]:
     """The researcher's gold rows and the calibration session's rows of the works that are in a
-    calibration sample of `name`, each read once for all of them. An empty gold label is no gold."""
-    units = _calibration_units(project, name, work_ids)
+    calibration sample of `name` at `version` (calibrations of other versions are ignored), each
+    read once for all of them. An empty gold label is no gold. Within the matching calibrations
+    the latest one with gold (or rows) for a work gives that work's rows."""
+    units = _calibration_units(project, name, version, work_ids)
     gold: dict[str, list[RawMinerRow]] = {}
     plain: dict[str, list[RawMinerRow]] = {}
     if not units:
         return gold, plain
-    for cid in {c for c, _ in units.values()}:
-        mine = {w for w, (c, _) in units.items() if c == cid}
+    order: list[str] = []
+    for cids in units.values():
+        order.extend(c for c in cids if c not in order)
+    for cid in order:
+        mine = {w for w, cids in units.items() if cid in cids}
         for work, labelled in calibration_labels(project, cid).items():
             if work in mine and labelled:
                 gold[work] = [_raw("gold", r.row_key, r.fields) for r in labelled]
         apart = calibration_task_ids(project, scope, cid)
+        fresh: dict[str, list[RawMinerRow]] = {}
         for row in live_rows(project, None, scope=scope, calibration=True):
             if row.work_id in mine and row.task_id in apart:
-                plain.setdefault(row.work_id, []).append(
+                fresh.setdefault(row.work_id, []).append(
                     _raw("calibration", row.row_key, row.fields)
                 )
+        plain.update(fresh)
     return gold, plain
 
 
-def load_miner_rows(
-    project: Project, name: str, work_ids: Sequence[str]
-) -> dict[str, list[RawMinerRow]]:
-    """The rows of miner `name` for each work of `work_ids` (every work a key), read in batches,
-    not per work. A work's rows are, in this order: its final rows (`final_rows_restricted`);
-    else its live pass A rows (`pass-a-only`); else, for a work in the miner's calibration sample,
-    the researcher's gold rows (`gold`, a non-empty label); else the calibration session's rows
-    (`calibration`). The sources are never mixed for one work (`choose_rows`). Unscrubbed,
-    unsorted beyond the reader's order. Read-only; the caller has synced the index."""
+def _reviewed_by_pass_b(project: Project, scope: MinerScope, work_ids: Sequence[str]) -> set[str]:
+    """The works of `work_ids` whose production extraction is complete once pass B has opened:
+    pass A is current for the work and either it is outside the dual sample (it has no pass B
+    unit) or its pass B unit is current. Such a work with no final row was reviewed to empty."""
+    if pass_config(project, PassLabel.B, scope=scope) is None:
+        return set()
+    states = unit_states(project, scope=scope, ledger=scope_ledger(project, scope))
+    a_current = {s.work_id for s in states if s.pass_label is PassLabel.A and s.state == "current"}
+    b_state = {s.work_id: s.state for s in states if s.pass_label is PassLabel.B}
+    return {w for w in work_ids if w in a_current and b_state.get(w, "current") == "current"}
+
+
+def load_miner_work_rows(
+    project: Project, name: str, version: int, work_ids: Sequence[str]
+) -> tuple[dict[str, list[RawMinerRow]], frozenset[str]]:
+    """`load_miner_rows` and, besides, the works that pass B reviewed to empty: those with no
+    final row although pass B has opened and the work's passes are current. Such a work has no
+    rows (its pass A rows, which pass B did not confirm, and the calibration rows are not
+    served)."""
     unique = list(dict.fromkeys(work_ids))
     scope = MinerScope(name)
     finals: dict[str, list[RawMinerRow]] = {w: [] for w in unique}
@@ -271,20 +305,39 @@ def load_miner_rows(
     ):
         finals[final.work_id].append(_raw("final", final.row_key, final.fields))
     lacking = [w for w in unique if not finals[w]]
+    emptied = frozenset(_reviewed_by_pass_b(project, scope, lacking)) if lacking else frozenset()
+    open_works = [w for w in lacking if w not in emptied]
     live: dict[str, list[RawMinerRow]] = {}
-    if lacking:
-        wanted = set(lacking)
+    if open_works:
+        wanted = set(open_works)
         for row in live_rows(project, PassLabel.A, scope=scope):
             if row.work_id in wanted:
                 live.setdefault(row.work_id, []).append(
                     _raw("pass-a-only", row.row_key, row.fields)
                 )
-    needy = [w for w in lacking if not live.get(w)]
-    gold, plain = _gold_and_calibration(project, name, scope, needy) if needy else ({}, {})
-    return {
-        w: choose_rows(finals[w] or live.get(w, []), gold.get(w, []), plain.get(w, []))
+    needy = [w for w in open_works if not live.get(w)]
+    gold, plain = _gold_and_calibration(project, name, version, scope, needy) if needy else ({}, {})
+    rows = {
+        w: []
+        if w in emptied
+        else choose_rows(finals[w] or live.get(w, []), gold.get(w, []), plain.get(w, []))
         for w in unique
     }
+    return rows, emptied
+
+
+def load_miner_rows(
+    project: Project, name: str, version: int, work_ids: Sequence[str]
+) -> dict[str, list[RawMinerRow]]:
+    """The rows of miner `name` for each work of `work_ids` (every work a key), read in batches,
+    not per work. A work's rows are, in this order: its final rows (`final_rows_restricted`);
+    else, unless pass B has reviewed the work to empty (no rows then; see `load_miner_work_rows`),
+    its live pass A rows (`pass-a-only`); else, for a work in a calibration sample of `version`
+    of the miner, the researcher's gold rows (`gold`, a non-empty label of any such calibration),
+    else the calibration session's rows (`calibration`). The sources are never mixed for one work
+    (`choose_rows`). Unscrubbed, unsorted beyond the reader's order. Read-only; the caller has
+    synced the index."""
+    return load_miner_work_rows(project, name, version, work_ids)[0]
 
 
 def paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProfile]:
@@ -308,12 +361,16 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
     listed = listed_miner_versions(project)
     rows: dict[str, list[ProfileRow]] = {w: [] for w in unique}
     seen: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
+    emptied: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     for name, version in listed:
         spec = registered_miner(project, name, version)
         if spec is None:
             continue
         names = _names_of(project, spec)
-        for work_id, raw_rows in load_miner_rows(project, name, unique).items():
+        loaded, reviewed = load_miner_work_rows(project, name, version, unique)
+        for work_id in reviewed:
+            emptied[work_id].add((name, version))
+        for work_id, raw_rows in loaded.items():
             if raw_rows:
                 rows[work_id].extend(
                     _row(
@@ -341,7 +398,8 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
                 str(withhold(work.title, tokens)),
                 str(work.dates.year or ""),
                 tuple(ordered),
-                tuple(m for m in listed if m not in seen[work_id]),
+                tuple(m for m in listed if m not in seen[work_id] and m not in emptied[work_id]),
+                tuple(m for m in listed if m in emptied[work_id]),
             )
         )
     return profiles
@@ -360,4 +418,6 @@ def render_profile(profile: PaperProfile) -> str:
         lines.append(f"{miner} [{status}]: {body}")
     if profile.missing_miners:
         lines.append("missing: " + ", ".join(n for n, _ in profile.missing_miners))
+    if profile.reviewed_empty:
+        lines.append("reviewed-empty: " + ", ".join(n for n, _ in profile.reviewed_empty))
     return "\n".join(lines)

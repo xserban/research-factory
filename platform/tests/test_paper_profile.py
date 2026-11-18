@@ -162,7 +162,7 @@ def test_taxonomy_category_rendered_as_name() -> None:
                 id="technique",
                 title="T",
                 question="q",
-                cardinality="single",  # type: ignore[arg-type]
+                cardinality="single",
                 categories=(Category("multi-agent", "Multi-agent system", "d"),),
             ),
         ),
@@ -276,7 +276,7 @@ def test_calibration_work_gold_else_calibration_rows(
     project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:
     works, name = _sample(project, agent, human, labelled=2)
-    found = load_miner_rows(project, name, works)
+    found = load_miner_rows(project, name, 1, works)
     gold, plain = works[:2], works[2:]
     for work in gold:
         assert [r.status for r in found[work]] == ["gold"]
@@ -296,3 +296,26 @@ def test_production_rows_win_over_calibration_rows() -> None:
     assert pp.choose_rows([], gold, calibration) is gold
     assert pp.choose_rows([], [], calibration) is calibration
     assert pp.choose_rows([], [], []) == []
+
+
+def test_calibration_of_another_version_is_not_served(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works, name = _sample(project, agent, human, labelled=2)
+    assert [r.status for r in load_miner_rows(project, name, 1, works)[works[0]]] == ["gold"]
+    other = load_miner_rows(project, name, 2, works)
+    assert all(rows == [] for rows in other.values())
+
+
+def test_pass_b_reviewed_to_empty_does_not_serve_pass_a_rows(
+    project: Project, agent: Actor, mina: Actor, minb: Actor, world: list[str]
+) -> None:
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row("lower")])
+    mine_pass(project, minb, B, lambda w: [])
+    [profile] = paper_profiles(project, world[:1])
+    assert profile.rows == ()
+    assert profile.reviewed_empty == ((VISION_NAME, 1),) and profile.missing_miners == ()
+    assert f"reviewed-empty: {VISION_NAME}" in render_profile(profile)
+    rows, emptied = pp.load_miner_work_rows(project, VISION_NAME, 1, world[:1])
+    assert rows == {world[0]: []} and emptied == {world[0]}

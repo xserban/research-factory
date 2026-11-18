@@ -12,14 +12,16 @@ Invariants:
   zero-padded to two digits (more when the selection has over 99 works); for one selection
   digest the codes are therefore stable.
 - Rows are those of the named miner at its listed version (`listed_miner_versions`), read with
-  `load_miner_rows`: final rows, else the live pass A rows (`pass-a-only`), else for a work in the
-  miner's calibration sample the researcher's gold rows (`gold`), else the calibration session's
+  `load_miner_work_rows`: final rows, else the live pass A rows (`pass-a-only`), else for a work in
+  a calibration sample of that version the researcher's gold rows (`gold`), else the calibration session's
   rows (`calibration`); never mixed for one work. A miner
   that is not listed in the protocol is refused on field `miner`.
 - Rows of a paper are ordered limitation, negative-result, failure-analysis, finding, mechanism,
   no-limitation-stated, then any other claim type; ties by row key.
-- `gap` is `no-rows` when the work has no row of the miner, and `absence-only` when every one of
-  its rows is `no-limitation-stated`; those rows are still listed. Otherwise `gap` is None.
+- `gap` is `reviewed-empty` when pass B has reviewed the work and left no final row (its pass A
+  rows are then not served); `no-rows` when the work has no row of the miner, and `absence-only`
+  when every one of its rows is `no-limitation-stated`; those rows are still listed. Otherwise
+  `gap` is None.
 - Held-out scrub: the title and every value and quote pass `withhold` of the held-out tokens
   (`held_out_tokens(include_work_ids=False)`); work ids are not scrubbed.
 - `size` is computed from the rendered text: characters, and estimated tokens at four characters
@@ -38,10 +40,10 @@ from factory.services.paper_profile import (
     PROFILE_CHARS_PER_TOKEN,
     RawMinerRow,
     listed_miner_versions,
-    load_miner_rows,
+    load_miner_work_rows,
 )
 from factory.services.search import get_work
-from factory.services.selection import SelectionSpec, resolve_selection_cached
+from factory.services.selection import Selection, SelectionSpec, resolve_selection_cached
 from factory.services.withholding import held_out_tokens, withhold
 
 __all__ = [
@@ -175,19 +177,20 @@ def claims_digest(
     `FactoryValidationError` on field `miner` when it is not listed in the protocol, and on the
     selection's own fields as `resolve_selection` does."""
     project.index.sync()
-    with project.index.snapshot(), entering():  # one read view: no re-sync per reader
-        return _claims_digest(project, spec, miner)
-
-
-def _claims_digest(project: Project, spec: SelectionSpec, miner: str) -> ClaimsDigest:
+    # resolved before the snapshot: a cache miss runs its own reads and must not hold the lock
     selection = resolve_selection_cached(project, spec)
+    with project.index.snapshot(), entering():  # one read view: no re-sync per reader
+        return _claims_digest(project, selection, miner)
+
+
+def _claims_digest(project: Project, selection: Selection, miner: str) -> ClaimsDigest:
     version = dict(listed_miner_versions(project)).get(miner)
     if version is None:
         raise FactoryValidationError(
             [ValidationIssue("miner", f"{miner}: not listed in the protocol")]
         )
     work_ids = [w.work_id for w in selection.works]
-    raw = load_miner_rows(project, miner, work_ids)
+    raw, emptied = load_miner_work_rows(project, miner, version, work_ids)
     tokens = held_out_tokens(project, include_work_ids=False)
     width = max(2, len(str(len(work_ids))))
     papers: list[DigestPaper] = []
@@ -196,7 +199,9 @@ def _claims_digest(project: Project, spec: SelectionSpec, miner: str) -> ClaimsD
         title = "" if record is None else str(withhold(record.title, tokens))
         rows = tuple(sorted((_claim(r, tokens) for r in raw[work_id]), key=_rank))
         gap = (
-            "no-rows"
+            "reviewed-empty"
+            if work_id in emptied
+            else "no-rows"
             if not rows
             else "absence-only"
             if all(r.claim_type == ABSENCE_TYPE for r in rows)
@@ -232,6 +237,11 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
         lines.extend(_line(r) for r in paper.rows)
         if paper.gap == "no-rows":
             lines.append(f"GAP: no {digest.miner} rows for this paper")
+        elif paper.gap == "reviewed-empty":
+            lines.append(
+                f"GAP: pass B reviewed this paper and left no final {digest.miner} row; "
+                "its pass A rows are not shown"
+            )
         elif paper.gap == "absence-only":
             lines.append(
                 "GAP: only no-limitation-stated; the paper states no limitation or other claim"

@@ -52,7 +52,7 @@ def test_tiers_and_coverage(project: Project, world: list[str]) -> None:
     assert result.total == len(world) and sum(result.by_tier.values()) == len(world)
     assert result.by_tier == {1: 2, 2: 2, 3: len(world) - 4}
     assert result.by_stance == {"against": 3, "for": 2}
-    assert result.proposals == 6 and result.over_cap == 0
+    assert result.proposals == 5 and result.over_cap == 0  # (work, source) pairs
 
 
 def test_cap_in_explore_only_and_ordering(project: Project, world: list[str]) -> None:
@@ -132,3 +132,19 @@ def test_nothing_written(project: Project, world: list[str]) -> None:
     before = events()
     chat_candidates(project, SPEC, [_p(world[0])])
     assert events() == before
+
+
+def test_bad_layer_is_returned_with_proposal_issues(project: Project, world: list[str]) -> None:
+    with pytest.raises(FactoryValidationError) as err:
+        chat_candidates(
+            project, SelectionSpec(layers=["no-such-layer"]), [C(world[0], "oracle", "for")]
+        )
+    fields = {i.field for i in err.value.issues}
+    assert "spec.layers" in fields and "proposals[0].source" in fields
+
+
+def test_proposals_count_distinct_work_source_pairs(project: Project, world: list[str]) -> None:
+    result = chat_candidates(
+        project, SPEC, [_p(world[0], "claims"), _p(world[0], "claims"), _p(world[0], "keyword")]
+    )
+    assert result.proposals == 2

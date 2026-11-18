@@ -140,3 +140,18 @@ def test_section_headings_are_scrubbed(project: Project, monkeypatch: pytest.Mon
     monkeypatch.setattr(cr, "held_out_tokens", lambda _p, include_work_ids=True: {"Detail"})
     heads = [s.heading for s in chat_sections(project, work).sections]
     assert heads == ["Study", "1 Method", "1.1 [withheld]", "2 Results"]
+
+
+@pytest.mark.usefixtures("corpus")
+def test_whitespace_runs_in_element_and_quote_are_normalised(project: Project) -> None:
+    work = _promoted(project)[0]
+    fetched_document(project, work, b"## 1 Method\n\nLine one of\nthe  claim   text here.\n")
+    _convert(project)
+    conv = document_read(project, work_id=work).conversion_id
+    a = _anchor_with(project, conv, "claim")
+    # a digest quote has its whitespace collapsed; the element holds a newline and double spaces
+    items = [
+        VerifyItem(work, a, "Line one of the claim text here."),
+        VerifyItem(work, a, "of\n  the claim"),
+    ]
+    assert [r.status for r in chat_verify(project, items)] == ["accepted", "accepted"]

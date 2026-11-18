@@ -7,7 +7,8 @@ The platform judges nothing: it validates the proposals and computes what follow
 Invariants:
 - Read-only, no event is written. Deterministic: the same spec and proposals give the same result.
 - Validated at the boundary: every issue is collected with a field path `proposals[i].<field>`
-  (`mode` and `tier1_cap` for the arguments) and, when any exists, nothing is returned.
+  (`mode` and `tier1_cap` for the arguments, `spec.<field>` for a refused selection spec, whose
+  issues come with those of the proposals) and, when any exists, nothing is returned.
   Refused: an unknown source, stance or mode; a work that is no work of the project or is not in
   the selection (ids pass the IDEA-66 resolver); no quote for source `claims` or `keyword`; an
   anchor without a quote or a quote without an anchor; a quote that is not in the anchor's
@@ -19,7 +20,8 @@ Invariants:
   `tier1_cap` by (researcher pick first, more sources first, work id) and marks the rest
   `over_cap`; they stay tier 1 and listed. `prepare` mode has no cap.
 - Counts per tier, per stance (works carrying that stance; a work with both counts in both) and
-  of proposals are computed from the result, never typed. `total` equals the selection size.
+  of proposals (distinct work and source pairs) are computed from the result, never typed.
+  `total` equals the selection size.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from typing import Literal
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.chat_read import VerifyItem, chat_verify
 from factory.services.context import Project
-from factory.services.selection import SelectionSpec, resolve_selection_cached
+from factory.services.selection import Selection, SelectionSpec, resolve_selection_cached
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
@@ -124,8 +126,12 @@ def chat_candidates(
         issues.append(ValidationIssue("mode", f"{mode}: must be explore or prepare"))
     if tier1_cap < 1:
         issues.append(ValidationIssue("tier1_cap", "must be at least 1"))
-    selection = resolve_selection_cached(project, spec)
-    pinned = {w.work_id: w.conversion_id for w in selection.works}
+    selection: Selection | None = None
+    try:
+        selection = resolve_selection_cached(project, spec)
+    except FactoryValidationError as err:
+        issues.extend(ValidationIssue(f"spec.{i.field}", i.reason) for i in err.issues)
+    pinned = {} if selection is None else {w.work_id: w.conversion_id for w in selection.works}
 
     accepted: list[tuple[str, CandidateInput]] = []
     checks: list[tuple[int, str, VerifyItem]] = []
@@ -138,6 +144,8 @@ def chat_candidates(
         if not _enum(p.stance, Stance):
             issues.append(ValidationIssue(f"{at}.stance", f"unknown stance: {p.stance}"))
             ok = False
+        if selection is None:
+            continue  # the spec is refused: only the fields that need no selection are checked
         try:
             work = resolve_work_id(project, p.work_id, field=f"{at}.work_id")
         except FactoryValidationError as err:
@@ -175,7 +183,7 @@ def chat_candidates(
                         f"proposals[{i}].quote", f"{verdict.status}: {verdict.item.anchor}"
                     )
                 )
-    if issues:
+    if issues or selection is None:
         raise FactoryValidationError(issues)
 
     sources: dict[str, set[str]] = {w: set() for w in pinned}
@@ -228,7 +236,7 @@ def chat_candidates(
         by_tier={t: sum(1 for c in result if c.tier == t) for t in (1, 2, 3)},
         by_stance={s.value: sum(1 for c in result if s.value in c.stances) for s in Stance},
         over_cap=len(over),
-        proposals=len(accepted),
+        proposals=len({(w, p.source) for w, p in accepted}),
         total=len(result),
     )
 
