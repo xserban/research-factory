@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from collections.abc import Callable, Mapping
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
@@ -258,15 +258,15 @@ def test_prisma_figures_narrow_their_decisions(
     project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
 ) -> None:
     protocol_id, _first, decision = _screened(project, agent, human, mock_sources)
-    screened = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
-    assert decision in screened.decisions and len(screened.decisions) == 2
+    shown = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
+    assert decision in shown.decisions and len(shown.decisions) == 2
     # no full-text decision: the title/abstract includes are the included figure; none here
     assert ht.trace_figure(project, "prisma.included", limit=ht.MAX_PAGE).decisions == ()
     _insert_decision(project, protocol_id, "dec_ta_in", "title-abstract", "include")
     _insert_decision(project, protocol_id, "dec_ft_in", "full-text", "include")
     _insert_decision(project, protocol_id, "dec_ft_out", "full-text", "exclude")
-    screened = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
-    assert "dec_ta_in" in screened.decisions and "dec_ft_in" not in screened.decisions
+    shown = ht.trace_figure(project, "prisma.screened", limit=ht.MAX_PAGE)
+    assert "dec_ta_in" in shown.decisions and "dec_ft_in" not in shown.decisions
     included = ht.trace_figure(project, "prisma.included", limit=ht.MAX_PAGE)
     assert included.decisions == ("dec_ft_in",)
     assert "full-text include" in included.title

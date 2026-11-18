@@ -46,8 +46,8 @@ METHODS: dict[str, str] = {
         "time of every event in the project's log. One grouped query counts them; no log file "
         "is parsed. A day is the UTC date of the event time. Each event type belongs to exactly "
         "one family (search, screening, acquisition, conversion, mining, references, feed, "
-        "other); a type that is not in the table counts as other, and so do the synthesis pages the "
-        "agent records (`page.recorded`)."
+        "other); a type that is not in the table counts as other, and so do the synthesis pages "
+        "the agent records (`page.recorded`)."
     ),
 }
 

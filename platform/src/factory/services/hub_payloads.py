@@ -45,8 +45,9 @@ METHODS: dict[str, str] = {
         "first-pass row of a listed miner. Where they differ, every work is listed by id: a "
         "duplicate record that was read under its own id is shown on the canonical record; a work "
         "that was read but excluded is listed with its exclusion criterion and not shown in "
-        "corpus views; a work read under a duplicate record whose canonical record is not included is "
-        "listed apart as 'duplicate of an excluded work' and not shown in corpus views; an "
+        "corpus views; a work read under a duplicate record whose canonical record is not "
+        "included is listed apart as 'duplicate of an excluded work' and not shown in corpus "
+        "views; an "
         "included work with no rows of its own or of a merged duplicate is "
         "'not read yet'."
     ),
