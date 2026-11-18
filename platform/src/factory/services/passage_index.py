@@ -7,14 +7,17 @@ the canonical Markdown blobs and is never authoritative: it may be deleted at an
 Invariants:
 - Only the pinned (default) conversion of each work in the selection is indexed; the rows of any
   other conversion of those works are removed, so a search never reads a superseded conversion.
-- A conversion is re-indexed when its `markdown_hash` or `CHUNKER_VERSION` differs from the rows
-  held; otherwise its rows are reused unchanged.
+- A conversion is re-indexed when its `markdown_hash`, `CHUNKER_VERSION` or the work title differs
+  from the `conversions` marker row held; otherwise its rows are reused unchanged. The marker row
+  is written for every indexed conversion, also one with no indexed passage, so such a conversion
+  is not re-cut on every call. Marker rows of other conversions of a work are removed with them.
 - Passages whose section kind is related, appendix or back are not indexed; they are counted in
   `IndexReport.excluded_passages` (for the conversions indexed in that call only).
 - Rows are a pure function of the Markdown, the chunker and the work title at index time.
 - The sidecar's layout carries `SCHEMA_VERSION` in SQLite's `user_version`. A sidecar of another
-  version has this module's tables (`passages`, `passages_fts`) dropped and recreated on open, so
-  a schema change never breaks an existing sidecar; tables of other modules are left alone.
+  version has this module's tables (`passages`, `passages_fts`, `conversions`) dropped and
+  recreated on open, so a schema change never breaks an existing sidecar; tables of other
+  modules are left alone.
 """
 
 from __future__ import annotations
@@ -48,13 +51,20 @@ TARGET_WORDS = 250
 _TITLE_SEP = " \u203a "  # joins title and section path
 MIN_WORDS = 30
 UNINDEXED_KINDS = frozenset({SectionKind.RELATED, SectionKind.APPENDIX, SectionKind.BACK})
-CHUNKER_VERSION = f"2:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
+CHUNKER_VERSION = f"3:target_words={TARGET_WORDS}:min_words={MIN_WORDS}"
 """Bumped when the passage cutter or its target size changes; forces a re-index."""
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Bumped when the sidecar tables change shape; an older sidecar's tables are recreated."""
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS conversions(
+    conversion_id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    markdown_hash TEXT NOT NULL,
+    chunker_version TEXT NOT NULL,
+    title TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS passages(
     conversion_id TEXT NOT NULL,
     work_id TEXT NOT NULL,
@@ -96,9 +106,11 @@ def open_index(project: Project) -> Iterator[sqlite3.Connection]:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     try:
+        conn.execute("PRAGMA busy_timeout = 30000")
         if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
             conn.executescript(
                 "DROP TABLE IF EXISTS passages_fts; DROP TABLE IF EXISTS passages;"
+                " DROP TABLE IF EXISTS conversions;"
                 f" PRAGMA user_version = {SCHEMA_VERSION};"
             )
         conn.executescript(_SCHEMA)
@@ -131,18 +143,32 @@ def ensure_indexed(project: Project, works: Sequence[SelectedWork]) -> IndexRepo
                 "work_id = ? AND conversion_id <> ?",
                 (work.work_id, work.conversion_id),
             )
+            conn.execute(
+                "DELETE FROM conversions WHERE work_id = ? AND conversion_id <> ?",
+                (work.work_id, work.conversion_id),
+            )
+            record = get_work(project, work.work_id)
+            title = "" if record is None else record.title
             held = conn.execute(
-                "SELECT DISTINCT markdown_hash, chunker_version FROM passages "
+                "SELECT markdown_hash, chunker_version, title FROM conversions "
                 "WHERE conversion_id = ?",
                 (work.conversion_id,),
             ).fetchall()
-            if held == [(conversion.markdown_hash, CHUNKER_VERSION)]:
+            if held == [(conversion.markdown_hash, CHUNKER_VERSION, title)]:
                 reused += 1
                 continue
             removed += _delete(conn, "conversion_id = ?", (work.conversion_id,))
             markdown = project.library.get(conversion.markdown_hash).decode("utf-8")
-            record = get_work(project, work.work_id)
-            title = "" if record is None else record.title
+            conn.execute(
+                "INSERT OR REPLACE INTO conversions VALUES (?, ?, ?, ?, ?)",
+                (
+                    work.conversion_id,
+                    work.work_id,
+                    conversion.markdown_hash,
+                    CHUNKER_VERSION,
+                    title,
+                ),
+            )
             for passage in cut_passages(markdown, target_words=TARGET_WORDS):
                 if passage.section_kind in UNINDEXED_KINDS:
                     excluded += 1

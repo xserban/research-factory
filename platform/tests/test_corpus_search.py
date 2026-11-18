@@ -11,7 +11,7 @@ from factory.services import corpus_search as cs
 from factory.services.context import Project
 from factory.services.corpus_search import corpus_search
 from factory.services.document_convert import convert_documents
-from factory.services.passage_index import ensure_indexed, index_path
+from factory.services.passage_index import ensure_indexed, index_path, open_index
 from factory.services.selection import SelectionSpec, resolve_selection
 from tests.extraction_helpers import screened  # noqa: F401
 
@@ -160,6 +160,19 @@ def test_held_out_scrub_applied(
     assert all("SECRETDOI" not in h.text and "[withheld]" in h.text for h in result.hits)
 
 
+def test_held_out_scrub_applied_to_section_path(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert(project)
+    plain = _hits(project, ["gradient"], per_work_limit=10)
+    word = next(h for h in plain.hits if h.section_path).section_path[0].split()[0]
+    monkeypatch.setattr(cs, "held_out_tokens", lambda _p, include_work_ids=True: {word})
+    result = _hits(project, ["gradient"], per_work_limit=10)
+    paths = [p for h in result.hits for p in h.section_path]
+    assert paths and all(word not in p.split() for p in paths)
+    assert any("[withheld]" in p for p in paths)
+
+
 def test_deleted_sidecar_is_rebuilt(project: Project, screened: list[str]) -> None:
     _convert(project)
     before = _hits(project, ["attention"], per_work_limit=10)
@@ -247,3 +260,48 @@ def test_sidecar_of_an_older_schema_is_rebuilt(project: Project, screened: list[
     assert conn.execute("SELECT count(*) FROM passages WHERE work_id = 'w'").fetchone() == (0,)
     assert conn.execute("SELECT x FROM keep_me").fetchone() == (7,)
     conn.close()
+
+
+class OnlyBack(Anchored):
+    """A document whose every passage is unindexed (back matter)."""
+
+    def to_markdown(self, raw: bytes, media_type: str) -> tuple[str, tuple[str, ...]]:
+        body = " ".join(["filler"] * 40)
+        return f'<a id="s1"></a>\n## Acknowledgements\n\n<a id="s1.p1"></a>\n{body}\n', ()
+
+
+def test_conversion_with_no_indexed_passage_is_reused(
+    project: Project, screened: list[str]
+) -> None:
+    convert_documents(project, ConverterRegistry([OnlyBack()]), override=True)
+    sel = resolve_selection(project, SelectionSpec())
+    first = ensure_indexed(project, sel.works)
+    assert first.indexed == len(screened)
+    with open_index(project) as conn:
+        assert conn.execute("SELECT count(*) FROM passages").fetchone() == (0,)
+    second = ensure_indexed(project, sel.works)
+    assert (second.indexed, second.reused) == (0, len(screened))
+
+
+def test_retitled_work_is_reindexed(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import passage_index as pi
+
+    _convert(project)
+    sel = resolve_selection(project, SelectionSpec())
+    ensure_indexed(project, sel.works)
+    from factory.services.search import get_work as real
+
+    monkeypatch.setattr(
+        pi,
+        "get_work",
+        lambda p, w: real(p, w).model_copy(update={"title": "Retitled"}),  # type: ignore[union-attr]
+    )
+    again = ensure_indexed(project, sel.works)
+    assert (again.indexed, again.reused) == (len(screened), 0)
+
+
+def test_index_connection_has_a_busy_timeout(project: Project) -> None:
+    with open_index(project) as conn:
+        assert conn.execute("PRAGMA busy_timeout").fetchone() == (30000,)
