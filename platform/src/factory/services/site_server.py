@@ -646,6 +646,7 @@ def child_builder(project: Project) -> Builder:
             slug,
             "site",
             "build",
+            "--lazy",
             "--only",
             pid,
         ]
@@ -665,6 +666,35 @@ def child_builder(project: Project) -> Builder:
         return None
 
     return build
+
+
+def render_item(project: Project, product: site_service.Product, rel: str) -> Path | None:
+    """The file of item `rel` of `product`, rendered on first request into
+    `site/.items/<product>/<fingerprint>/` and kept there until the product is rebuilt (the
+    fingerprint is the recorded one, so items match the list page that is served). None when
+    `rel` names no item. Rendering goes to a scratch folder first, so a reader never sees half a
+    file and two requests for one item do not collide."""
+    if product.item is None:
+        return None
+    root = site_service.site_dir(project) / site_service.ITEMS_DIR / product.id
+    fp = site_service.recorded_fingerprint(project, product.id) or "unbuilt"
+    cached = root / fp / rel
+    if cached.exists():
+        return cached
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=".render-", dir=root))
+    try:
+        if not product.item(project, rel, scratch):
+            return None
+        for made in scratch.rglob("*"):
+            if made.is_dir() and not made.is_symlink():
+                continue
+            target = root / fp / made.relative_to(scratch)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(made, target)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return cached if cached.exists() else None
 
 
 class Rebuilder:
@@ -1060,9 +1090,35 @@ def _handler_class(
                 return
             if self._product_gate(url, slot):
                 return
+            if self._lazy_item(url, slot):
+                return
             self.directory = str(slot.root)
             self.path = mount.rel
             super().do_GET()
+
+        def _lazy_item(self, url: str, slot: Slot) -> bool:
+            """Serve an item page of a lazily built product, rendering it on its first request
+            (IDEA-96); True when this answered. A file the build wrote is served as it is."""
+            pid, _, rest = url.lstrip("/").partition("/")
+            product = slot.rebuilder.product(pid)
+            if product is None or product.item is None or not rest:
+                return False
+            parts = rest.split("/")
+            if parts[0] not in product.item_dirs or any(not p or p.startswith(".") for p in parts):
+                return False
+            if (slot.root / pid / rest).exists():
+                return False
+            found = render_item(slot.project, product, rest)
+            if found is None:
+                self._deny(404, "not found")
+                return True
+            body = found.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", self.guess_type(str(found)))
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return True
 
         def _product_gate(self, url: str, slot: Slot) -> bool:
             """Serve a product's entry page by its freshness (IDEA-96); True when this answered.

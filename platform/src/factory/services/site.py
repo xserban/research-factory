@@ -75,6 +75,11 @@ CORPUS_EVENTS: Final = (
 )
 
 Build = Callable[[Project, Path], None]
+ItemRender = Callable[[Project, str, Path], bool]
+"""Writes one item file of a product (`rel`, e.g. `doc/<slug>.html`) under the given directory, at
+the same relative path; False when `rel` names no item (IDEA-96, lazy item pages)."""
+ITEMS_DIR: Final = ".items"
+"""Under `site/`: the item pages a served hub rendered on request, by product and fingerprint."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,12 @@ class Product:
     stamp: Callable[[Project], str] | None = None
     """Extra fingerprint text for a product that reads files rather than events (the catalog
     reads SKILL.md files and the decision log)."""
+    index_build: Build | None = None
+    """A build without the item pages (lazy build, IDEA-96): the served hub renders each item on
+    its first request with `item`. A full build (`factory site build`) writes them all."""
+    item: ItemRender | None = None
+    item_dirs: tuple[str, ...] = ()
+    """The folders of the product that hold its item pages (rendered on request when lazy)."""
 
 
 @dataclass(frozen=True)
@@ -252,6 +263,18 @@ def _build_synthesis(project: Project, out: Path) -> None:
     from factory.services.site_synthesis import build_synthesis
 
     build_synthesis(project, out)
+
+
+def _build_conversion_index(project: Project, out: Path) -> None:
+    from factory.services.site_inspector import build_conversion_index
+
+    build_conversion_index(project, out)
+
+
+def _conversion_item(project: Project, rel: str, out: Path) -> bool:
+    from factory.services.site_inspector import render_conversion_item
+
+    return render_conversion_item(project, rel, out)
 
 
 def _build_conversion(project: Project, out: Path) -> None:
@@ -458,6 +481,9 @@ def products() -> list[Product]:
             entry="index.html",
             inputs=("document.%", "fulltext.%"),
             build=_build_conversion,
+            index_build=_build_conversion_index,
+            item=_conversion_item,
+            item_dirs=("doc", "files"),
         ),
         Product(
             id="acquisition",
@@ -732,6 +758,13 @@ def _read_manifest(project: Project) -> dict[str, dict[str, str | None]]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def recorded_fingerprint(project: Project, pid: str) -> str | None:
+    """The fingerprint the manifest records for product `pid`'s current build, or None."""
+    entry = _read_manifest(project).get(pid)
+    value = entry.get("fingerprint") if isinstance(entry, dict) else None
+    return value if isinstance(value, str) else None
+
+
 def built_count(project: Project) -> int:
     """How many products the manifest records as built, read without any lock: it never waits
     for a rebuild (a half-written manifest reads as empty)."""
@@ -789,6 +822,7 @@ def build(
     only: Sequence[str] = (),
     force: bool = False,
     registry: Sequence[Product] | None = None,
+    lazy: bool = False,
 ) -> list[BuildResult]:
     """Build every stale product (or the named ones; all of them with `force`), then the hub.
 
@@ -808,7 +842,14 @@ def build(
         fp = fingerprint(project, product)
         entry = manifest.get(product.id, {})
         built = bool(entry.get("built_at")) and (root / product.id / product.entry).exists()
-        if built and entry.get("fingerprint") == fp and not entry.get("error") and not force:
+        partial = bool(entry.get("lazy")) and not lazy  # a full build must write the items
+        if (
+            built
+            and entry.get("fingerprint") == fp
+            and not entry.get("error")
+            and not force
+            and not partial
+        ):
             results.append(BuildResult(id=product.id, built=False, skipped=True, error=None))
             continue
         scratch = root / f".build-{product.id}"
@@ -818,8 +859,11 @@ def build(
             # one memo scope per product (`call_memo`): the derivations its parts share (corpus,
             # outcomes, miner populations) are computed once. Events added meanwhile are not seen;
             # the fingerprint was taken before, so the product reads stale and is built again.
+            as_lazy = lazy and product.index_build is not None
             with entering():
-                product.build(project, scratch)
+                (product.index_build if as_lazy and product.index_build else product.build)(
+                    project, scratch
+                )
             if not (scratch / product.entry).exists():
                 raise RuntimeError(f"the build did not write {product.entry}")
         except Exception as exc:  # a product failure is recorded, never raised across products
@@ -834,10 +878,12 @@ def build(
         target = root / product.id
         shutil.rmtree(target, ignore_errors=True)
         scratch.rename(target)
+        shutil.rmtree(root / ITEMS_DIR / product.id, ignore_errors=True)
         manifest[product.id] = {
             "built_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             "fingerprint": fp,
             "error": None,
+            "lazy": "1" if as_lazy else None,
         }
         results.append(BuildResult(id=product.id, built=True, skipped=False, error=None))
     _write_manifest(project, manifest)

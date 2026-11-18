@@ -429,6 +429,34 @@ def build_index(
     (out / "index.html").write_text(page("Conversion coverage", body, _CSS), encoding="utf-8")
 
 
+def build_conversion_index(project: Project, out: Path) -> None:
+    """The conversion list only (lazy build, IDEA-96): the served hub renders each document's
+    page and files on request (`render_conversion_item`)."""
+    report = cov.cached(project) or cov.refresh(project)
+    (out / "doc").mkdir(parents=True, exist_ok=True)
+    (out / "files").mkdir(parents=True, exist_ok=True)
+    build_index(project, out, documents(project, report), report)
+
+
+def render_conversion_item(project: Project, rel: str, out: Path) -> bool:
+    """Write the one item `rel` names (`doc/<slug>.html`, `files/<slug>.md` or the original
+    `files/<slug>.<ext>`) under `out`, as the full build would; False when no document has it."""
+    folder, _, name = rel.partition("/")
+    if folder not in ("doc", "files") or "/" in name:
+        return False
+    report = cov.cached(project) or cov.refresh(project)
+    for d in documents(project, report):
+        if folder == "doc" and name == f"{d.slug}.html":
+            (out / "doc").mkdir(parents=True, exist_ok=True)
+            write_document_page(project, d, out)
+            return True
+        if folder == "files" and name in (f"{d.slug}.md", f"{d.slug}.{d.ext}"):
+            (out / "files").mkdir(parents=True, exist_ok=True)
+            write_files(project, d, out)
+            return True
+    return False
+
+
 def build_conversion_site(project: Project, out: Path) -> None:
     """The conversion product: the list and one inspector page per converted document."""
     report = cov.cached(project) or cov.refresh(project)
@@ -444,4 +472,12 @@ def build_conversion_site(project: Project, out: Path) -> None:
     build_index(project, out, docs, report)
 
 
-__all__ = ["Doc", "build_conversion_site", "documents", "gaps", "html"]
+__all__ = [
+    "Doc",
+    "build_conversion_index",
+    "build_conversion_site",
+    "documents",
+    "gaps",
+    "html",
+    "render_conversion_item",
+]

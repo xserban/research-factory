@@ -29,6 +29,14 @@ def site_build_cmd(
     force: Annotated[
         bool, typer.Option("--force", help="Rebuild even when a product is up to date.")
     ] = False,
+    lazy: Annotated[
+        bool,
+        typer.Option(
+            "--lazy",
+            help="Skip the item pages of products that support it (the conversion inspector); "
+            "a served hub renders each on its first request. Used by `site serve`.",
+        ),
+    ] = False,
 ) -> None:
     """Build every stale product and the hub page (`<project>/site/index.html`)."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
@@ -37,7 +45,7 @@ def site_build_cmd(
     with _reporting_errors():
         project = _resolve_project(state)
         try:
-            results = site_service.build(project, only=only or (), force=force)
+            results = site_service.build(project, only=only or (), force=force, lazy=lazy)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     for r in results:
