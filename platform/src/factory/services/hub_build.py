@@ -16,11 +16,14 @@ Invariants:
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
+
+from sqlalchemy import text as sql_text
 
 from factory.services import (
     hub_findings,
@@ -30,6 +33,8 @@ from factory.services import (
     hub_mining,
     hub_screening,
     hub_ui,
+    protocol,
+    question,
     site_corpus,
 )
 from factory.services import hub_payloads as hp
@@ -128,6 +133,23 @@ class HubContext:
             lambda: hp._load_role_cells(self.project, self.source_of, dim_key),
         )
 
+    @property
+    def dna(self) -> dict[str, dict[str, dict[str, str] | None]]:
+        """Included work id -> EXPLORE_DIMS -> {"v", "q"} or None; computed once, shared by the
+        shell and explore payloads."""
+
+        def build() -> dict[str, dict[str, dict[str, str] | None]]:
+            cells = {k: self.role_cells(k) for k in EXPLORE_DIMS}
+            out: dict[str, dict[str, dict[str, str] | None]] = {}
+            for w in self.included:
+                out[w] = {}
+                for k in EXPLORE_DIMS:
+                    c = cells[k].get(w)
+                    out[w][k] = {"v": c[0], "q": c[1]} if c else None
+            return out
+
+        return self._once("dna", build)
+
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
         date = self.publication.get(work_id, ("", ""))[1]
         year = int(date[:4]) if len(date) >= 4 and date[:4].isdigit() else None
@@ -138,32 +160,115 @@ class HubContext:
 # ---------------------------------------------------------------- builders
 
 
-def build_shell(ctx: HubContext) -> dict[str, Any]:
-    """Slug, build time, PRISMA headline, included works (Ctrl-K, drawer), glossary and labels."""
-    d = ctx.flow_data
-    works = []
-    for w in sorted(ctx.included):
-        year, month = ctx.year_month(w)
-        works.append(
-            {
-                "id": w,
-                "title": ctx.publication.get(w, (w, ""))[0],
-                "year": year,
-                "month": month,
-                "layer": ctx.layer_of[w],
+SHELL_ABSTRACT_CHARS = 600  # the drawer's abstract is cut to this many characters, then "…"
+SHELL_AUTHORS = 8
+
+
+def _cut(text: str, n: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def work_meta(project: Project, ids: Collection[str]) -> dict[str, dict[str, Any]]:
+    """work id -> authors (first 8 names), venue, abstract, doi and arxiv, one index read."""
+    wanted = set(ids)
+    out: dict[str, dict[str, Any]] = {}
+    with project.index.connect() as conn:
+        for w, data in conn.execute(sql_text("SELECT work_id, data FROM works")):
+            if str(w) not in wanted:
+                continue
+            d = json.loads(str(data))
+            ident = d.get("identifiers") or {}
+            out[str(w)] = {
+                "authors": [str(a.get("name")) for a in (d.get("authors") or []) if a.get("name")][
+                    :SHELL_AUTHORS
+                ],
+                "venue": (d.get("venue") or {}).get("name") or "",
+                "abstract": str(d.get("abstract") or ""),
+                "doi": ident.get("doi"),
+                "arxiv": ident.get("arxiv"),
             }
-        )
+    return out
+
+
+def readable_title(slug: str) -> str:
+    """A project title from its slug: separators become spaces, first letter capital."""
+    words = re.sub(r"[-_]+", " ", slug).strip()
+    return words[:1].upper() + words[1:]
+
+
+def project_head(project: Project) -> dict[str, Any]:
+    """Title (the slug made readable; the question record has no short title), protocol id and
+    the review question's primary question."""
+    q = question.question_view(project)
+    pv = protocol.protocol_view(project)
+    return {
+        "title": readable_title(project.paths.slug),
+        "question": q.spec.primary_question if q.spec is not None else None,
+        "protocol_id": pv.protocol_id,
+    }
+
+
+def build_shell(ctx: HubContext, *, with_abstracts: bool = True) -> dict[str, Any]:
+    """Slug, build time, PRISMA headline, included works with what the drawer and Ctrl-K show
+    (authors, venue, abstract cut to SHELL_ABSTRACT_CHARS, ids, cited-here, DNA values with quotes,
+    layer, mapped_from), included-to-included citation pairs as indexes into `works`, the
+    project head, the sets summary, glossary and labels."""
+    d = ctx.flow_data
+    ids = sorted(ctx.included)
+    meta = work_meta(ctx.project, ids)
+    cited = ctx.cited_here
+    dna = ctx.dna
+    src = ctx.source_of
+    works = []
+    for w in ids:
+        year, month = ctx.year_month(w)
+        m = meta.get(w, {})
+        entry: dict[str, Any] = {
+            "id": w,
+            "title": ctx.publication.get(w, (w, ""))[0],
+            "year": year,
+            "month": month,
+            "layer": ctx.layer_of[w],
+            "authors": m.get("authors", []),
+            "venue": m.get("venue", ""),
+            "doi": m.get("doi"),
+            "arxiv": m.get("arxiv"),
+            "cited_here": cited[w].count,
+            **{k: dna[w][k] for k in EXPLORE_DIMS},
+        }
+        if with_abstracts:
+            entry["abstract"] = _cut(m.get("abstract", ""), SHELL_ABSTRACT_CHARS)
+        if src[w] != w:
+            entry["mapped_from"] = src[w]
+        works.append(entry)
+    index = {w["id"]: i for i, w in enumerate(works)}
+    cites = sorted(
+        [index[a], index[b]] for a, b in ctx.graph.edges if a in index and b in index and a != b
+    )
+    sets = d.sets
     return {
         "slug": ctx.project.paths.slug,
         "generated": ctx.project.clock.now().isoformat(timespec="seconds"),
+        "project": project_head(ctx.project),
         "prisma": {
             "identified": sum(d.prisma.identified_databases.values())
             + sum(d.prisma.identified_other.values()),
             "screened": d.prisma.screened,
             "included": len(works),
-            "read_in_full": len(d.sets.read_in_full),
+            "read_in_full": len(sets.read_in_full),
+        },
+        "sets": {
+            "included": len(sets.included),
+            "read_in_full": len(sets.read_in_full),
+            "duplicate_mapped": len(sets.duplicate_mapped),
+            "mined_but_excluded": len(sets.mined_but_excluded),
+            "not_read_yet": len(sets.not_read_yet),
         },
         "works": works,
+        "cites": cites,
+        "dna_dims": list(EXPLORE_DIMS),
+        "abstract_chars": SHELL_ABSTRACT_CHARS,
         "glossary": {k: list(v) for k, v in sorted(hub_ui.GLOSSARY.items())},
         "labels": dict(sorted(hub_ui.LABELS.items())),
     }
@@ -284,15 +389,12 @@ EXPLORE_DIMS = ("technique", "architecture", "span", "human")
 def build_explore(ctx: HubContext) -> dict[str, Any]:
     """Per included work: id, title, date, layer, cited-here count and the DNA dimensions, each
     as {"v": value, "q": quote} (null when the work has no value). Nothing else is included."""
-    cells = {k: ctx.role_cells(k) for k in EXPLORE_DIMS}
+    all_dna = ctx.dna
     cited = ctx.cited_here
     works = []
     for w in sorted(ctx.included):
         year, month = ctx.year_month(w)
-        dna: dict[str, dict[str, str] | None] = {}
-        for k in EXPLORE_DIMS:
-            c = cells[k].get(w)
-            dna[k] = {"v": c[0], "q": c[1]} if c else None
+        dna = all_dna[w]
         works.append(
             {
                 "id": w,

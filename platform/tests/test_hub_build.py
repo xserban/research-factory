@@ -291,3 +291,64 @@ def test_journeys_is_reported_not_raised_when_the_module_is_absent(
     report = hb.build_static(world, tmp_path / "ui", only={"journeys"})
     assert "hub_journeys" in report.errors["journeys"]
     assert not (tmp_path / "ui/data/journeys.json").exists()
+
+
+def test_shell_works_carry_drawer_fields_and_valid_cites(world: Project, tmp_path: Path) -> None:
+    shell = _payload(world, tmp_path, "shell")
+    ctx = hb.HubContext(world)
+    works = shell["works"]
+    assert isinstance(works, list) and works
+    for w in works:
+        assert {
+            "authors",
+            "venue",
+            "abstract",
+            "doi",
+            "arxiv",
+            "cited_here",
+            "layer",
+            *hb.EXPLORE_DIMS,
+        } <= set(w)
+        assert len(w["authors"]) <= hb.SHELL_AUTHORS
+        assert len(w["abstract"]) <= hb.SHELL_ABSTRACT_CHARS
+        for k in hb.EXPLORE_DIMS:
+            assert w[k] is None or set(w[k]) == {"v", "q"}
+        src = ctx.source_of[w["id"]]
+        assert ("mapped_from" in w) == (src != w["id"])
+    n = len(works)
+    cites = shell["cites"]
+    assert isinstance(cites, list)
+    for a, b in cites:
+        assert 0 <= a < n and 0 <= b < n and a != b
+    assert cites == sorted(cites)
+    head = shell["project"]
+    assert isinstance(head, dict) and set(head) == {"title", "question", "protocol_id"}
+    assert head["title"]
+
+
+def test_shell_sets_summary_equals_reconciliation_sizes(world: Project, tmp_path: Path) -> None:
+    shell = _payload(world, tmp_path, "shell")
+    flow = _payload(world, tmp_path, "flow")
+    sets = flow["sets"]
+    assert isinstance(sets, dict)
+    assert shell["sets"] == {k: len(sets[k]) for k in shell["sets"]}  # type: ignore[attr-defined]
+    assert shell["sets"]["included"] == len(shell["works"])  # type: ignore[arg-type]
+
+
+def test_shell_size_is_measured_and_dna_is_computed_once(
+    world: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    real = hp._load_role_cells
+
+    def counted(*a: object, **k: object) -> object:
+        calls.append(str(a[2]) if len(a) > 2 else "")
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(hp, "_load_role_cells", counted)
+    report = hb.build_static(world, tmp_path / "ui", only={"shell", "explore"})
+    assert report.errors == {}
+    assert len(calls) == len(hb.EXPLORE_DIMS)
+    size = report.payloads["shell"].bytes
+    works = len(json.loads((tmp_path / "ui/data/shell.json").read_text(encoding="utf-8"))["works"])
+    assert size < 4000 * max(works, 1) + 50_000, f"{size} bytes for {works} works"

@@ -1,6 +1,6 @@
 /* Research hub shared shell (ported from the round-2 demo). Served from /p/<slug>/ui/assets/shell.js.
    Page scripts call HUB.init(payload) once, then HUB.mount({page, crumb}). Nothing is read from
-   globals at load time. Payload: {slug, generated, prisma, works, cites}. */
+   globals at load time. Payload (services/hub_build.build_shell): {slug, generated, project, prisma, sets, works, cites (index pairs into works), dna_dims, glossary, labels}. */
 (function(){
 let RF = null, P = {}, byId = new Map(), citesOut = new Map(), citesIn = new Map(), stats = {}, SETS_NOTE = '';
 const $ = (s, r=document) => r.querySelector(s);
@@ -124,7 +124,7 @@ function mount(opts){
     </nav>
     <div>
       <header class="topbar">
-        <span class="crumb">${esc(RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
+        <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
@@ -197,19 +197,21 @@ function openDrawer(id){
   const w = byId.get(id); if(!w) return;
   lastFocus = document.activeElement;
   const out=(citesOut.get(id)||[]).map(x=>byId.get(x)).filter(Boolean), inn=(citesIn.get(id)||[]).map(x=>byId.get(x)).filter(Boolean);
-  const link = w.arxiv?`https://arxiv.org/abs/${w.arxiv}`:(w.doi?`https://doi.org/${w.doi}`:null);
+  const links = [w.arxiv?`<a href="https://arxiv.org/abs/${esc(w.arxiv)}" target="_blank" rel="noopener">arXiv</a>`:'', w.doi?`<a href="https://doi.org/${esc(w.doi)}" target="_blank" rel="noopener">DOI</a>`:''].filter(Boolean).join(' · ');
   const d=$('#drawer');
+  const authors = (w.authors||[]).join('; '), more = (w.authors||[]).length>=8 ? ' et al.' : '';
   d.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center"><span class="meta">Paper · <span class="dot" style="background:${layerColor(w.layer)}"></span> ${esc(layerLabel(w.layer))}</span><button class="btn" id="dClose">Close <span class="kbd">Esc</span></button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><span class="meta">Paper · <span class="dot" style="background:${layerColor(w.layer)}"></span> ${esc(layerLabel(w.layer))}${w.mapped_from?' · '+info('Its fields were read from a duplicate record of the same paper.','About duplicate records'):''}</span><button class="btn" id="dClose">Close <span class="kbd">Esc</span></button></div>
     <h2 class="display" style="font-size:30px;margin-top:14px">${esc(w.title)}</h2>
-    <p class="meta">${esc((w.authors||[]).join('; ')||'No author recorded')} · ${esc(w.month||w.year)}${w.venue?' · '+esc(w.venue):''}</p>
-    <p class="meta">Cited <b class="num">${w.cic}</b> times inside the corpus; cites <b class="num">${out.length}</b> works inside it.${link?` <a href="${link}" target="_blank" rel="noopener">Open source</a>`:''}</p>
-    <div class="field"><div class="k">Abstract</div><p style="margin:4px 0">${esc(w.abstract)||'<span class="meta">No abstract recorded.</span>'}</p></div>
+    <p class="meta">${esc(authors?authors+more:'No author recorded')} · ${esc(w.year||'')}${w.venue?' · '+esc(w.venue):''}</p>
+    <p class="meta">${term('cic','Cited here')} <b class="num">${w.cited_here??0}</b> times; cites <b class="num">${out.length}</b> works inside the corpus.${links?' '+links:''}</p>
+    <p class="meta"><a href="flow.html#lanes=${encodeURIComponent(id)}">See its path</a> · <a href="corpus.html#id=${encodeURIComponent(id)}">Open in Corpus</a></p>
+    <div class="field"><div class="k">Abstract</div><p style="margin:4px 0">${w.abstract?esc(w.abstract):'<span class="meta">No abstract recorded.</span>'}</p></div>
     <h3 class="h3" style="margin-top:22px">What the paper says, field by field</h3>
     ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${l}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
     ${inn.length||out.length?`<h3 class="h3" style="margin-top:22px">Inside the corpus</h3>
-      ${inn.length?`<p class="meta">Built on by ${inn.length}:</p><ul>${inn.slice(0,8).map(x=>`<li><a href="#" data-open="${x.id}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}
-      ${out.length?`<p class="meta">Builds on ${out.length}:</p><ul>${out.slice(0,8).map(x=>`<li><a href="#" data-open="${x.id}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}`:''}`;
+      ${inn.length?`<p class="meta">Built on by ${inn.length}:</p><ul>${inn.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}
+      ${out.length?`<p class="meta">Builds on ${out.length}:</p><ul>${out.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}`:''}`;
   d.setAttribute('open',''); d.focus();
   $('#dClose').onclick=closeDrawer;
   d.querySelectorAll('[data-open]').forEach(a=>a.onclick=e=>{e.preventDefault();openDrawer(a.dataset.open);});
@@ -230,7 +232,10 @@ const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, p
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){
   RF = payload;
-  RF.works = RF.works || []; RF.cites = RF.cites || [];
+  RF.works = RF.works || [];
+  /* cites arrive as index pairs into works (smaller); the page-facing RF.cites holds work ids. */
+  RF.cites = (RF.cites || []).map(([a,b]) => [RF.works[a] && RF.works[a].id, RF.works[b] && RF.works[b].id]).filter(([a,b]) => a && b);
+  for (const w of RF.works) w.cic = w.cited_here ?? w.cic ?? 0;
   /* The Python copies (services/hub_ui.py) are the source: the payload's wins when present. */
   if (RF.labels) Object.assign(LABELS, RF.labels);
   if (RF.glossary) Object.assign(GLOSSARY, RF.glossary);
@@ -245,7 +250,12 @@ function init(payload){
     included: P.included, mined: RF.works.length, links: RF.cites.length,
   };
   /* Two named sets, never conflated: PRISMA 'included' (screening decisions) vs 'mined' (works with a miner row; the explorer's scope). */
-  SETS_NOTE = `This page shows the ${fmt(stats.mined)} papers that have been read in full. Screening included ${fmt(stats.included)}; the ${stats.mined-stats.included} extra papers are still being traced.`;
+  const S = RF.sets || {}, nInc = S.included ?? RF.works.length, nRead = S.read_in_full ?? nInc;
+  stats.mined = nRead;
+  SETS_NOTE = `This page shows the ${fmt(nInc)} included papers; ${fmt(nRead)} of them have been read in full.` +
+    (S.duplicate_mapped ? ` ${fmt(S.duplicate_mapped)} were read under a duplicate record.` : '') +
+    (S.not_read_yet ? ` ${fmt(S.not_read_yet)} not read yet.` : '') +
+    (S.mined_but_excluded ? ` ${fmt(S.mined_but_excluded)} read papers were excluded.` : '');
   for (const [k,v] of Object.entries(P.criteria||{})) GLOSSARY[k]=[k, v+'. One of the protocol\'s exclusion criteria.'];
   Object.assign(HUB, {RF, stats, SETS_NOTE, byId, citesOut, citesIn});
   return HUB;
