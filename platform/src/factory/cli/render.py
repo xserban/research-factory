@@ -2106,6 +2106,8 @@ def _score_lines(score: Any) -> list[str]:
         for k in ("popularity", "stage", "strength", "bridge", "evidence", "generic")
         if getattr(score, k) is not None
     ]
+    if getattr(score, "twin_share", None):
+        parts.append(f"work_set_overlap={score.twin_share:.2f}")
     parts.append(f"composite={score.composite:.3f}")
     extra = f"  flags: {', '.join(score.flags)}" if score.flags else ""
     lines = [

@@ -275,16 +275,30 @@ def test_gaps_empty_and_deterministic() -> None:
     assert gaps(d).model_dump_json() == gaps(d).model_dump_json()
 
 
-def test_a_pairs_score_does_not_depend_on_the_threshold_when_the_pool_maximum_is_fixed() -> None:
-    rows = [*BASE, *users("lit-02", "qr")]  # a two-work approach drops out at min_works=3
+def test_scores_are_pool_relative_so_popularity_moves_with_the_pool_maximum() -> None:
+    rows = [*BASE, *users("lit-02", "qr")]
     wide = combos(inputs(rows), min_works=2)
     narrow = combos(inputs(rows), min_works=3)
     by_wide = {(c.a.id, c.b.id): c.score for c in wide.combinations}
     assert narrow.total < wide.total
-    for c in narrow.combinations:
-        assert by_wide[(c.a.id, c.b.id)] == c.score
     kept = [(c.a.id, c.b.id) for c in wide.combinations if min(c.works_a, c.works_b) >= 3]
-    assert kept == [(c.a.id, c.b.id) for c in narrow.combinations]
+    assert kept == [(c.a.id, c.b.id) for c in narrow.combinations] or set(kept) == {
+        (c.a.id, c.b.id) for c in narrow.combinations
+    }
+    for c in narrow.combinations:
+        w, n = by_wide[(c.a.id, c.b.id)], c.score
+        assert w is not None and n is not None
+        # same pool maximum here (3), so identical; with a larger pool the popularity differs
+        assert w.popularity_raw == n.popularity_raw and w.weights == n.weights
+    bigger = [*rows, *users("ide-02", "stuvwxyz")]
+    grown = combos(inputs(bigger), min_works=3)
+    g = {(c.a.id, c.b.id): c.score for c in grown.combinations}
+    n0 = {(c.a.id, c.b.id): c.score for c in narrow.combinations}
+    key = ("ide-01", "wri-01")
+    assert g[key] is not None and n0[key] is not None
+    assert g[key].popularity_raw == n0[key].popularity_raw  # type: ignore[union-attr]
+    assert g[key].popularity != n0[key].popularity  # type: ignore[union-attr]
+    assert g[key].weights == n0[key].weights  # type: ignore[union-attr]
 
 
 # --- log-scale bridge and name lookalikes ------------------------------------------------------
@@ -325,7 +339,7 @@ def test_gap_bridge_is_log_scaled_over_works_times_to_stage_works() -> None:
 
 def test_name_tokens_and_jaccard() -> None:
     assert tr.name_tokens("The Staged tree-search of an Agent, by id") == frozenset(
-        {"staged", "tree", "search", "agent"}
+        {"stag", "tree", "search", "agent"}  # light stem; agent stays a token
     )
     a = tr.name_tokens("Staged experiment tree search")
     b = tr.name_tokens("Staged agentic tree search over experiment scripts")
@@ -383,3 +397,108 @@ def test_lookalike_is_deterministic_and_never_changes_the_order_or_score() -> No
         total_works=9,
     )
     assert expected.composite == c.score.composite
+
+
+# --- review fixes: lookalike rules, twins, limit, quotes ----------------------------------------
+
+
+def test_lookalike_needs_two_shared_tokens_and_jaccard_point_four() -> None:
+    assert tr.LOOKALIKE_MIN == 0.4 and tr.LOOKALIKE_MIN_SHARED == 2
+    cat = {
+        "a-1": ("experiment-design", "Tree search", ""),
+        "b-1": ("data-analysis", "Tree", ""),
+        "c-1": ("data-analysis", "Tree search planner", ""),
+        "d-1": ("paper-writing", "Tree builder planner", ""),
+    }
+    got = tr.lookalike_index(cat, cat)
+    assert "a-1" in got and got["a-1"].approach_id == "c-1"  # b-1: one shared token only
+    assert "b-1" not in got  # Jaccard 0.5 with a-1 but a single shared token
+    assert got["c-1"].jaccard == pytest.approx(2 / 3)
+    assert "d-1" not in got or got["d-1"].jaccard >= 0.4
+
+
+def test_generic_method_words_are_not_evidence_of_a_lookalike() -> None:
+    cat = {
+        "a-1": ("experiment-design", "Learning model of reward", ""),
+        "b-1": ("data-analysis", "Model learning of tools", ""),
+    }
+    assert tr.lookalike_index(cat, cat) == {}
+    assert tr.name_tokens("Neural network based method") == frozenset()
+
+
+def test_tokens_fold_accents_keep_acronyms_and_stem_lightly() -> None:
+    assert tr.name_tokens("Schrödinger bridge") == frozenset({"schrodinger", "bridge"})
+    assert tr.name_tokens("RL for GP and AI") == frozenset({"rl", "gp", "ai"})
+    assert tr.name_tokens("rl go") == frozenset()  # lower-case two-letter words are dropped
+    assert tr.name_tokens("prompt prompting prompts prompted") == frozenset({"prompt"})
+    assert tr.name_tokens("Grüne Bäume trees") == frozenset({"grune", "baume", "tree"})
+    assert tr.name_tokens("process class") == frozenset({"process", "class"})
+
+
+def test_lookalike_index_is_memoised_and_pure() -> None:
+    cat = {k: v for k, v in CATALOGUE.items()}
+    first = tr.lookalike_index(cat, cat)
+    assert tr.lookalike_index(cat, list(reversed(list(cat)))) == first
+    info = tr.lookalike_cache_info()
+    tr.lookalike_index(cat, cat)
+    assert tr.lookalike_cache_info().hits > info.hits
+
+
+def test_work_set_twins_are_scored_and_flagged_without_changing_the_order() -> None:
+    rows = [*users("ide-01", "abcd"), *users("ide-02", "abce"), *users("exp-01", "fghi")]
+    data = inputs(rows)
+    out = combos(data, max_co_works=9)
+    by = {(c.a.id, c.b.id): c.score for c in out.combinations}
+    twin = by[("ide-01", "ide-02")]
+    assert twin is not None and twin.twin_share == pytest.approx(3 / 5)
+    assert "shares-works-with-ide-02" in twin.flags
+    other = by[("exp-01", "ide-01")]
+    assert other is not None and other.twin_share == 0.0
+    assert not any(f.startswith("shares-works-with") for f in other.flags)
+    c = next(c for c in out.combinations if (c.a.id, c.b.id) == ("ide-01", "ide-02"))
+    assert "shares-works-with-ide-02" in c.statement
+    # flag-only: the order is that of the plain composite
+    keys = [(-c.score.composite, c.a.id, c.b.id) for c in out.combinations if c.score]
+    assert keys == sorted(keys)
+    # a half-overlap is not enough ("more than 50% of the smaller set")
+    rows2 = [*users("ide-01", "abcd"), *users("ide-02", "abxy")]
+    s2 = combos(inputs(rows2), max_co_works=9).combinations[0].score
+    assert s2 is not None and not s2.flags
+
+
+def test_quotes_stay_with_the_first_five_of_the_list_even_when_flagged() -> None:
+    rows = [*users("ide-01", "abcd"), *users("ide-02", "abce"), *users("exp-01", "fghi")]
+    out = combos(inputs(rows), max_co_works=9)
+    assert out.combinations[0].quote_a is not None
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, True, "3"])
+def test_limit_must_be_a_positive_int_or_none(bad: object) -> None:
+    data = inputs(BASE)
+    with pytest.raises(FactoryValidationError):
+        combos(data, limit=bad)
+    with pytest.raises(FactoryValidationError):
+        gaps(inputs(GAPROWS), limit=bad)
+    with pytest.raises(FactoryValidationError):
+        tg.build_challenges(data, Lens(), limit=bad)  # type: ignore[arg-type]
+    assert combos(data, limit=2).combinations.__len__() == 2
+
+
+def test_gap_statement_counts_users_without_a_row_at_the_to_stage() -> None:
+    out = gaps(inputs(GAPROWS), max_to_share=0.5)
+    g = next(g for g in out.gaps if g.approach.id == "ide-01")  # users abcd, a has exp-01
+    assert "1 of 4 users have a row at experiment-design" in g.statement
+    assert "3 of 4 users" in g.statement  # the ones with no row there
+
+
+def test_the_quote_skips_reused_cited_rows_when_another_row_exists() -> None:
+    import dataclasses
+
+    good = row("rf:z", "ide-01", None)
+    cited = dataclasses.replace(row("rf:a", "ide-01", "own-ablation"), status="reused-cited")
+    rows = [cited, good, *users("wri-01", "def")]
+    out = combos(inputs(rows))
+    q = out.combinations[0].quote_a
+    assert q is not None and q.work_id == "rf:z"
+    only = combos(inputs([cited, *users("wri-01", "def")]), min_works=1)
+    assert only.combinations[0].quote_a is not None

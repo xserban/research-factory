@@ -16,12 +16,19 @@ Combination components, each in 0..1:
   scored exactly 1.0 for 3,247 of 9,506 pilot pairs, and log(1 + links) / log(1 + min(works))
   kept the same 3,247 at 1.0 because the cap, not the linear scale, caused it. The product is
   the number of work pairs that could cite each other, so 1.0 needs a link for every such pair;
-  the log keeps a few links from reading as nothing;
+  the log keeps a few links from reading as nothing. Links are counted in both directions while
+  the denominator counts unordered work pairs, so a densely cross-citing pair can reach 1.0 early;
 - `evidence`: the mean over the two approaches of the share of their rows whose evidence is
   supportive (independent-test, own-ablation, own-comparison); `not-stated` counts as not
   supportive;
 - `generic`: the mean idf-like value ln(N / works) / ln(N) of the two approaches (N works with a
   row in the lens), so an approach found in nearly every work scores near 0.
+
+`twin_share` (Jaccard of the two approaches' work sets) is reported, not scored.
+
+Every normalisation here is relative to the candidates of ONE call (`popularity` divides by the
+pool maximum), so scores are comparable within one call only: the same pair scores differently
+under another `min_works`, `stage` or `max_co_works`.
 
 The composite is the weighted sum of popularity, stage, bridge and evidence, times
 `0.5 + 0.5 * generic` (the generic penalty never removes more than half the score).
@@ -32,17 +39,22 @@ between those works and the works with a row at the to stage: log(1 + links) /
 log(1 + works * to-stage works), the same possible-pairs denominator as above, clamped at 1). The
 composite is their weighted sum (`GAP_WEIGHTS`).
 
-Flags (never part of the score): `same-name-across-stages` and `lookalike-across-stages` (an
-approach of the pair has a name-token Jaccard of at least `LOOKALIKE_MIN` with an approach of
-another stage in the lens: possibly one technique listed twice; see `lookalikes`).
+Flags (never part of the score or the order): `same-name-across-stages`;
+`lookalike-across-stages` (an approach of the pair shares at least `LOOKALIKE_MIN_SHARED` name
+tokens and a Jaccard of at least `LOOKALIKE_MIN` with an approach of another stage in the lens:
+possibly one technique listed twice; see `lookalikes`); `shares-works-with-<id>` (the work sets of
+the pair overlap by more than `TWIN_MIN` of the smaller set).
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping
+from functools import lru_cache
 from math import log
+from typing import Any
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.technique_graph import SUPPORTIVE, Lookalike, Score
@@ -53,11 +65,15 @@ __all__ = [
     "DEFAULT_TOP",
     "GAP_KEYS",
     "GAP_WEIGHTS",
+    "GENERIC_WORDS",
     "LOOKALIKE_MIN",
+    "LOOKALIKE_MIN_SHARED",
     "QUOTE_TOP",
     "STAGE_FACTORS",
     "STAGE_ORDER",
+    "TWIN_MIN",
     "bridge_norm",
+    "check_limit",
     "check_rank_by",
     "check_top",
     "combination_score",
@@ -65,9 +81,11 @@ __all__ = [
     "idf",
     "jaccard",
     "links_between",
+    "lookalike_cache_info",
     "lookalike_index",
     "name_tokens",
     "stage_relation",
+    "work_overlap",
 ]
 
 STAGE_ORDER: tuple[str, ...] = (
@@ -116,33 +134,33 @@ QUOTE_TOP = 5
 """Candidates that carry one verbatim quote per side."""
 
 
-LOOKALIKE_MIN = 0.3
-"""Smallest name-token Jaccard that flags a cross-stage lookalike (researcher ruling 2026-11-18)."""
+LOOKALIKE_MIN = 0.4
+"""Smallest name-token Jaccard that flags a cross-stage lookalike (0.3 in the first version, which
+flagged 22 of the pilot top 50 on single generic words; raised after review)."""
 
-_STOP = frozenset(
-    [
-        "of",
-        "the",
-        "and",
-        "for",
-        "with",
-        "by",
-        "in",
-        "on",
-        "to",
-        "a",
-        "an",
-        "over",
-        "from",
-        "via",
-        "using",
-        "into",
-        "at",
-        "as",
-        "or",
-    ]
+LOOKALIKE_MIN_SHARED = 2
+"""A lookalike also needs at least this many shared name tokens: one shared word is a topic, not
+a technique."""
+
+TWIN_MIN = 0.5
+"""Two approaches whose work sets overlap by MORE than this share of the smaller set are flagged
+`shares-works-with-<id>`: they describe nearly the same papers, so "not co-used" is an artefact."""
+
+_FUNCTION_WORDS = frozenset(
+    {"of", "the", "and", "for", "with", "by", "in", "on", "to", "a", "an"}
+    | {"over", "from", "via", "using", "into", "at", "as", "or"}
 )
-_TOKEN = re.compile(r"[a-z0-9]+")
+GENERIC_WORDS = frozenset(
+    {"model", "models", "learning", "based", "network", "networks", "neural", "language"}
+    | {"analysis", "method", "methods", "approach", "framework", "system", "systems"}
+    | {"using"}
+)
+"""Words of nearly every method name: sharing one says nothing about the same technique. `agent`
+and `agents` are deliberately NOT here: they are central in the pilot corpus, and stopping them
+changed no flag in the top 50 (14 flagged candidates either way; 1,531 of 9,506 pairs overall),
+so the more conservative choice (more tokens, more flags) is kept."""
+_STOP = _FUNCTION_WORDS | GENERIC_WORDS
+_TOKEN = re.compile(r"[^\W_]+")
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -153,6 +171,14 @@ def check_rank_by(kind: str, rank_by: str) -> None:
     keys = COMBINATION_KEYS if kind == "combinations" else GAP_KEYS
     if rank_by not in keys:
         raise _refuse("rank_by", f"must be one of {', '.join(keys)}")
+
+
+def check_limit(limit: object) -> None:
+    """`limit` is None or a positive int (not a bool)."""
+    if limit is None:
+        return
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise _refuse("limit", "must be a positive integer or null")
 
 
 def check_top(top: int | None) -> None:
@@ -201,10 +227,39 @@ def bridge_norm(links: int, pairs: int) -> float:
     return min(1.0, log(1 + links) / log(1 + pairs))
 
 
+def _stem(token: str) -> str:
+    """Strip a trailing `ing`, `ed` or `s` when at least three characters remain (prompting,
+    prompted and prompts all give prompt); `ss`, `us` and `is` endings keep their `s`."""
+    if token.endswith("ing") and len(token) >= 6:
+        return token[:-3]
+    if token.endswith("ed") and len(token) >= 5:
+        return token[:-2]
+    if token.endswith("s") and len(token) >= 4 and not token.endswith(("ss", "us", "is")):
+        return token[:-1]
+    return token
+
+
 def name_tokens(name: str) -> frozenset[str]:
-    """Lower-cased alphanumeric tokens of a name, short words (under 3 characters) and stop words
-    dropped."""
-    return frozenset(t for t in _TOKEN.findall(name.lower()) if len(t) >= 3 and t not in _STOP)
+    """Casefolded, accent-folded (NFKD) alphanumeric tokens of a name, lightly stemmed. Words of
+    fewer than 3 characters are dropped, except two-letter ALL-CAPS acronyms (RL, GP, AI); function
+    words and generic method words are dropped before and after stemming."""
+    folded = "".join(
+        ch for ch in unicodedata.normalize("NFKD", name) if not unicodedata.combining(ch)
+    )
+    out: set[str] = set()
+    for raw in _TOKEN.findall(folded):
+        low = raw.casefold()
+        if low in _STOP:
+            continue
+        if len(raw) == 2 and raw.isalpha() and raw.isupper():
+            out.add(low)
+            continue
+        if len(low) < 3:
+            continue
+        stem = _stem(low)
+        if stem not in _STOP:
+            out.add(stem)
+    return frozenset(out)
 
 
 def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
@@ -212,32 +267,54 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return len(a & b) / len(union) if union else 0.0
 
 
+def work_overlap(a: Collection[str], b: Collection[str]) -> tuple[float, float]:
+    """(Jaccard of two work sets, shared works over the smaller set); (0, 0) if either is empty."""
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return 0.0, 0.0
+    both = len(sa & sb)
+    return both / len(sa | sb), both / min(len(sa), len(sb))
+
+
+@lru_cache(maxsize=16)
+def _lookalikes(entries: tuple[tuple[str, str, str], ...]) -> tuple[Lookalike, ...]:
+    toks = {i: name_tokens(name) for i, _, name in entries}
+    stage = {i: st for i, st, _ in entries}
+    name = {i: nm for i, _, nm in entries}
+    found: list[Lookalike] = []
+    for i, _, _ in entries:
+        best: tuple[float, str] | None = None
+        for j, _, _ in entries:
+            if stage[j] == stage[i]:
+                continue
+            value = jaccard(toks[i], toks[j])
+            if (
+                value >= LOOKALIKE_MIN
+                and len(toks[i] & toks[j]) >= LOOKALIKE_MIN_SHARED
+                and (best is None or value > best[0])
+            ):
+                best = (value, j)
+        if best is not None:
+            value, j = best
+            found.append(
+                Lookalike(of=i, approach_id=j, stage=stage[j], name=name[j], jaccard=_round(value))
+            )
+    return tuple(found)
+
+
+def lookalike_cache_info() -> Any:
+    return _lookalikes.cache_info()
+
+
 def lookalike_index(
     catalogue: Mapping[str, tuple[str, str, str]], ids: Iterable[str]
 ) -> dict[str, Lookalike]:
     """For each id, its closest lookalike among `ids` of ANOTHER stage (highest Jaccard, ties by
-    id), when at least `LOOKALIKE_MIN`. Pure and deterministic."""
-    pool = sorted(set(ids))
-    toks = {i: name_tokens(catalogue[i][1]) for i in pool}
-    found: dict[str, Lookalike] = {}
-    for i in pool:
-        best: tuple[float, str] | None = None
-        for j in pool:
-            if catalogue[j][0] == catalogue[i][0]:
-                continue
-            value = jaccard(toks[i], toks[j])
-            if value >= LOOKALIKE_MIN and (best is None or value > best[0]):
-                best = (value, j)
-        if best is not None:
-            value, j = best
-            found[i] = Lookalike(
-                of=i,
-                approach_id=j,
-                stage=catalogue[j][0],
-                name=catalogue[j][1],
-                jaccard=_round(value),
-            )
-    return found
+    id) when the name-token Jaccard is at least `LOOKALIKE_MIN` and at least
+    `LOOKALIKE_MIN_SHARED` tokens are shared. Pure and deterministic; memoised on the (id, stage,
+    name) entries, since it is quadratic in the number of approaches."""
+    entries = tuple((i, catalogue[i][0], catalogue[i][1]) for i in sorted(set(ids)))
+    return {lk.of: lk for lk in _lookalikes(entries)}
 
 
 def adjacency(cites: Iterable[tuple[str, str, str]]) -> dict[str, set[str]]:
@@ -272,6 +349,7 @@ def combination_score(
     total_works: int,
     flags: tuple[str, ...] = (),
     lookalikes: tuple[Lookalike, ...] = (),
+    twin_share: float = 0.0,
 ) -> Score:
     low = min(works_a, works_b)
     popularity = low / pool_max if pool_max else 0.0
@@ -311,6 +389,7 @@ def combination_score(
         weights=dict(w),
         flags=flags,
         lookalikes=lookalikes,
+        twin_share=_round(twin_share),
     )
 
 

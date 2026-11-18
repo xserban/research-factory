@@ -679,6 +679,7 @@ def build_neighbors(
         ((a, tuple(sorted(w))) for a, w in other.items() if len(w) >= min_works),
         key=lambda aw: (-len(aw[1]), aw[0]),
     )
+    rank.check_limit(limit)
     if limit is not None:
         co = co[:limit]
     layer_rows = _in_layer(inputs, inputs.rows, lens.layer)
@@ -700,14 +701,21 @@ def build_neighbors(
 
 
 def _quote_row(rows: Sequence[RawRow]) -> UseRow | None:
-    """The row a reader should check first: supportive evidence, then a quote and an anchor, then
-    the lowest work id (deterministic)."""
+    """The row a reader should check first: not a `reused-cited` row (a quote of a use credited
+    to another work) when another row exists, then supportive evidence, then an anchor, then the
+    lowest work id (deterministic)."""
     usable = [r for r in rows if r.quote]
     if not usable:
         return None
     best = min(
         usable,
-        key=lambda r: (r.evidence not in SUPPORTIVE, r.anchor is None, r.work_id, r.extraction_id),
+        key=lambda r: (
+            r.status == "reused-cited",
+            r.evidence not in SUPPORTIVE,
+            r.anchor is None,
+            r.work_id,
+            r.extraction_id,
+        ),
     )
     return _use(best)
 
@@ -735,6 +743,7 @@ def build_gaps(
     The first `QUOTE_TOP` carry one verbatim quote."""
     rank.check_rank_by("gaps", rank_by)
     rank.check_top(top)
+    rank.check_limit(limit)
     rows = _lens_rows(inputs, lens, with_stage=False)
     to_works = {r.work_id for r in rows if r.stage == to_stage}
     out = rank.adjacency(inputs.cites)
@@ -779,9 +788,10 @@ def build_gaps(
                 works_with_to_stage=covered,
                 statement=(
                     f"{node.name} ({approach}) is used by {len(users)} work(s) at {from_stage}; "
-                    f"{len(covered)} of them have a row at {to_stage}; "
+                    f"{len(covered)} of {len(users)} users have a row at {to_stage}; "
                     f"{score.bridge_links} citation link(s) join its works to works with a row "
-                    f"at {to_stage}; not found at {to_stage} among its users in this corpus "
+                    f"at {to_stage}; no row at {to_stage} for {len(users) - len(covered)} of "
+                    f"{len(users)} users in this corpus "
                     f"(exploratory, pass-A rows); rank {i} by {rank_by} "
                     f"(composite {score.composite:.3f})"
                 ),
@@ -818,10 +828,14 @@ def _same_name(inputs: Inputs, a: str, b: str) -> bool:
     return sa != sb and na.casefold().strip() == nb.casefold().strip()
 
 
-def _flags(inputs: Inputs, a: str, b: str, lookalikes: Sequence[Lookalike]) -> tuple[str, ...]:
+def _flags(
+    inputs: Inputs, a: str, b: str, lookalikes: Sequence[Lookalike], overlap: float
+) -> tuple[str, ...]:
     flags = ["same-name-across-stages"] if _same_name(inputs, a, b) else []
     if lookalikes:
         flags.append("lookalike-across-stages")
+    if overlap > rank.TWIN_MIN:
+        flags.append(f"shares-works-with-{b}")
     return tuple(flags)
 
 
@@ -843,6 +857,7 @@ def build_combinations(
     verbatim quote per side. Never a claim of novelty."""
     rank.check_rank_by("combinations", rank_by)
     rank.check_top(top)
+    rank.check_limit(limit)
     rows = _lens_rows(inputs, lens, with_stage=False)
     by = _by_approach(rows)
     users = {a: {r.work_id for r in mine} for a, mine in by.items()}
@@ -862,6 +877,7 @@ def build_combinations(
     scored: list[tuple[Score, str, str, tuple[str, ...]]] = []
     for a, b, both in found:
         lks = tuple(look[x] for x in (a, b) if x in look)
+        twin, overlap = rank.work_overlap(users[a], users[b])
         score = rank.combination_score(
             rank_by=rank_by,
             works_a=len(users[a]),
@@ -873,8 +889,9 @@ def build_combinations(
             evidence_a=share[a],
             evidence_b=share[b],
             total_works=total_works,
-            flags=_flags(inputs, a, b, lks),
+            flags=_flags(inputs, a, b, lks, overlap),
             lookalikes=lks,
+            twin_share=twin,
         )
         scored.append((score, a, b, both))
     scored.sort(key=lambda t: (-t[0].value, t[1], t[2]))
@@ -893,6 +910,11 @@ def build_combinations(
             f" (name tokens {lk.jaccard:.2f}, {lk.of})"
             for lk in score.lookalikes
         )
+        if any(f.startswith("shares-works-with-") for f in score.flags):
+            flag += (
+                f"; shares-works-with: the two work sets overlap (Jaccard {score.twin_share:.2f}), "
+                "so 'not co-used' may be an artefact of near-identical categories"
+            )
         cands.append(
             CombinationCandidate(
                 a=na,
@@ -932,6 +954,7 @@ def build_combinations(
 
 
 def build_challenges(inputs: Inputs, lens: Lens, *, limit: int | None) -> Candidates:
+    rank.check_limit(limit)
     """Approaches with a `reported-failure` row in one work and a supportive row (independent-test,
     own-ablation or own-comparison) in another. The settings may differ: a prompt to read the
     quotes, not a contradiction."""

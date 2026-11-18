@@ -205,7 +205,8 @@ class Score(StrictModel):
     counts they come from), the weights used and the composite. Nothing here is a probability or a
     measure of novelty: it orders a list of hypotheses to check. Components that do not apply to a
     kind are None. `flags` name pairs to judge by hand (`same-name-across-stages`,
-    `lookalike-across-stages` with the `lookalikes` that caused it); flags never change the
+    `lookalike-across-stages` with the `lookalikes` that caused it, `shares-works-with-<id>` with
+    `twin_share`, the Jaccard of the two work sets); flags never change the
     score."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -225,6 +226,7 @@ class Score(StrictModel):
     weights: dict[str, float]
     flags: tuple[str, ...] = ()
     lookalikes: tuple[Lookalike, ...] = ()
+    twin_share: float | None = None
 
 
 class GapCandidate(StrictModel):
