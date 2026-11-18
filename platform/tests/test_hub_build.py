@@ -33,6 +33,8 @@ CORE = {
     "findings",
     "explore",
     "corpus",
+    "landscape",
+    "landscape_uses",
 }
 OPTIONAL = {"journeys"}  # delivered by hub_journeys; may be absent
 
@@ -191,6 +193,7 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "lenses",
         "explore",
         "graph",
+        "landscape",
         "miners",
         "data",
         "findings",

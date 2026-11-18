@@ -9,7 +9,10 @@ Invariants:
 - One fingerprint covers every payload: the event log (count and greatest id per event type, summed)
   and the hub code (`code_hash`: the `hub_*` services and the served assets). Finer per-payload keys
   were not cheap: a payload reads through shared inputs (flow ledger, graph, layers) that span most
-  event types. A payload on disk is served only when its recorded fingerprint is the current one.
+  event types. The one exception is a payload listed in `hub_build.PAYLOAD_EVENTS` (the Landscape:
+  a 26 to 60 s read): its key is the count and greatest id of the event types it names plus the
+  hub code and the technique code, so a feed, runner or page event never rebuilds it. A payload on
+  disk is served only when its recorded fingerprint is the current one.
 - Payloads are built on demand by one worker thread, one build at a time, all stale payloads that
   were asked for sharing one `HubContext` (the flow ledger takes about 80 s on the pilot). A request
   never waits for a build: it gets `Building` (the server answers 503 with `Retry-After`). A payload
@@ -38,7 +41,7 @@ from factory.events.envelope import Actor
 from factory.inbox.links import parse_link
 from factory.model.screening import Channel
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import hub_build, hub_mining, hub_ui
+from factory.services import hub_build, hub_landscape, hub_mining, hub_ui
 from factory.services import inbox as inbox_service
 from factory.services.context import Project
 from factory.services.hub_trace import trace_figure
@@ -106,12 +109,20 @@ def code_hash() -> str:
     return digest.hexdigest()[:16]
 
 
-def fingerprint(project: Project) -> str:
-    """One version for every payload: the event log head and the hub code.
+def fingerprint(project: Project, name: str | None = None) -> str:
+    """The version of payload `name`: for most payloads (and for `None`) the event log head and the
+    hub code; for a payload in `hub_build.PAYLOAD_EVENTS`, the head of its own event types, the hub
+    code and the technique code.
 
     Reads the projected index (`type_counts`), not the log files: every writer projects on write,
     so the index is current whenever an event has landed."""
     counts = type_counts(project)
+    if name in hub_build.PAYLOAD_EVENTS:
+        raw = (
+            f"events:{hub_landscape.event_key(counts)}|code:{code_hash()}"
+            f"|technique:{hub_landscape.code_stamp()}"
+        )
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
     total = sum(n for n, _ in counts.values())
     last = max((m for _, m in counts.values()), default="")
     raw = f"events:{total}:{last}|code:{code_hash()}"
@@ -185,7 +196,7 @@ class PayloadService:
         """The payload `name` at the current fingerprint, or what is happening to it."""
         if not known_name(name):
             return Unknown()
-        fp = fingerprint(self._project)
+        fp = fingerprint(self._project, name)
         if self._unknown.get(name) == fp:
             return Unknown()
         body = self._read(name, fp)
@@ -248,9 +259,12 @@ class PayloadService:
         return self._ctx[1]
 
     def _build(self, name: str) -> None:
-        fp = fingerprint(self._project)  # taken first: an event landing meanwhile reads as stale
+        fp = fingerprint(
+            self._project, name
+        )  # taken first: an event landing meanwhile reads as stale
+        context_fp = fingerprint(self._project)  # one shared context per log head, whatever the key
         try:
-            ctx = self._context(fp)
+            ctx = self._context(context_fp)
             if name in hub_build.BUILDERS:
                 payload = hub_build.BUILDERS[name](ctx)
             else:

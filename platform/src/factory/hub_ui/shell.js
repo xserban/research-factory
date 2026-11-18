@@ -81,7 +81,7 @@ function info(html, label='About this'){ const id='p'+(++popN); POPS.set(id, htm
 /* ---------- pages for the palette (the whole hub, grouped) ---------- */
 const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Flow','flow.html'],
-  ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],
+  ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
   ['Findings','Findings','findings.html'],['Living','Living review','living.html'],
   ['Design','Brand kit','kit.html'],
@@ -98,6 +98,7 @@ const ICON = {
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   kit:'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
+  landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
   living:'<path d="M3 12h4l2-6 4 12 2-6h6"/>',
   search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
   theme:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
@@ -113,7 +114,7 @@ const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.do
 /* ---------- mount ---------- */
 function mount(opts){
   const page = opts.page;
-  const nav = [['overview','Overview','overview.html'],['corpus','Corpus','corpus.html'],['flow','Flow','flow.html'],['lenses','Lenses','lenses.html'],['explore','Explore','explore.html'],['graph','Graph','graph.html'],'-',['miners','Miners','miners.html'],['data','Data','data.html'],['findings','Findings','findings.html'],['living','Living','living.html']];
+  const nav = [['overview','Overview','overview.html'],['corpus','Corpus','corpus.html'],['flow','Flow','flow.html'],['lenses','Lenses','lenses.html'],['explore','Explore','explore.html'],['graph','Graph','graph.html'],['landscape','Landscape','landscape.html'],'-',['miners','Miners','miners.html'],['data','Data','data.html'],['findings','Findings','findings.html'],['living','Living','living.html']];
   document.body.innerHTML = `
   <div class="shell">
     <nav class="rail" aria-label="Hub">
@@ -185,8 +186,9 @@ function closePalette(){ $('#palette')?.removeAttribute('open'); }
 function renderPal(q){
   q=q.trim().toLowerCase();
   const pages = PAGES.filter(p=>!q || (p[1]+' '+p[0]).toLowerCase().includes(q)).map(p=>({label:p[1],group:p[0]+(p[2]?'':' · coming soon'),go:()=>{ if(p[2]) location.href=p[2]; }}));
+  const extra = (HUB.paletteExtra && q.length>=2) ? HUB.paletteExtra(q).slice(0,8) : [];
   const works = q.length<2?[]:RF.works.filter(w=>w.title.toLowerCase().includes(q)).slice(0,8).map(w=>({label:w.title,group:'Paper · '+layerLabel(w.layer),go:()=>{closePalette();openDrawer(w.id);}}));
-  palItems=[...pages.slice(0,q?8:30),...works]; palSel=0; paintPal();
+  palItems=[...pages.slice(0,q?8:30),...extra,...works]; palSel=0; paintPal();
 }
 function paintPal(){ $('#palList').innerHTML = palItems.map((it,i)=>`<li role="option" aria-selected="${i===palSel}" data-i="${i}"><span>${esc(it.label)}</span><span class="g">${esc(it.group)}</span></li>`).join('') || '<li>No match.</li>';
   $('#palList').querySelectorAll('li[data-i]').forEach(li=>li.onclick=()=>palItems[+li.dataset.i].go()); }
@@ -231,8 +233,9 @@ function tipAt(ev){ if($('#tip').style.display==='block') tipShow(ev); }
 /* ---------- hash state (shareable views) ---------- */
 const hash = { get(){ return new URLSearchParams(location.hash.slice(1)); }, set(obj){ const p=new URLSearchParams(location.hash.slice(1)); for(const [k,v] of Object.entries(obj)){ if(v==null||v==='') p.delete(k); else p.set(k,v);} history.replaceState(null,'','#'+p.toString()); } };
 
+/* A page may set HUB.paletteExtra = q => [{label, group, go}] to add its own entries (approaches, …) to Ctrl-K. */
 const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, pretty, humanColor, layerColor, cssv, val, quote,
-  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, tip, tipHtml, tipAt, hash, setTheme, init };
+  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, closePalette, tip, tipHtml, tipAt, hash, setTheme, init };
 
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){

@@ -115,6 +115,7 @@ def test_shell_palette_points_at_hub_pages() -> None:
         "lenses",
         "explore",
         "graph",
+        "landscape",
         "miners",
         "data",
         "findings",

@@ -29,6 +29,7 @@ from sqlalchemy import text as sql_text
 from factory.services import (
     hub_findings,
     hub_graph,
+    hub_landscape,
     hub_lenses,
     hub_living,
     hub_mining,
@@ -158,6 +159,15 @@ class HubContext:
             return out
 
         return self._once("dna", build)
+
+    @property
+    def landscape_parts(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The `landscape` and `landscape_uses` payloads, built once from one read of the technique
+        service's inputs (a cold read takes 26 to 60 s; the service memoises it per last event)."""
+        return self._once(
+            "landscape",
+            lambda: hub_landscape.landscape_payloads(hub_landscape.load_inputs(self.project)),
+        )
 
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
         date = self.publication.get(work_id, ("", ""))[1]
@@ -379,6 +389,14 @@ def build_lenses(ctx: HubContext) -> dict[str, Any]:
     )
 
 
+def build_landscape(ctx: HubContext) -> dict[str, Any]:
+    return ctx.landscape_parts[0]
+
+
+def build_landscape_uses(ctx: HubContext) -> dict[str, Any]:
+    return ctx.landscape_parts[1]
+
+
 def build_living(ctx: HubContext) -> dict[str, Any]:
     return hub_living.living_payload(ctx.project)
 
@@ -582,6 +600,15 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "explore": build_explore,
     "corpus": build_corpus,
     "journeys": build_journeys,
+    hub_landscape.LANDSCAPE: build_landscape,
+    hub_landscape.USES: build_landscape_uses,
+}
+
+# Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes
+# they read. Every other payload is keyed on the whole log (see `hub_serve.fingerprint`).
+PAYLOAD_EVENTS: dict[str, tuple[str, ...]] = {
+    hub_landscape.LANDSCAPE: hub_landscape.EVENT_PREFIXES,
+    hub_landscape.USES: hub_landscape.EVENT_PREFIXES,
 }
 
 
