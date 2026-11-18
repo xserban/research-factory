@@ -1,7 +1,7 @@
 # Plan: summary tables kept by the projector, and a published index snapshot (IDEA-96, part 2)
 
 Date: 2026-11-18 · Branch: `hub-summary-tables` (to be made) · Follows: IDEA-96, plan
-2026-11-18-hub-on-demand · Status: draft for the researcher's review; not started
+2026-11-18-hub-on-demand · Status: parked by the researcher 2026-11-18 (complex; the hub is usable as merged). Revisit when testing resumes or when Hub UI v2 (IDEA-97) needs faster payloads
 
 ## Goal
 Hub pages and the dashboard read small tables the projector keeps current, not derivations
