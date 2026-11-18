@@ -306,7 +306,7 @@ def test_declared_markers_cover_the_ruling() -> None:
     from factory.services.site_catalog import MARKER_KINDS, MARKERS
 
     assert sum(1 for k in MARKERS.values() if k == "read-only") == 24
-    assert sum(1 for k in MARKERS.values() if k == "human-only") == 11
+    assert sum(1 for k in MARKERS.values() if k == "human-only") == 12
     assert sum(1 for k in MARKERS.values() if k == "scheduled") == 2
     assert set(MARKERS.values()) <= set(MARKER_KINDS)
     assert "grey_search_report" not in MARKERS

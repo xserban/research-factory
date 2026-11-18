@@ -102,6 +102,7 @@ _HUMAN_ONLY: Final = [
     "extract_audit_record",
     "extract_audit_sample",
     "mine_import",
+    "mine_reopen",
     "notice_assess",
     "hypothesis_register",
 ]
