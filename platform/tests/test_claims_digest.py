@@ -227,3 +227,20 @@ def test_older_version_rows_are_tagged_and_counted(
     assert f"## P01 {order[0]} (m-claims v0)" in text
     assert "served from an older version: 1" in text.splitlines()[0]
     assert all("(m-claims v" not in line for line in text.splitlines()[1:] if "P01" not in line)
+
+
+def test_newer_version_only_is_a_stated_gap(
+    project: Project, agent: Actor, mina: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.model.extraction import MinerScope
+    from factory.services import paper_profile as pp
+    from factory.services.extraction import live_rows
+
+    order = _mine(project, agent, mina, {0: [claim_row("finding")]}, world)
+    live = live_rows(project, scope=MinerScope("m-claims"))
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: {r.extraction_id: 2 for r in live})
+    digest = claims_digest(project, SelectionSpec())
+    first = digest.papers[0]
+    assert first.work_id == order[0] and first.rows == ()
+    assert first.gap == "newer-version-only"
+    assert "GAP: only rows of a newer version" in render_claims_digest(digest)

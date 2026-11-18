@@ -23,8 +23,9 @@ Invariants:
 - Rows of a paper are ordered limitation, negative-result, failure-analysis, finding, mechanism,
   no-limitation-stated, then any other claim type; ties by row key.
 - `gap` is `reviewed-empty` when pass B has reviewed the work and left no final row (its pass A
-  rows are then not served); `no-rows` when the work has no row of the miner, and `absence-only`
-  when every one of its rows is `no-limitation-stated`; those rows are still listed. Otherwise
+  rows are then not served); `newer-version-only` when the only rows of the work are of a
+  version newer than the listed one (not shown); `no-rows` when the work has no row of the miner,
+  and `absence-only` when every one of its rows is `no-limitation-stated`; those rows are still listed. Otherwise
   `gap` is None.
 - Held-out scrub: the title and every value and quote pass `withhold` of the held-out tokens
   (`held_out_tokens(include_work_ids=False)`); work ids are not scrubbed.
@@ -44,7 +45,7 @@ from factory.services.paper_profile import (
     PROFILE_CHARS_PER_TOKEN,
     RawMinerRow,
     listed_miner_versions,
-    load_miner_work_rows,
+    load_miner_work_report,
 )
 from factory.services.search import get_work
 from factory.services.selection import Selection, SelectionSpec, resolve_selection_cached
@@ -204,7 +205,7 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
             [ValidationIssue("miner", f"{miner}: not listed in the protocol")]
         )
     work_ids = [w.work_id for w in selection.works]
-    raw, emptied = load_miner_work_rows(project, miner, version, work_ids)
+    raw, emptied, newer = load_miner_work_report(project, miner, version, work_ids)
     tokens = held_out_tokens(project, include_work_ids=False)
     width = max(2, len(str(len(work_ids))))
     papers: list[DigestPaper] = []
@@ -215,6 +216,8 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
         gap = (
             "reviewed-empty"
             if work_id in emptied
+            else "newer-version-only"
+            if work_id in newer
             else "no-rows"
             if not rows
             else "absence-only"
@@ -263,6 +266,11 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
             lines.append(
                 f"GAP: pass B reviewed this paper and left no final {digest.miner} row; "
                 "its pass A rows are not shown"
+            )
+        elif paper.gap == "newer-version-only":
+            lines.append(
+                f"GAP: only rows of a newer version than {digest.miner} v{digest.version} exist "
+                "for this paper; they are not shown"
             )
         elif paper.gap == "absence-only":
             lines.append(

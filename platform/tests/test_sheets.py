@@ -320,7 +320,9 @@ def test_stale_selection_refused_nothing_written(
 
     sheet = _open(project, agent, world)
     real = sh.resolve_selection_cached
-    monkeypatch.setattr(sh, "resolve_selection_cached", lambda p, s: replace(real(p, s), digest="x"))
+    monkeypatch.setattr(
+        sh, "resolve_selection_cached", lambda p, s: replace(real(p, s), digest="x")
+    )
     before = _events(project)
     with pytest.raises(FactoryValidationError) as err:
         sh.record_arguments(project, agent, sheet, [_arg(sorted(world)[0])])

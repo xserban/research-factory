@@ -30,6 +30,8 @@ Invariants:
 - A work that pass B has reviewed (pass B opened, its passes current) and that ended with no final
   row gets no rows of the miner: its pass A rows are not served as `pass-a-only`; the miner is in
   `reviewed_empty`, not `missing_miners`.
+- A work whose only live rows are of a version NEWER than the listed one gets none of them (the
+  listed version is the contract); the miner is in `newer_version_only`, not `missing_miners`.
 - Quote fields are omitted, except for miners in `QUOTED_MINERS`, whose quotes are kept cut to
   `QUOTE_CHARS` characters. Other values are cut to `VALUE_CHARS`.
 - A category of a miner derived from a taxonomy is shown by its category name, not its id.
@@ -80,6 +82,7 @@ __all__ = [
     "choose_rows",
     "listed_miner_versions",
     "load_miner_rows",
+    "load_miner_work_report",
     "load_miner_work_rows",
     "paper_profiles",
     "profile_size",
@@ -124,6 +127,9 @@ class PaperProfile:
     rows: tuple[ProfileRow, ...]
     missing_miners: tuple[tuple[str, int], ...]
     reviewed_empty: tuple[tuple[str, int], ...] = ()
+    newer_version_only: tuple[tuple[str, int], ...] = ()
+    """Listed miners whose only rows for the work are of a newer version than the listed one;
+    not served, not counted missing."""
 
 
 def profile_size(text: str) -> int:
@@ -339,6 +345,14 @@ def _reviewed_by_pass_b(project: Project, scope: MinerScope, work_ids: Sequence[
 def load_miner_work_rows(
     project: Project, name: str, version: int, work_ids: Sequence[str]
 ) -> tuple[dict[str, list[RawMinerRow]], frozenset[str]]:
+    """`load_miner_work_report` without its third part."""
+    rows, emptied, _newer = load_miner_work_report(project, name, version, work_ids)
+    return rows, emptied
+
+
+def load_miner_work_report(
+    project: Project, name: str, version: int, work_ids: Sequence[str]
+) -> tuple[dict[str, list[RawMinerRow]], frozenset[str], frozenset[str]]:
     """`load_miner_rows` and, besides, the works that pass B reviewed to empty: those with no
     final row although pass B has opened and the work's passes are current. Such a work has no
     rows (its pass A rows, which pass B did not confirm, and the calibration rows are not
@@ -347,7 +361,11 @@ def load_miner_work_rows(
     A work with no row of `version` from any source, and not reviewed to empty, gets the rows of
     the newest older version of the miner that has rows for it (live pass A rows, else gold, else
     calibration of that version; final rows of an older version are not computed). Each row
-    carries the version it belongs to; one work never mixes versions."""
+    carries the version it belongs to; one work never mixes versions.
+
+    The third part lists the works left with no row whose only live rows are of a version newer
+    than `version`: they are not served (the listed version is the reader's contract) and are
+    reported, so a caller states the gap instead of calling the work unmined."""
     unique = list(dict.fromkeys(work_ids))
     scope = MinerScope(name)
     finals: dict[str, list[RawMinerRow]] = {w: [] for w in unique}
@@ -387,7 +405,10 @@ def load_miner_work_rows(
             gold, plain = _gold_and_calibration(project, name, tried, scope, needy)
             for w in needy:
                 rows[w] = choose_rows([], gold.get(w, []), plain.get(w, []))
-    return rows, emptied
+    newer = frozenset(
+        w for w in open_works if not rows[w] and any(v > version and w in live[v] for v in live)
+    )
+    return rows, emptied, newer
 
 
 def load_miner_rows(
@@ -426,14 +447,17 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
     rows: dict[str, list[ProfileRow]] = {w: [] for w in unique}
     seen: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     emptied: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
+    newer_only: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     for name, version in listed:
         spec = registered_miner(project, name, version)
         if spec is None:
             continue
         names = _names_of(project, spec)
-        loaded, reviewed = load_miner_work_rows(project, name, version, unique)
+        loaded, reviewed, newer = load_miner_work_report(project, name, version, unique)
         for work_id in reviewed:
             emptied[work_id].add((name, version))
+        for work_id in newer:
+            newer_only[work_id].add((name, version))
         for work_id, raw_rows in loaded.items():
             if raw_rows:
                 rows[work_id].extend(
@@ -463,8 +487,15 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
                 str(withhold(work.title, tokens)),
                 str(work.dates.year or ""),
                 tuple(ordered),
-                tuple(m for m in listed if m not in seen[work_id] and m not in emptied[work_id]),
+                tuple(
+                    m
+                    for m in listed
+                    if m not in seen[work_id]
+                    and m not in emptied[work_id]
+                    and m not in newer_only[work_id]
+                ),
                 tuple(m for m in listed if m in emptied[work_id]),
+                tuple(m for m in listed if m in newer_only[work_id]),
             )
         )
     return profiles
@@ -487,4 +518,6 @@ def render_profile(profile: PaperProfile) -> str:
         lines.append("missing: " + ", ".join(n for n, _ in profile.missing_miners))
     if profile.reviewed_empty:
         lines.append("reviewed-empty: " + ", ".join(n for n, _ in profile.reviewed_empty))
+    if profile.newer_version_only:
+        lines.append("newer-version-only: " + ", ".join(n for n, _ in profile.newer_version_only))
     return "\n".join(lines)

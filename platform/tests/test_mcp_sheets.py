@@ -10,10 +10,10 @@ from typer.testing import CliRunner
 from factory.cli.main import app
 from factory.clock import FixedClock
 from factory.config import Settings
+from factory.mcp import sessions as mcp_sessions
 from factory.services.context import Project
 from tests.cli_helpers import _env
 from tests.extraction_helpers import screened, world  # noqa: F401
-from factory.mcp import sessions as mcp_sessions
 from tests.helpers import SESSION, open_session
 
 ACT = {"role": "spar-a", "model": "claude-opus-5-5", "skill": "rf-screen"}

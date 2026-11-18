@@ -401,3 +401,21 @@ def test_older_version_calibration_rows_are_a_fallback_of_that_version(
     works, name = _sample(project, agent, human, labelled=2)
     other = load_miner_rows(project, name, 2, works)
     assert [(r.status, r.version) for r in other[works[0]]] == [("gold", 1)]
+
+
+def test_work_with_only_newer_version_rows_is_reported_not_served_not_missing(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row()])
+    _relabel(project, monkeypatch, {}, 2)  # the listed version is 1
+    rows, emptied, newer = pp.load_miner_work_report(project, VISION_NAME, 1, world[:1])
+    assert rows == {world[0]: []} and emptied == frozenset() and newer == {world[0]}
+    [profile] = paper_profiles(project, world[:1])
+    assert profile.rows == () and profile.missing_miners == ()
+    assert profile.newer_version_only == ((VISION_NAME, 1),)
+    assert f"newer-version-only: {VISION_NAME}" in render_profile(profile)
