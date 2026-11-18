@@ -17,7 +17,8 @@ dropped (quote `a_b` verifies against code `a\\_b`); accepted as a small false a
 Entity rule. The converter also stores HTML character references (`Planning &amp; Control`),
 which markdown-it decodes in the block text. Complete references (ending in `;`: named, decimal or
 hexadecimal) are decoded on both sides before the escape rule, so a quote copied as served or as
-rendered verifies; `&amp` without `;` is left as written.
+rendered verifies; `&amp` without `;` is left as written, and so is a reference that decodes to a
+control character (category Cc, e.g. `&#1;`).
 """
 
 import html
@@ -79,10 +80,20 @@ def quote_in_element(element_markdown: str, quote: str) -> bool:
     )
 
 
+def _decode_entity(match: re.Match[str]) -> str:
+    """The decoded reference, or the reference as written when it does not decode to printable
+    non-control characters (`&#1;` is left alone, so it never matches a quote without it)."""
+    raw = match.group(0)
+    out = html.unescape(raw)
+    if out == raw or any(unicodedata.category(ch) == "Cc" for ch in out):
+        return raw
+    return out
+
+
 def _unescape(text: str) -> str:
     """Remove a backslash before ASCII punctuation (the Markdown escape) and decode complete HTML
     character references (`&amp;`, `&#8211;`, ending in `;`); see the module doc."""
-    decoded = _ENTITY.sub(lambda m: html.unescape(m.group(0)), text)
+    decoded = _ENTITY.sub(_decode_entity, text)
     return _ESCAPE.sub(r"\1", decoded)
 
 

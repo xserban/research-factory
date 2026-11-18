@@ -152,3 +152,9 @@ def test_entity_tolerance_does_not_loosen_the_match() -> None:
     assert not quote_in_element(markdown, "Planning and Control")
     assert not quote_in_element(markdown, "Planning &amp Control")  # not an entity without `;`
     assert not quote_in_element("a < b", "a &gt; b")
+
+
+def test_control_character_reference_is_not_decoded() -> None:
+    assert not quote_in_element("a&#1;b", "ab")
+    assert not quote_in_element("a&#x7f;b", "ab")
+    assert quote_in_element("a&#65;b", "aAb")
