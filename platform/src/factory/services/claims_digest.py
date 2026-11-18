@@ -14,7 +14,11 @@ Invariants:
 - Rows are those of the named miner at its listed version (`listed_miner_versions`), read with
   `load_miner_work_rows`: final rows, else the live pass A rows (`pass-a-only`), else for a work in
   a calibration sample of that version the researcher's gold rows (`gold`), else the calibration
-  session's rows (`calibration`); never mixed for one work. A miner that is not listed in the
+  session's rows (`calibration`); never mixed for one work. A work with no row of the listed
+  version from any source, not reviewed to empty, is served the rows of the newest older version
+  that has some (`load_miner_work_rows`): its `served_version` is that version, its heading is
+  tagged `(m-claims v1)` and the digest header counts such papers ("served from an older version:
+  n"). Never mixed versions for one paper. A miner that is not listed in the
   protocol is refused on field `miner`.
 - Rows of a paper are ordered limitation, negative-result, failure-analysis, finding, mechanism,
   no-limitation-stated, then any other claim type; ties by row key.
@@ -76,6 +80,7 @@ class ClaimRow:
 
     row_key: str
     status: str
+    version: int
     claim_type: str
     about: str
     direction: str
@@ -97,6 +102,9 @@ class DigestPaper:
     title: str
     rows: tuple[ClaimRow, ...]
     gap: str | None
+    served_version: int | None = None
+    """The older miner version the rows come from; None when they are of the listed version (or
+    the paper has no rows)."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +135,11 @@ class ClaimsDigest:
         return tuple((p.code, p.gap) for p in self.papers if p.gap)
 
     @property
+    def older_served(self) -> int:
+        """The papers whose rows come from an older version than the listed one."""
+        return sum(1 for p in self.papers if p.served_version is not None)
+
+    @property
     def size(self) -> DigestSize:
         text = render_claims_digest(self)
         return DigestSize(len(text), -(-len(text) // PROFILE_CHARS_PER_TOKEN))
@@ -153,6 +166,7 @@ def _claim(row: RawMinerRow, tokens: set[str]) -> ClaimRow:
     return ClaimRow(
         row_key=row.row_key,
         status=row.status,
+        version=row.version,
         claim_type=plain("claim_type"),
         about=plain("about"),
         direction=plain("direction"),
@@ -207,7 +221,8 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
             if all(r.claim_type == ABSENCE_TYPE for r in rows)
             else None
         )
-        papers.append(DigestPaper(f"P{position:0{width}d}", work_id, title, rows, gap))
+        served = next((r.version for r in rows if r.version < version), None)
+        papers.append(DigestPaper(f"P{position:0{width}d}", work_id, title, rows, gap, served))
     return ClaimsDigest(miner, version, selection.digest, tuple(papers))
 
 
@@ -226,14 +241,21 @@ def _line(row: ClaimRow) -> str:
 
 
 def render_claims_digest(digest: ClaimsDigest) -> str:
-    """The digest as Markdown: a heading `## Pxx work_id`, the title, then one line per claim
+    """The digest as Markdown: a heading `## Pxx work_id` (with `(miner vN)` for a paper served
+    from an older version, counted in the first line), the title, then one line per claim
     `- type | about | direction | evidence | strength: "quote" [anchor] [conditions: "..."]`
     (`(pass-a-only)` appended for a row without final status), and a stated gap line for a paper
     with `gap`. Pure and deterministic."""
     head = f"# Claims digest: {digest.miner} v{digest.version}"
-    blocks = [f"{head}, selection {digest.selection_digest[:12]}"]
+    summary = f"{head}, selection {digest.selection_digest[:12]}"
+    if digest.older_served:
+        summary += f", served from an older version: {digest.older_served}"
+    blocks = [summary]
     for paper in digest.papers:
-        lines = [f"## {paper.code} {paper.work_id}", paper.title]
+        tag = (
+            f" ({digest.miner} v{paper.served_version})" if paper.served_version is not None else ""
+        )
+        lines = [f"## {paper.code} {paper.work_id}{tag}", paper.title]
         lines.extend(_line(r) for r in paper.rows)
         if paper.gap == "no-rows":
             lines.append(f"GAP: no {digest.miner} rows for this paper")

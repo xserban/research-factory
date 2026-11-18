@@ -207,3 +207,23 @@ def test_pass_b_reviewed_to_empty_is_a_gap_not_pass_a_only(
     digest = claims_digest(project, SelectionSpec())
     assert all(p.rows == () and p.gap == "reviewed-empty" for p in digest.papers)
     assert "GAP: pass B reviewed" in render_claims_digest(digest)
+
+
+def test_older_version_rows_are_tagged_and_counted(
+    project: Project, agent: Actor, mina: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.model.extraction import MinerScope
+    from factory.services import paper_profile as pp
+    from factory.services.extraction import live_rows
+
+    order = _mine(project, agent, mina, {0: [claim_row("finding")]}, world)
+    live = live_rows(project, scope=MinerScope("m-claims"))
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: {r.extraction_id: 0 for r in live})
+    digest = claims_digest(project, SelectionSpec())
+    first = digest.papers[0]
+    assert first.work_id == order[0] and first.served_version == 0
+    assert {r.version for r in first.rows} == {0} and digest.older_served == 1
+    text = render_claims_digest(digest)
+    assert f"## P01 {order[0]} (m-claims v0)" in text
+    assert "served from an older version: 1" in text.splitlines()[0]
+    assert all("(m-claims v" not in line for line in text.splitlines()[1:] if "P01" not in line)

@@ -9,7 +9,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.mining.spec import EnumKind, MinerField, MinerRegime, MinerSpec, spec_to_json
 from factory.mining.taxonomy import Category, Dimension, TaxonomySpec
-from factory.model.extraction import MinerScope
+from factory.model.extraction import FieldInput, MinerScope
 from factory.model.screening import Channel, PassLabel
 from factory.services import paper_profile as pp
 from factory.services.context import Project
@@ -303,8 +303,8 @@ def test_calibration_of_another_version_is_not_served(
 ) -> None:
     works, name = _sample(project, agent, human, labelled=2)
     assert [r.status for r in load_miner_rows(project, name, 1, works)[works[0]]] == ["gold"]
-    other = load_miner_rows(project, name, 2, works)
-    assert all(rows == [] for rows in other.values())
+    # version 2 is not calibrated: the rows of version 1 are its tagged fallback, not its own
+    assert [r.version for r in load_miner_rows(project, name, 2, works)[works[0]]] == [1]
 
 
 def test_pass_b_reviewed_to_empty_does_not_serve_pass_a_rows(
@@ -319,3 +319,85 @@ def test_pass_b_reviewed_to_empty_does_not_serve_pass_a_rows(
     assert f"reviewed-empty: {VISION_NAME}" in render_profile(profile)
     rows, emptied = pp.load_miner_work_rows(project, VISION_NAME, 1, world[:1])
     assert rows == {world[0]: []} and emptied == {world[0]}
+
+
+def _relabel(
+    project: Project, monkeypatch: pytest.MonkeyPatch, version_of: dict[int, int], default: int
+) -> None:
+    """Relabel the live rows of the miner as rows of other schema versions: the n-th row (by
+    extraction id) gets `version_of[n]`, else `default`. The fixture protocol lists version 1 only,
+    so older versions are built by relabelling, as `_row_versions` is the one reader of them."""
+    live = sorted(live_rows(project, scope=MinerScope(VISION_NAME)), key=lambda r: r.extraction_id)
+    labels = {r.extraction_id: version_of.get(n, default) for n, r in enumerate(live)}
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: labels)
+
+
+def test_work_with_only_older_version_rows_is_served_those_rows_tagged(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row()])
+    _relabel(project, monkeypatch, {}, 0)
+    rows, emptied = pp.load_miner_work_rows(project, VISION_NAME, 1, world[:1])
+    assert emptied == frozenset()
+    assert rows[world[0]] and {(r.version, r.status) for r in rows[world[0]]} == {
+        (0, "pass-a-only")
+    }
+    [profile] = paper_profiles(project, world[:1])
+    assert profile.rows and {(r.version, r.older) for r in profile.rows} == {(0, True)}
+    assert profile.missing_miners == ()
+    assert f"{VISION_NAME} [pass-a-only] (v0):" in render_profile(profile)
+
+
+def test_work_with_listed_version_rows_gets_only_those(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    other = mine_row("lower")
+    other.fields["metric"] = FieldInput(value="Low", anchor="t1.r2.c2", quote="Low")
+    other.fields["value"] = FieldInput(value="2", anchor="t1", cell="t1.r3.c3", quote="2")
+    mine_pass(project, mina, A, lambda w: [mine_row("higher"), other])
+    live = [r for r in live_rows(project, scope=MinerScope(VISION_NAME)) if r.work_id == world[0]]
+    assert len(live) == 2
+    _relabel(project, monkeypatch, {}, 0)
+    first = sorted(live_rows(project, scope=MinerScope(VISION_NAME)), key=lambda r: r.extraction_id)
+    labels = {r.extraction_id: 0 for r in first}
+    labels[min(r.extraction_id for r in live)] = 1  # one current-version row for the work
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: labels)
+    rows, _ = pp.load_miner_work_rows(project, VISION_NAME, 1, world[:1])
+    assert [r.version for r in rows[world[0]]] == [1]
+    [profile] = paper_profiles(project, world[:1])
+    assert {r.older for r in profile.rows} == {False}
+    assert "(v" not in render_profile(profile)
+
+
+def test_reviewed_empty_work_gets_no_older_version_fallback(
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    minb: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    list_miner(project, agent)
+    mine_pass(project, mina, A, lambda w: [mine_row("lower")])
+    mine_pass(project, minb, B, lambda w: [])
+    _relabel(project, monkeypatch, {}, 0)
+    rows, emptied = pp.load_miner_work_rows(project, VISION_NAME, 1, world[:1])
+    assert rows == {world[0]: []} and emptied == {world[0]}
+
+
+def test_older_version_calibration_rows_are_a_fallback_of_that_version(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works, name = _sample(project, agent, human, labelled=2)
+    other = load_miner_rows(project, name, 2, works)
+    assert [(r.status, r.version) for r in other[works[0]]] == [("gold", 1)]

@@ -20,6 +20,13 @@ Invariants:
   versions never count), takes the researcher's gold rows (status `gold`, non-empty labels of any
   such calibration), else the calibration session's rows (status `calibration`). A work with none
   of these is in `missing_miners`. Rows of the one status are never mixed for a work and miner.
+- Versions: rows are read at the listed version of the miner (their `schema_ref`). A work with NO
+  row of the listed version from any source above, that pass B has not reviewed to empty, falls
+  back to the rows of the newest older version of the same miner that has rows for it, taking the
+  same source order within that version (live pass A rows, then gold, then calibration; final rows
+  are only known for the listed version). Every row carries the `version` served, and a profile row
+  served from an older version has `older` set and is rendered with its version. One work never
+  mixes versions.
 - A work that pass B has reviewed (pass B opened, its passes current) and that ended with no final
   row gets no rows of the miner: its pass A rows are not served as `pass-a-only`; the miner is in
   `reviewed_empty`, not `missing_miners`.
@@ -100,6 +107,9 @@ class ProfileRow:
     status: str
     row_key: str
     fields: tuple[tuple[str, str], ...]
+    older: bool = False
+    """True when `version` is older than the listed version of the miner (see the module
+    invariants)."""
 
 
 @dataclass(frozen=True)
@@ -162,6 +172,7 @@ def _row(
     status: str,
     row_key: str,
     stored: Mapping[str, tuple[str | int | float | bool, str | None]],
+    version: int | None = None,
 ) -> ProfileRow:
     fields: list[tuple[str, str]] = []
     for field in _ordered(spec, stored):
@@ -169,7 +180,10 @@ def _row(
         shown = _short(spec, names, field, value)
         if shown:
             fields.append((field, f"{shown} {unit}" if unit else shown))
-    return ProfileRow(spec.name, spec.version, status, row_key, tuple(fields))
+    served = spec.version if version is None else version
+    return ProfileRow(
+        spec.name, served, status, row_key, tuple(fields), older=served < spec.version
+    )
 
 
 def _scrubbed(row: ProfileRow, tokens: set[str]) -> ProfileRow:
@@ -191,6 +205,8 @@ class RawMinerRow:
     status: str
     row_key: str
     fields: Mapping[str, tuple[str | int | float | bool, str | None, str | None, str | None]]
+    version: int = 0
+    """The miner version the row belongs to (its `schema_ref`); 0 when not labelled."""
 
 
 def listed_miner_versions(project: Project) -> list[tuple[str, int]]:
@@ -219,10 +235,40 @@ def choose_rows(
     return production or gold or calibration
 
 
-def _raw(status: str, row_key: str, fields: Mapping[str, Any]) -> RawMinerRow:
+def _raw(status: str, row_key: str, fields: Mapping[str, Any], version: int) -> RawMinerRow:
     return RawMinerRow(
-        status, row_key, {k: (f.value, f.unit, f.anchor, f.quote) for k, f in fields.items()}
+        status,
+        row_key,
+        {k: (f.value, f.unit, f.anchor, f.quote) for k, f in fields.items()},
+        version,
     )
+
+
+def _row_versions(project: Project, name: str) -> dict[str, int]:
+    """The schema version (`schema_ref` `name@version`) of every live mined row of miner `name`,
+    by extraction id. Read-only; the caller has synced the index."""
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text(
+                "SELECT extraction_id, schema_ref FROM extraction_rows "
+                "WHERE scope = :s AND superseded_by IS NULL"
+            ),
+            {"s": name},
+        ).all()
+    versions: dict[str, int] = {}
+    for ident, ref in found:
+        _, _, tail = str(ref).rpartition("@")
+        if tail.isdigit():
+            versions[str(ident)] = int(tail)
+    return versions
+
+
+def _calibration_versions(project: Project, name: str) -> set[int]:
+    with project.index.connect() as conn:
+        found = conn.execute(
+            text("SELECT DISTINCT version FROM miner_calibrations WHERE name = :n"), {"n": name}
+        ).all()
+    return {int(v) for (v,) in found}
 
 
 def _calibration_units(
@@ -266,13 +312,13 @@ def _gold_and_calibration(
         mine = {w for w, cids in units.items() if cid in cids}
         for work, labelled in calibration_labels(project, cid).items():
             if work in mine and labelled:
-                gold[work] = [_raw("gold", r.row_key, r.fields) for r in labelled]
+                gold[work] = [_raw("gold", r.row_key, r.fields, version) for r in labelled]
         apart = calibration_task_ids(project, scope, cid)
         fresh: dict[str, list[RawMinerRow]] = {}
         for row in live_rows(project, None, scope=scope, calibration=True):
             if row.work_id in mine and row.task_id in apart:
                 fresh.setdefault(row.work_id, []).append(
-                    _raw("calibration", row.row_key, row.fields)
+                    _raw("calibration", row.row_key, row.fields, version)
                 )
         plain.update(fresh)
     return gold, plain
@@ -296,33 +342,51 @@ def load_miner_work_rows(
     """`load_miner_rows` and, besides, the works that pass B reviewed to empty: those with no
     final row although pass B has opened and the work's passes are current. Such a work has no
     rows (its pass A rows, which pass B did not confirm, and the calibration rows are not
-    served)."""
+    served, and no older version is tried).
+
+    A work with no row of `version` from any source, and not reviewed to empty, gets the rows of
+    the newest older version of the miner that has rows for it (live pass A rows, else gold, else
+    calibration of that version; final rows of an older version are not computed). Each row
+    carries the version it belongs to; one work never mixes versions."""
     unique = list(dict.fromkeys(work_ids))
     scope = MinerScope(name)
     finals: dict[str, list[RawMinerRow]] = {w: [] for w in unique}
     for final in final_rows_restricted(
         project, unique, scope=scope, ledger=scope_ledger(project, scope)
     ):
-        finals[final.work_id].append(_raw("final", final.row_key, final.fields))
+        finals[final.work_id].append(_raw("final", final.row_key, final.fields, version))
     lacking = [w for w in unique if not finals[w]]
     emptied = frozenset(_reviewed_by_pass_b(project, scope, lacking)) if lacking else frozenset()
     open_works = [w for w in lacking if w not in emptied]
-    live: dict[str, list[RawMinerRow]] = {}
+    live: dict[int, dict[str, list[RawMinerRow]]] = {}
     if open_works:
         wanted = set(open_works)
+        labels = _row_versions(project, name)
         for row in live_rows(project, PassLabel.A, scope=scope):
             if row.work_id in wanted:
-                live.setdefault(row.work_id, []).append(
-                    _raw("pass-a-only", row.row_key, row.fields)
+                found = labels.get(row.extraction_id, version)
+                live.setdefault(found, {}).setdefault(row.work_id, []).append(
+                    _raw("pass-a-only", row.row_key, row.fields, found)
                 )
-    needy = [w for w in open_works if not live.get(w)]
-    gold, plain = _gold_and_calibration(project, name, version, scope, needy) if needy else ({}, {})
-    rows = {
-        w: []
-        if w in emptied
-        else choose_rows(finals[w] or live.get(w, []), gold.get(w, []), plain.get(w, []))
-        for w in unique
+    rows: dict[str, list[RawMinerRow]] = {
+        w: finals[w] or list(live.get(version, {}).get(w, [])) for w in unique
     }
+    rows.update({w: [] for w in emptied})
+    older = sorted(
+        {v for v in set(live) | _calibration_versions(project, name) if v < version}, reverse=True
+    )
+    for tried in [version, *older]:
+        needy = [w for w in open_works if not rows[w]]
+        if not needy:
+            break
+        if tried != version:
+            for w in needy:
+                rows[w] = list(live.get(tried, {}).get(w, []))
+            needy = [w for w in needy if not rows[w]]
+        if needy:
+            gold, plain = _gold_and_calibration(project, name, tried, scope, needy)
+            for w in needy:
+                rows[w] = choose_rows([], gold.get(w, []), plain.get(w, []))
     return rows, emptied
 
 
@@ -379,6 +443,7 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
                         r.status,
                         r.row_key,
                         {k: (v[0], v[1]) for k, v in r.fields.items()},
+                        r.version,
                     )
                     for r in raw_rows
                 )
@@ -407,15 +472,17 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
 
 def render_profile(profile: PaperProfile) -> str:
     """The profile as plain text: a header line `work_id · year · title`, then one line per miner
-    (and status) `miner [status]: field=value; field=value | next row`, ordered by miner name,
+    (and status) `miner [status]: field=value; field=value | next row` (`miner [status] (v1): ...`
+    for rows served from an older version than the listed one), ordered by miner name,
     then version; a line `missing: ...` lists the listed miners without rows. Pure."""
     lines = [f"{profile.work_id} · {profile.year or 'n.d.'} · {profile.title}"]
     groups: dict[tuple[str, int, str], list[ProfileRow]] = {}
     for row in sorted(profile.rows, key=lambda r: (r.miner, r.version, r.row_key)):
         groups.setdefault((row.miner, row.version, row.status), []).append(row)
-    for (miner, _version, status), members in sorted(groups.items()):
+    for (miner, version, status), members in sorted(groups.items()):
         body = " | ".join("; ".join(f"{k}={v}" for k, v in m.fields) for m in members)
-        lines.append(f"{miner} [{status}]: {body}")
+        tag = f" (v{version})" if members[0].older else ""
+        lines.append(f"{miner} [{status}]{tag}: {body}")
     if profile.missing_miners:
         lines.append("missing: " + ", ".join(n for n, _ in profile.missing_miners))
     if profile.reviewed_empty:
