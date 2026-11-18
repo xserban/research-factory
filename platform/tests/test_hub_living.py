@@ -166,6 +166,8 @@ def test_every_catalog_prefix_is_assigned() -> None:
     assert hl.family_of("search.run_started") == "search"
     assert hl.family_of("zzz.unknown") == "other"
     assert hl.family_of("nodot") == "other"
+    # a recorded synthesis page is neither a search nor an acquisition event
+    assert hl.family_of("page.recorded") == "other"
 
 
 def test_heartbeat_loader_matches_the_log(project: Project) -> None:

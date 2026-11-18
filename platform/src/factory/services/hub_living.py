@@ -46,7 +46,8 @@ METHODS: dict[str, str] = {
         "time of every event in the project's log. One grouped query counts them; no log file "
         "is parsed. A day is the UTC date of the event time. Each event type belongs to exactly "
         "one family (search, screening, acquisition, conversion, mining, references, feed, "
-        "other); a type that is not in the table counts as other."
+        "other); a type that is not in the table counts as other, and so do the synthesis pages the "
+        "agent records (`page.recorded`)."
     ),
 }
 
@@ -87,7 +88,9 @@ FAMILY_OF_PREFIX: dict[str, str] = {
     "file": "acquisition",
     "inbox": "acquisition",
     "library": "acquisition",
-    "page": "acquisition",
+    # `page.recorded` is a synthesis page the agent wrote (kind "synthesis"), not a fetched page:
+    # it is no acquisition and no search, so it is counted as other, stated here.
+    "page": OTHER,
     # conversion
     "document": "conversion",
     # mining and extraction
