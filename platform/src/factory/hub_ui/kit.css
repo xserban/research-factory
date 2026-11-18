@@ -182,3 +182,6 @@ table.t{width:100%;border-collapse:collapse;font-size:var(--t-s)}
 
 .sx-hint{display:none;margin:6px 2px 0;color:var(--mut);font:400 var(--t-xs) var(--f-ui)}
 @media (max-width:760px){.sx-hint{display:block}}
+
+/* the rail scrolls sideways on a phone when it holds more pages than fit */
+@media (max-width:760px){.rail{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.rail a{flex:none;width:56px}}

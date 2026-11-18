@@ -61,6 +61,7 @@ HUB.load(['shell']).then(d => {
 .ls svg.ego a:hover text{text-decoration:underline}
 .ls .empty{color:var(--mut);padding:10px 0;font-size:var(--t-s)}
 .ls td.q{max-width:520px}
+.ls .t td.r{white-space:nowrap}
 .ls .status{color:var(--mut);padding:18px 0}
 .ls .foot{margin-top:36px;color:var(--dim);font-size:var(--t-xs);display:flex;gap:4px;align-items:center;flex-wrap:wrap}
 @media (max-width:1100px){.ls .two{grid-template-columns:minmax(0,1fr)}}
@@ -74,6 +75,7 @@ HUB.load(['shell']).then(d => {
   const evLabel = e => EV_LABEL[e] || H.pretty(e);
   const stLabel = s => H.pretty(s);
   const short = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1).trim() + '…' : s; };
+  const cap = t => String(t).charAt(0).toUpperCase() + String(t).slice(1);
   const nf = v => v == null ? 'none' : Number(v).toFixed(2);
 
   /* the shell lists the included papers; a work outside it cannot open the drawer, so it is plain text */
@@ -93,7 +95,7 @@ HUB.load(['shell']).then(d => {
     const CAT = D.catalogue, W = D.works, R = D.rows, EVA = D.evidence_all, STA = D.statuses;
     const catById = new Map(CAT.map((c, i) => [c.id, i]));
     const workIdx = new Map(W.map((w, i) => [w.id, i]));
-    const stages = D.stage_order.length ? D.stage_order : [...new Set(CAT.map(c => c.stage))];
+    const stages = (D.stage_order.length ? [...D.stage_order] : [...new Set(CAT.map(c => c.stage))]).sort((a, b) => (a === 'other') - (b === 'other'));
     const stageSum = new Map(D.stages.map(s => [s.stage, s]));
     const M = D.methods || {};
     let USES = null; /* landscape_uses, loaded on first detail view */
@@ -149,7 +151,7 @@ HUB.load(['shell']).then(d => {
         + '</div>';
     }
     function notice() {
-      return `<div class="xnote" role="note"><b>${esc(NOTICE_HEAD)}</b> ${esc(D.notice)}.<br>${esc(D.corpus)} ${esc(D.cross_stage_note)}.</div>`;
+      return `<div class="xnote" role="note"><b>${esc(NOTICE_HEAD)}</b> ${esc(D.notice.replace(/^exploratory:\s*/i, ''))}.<br>${esc(D.corpus)} ${esc(cap(D.cross_stage_note))}.</div>`;
     }
     function bindLens(redraw) {
       for (const [id, key] of [['f-layer', 'layer'], ['f-ev', 'ev'], ['f-st', 'st']]) {
@@ -234,7 +236,7 @@ HUB.load(['shell']).then(d => {
       const C = compute();
       const empty = !CAT.length;
       main.innerHTML = H.header({ level: 1, kicker: esc(NOTICE_HEAD) + ' · ' + H.term('technique', 'techniques') + ' by stage', title: 'Landscape', infoHtml: M.page })
-        + (empty ? '' : `<p class="lead">In ${esc(layerName(lens.layer).toLowerCase())}, <b>${fmt(C.all.size)}</b> papers use <b>${fmt(C.by.size)}</b> approaches across <b>${fmt(C.per.size)}</b> stages.</p>`)
+        + (empty ? '' : `<p class="lead">In ${lens.layer === 'all' ? 'all layers' : 'the ' + esc(layerName(lens.layer).toLowerCase()) + ' layer'}, <b>${fmt(C.all.size)}</b> papers use <b>${fmt(C.by.size)}</b> approaches across <b>${fmt(C.per.size)}</b> stages.</p>`)
         + notice() + (empty ? '<p class="empty">No technique readings are recorded yet. The landscape appears here once the technique miners have read papers.</p>' : lensBar()
           + `<p class="nowlens" id="nowlens">Lens now: <b>${esc(lensText())}</b>. Counts are papers with a current pass-A row; the lens also drives the stage summaries.</p>
           <section class="sec">${H.header({ title: 'Stages', level: 2, infoHtml: M.agreement })}${stagesView(C)}</section>
@@ -258,7 +260,7 @@ HUB.load(['shell']).then(d => {
         const t = mk('text', { x: x.x, y: x.y - 8, 'text-anchor': 'middle' }, g); t.textContent = short(x.name, 26);
         const t2 = mk('text', { x: x.x, y: x.y + 6, 'text-anchor': 'middle', class: 'dimt' }, g); t2.textContent = `${x.weight} paper${x.weight === 1 ? '' : 's'} together`;
         mk('title', {}, g).textContent = x.name; });
-      const c = mk('g', {}, svg); mk('rect', { x: cx - 78, y: cy - 20, width: 156, height: 40, rx: 8, class: 'cn' }, c);
+      const c = mk('g', {}, svg); mk('rect', { x: cx - 78, y: cy - 20, width: 156, height: 40, rx: 8, class: 'nd' }, c); mk('rect', { x: cx - 78, y: cy - 20, width: 156, height: 40, rx: 8, class: 'cn' }, c);
       const ct = mk('text', { x: cx, y: cy + 4, 'text-anchor': 'middle' }, c); ct.textContent = short(a.name, 22);
       return svg;
     }
@@ -287,7 +289,7 @@ HUB.load(['shell']).then(d => {
           <section class="sec"><h2 class="h2">Where its papers also work</h2>
             ${[...reach].sort((x, y) => y[1].size - x[1].size || (x[0] < y[0] ? -1 : 1)).map(([s, set]) => `<p class="meta">${esc(stLabel(s))}: <b class="num">${fmt(set.size)}</b> of ${fmt(users.length)} papers</p>`).join('') || '<p class="empty">None.</p>'}
             <h2 class="h2" style="margin-top:18px">Earliest in this corpus ${H.info(M.earliest || '', 'About earliest')}</h2>
-            ${early ? `<p>${title(workIdx.get(early.work))} <span class="meta">${esc(wid(early.work).date || '')}</span></p><p class="meta">${esc(early.note || 'A date rule, not a claim of origin.')} It follows the layer, not the evidence level or status.</p>` : '<p class="empty">No dated paper to name in this layer.</p>'}
+            ${early ? `<p>${title(workIdx.get(early.work))} <span class="meta">${esc(wid(early.work).date || '')}</span></p><p class="meta">${esc(cap(early.note || 'a date rule, not a claim of origin'))}. It follows the layer, not the evidence level or status.</p>` : '<p class="empty">No dated paper to name in this layer.</p>'}
             <h2 class="h2" style="margin-top:18px">Possible lines of descent ${H.info(M.derives || '', 'About descent')}</h2>
             ${derives.length ? `<ul>${derives.map(e => `<li>${paper(e.source, (wid(e.source) || {}).title)} reuses it from ${paper(e.target, (wid(e.target) || {}).title)}</li>`).join('')}</ul><p class="meta">${esc(D.derives_lens_note)}.</p>` : '<p class="empty">No candidate line of descent in this layer.</p>'}</section></div>
         <section class="sec"><h2 class="h2">Papers</h2>${users.length ? `<div class="scrollx"><table class="t"><thead><tr><th>Paper</th><th>Layer</th><th class="r">Year</th><th class="r">Uses</th><th>Evidence levels</th></tr></thead><tbody>${users.map(i => { const p = per.get(i); return `<tr><td>${title(i)}</td><td>${esc(layerName(W[i].layer))}</td><td class="r">${esc(W[i].year || '')}</td><td class="r">${fmt(p.n)}</td><td>${esc([...p.ev].map(evLabel).join(', '))}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">None.</p>'}</section>
