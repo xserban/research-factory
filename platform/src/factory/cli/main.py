@@ -6184,9 +6184,13 @@ def technique_gaps_cmd(
     max_to_share: Annotated[float, typer.Option("--max-to-share")] = 0.0,
     layer: Annotated[str, _LAYER_OPT] = "core",
     limit: Annotated[int | None, typer.Option("--limit")] = 100,
+    rank_by: Annotated[
+        str, typer.Option("--rank-by", help="composite or one component")
+    ] = "composite",
+    top: Annotated[int | None, typer.Option("--top", help="ranked shortlist size")] = 50,
     format_: Annotated[str, _FORMAT_OPT] = "table",
 ) -> None:
-    """Hypotheses to check: approaches used at one stage whose users show none at another."""
+    """Ranked hypotheses to check: approaches used at one stage whose users show none at another."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
@@ -6198,6 +6202,8 @@ def technique_gaps_cmd(
             max_to_share=max_to_share,
             layer=layer,
             limit=limit,
+            rank_by=rank_by,
+            top=top,
         )
     _technique_out(result, render.technique_candidate_list_lines, format_)
 
@@ -6210,9 +6216,13 @@ def technique_combinations_cmd(
     stage: Annotated[str | None, typer.Option("--stage")] = None,
     layer: Annotated[str, _LAYER_OPT] = "core",
     limit: Annotated[int | None, typer.Option("--limit")] = 100,
+    rank_by: Annotated[
+        str, typer.Option("--rank-by", help="composite or one component")
+    ] = "composite",
+    top: Annotated[int | None, typer.Option("--top", help="ranked shortlist size")] = 50,
     format_: Annotated[str, _FORMAT_OPT] = "table",
 ) -> None:
-    """Hypotheses to check: well-used approach pairs that no work uses together."""
+    """Ranked hypotheses to check: well-used approach pairs that no work uses together."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
@@ -6223,6 +6233,8 @@ def technique_combinations_cmd(
             stage=stage,
             layer=layer,
             limit=limit,
+            rank_by=rank_by,
+            top=top,
         )
     _technique_out(result, render.technique_candidate_list_lines, format_)
 

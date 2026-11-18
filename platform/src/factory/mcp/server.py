@@ -3148,11 +3148,15 @@ def build_server(
         max_to_share: float = 0.0,
         layer: str = "core",
         limit: int | None = 100,
+        rank_by: str = "composite",
+        top: int | None = 50,
     ) -> dict[str, JsonValue]:
-        """Hypotheses to check, not findings: approaches used by at least `min_works` works at
-        `from_stage` of which at most `max_to_share` (0 means none) have any row at `to_stage`,
-        with the work ids. Cross-stage duplicate approaches stay two nodes. EXPLORATORY. Read-only;
-        refused to a session that has joined a pass."""
+        """Ranked hypotheses to check, not findings: approaches used by at least `min_works` works
+        at `from_stage` of which at most `max_to_share` (0 means none) have any row at `to_stage`,
+        with the work ids, the score components (popularity, strength, bridge) and, for the first
+        few, a verbatim quote. `rank_by` is `composite` or one component; `top` caps the list.
+        Cross-stage duplicate approaches stay two nodes. EXPLORATORY. Read-only; refused to a
+        session that has joined a pass."""
         return _technique_reply(
             project,
             lambda p: technique_service.technique_gaps(
@@ -3163,6 +3167,8 @@ def build_server(
                 max_to_share=max_to_share,
                 layer=layer,
                 limit=limit,
+                rank_by=rank_by,
+                top=top,
             ),
         )
 
@@ -3174,11 +3180,15 @@ def build_server(
         stage: str | None = None,
         layer: str = "core",
         limit: int | None = 100,
+        rank_by: str = "composite",
+        top: int | None = 50,
     ) -> dict[str, JsonValue]:
-        """Hypotheses to check, not findings: pairs of approaches each used by at least
+        """Ranked hypotheses to check, not findings: pairs of approaches each used by at least
         `min_works` works and used together by at most `max_co_works` (0 means never), with the
-        counts and the co-using work ids. EXPLORATORY. Read-only; refused to a session that has
-        joined a pass."""
+        counts, the supporting work ids, the score components (popularity, stage relation, bridge,
+        evidence, generic) and, for the first few, one verbatim quote per side. `rank_by` is
+        `composite` or one component; `top` caps the list. EXPLORATORY. Read-only; refused to a
+        session that has joined a pass."""
         return _technique_reply(
             project,
             lambda p: technique_service.technique_combinations(
@@ -3188,6 +3198,8 @@ def build_server(
                 stage=stage,
                 layer=layer,
                 limit=limit,
+                rank_by=rank_by,
+                top=top,
             ),
         )
 

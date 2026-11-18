@@ -50,6 +50,7 @@ from factory.model.technique_graph import (
     Landscape,
     Lens,
     Neighbors,
+    Score,
     StageReach,
     StageSummary,
     UseRow,
@@ -57,6 +58,7 @@ from factory.model.technique_graph import (
 )
 from factory.services import mining as mining_service
 from factory.services import taxonomies as tax_service
+from factory.services import technique_rank as rank
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.extraction import live_rows, scope_ledger, stale_extractions
@@ -82,6 +84,8 @@ TECHNIQUE_TAXONOMY_PREFIX = "t-tech-"
 REUSED = "reused-cited"
 _CATEGORY = "category"
 _CACHE_MAX = 4
+SUPPORT_CAP = 10
+"""Supporting work ids listed per side of a ranked candidate (the full count is `works_a`)."""
 
 
 @dataclass(frozen=True)
@@ -609,6 +613,23 @@ def build_neighbors(
     )
 
 
+def _quote_row(rows: Sequence[RawRow]) -> UseRow | None:
+    """The row a reader should check first: supportive evidence, then a quote and an anchor, then
+    the lowest work id (deterministic)."""
+    usable = [r for r in rows if r.quote]
+    if not usable:
+        return None
+    best = min(
+        usable,
+        key=lambda r: (r.evidence not in SUPPORTIVE, r.anchor is None, r.work_id, r.extraction_id),
+    )
+    return _use(best)
+
+
+def _cap(ids: Sequence[str]) -> tuple[str, ...]:
+    return tuple(ids[:SUPPORT_CAP])
+
+
 def build_gaps(
     inputs: Inputs,
     lens: Lens,
@@ -618,13 +639,20 @@ def build_gaps(
     min_works: int,
     max_to_share: float,
     limit: int | None,
+    rank_by: str = "composite",
+    top: int | None = rank.DEFAULT_TOP,
 ) -> Candidates:
     """Approaches of `from_stage` used by at least `min_works` works, of which at most
     `max_to_share` (a share of those works, 0.0 for none) have any row of an approach of
-    `to_stage`. Ordered by fewest such works, then most users, then id."""
+    `to_stage`. Ranked by `rank_by` (a component or the composite of `technique_rank`), ties by
+    approach id; at most the smaller of `limit` and `top` are returned, `total` is before that.
+    The first `QUOTE_TOP` carry one verbatim quote."""
+    rank.check_rank_by("gaps", rank_by)
+    rank.check_top(top)
     rows = _lens_rows(inputs, lens, with_stage=False)
     to_works = {r.work_id for r in rows if r.stage == to_stage}
-    found: list[GapCandidate] = []
+    out = rank.adjacency(inputs.cites)
+    found: list[tuple[str, tuple[str, ...], tuple[str, ...], int]] = []
     for approach, mine in sorted(_by_approach(r for r in rows if r.stage == from_stage).items()):
         users = tuple(sorted({r.work_id for r in mine}))
         if len(users) < min_works:
@@ -632,8 +660,26 @@ def build_gaps(
         covered = tuple(w for w in users if w in to_works)
         if len(covered) / len(users) > max_to_share:
             continue
+        found.append((approach, users, covered, rank.links_between(out, set(users), to_works)))
+    pool_max = max((len(u) for _, u, _, _ in found), default=0)
+    scored = [
+        (
+            rank.gap_score(
+                rank_by=rank_by, works=len(u), covered=len(c), pool_max=pool_max, links=links
+            ),
+            a,
+            u,
+            c,
+        )
+        for a, u, c, links in found
+    ]
+    scored.sort(key=lambda t: (-t[0].value, t[1]))
+    shown = scored[: _shown(limit, top)]
+    by_approach = _by_approach(r for r in rows if r.stage == from_stage)
+    gaps: list[GapCandidate] = []
+    for i, (score, approach, users, covered) in enumerate(shown, 1):
         node = _node(inputs, approach, rows)
-        found.append(
+        gaps.append(
             GapCandidate(
                 approach=node,
                 from_stage=from_stage,
@@ -642,11 +688,17 @@ def build_gaps(
                 works_with_to_stage=covered,
                 statement=(
                     f"{node.name} ({approach}) is used by {len(users)} work(s) at {from_stage}; "
-                    f"{len(covered)} of them have a row at {to_stage}"
+                    f"{len(covered)} of them have a row at {to_stage}; "
+                    f"{score.bridge_links} citation link(s) join its works to works with a row "
+                    f"at {to_stage}; not found at {to_stage} among its users in this corpus "
+                    f"(exploratory, pass-A rows); rank {i} by {rank_by} "
+                    f"(composite {score.composite:.3f})"
                 ),
+                rank=i,
+                score=score,
+                quote=_quote_row(by_approach[approach]) if i <= rank.QUOTE_TOP else None,
             )
         )
-    found.sort(key=lambda g: (len(g.works_with_to_stage), -len(g.works), g.approach.id))
     return Candidates(
         kind="gaps",
         lens=lens,
@@ -656,10 +708,23 @@ def build_gaps(
             "min_works": min_works,
             "max_to_share": max_to_share,
             "limit": limit,
+            "rank_by": rank_by,
+            "top": top,
         },
         total=len(found),
-        gaps=tuple(found if limit is None else found[:limit]),
+        gaps=tuple(gaps),
     )
+
+
+def _shown(limit: int | None, top: int | None) -> int | None:
+    """The smaller of two optional caps; None means no cap."""
+    caps = [c for c in (limit, top) if c is not None]
+    return min(caps) if caps else None
+
+
+def _same_name(inputs: Inputs, a: str, b: str) -> bool:
+    (sa, na, _), (sb, nb, _) = inputs.catalogue[a], inputs.catalogue[b]
+    return sa != sb and na.casefold().strip() == nb.casefold().strip()
 
 
 def build_combinations(
@@ -670,11 +735,22 @@ def build_combinations(
     max_co_works: int,
     stage: str | None,
     limit: int | None,
+    rank_by: str = "composite",
+    top: int | None = rank.DEFAULT_TOP,
 ) -> Candidates:
     """Pairs of approaches each used by at least `min_works` works and used together by at most
-    `max_co_works`. Ordered by the smaller user count, then the sum, then ids."""
+    `max_co_works`. Ranked by `rank_by` (a component or the composite of `technique_rank`, whose
+    docstring gives the definitions and weights), ties by approach ids; at most the smaller of
+    `limit` and `top` are returned, `total` is before that. The first `QUOTE_TOP` carry one
+    verbatim quote per side. Never a claim of novelty."""
+    rank.check_rank_by("combinations", rank_by)
+    rank.check_top(top)
     rows = _lens_rows(inputs, lens, with_stage=False)
-    users = {a: {r.work_id for r in mine} for a, mine in _by_approach(rows).items()}
+    by = _by_approach(rows)
+    users = {a: {r.work_id for r in mine} for a, mine in by.items()}
+    share = {a: rank.supportive_share(r.evidence for r in mine) for a, mine in by.items()}
+    total_works = len({r.work_id for r in rows})
+    out = rank.adjacency(inputs.cites)
     big = sorted(a for a, w in users.items() if len(w) >= min_works)
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for a, b in _pairs(big, 2):
@@ -683,15 +759,56 @@ def build_combinations(
         both = tuple(sorted(users[a] & users[b]))
         if len(both) <= max_co_works:
             found.append((a, b, both))
-    found.sort(
-        key=lambda t: (
-            -min(len(users[t[0]]), len(users[t[1]])),
-            -(len(users[t[0]]) + len(users[t[1]])),
-            t[0],
-            t[1],
+    pool_max = max((min(len(users[a]), len(users[b])) for a, b, _ in found), default=0)
+    scored: list[tuple[Score, str, str, tuple[str, ...]]] = []
+    for a, b, both in found:
+        score = rank.combination_score(
+            rank_by=rank_by,
+            works_a=len(users[a]),
+            works_b=len(users[b]),
+            pool_max=pool_max,
+            stage_a=inputs.catalogue[a][0],
+            stage_b=inputs.catalogue[b][0],
+            links=rank.links_between(out, users[a], users[b]),
+            evidence_a=share[a],
+            evidence_b=share[b],
+            total_works=total_works,
+            flags=("same-name-across-stages",) if _same_name(inputs, a, b) else (),
         )
-    )
-    shown = found if limit is None else found[:limit]
+        scored.append((score, a, b, both))
+    scored.sort(key=lambda t: (-t[0].value, t[1], t[2]))
+    shown = scored[: _shown(limit, top)]
+    cands: list[CombinationCandidate] = []
+    for i, (score, a, b, both) in enumerate(shown, 1):
+        na, nb = _node(inputs, a, rows), _node(inputs, b, rows)
+        if both:
+            relation = f"co-used by {len(both)} work(s) in this corpus (exploratory, pass-A rows)"
+        else:
+            relation = "not co-used in this corpus (exploratory, pass-A rows)"
+        sa, sb = sorted(users[a]), sorted(users[b])
+        flag = f" [{', '.join(score.flags)}: judge by hand]" if score.flags else ""
+        cands.append(
+            CombinationCandidate(
+                a=na,
+                b=nb,
+                co_works=both,
+                works_a=len(users[a]),
+                works_b=len(users[b]),
+                statement=(
+                    f"{na.name} ({a}, {na.stage}; {len(sa)} works) and {nb.name} ({b}, "
+                    f"{nb.stage}; {len(sb)} works): {relation}; rank {i} by {rank_by} "
+                    f"(composite {score.composite:.3f}: both established, stage relation "
+                    f"{score.stage_relation}, {score.bridge_links} citation link(s) between "
+                    f"their works, supportive evidence share {score.evidence:.2f}){flag}"
+                ),
+                rank=i,
+                score=score,
+                support_a=_cap(sa),
+                support_b=_cap(sb),
+                quote_a=_quote_row(by[a]) if i <= rank.QUOTE_TOP else None,
+                quote_b=_quote_row(by[b]) if i <= rank.QUOTE_TOP else None,
+            )
+        )
     return Candidates(
         kind="combinations",
         lens=lens,
@@ -700,22 +817,11 @@ def build_combinations(
             "max_co_works": max_co_works,
             "stage": stage,
             "limit": limit,
+            "rank_by": rank_by,
+            "top": top,
         },
         total=len(found),
-        combinations=tuple(
-            CombinationCandidate(
-                a=_node(inputs, a, rows),
-                b=_node(inputs, b, rows),
-                co_works=both,
-                works_a=len(users[a]),
-                works_b=len(users[b]),
-                statement=(
-                    f"{a} ({len(users[a])} works) and {b} ({len(users[b])} works) are used "
-                    f"together by {len(both)} work(s) in this corpus"
-                ),
-            )
-            for a, b, both in shown
-        ),
+        combinations=tuple(cands),
     )
 
 
@@ -823,9 +929,12 @@ def technique_gaps(
     max_to_share: float = 0.0,
     layer: str = "core",
     limit: int | None = 100,
+    rank_by: str = "composite",
+    top: int | None = rank.DEFAULT_TOP,
 ) -> Candidates:
-    """Hypotheses to check: approaches well used at `from_stage` whose users show none (at most
-    `max_to_share`) at `to_stage`. Cross-stage duplicates stay two nodes."""
+    """Ranked hypotheses to check: approaches well used at `from_stage` whose users show none (at
+    most `max_to_share`) at `to_stage`, ordered by `rank_by` (see `technique_rank`).
+    Cross-stage duplicates stay two nodes."""
     _positive("min_works", min_works)
     if not 0.0 <= max_to_share <= 1.0:
         raise _refuse("max_to_share", "must be between 0 and 1")
@@ -840,6 +949,8 @@ def technique_gaps(
         min_works=min_works,
         max_to_share=max_to_share,
         limit=limit,
+        rank_by=rank_by,
+        top=top,
     )
 
 
@@ -851,9 +962,11 @@ def technique_combinations(
     stage: str | None = None,
     layer: str = "core",
     limit: int | None = 100,
+    rank_by: str = "composite",
+    top: int | None = rank.DEFAULT_TOP,
 ) -> Candidates:
-    """Hypotheses to check: pairs of approaches each used by at least `min_works` works and used
-    together by at most `max_co_works`."""
+    """Ranked hypotheses to check: pairs of approaches each used by at least `min_works` works
+    and used together by at most `max_co_works`, ordered by `rank_by` (see `technique_rank`)."""
     _positive("min_works", min_works)
     if max_co_works < 0:
         raise _refuse("max_co_works", "must not be negative")
@@ -867,6 +980,8 @@ def technique_combinations(
         max_co_works=max_co_works,
         stage=stage,
         limit=limit,
+        rank_by=rank_by,
+        top=top,
     )
 
 

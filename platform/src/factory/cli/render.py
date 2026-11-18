@@ -2098,12 +2098,36 @@ def technique_neighbor_lines(result: Any) -> list[str]:
     return lines
 
 
+def _score_lines(score: Any) -> list[str]:
+    if score is None:
+        return []
+    parts = [
+        f"{k}={getattr(score, k):.3f}"
+        for k in ("popularity", "stage", "strength", "bridge", "evidence", "generic")
+        if getattr(score, k) is not None
+    ]
+    parts.append(f"composite={score.composite:.3f}")
+    extra = f"  flags: {', '.join(score.flags)}" if score.flags else ""
+    return [
+        f"    score {score.rank_by}={score.value:.3f}: "
+        + " ".join(parts)
+        + f" (works={score.popularity_raw}, links={score.bridge_links}){extra}"
+    ]
+
+
 def technique_candidate_list_lines(result: Any) -> list[str]:
     lines = [f"EXPLORATORY: {technique_notice()}", f"{result.kind}: {result.total} candidates"]
     for g in result.gaps:
-        lines.append(f"{g.statement}  [{g.label}]")
+        lines.append(f"{g.rank}. {g.statement}  [{g.label}]")
+        lines += _score_lines(g.score)
+        if g.quote is not None:
+            lines.append(f"    quote {g.quote.work_id} {g.quote.anchor or '-'}: {g.quote.quote}")
     for c in result.combinations:
-        lines.append(f"{c.statement}  [{c.label}]")
+        lines.append(f"{c.rank}. {c.statement}  [{c.label}]")
+        lines += _score_lines(c.score)
+        for side, q in (("a", c.quote_a), ("b", c.quote_b)):
+            if q is not None:
+                lines.append(f"    quote {side} {q.work_id} {q.anchor or '-'}: {q.quote}")
     for h in result.challenges:
         lines.append(f"{h.statement}  [{h.label}]")
         lines += [f"    failed: {u.work_id} {u.anchor or '-'} {u.quote or ''}" for u in h.failed]

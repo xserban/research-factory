@@ -246,8 +246,8 @@ def test_gaps_apply_thresholds_and_are_labelled() -> None:
         min_works=1, max_to_share=0.5, limit=None,
     )  # fmt: skip
     assert [(g.approach.id, g.works_with_to_stage) for g in wide.gaps] == [
+        ("ide-01", ("rf:a", "rf:c")),  # composite: the more used approach first
         ("ide-02", ("rf:c",)),
-        ("ide-01", ("rf:a", "rf:c")),
     ]
     assert wide.total == 2
     none = tg.build_gaps(
