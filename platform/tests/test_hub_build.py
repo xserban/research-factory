@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -267,6 +268,23 @@ def test_explore_has_only_included_works_with_dna_and_quotes(
     methods = payload["methods"]
     assert isinstance(methods, dict) and methods["similar"] == hb.hub_lenses.METHODS["similar"]
     assert {"filter", "rings", "wall", "tray"} <= set(methods)
+
+
+GOLDEN_CORPUS = Path(__file__).parent / "golden" / "hub_corpus.json"
+
+
+def test_corpus_payload_is_identical_to_the_one_the_full_citation_report_gave(
+    world: Project, tmp_path: Path
+) -> None:
+    """`golden/hub_corpus.json` was written by the code that took `cited_in_corpus` from the full
+    `citation_report`; the lighter count must give the same payload. Set `REGEN_GOLDEN=1` to
+    rewrite it (only for an intended change of the payload)."""
+    payload = _payload(world, tmp_path, "corpus")
+    text = json.dumps(payload, sort_keys=True, indent=1) + "\n"
+    if os.environ.get("REGEN_GOLDEN") == "1":
+        GOLDEN_CORPUS.parent.mkdir(exist_ok=True)
+        GOLDEN_CORPUS.write_text(text, encoding="utf-8")
+    assert text == GOLDEN_CORPUS.read_text(encoding="utf-8")
 
 
 def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_path: Path) -> None:

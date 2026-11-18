@@ -181,7 +181,7 @@ def test_payload_in_corpus_citations_are_unknown_without_extractions(
     assert _corpus_works(project)["rf:a"]["cited_in_corpus"] is None
 
 
-def test_citation_report_is_computed_once_per_payload(
+def test_citation_counts_are_computed_once_per_payload_without_the_report(
     project: Project, listed_miners: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _work(project, "rf:a", "A", 2020, [])
@@ -189,15 +189,36 @@ def test_citation_report_is_computed_once_per_payload(
     _miner_row(project, "m1", "rf:a", "m-classification@1")
     _miner_row(project, "m2", "rf:b", "m-classification@1")
     calls: list[int] = []
-    real = citations.citation_report
+    real = citations.cited_by_counts
 
-    def counting(project: Project, *, as_of_year: int) -> citations.CitationReport:
+    def counting(project: Project) -> dict[str, int | None]:
         calls.append(1)
-        return real(project, as_of_year=as_of_year)
+        return real(project)
 
-    monkeypatch.setattr(site_corpus, "citation_report", counting)
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the payload needs no candidates")
+
+    monkeypatch.setattr(site_corpus, "cited_by_counts", counting)
+    monkeypatch.setattr(citations, "cited_items", forbidden)
     site_corpus.corpus_payload(project)
     assert len(calls) == 1
+
+
+def test_cited_by_counts_equal_the_reports(project: Project) -> None:
+    _work(project, "rf:a", "A", 2020, ["Ann Lee"])
+    _work(project, "rf:b", "B", 2022, ["Bo Chan"])
+    _work(project, "rf:c", "C", 2023, ["Cy Dunn"])
+    assert citations.cited_by_counts(project) == {w: None for w in ("rf:a", "rf:b", "rf:c")}
+    _extraction(project, "x1", "rf:b", 3)
+    _extraction(project, "x2", "rf:c", 2)
+    _link(project, "x1", 1, "resolved", "rf:a")
+    _link(project, "x1", 2, "resolved", "rf:a")
+    _link(project, "x1", 3, "resolved", "rf:b")  # itself
+    _link(project, "x2", 1, "resolved", "rf:a")
+    _link(project, "x2", 2, "unconfirmed", "rf:b")
+    report = citation_report(project, as_of_year=2025)
+    assert citations.cited_by_counts(project) == {w.work_id: w.cited_by for w in report.works}
+    assert citations.cited_by_counts(project)["rf:a"] == 2
 
 
 def test_explorer_page_has_the_cited_by_filter(

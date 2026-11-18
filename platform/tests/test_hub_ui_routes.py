@@ -95,7 +95,8 @@ def _payload(
     deadline = time.monotonic() + 20
     while True:
         found = _req(port, "GET", f"{UI}/data/{name}.json", headers=headers)
-        if found[0] != 503 or time.monotonic() > deadline:
+        waiting = found[0] == 503 or "x-hub-stale" in found[1]
+        if not waiting or time.monotonic() > deadline:
             return found
         time.sleep(0.05)
 
@@ -293,6 +294,106 @@ def test_one_context_serves_every_payload_of_a_build(
     for name in ("shell", "flow", "screening"):
         assert _payload(port, name)[0] == 200
     assert len(contexts) == 3 and len(set(contexts)) == 1
+
+
+# ---------------------------------------------------------------- prewarm and stale
+
+
+def _idle(service: hub_serve.PayloadService) -> None:
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        with service._cond:
+            if not service._queue and service._current is None:
+                return
+        time.sleep(0.02)
+    raise AssertionError("the build did not finish")
+
+
+@pytest.fixture
+def prewarm_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FACTORY_HUB_PREWARM", "1")
+    monkeypatch.setattr(hub_serve, "WATCH_SECONDS", 3600.0)
+
+
+def test_prewarm_queues_every_payload_once_per_fingerprint(
+    project: Project, calls: list[str], prewarm_on: None
+) -> None:
+    service = hub_serve.PayloadService(project)
+    service.prewarm()
+    _idle(service)
+    service.stop()
+    expected = [n for n in hub_serve.PREWARM_ORDER if n in hb.BUILDERS]
+    assert calls == expected and set(calls) == set(hb.BUILDERS)
+    assert service.prewarm_check() is False  # same fingerprint: nothing more
+    assert calls == expected
+    inbox_service.add_links(
+        project, project.human_actor(), [inbox_service.LinkInput("10.1234/warm")], Channel.CLI
+    )
+    assert service.prewarm_check() is True  # a new event: all again
+    _idle(service)
+    assert calls == expected + expected
+
+
+def test_a_request_jumps_the_prewarm_queue_and_starts_no_second_builder(
+    project: Project, calls: list[str], prewarm_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = threading.Event()
+    running: list[int] = []
+    peak: list[int] = []
+
+    def slow(ctx: hb.HubContext) -> dict[str, Any]:
+        running.append(1)
+        peak.append(len(running))
+        gate.wait(20)
+        running.pop()
+        return {"slow": True}
+
+    monkeypatch.setitem(hb.BUILDERS, "shell", slow)
+    service = hub_serve.PayloadService(project)
+    service.prewarm()
+    service.stop()
+    assert isinstance(service.get("journeys"), hub_serve.Building)
+    queued = service._progress()["queued"]
+    assert queued[0] == "journeys" and queued.count("journeys") == 1
+    gate.set()
+    _idle(service)
+    assert calls.index("journeys") < calls.index("overview") and max(peak) == 1
+
+
+def test_a_payload_of_an_older_fingerprint_is_served_stale_while_it_rebuilds(
+    served: tuple[int, Project], calls: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    port, project = served
+    assert _payload(port, "overview")[0] == 200
+    gate = threading.Event()
+
+    def slow(ctx: hb.HubContext) -> dict[str, Any]:
+        gate.wait(20)
+        return {"name": "fresh"}
+
+    monkeypatch.setitem(hb.BUILDERS, "overview", slow)
+    inbox_service.add_links(
+        project, project.human_actor(), [inbox_service.LinkInput("10.1234/stale")], Channel.CLI
+    )
+    status, head, body = _req(port, "GET", f"{UI}/data/overview.json")
+    assert status == 200 and head["x-hub-stale"] == "1" and json.loads(body)["name"] == "overview"
+    assert head["cache-control"] == "no-store"
+    fresh = json.loads(_req(port, "GET", f"{UI}/fresh?name=overview")[2])
+    assert fresh == {"fresh": False}
+    gate.set()
+    status, head, body = _payload(port, "overview")
+    assert status == 200 and "x-hub-stale" not in head and json.loads(body)["name"] == "fresh"
+    assert json.loads(_req(port, "GET", f"{UI}/fresh?name=overview")[2]) == {"fresh": True}
+
+
+def test_prewarm_is_off_when_the_env_switch_says_so(
+    project: Project, calls: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACTORY_HUB_PREWARM", "0")
+    service = hub_serve.PayloadService(project)
+    service.prewarm()
+    time.sleep(0.2)
+    assert calls == [] and service._worker is None and service._watcher is None
 
 
 # ---------------------------------------------------------------- trace
