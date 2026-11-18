@@ -936,3 +936,10 @@ Status: built and merged into main 2026-11-17 (commits 85fcf6ec and merge 73378e
 **Why:** the address is the researcher's private contact detail; outside services did not ask for it. Consequence: no polite-pool rate limits and no workaround planned.
 **Rigour notes:** read-only change to outbound requests; redaction kept; throttle, retry and the outbound guard unchanged.
 **Open questions:** reword `docs/specs/slice-5-teams-deployment.md:126` (binding spec), `docs/runbook-pdf-pilot.md:12` and about eight older plans that still mention the address; a decision-log entry for the ruling; whether to rename the constructors' `mailto` parameters (redaction only) and drop the unused `settings` argument of `default_http`.
+
+### IDEA-97 — Hub UI v2: one design system, lenses and paper exploration
+Status: triaged (plan `docs/plans/2026-11-18-hub-ui.md`; prototypes approved 2026-11-18, not built) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-54, IDEA-55, IDEA-96 (route hook after its merge)
+**What:** replace the cluttered hub shell with one calm design system (tokens, rail, Ctrl-K, paper drawer with evidence quotes) and four pages: home, flow (Sankey + every-record waffle), seven lenses, and an explore surface (sentence query, rings, semantic zoom, paper DNA + compare tray, trail). Pages load JSON payloads built by services instead of inlined data.
+**Why:** the researcher found the hub cluttered and wants innovative, question-led ways to read and explore the corpus; design note `docs/design-note-hub-ui-2026-11-18.md`.
+**Rigour notes:** every number computed from a payload and pinned by a test; included (PRISMA) and mined (miner rows) sets named and reconciled; one citation count; quotes shown with every classified value; held-out works never hidden; no model call (similarity is a stated formula); offline (vendored OFL fonts); WCAG AA on token pairs.
+**Open questions:** rulings R1–R7 in the plan.
