@@ -12,7 +12,7 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.model.extraction import ExtractedRowInput
+from factory.model.extraction import ExtractedRowInput, FieldInput
 from factory.model.screening import PassLabel
 from factory.services import hub_trace as ht
 from factory.services.context import Project
@@ -24,6 +24,7 @@ from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.helpers import _setup
 from tests.miner_helpers import (
     SESSION_M1,
+    SESSION_M2,
     VISION_NAME,
     list_miner,
     mine_pass,
@@ -160,10 +161,17 @@ def test_mined_field_traces_back_to_its_row(
     assert raised.value.issues[0].field == "figure_id"
 
 
-def _row(*, without: str | None = None) -> ExtractedRowInput:
-    """The fixture row, optionally without one field (so that row has no cell of it)."""
+def _second_row() -> ExtractedRowInput:
+    """A full row at the next cell of the fixture table, so it does not collide with `mine_row`."""
+    fields = dict(mine_row().fields)
+    fields["metric"] = FieldInput(value="Lorem ipsum", anchor="s3.p1", quote="Lorem ipsum")
+    return ExtractedRowInput(fields=fields)
+
+
+def _row(*without: str) -> ExtractedRowInput:
+    """The fixture row without the named fields (so that row has no cell of them)."""
     return ExtractedRowInput(
-        fields={k: v for k, v in mine_row().fields.items() if k != without}
+        fields={k: v for k, v in mine_row().fields.items() if k not in without}
     )
 
 
@@ -188,7 +196,7 @@ def test_field_traces_the_first_non_empty_pass_a_cell(
 ) -> None:
     list_miner(project, agent)
     mina = miner_actor(SESSION_M1, "claude-opus-5-5")
-    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row(without="direction"), _row()])
+    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row("direction"), _second_row()])
     work = worked[0]
     first, second = _row_ids(project, work, "A")[:2]
     view = ht.trace_figure(project, f"work.{work}.field.{VISION_NAME}.direction")
@@ -204,8 +212,9 @@ def test_field_ignores_pass_b_rows(
 ) -> None:
     list_miner(project, agent)
     mina = miner_actor(SESSION_M1, "claude-opus-5-5")
-    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row(without="direction")])
-    mine_pass(project, mina, PassLabel.B, lambda w: [_row()])
+    worked = mine_pass(project, mina, PassLabel.A, lambda w: [_row("direction")])
+    minb = miner_actor(SESSION_M2, "claude-sonnet-5-5")
+    mine_pass(project, minb, PassLabel.B, lambda w: [_row()])
     figure = f"work.{worked[0]}.field.{VISION_NAME}.direction"
     assert _row_ids(project, worked[0], "B")  # a pass-B row with the value exists
     with pytest.raises(FactoryValidationError):
