@@ -108,3 +108,49 @@ def test_contrast_rejects_bad_hex() -> None:
         contrast_ratio("#12345", "#000")
     with pytest.raises(ValueError):
         contrast_ratio("red", "#000")
+
+
+# The 19 pairs the Kit page measures in the browser (pages/kit.js PAIRS): text on grounds at 4.5,
+# graphic tokens (six human positions, two layers) on the ground at 3. Every token is a plain hex
+# in kit.css, so the ratios are computed here from the parsed blocks.
+_HUMAN_TOKENS = ("h-none", "h-goal", "h-review", "h-feedback", "h-collab", "h-physical")
+_KIT_PAIRS: tuple[tuple[str, str, float], ...] = (
+    ("fg", "bg", 4.5),
+    ("fg", "surface", 4.5),
+    ("mut", "bg", 4.5),
+    ("mut", "surface", 4.5),
+    ("mut", "raised", 4.5),
+    ("dim", "bg", 4.5),
+    ("dim", "surface", 4.5),
+    ("acc", "bg", 4.5),
+    ("acc-ink", "acc", 4.5),
+    ("inc", "bg", 4.5),
+    ("exc", "bg", 4.5),
+    *((h, "bg", 3.0) for h in _HUMAN_TOKENS),
+    ("l-core", "bg", 3.0),
+    ("l-adjacent", "bg", 3.0),
+)
+
+
+def _all_hex_tokens(css: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for match in _BLOCK.finditer(css):
+        theme_id = match.group(1) or match.group(2) or "dark"
+        found = re.findall(r"--([a-z-]+):\s*(#[0-9a-fA-F]{3,6})\s*[;}]?", match.group(3))
+        out.setdefault(theme_id, {}).update({k: v for k, v in found})
+    return out
+
+
+def test_kit_has_nineteen_pairs() -> None:
+    assert len(_KIT_PAIRS) == 19
+    kit_js = resources.files("factory").joinpath("hub_ui", "pages", "kit.js").read_text("utf-8")
+    assert kit_js.count("'--l-") >= 2 and "HUMAN.slice(0, 6)" in kit_js  # still the same pairs
+
+
+@pytest.mark.parametrize("theme_id", THEME_IDS)
+def test_every_kit_pair_meets_its_threshold(theme_id: str) -> None:
+    tokens = _all_hex_tokens(_kit_css())
+    dark, mine = tokens["dark"], tokens[theme_id]
+    for fg, bg, minimum in _KIT_PAIRS:
+        ratio = contrast_ratio(mine.get(fg, dark[fg]), mine.get(bg, dark[bg]))
+        assert ratio >= minimum, f"{theme_id}: --{fg} on --{bg} is {ratio:.2f}, needs {minimum}"

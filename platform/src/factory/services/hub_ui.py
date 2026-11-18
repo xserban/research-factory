@@ -114,7 +114,7 @@ THEMES: Final[tuple[ThemeSpec, ...]] = (
         acc="#fe8019",
         acc_ink="#282828",
         inc="#b8bb26",
-        exc="#fb4934",
+        exc="#fc6857",
     ),
     ThemeSpec(
         id="nord",
@@ -128,7 +128,7 @@ THEMES: Final[tuple[ThemeSpec, ...]] = (
         acc="#88c0d0",
         acc_ink="#2e3440",
         inc="#a3be8c",
-        exc="#c7767d",
+        exc="#dc8a91",
     ),
     ThemeSpec(
         id="rose-pine",
