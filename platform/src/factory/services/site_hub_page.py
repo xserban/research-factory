@@ -92,16 +92,17 @@ function show(){const id=(location.hash||'#home').slice(1);
   if(first)frame.setAttribute('src',cur);else frame.contentWindow.location.replace(cur);}}
 window.addEventListener('hashchange',show);show();
 document.querySelectorAll('[data-go]').forEach(r=>r.onclick=()=>{location.hash=r.dataset.go;});
-const WORD={ok:'Nominal',stale:'Stale',bad:'Fault'};
+const WORD={ok:'Nominal',stale:'Updates on open',busy:'Updating',bad:'Fault'};
 async function live(){if(!location.protocol.startsWith('http'))return;
  const ac=new AbortController();const t=setTimeout(()=>ac.abort(),8000);
  try{const r=await fetch('api/status',{cache:'no-store',signal:ac.signal});const s=await r.json();
-  s.products.forEach(p=>{const st=p.error?'bad':(p.stale||!p.built)?'stale':'ok';
+  const Q=s.queued||[];const L=st=>st==='ok'?'':st==='busy'?'stale':st;
+  s.products.forEach(p=>{const st=Q.includes(p.id)?'busy':p.error?'bad':(p.stale||!p.built)?'stale':'ok';
    const a=items.find(x=>x.dataset.id===p.id);
-   if(a){a.querySelector('.led').className='led '+(st==='ok'?'':st);if(p.built)a.dataset.src=p.id+'/'+p.entry;}
-   document.querySelectorAll('[data-led="'+p.id+'"]').forEach(l=>l.className='led '+(st==='ok'?'':st));
+   if(a){a.querySelector('.led').className='led '+L(st);a.dataset.src=p.id+'/'+p.entry;}
+   document.querySelectorAll('[data-led="'+p.id+'"]').forEach(l=>l.className='led '+L(st));
    const pn=document.querySelector('.pn[data-go="'+p.id+'"]');
-   if(pn){const b=pn.querySelector('.tg');if(b){b.className='tg '+(st==='ok'?'ok':st==='stale'?'warn':'bad');b.textContent=WORD[st];}
+   if(pn){const b=pn.querySelector('.tg');if(b){b.className='tg '+(st==='ok'?'ok':st==='bad'?'bad':'warn');b.textContent=WORD[st];}
     const m=pn.querySelector('.when');if(m)m.textContent=p.built_at?'built '+p.built_at:'not built yet';}});
   document.getElementById('live').textContent=s.building?'REBUILDING':'LIVE';}catch(e){}
  finally{clearTimeout(t);setTimeout(live,10000);}}
@@ -201,7 +202,8 @@ def render_hub(
         panels.append(f"<div class=sec>{e(group)}</div><div class=mods>")
         for s in (x for x in stat if x.group == group):
             idx += 1
-            src = f"{s.id}/{s.entry}" if s.built else ""
+            # every product links to its page: a served hub builds it when opened (IDEA-96)
+            src = f"{s.id}/{s.entry}"
             nav.append(
                 f"<a class='i' data-id='{e(s.id)}' data-src='{e(src)}' href='#{e(s.id)}'>"
                 f"<span class=no>{idx:02d}</span><span class='led {_led(s)}'></span>"

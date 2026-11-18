@@ -1,10 +1,11 @@
 """Serve the project site on 127.0.0.1 and keep it current (plan site-hub, step 6).
 
-The hub is a folder of static files (`<project>/site/`); this server shows it over HTTP, adds
-`/api/status` (each product's build time and staleness, read from the manifest and the event log),
-and runs one background thread that rebuilds stale products. A rebuild waits at least `min_gap`
-seconds after the previous one: the snapshot of the dashboard takes about a minute, and a project
-that is being mined makes it stale all the time.
+The hub is a folder of static files (`<project>/site/`); this server shows it over HTTP and adds
+`/api/status` (each product's build time and staleness, read from the manifest and the event log;
+it never waits for a build). A product is rebuilt when its page is opened and it is stale
+(IDEA-96): one worker thread per project builds the opened products one at a time, and a small
+page that reloads itself stands in meanwhile. With `eager`, a second thread also rebuilds every
+stale product, at most once per `min_gap` seconds (the behaviour before IDEA-96).
 
 Invariants:
 - Read-only for the browser except these allow-listed acts (decision 119). Project acts:
@@ -49,6 +50,7 @@ Invariants:
 from __future__ import annotations
 
 import contextlib
+import html as html_lib
 import json
 import logging
 import shutil
@@ -59,7 +61,7 @@ from collections.abc import Callable, Mapping
 from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Final, NamedTuple
+from typing import Any, Final, Literal, NamedTuple
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -542,25 +544,136 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
 }
 
 
-class Rebuilder:
-    """Rebuilds stale products in the background, at most once per `min_gap` seconds."""
+Freshness = Literal["fresh", "building", "failed"]
 
-    def __init__(self, project: Project, *, min_gap: float, poll: float = 15.0) -> None:
+UPDATING_REFRESH: Final = 2
+"""Seconds between the reloads of the page that stands in while a product builds."""
+
+
+def updating_page(title: str, *, failed: str | None = None) -> str:
+    """The page that stands in for a product while it builds (it reloads itself; a meta refresh
+    replaces the history entry, so Back is not caught), or that shows its failed build."""
+    name = html_lib.escape(title)
+    if failed is not None:
+        return site_service.page(
+            f"{title}: build failed",
+            f"<h1>{name}</h1><p>The build of this page failed and there is no earlier version to "
+            f"show.</p><pre class=panel>{html_lib.escape(failed)}</pre><p class=dim>It is tried "
+            "again when its inputs change, or after a restart of the server.</p>",
+        )
+    return site_service.page(
+        f"Updating {title}",
+        f"<h1>Updating {name}</h1><p>The events or the code behind this page changed since it was "
+        "last built. It is being rebuilt now and opens here when it is ready.</p>"
+        "<p class=dim>A large page (the dashboard, the explorer) can take a minute.</p>",
+        head=f"<meta http-equiv=refresh content={UPDATING_REFRESH}>",
+    )
+
+
+class Rebuilder:
+    """Keeps one project's products current (IDEA-96).
+
+    On demand (the default): `ensure(pid)` answers whether a product may be served as it is; a
+    stale one is queued for the one worker thread, so builds run one at a time and only for the
+    products that are opened. A build that failed at a fingerprint is not tried again until the
+    fingerprint changes (or the server restarts). With `eager`, a second thread also rebuilds every
+    stale product, at most once per `min_gap` seconds (the behaviour before IDEA-96). Before
+    `start`, `ensure` answers `fresh` for everything: the files on disk are served as they are."""
+
+    def __init__(
+        self, project: Project, *, min_gap: float, poll: float = 15.0, eager: bool = False
+    ) -> None:
         self._project = project
         self._min_gap = min_gap
         self._poll = poll
+        self._eager = eager
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="site-rebuilder", daemon=True)
+        self._worker = threading.Thread(target=self._work, name="site-on-open", daemon=True)
+        self._products = {p.id: p for p in site_service.products()}
+        self._queue: list[str] = []
+        self._wake = threading.Condition()
+        self._failed: dict[str, str] = {}
+        self._started = False
         self.building = False
         self.last_build_at: float | None = None
         self.last_error: str | None = None
 
     def start(self) -> None:
-        self._thread.start()
+        self._started = True
+        self._worker.start()
+        if self._eager:
+            self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        with self._wake:
+            self._wake.notify_all()
+
+    def queued(self) -> list[str]:
+        """The products waiting for, or in, an on-demand build."""
+        with self._wake:
+            return list(self._queue)
+
+    def product(self, pid: str) -> site_service.Product | None:
+        """The registered product `pid`, or None."""
+        return self._products.get(pid)
+
+    def ensure(self, pid: str) -> Freshness:
+        """Whether product `pid` may be served now: `fresh` (also for anything that is no
+        product, and before `start`), `building` (queued; it was stale or never built), or
+        `failed` (its last build at the current fingerprint failed). Never waits for a build."""
+        product = self._products.get(pid)
+        if not self._started or product is None:
+            return "fresh"
+        with self._wake:
+            if pid in self._queue:
+                return "building"
+        state = site_service.status(self._project, [product])[0]
+        if state.built and not state.stale and state.error is None:
+            return "fresh"
+        if self._failed.get(pid) == state.fingerprint:
+            return "failed"
+        with self._wake:
+            if pid not in self._queue:
+                self._queue.append(pid)
+                self._wake.notify_all()
+        return "building"
+
+    def _work(self) -> None:
+        while not self._stop.is_set():
+            with self._wake:
+                while not self._queue and not self._stop.is_set():
+                    self._wake.wait()
+                if self._stop.is_set():
+                    return
+                pid = self._queue[0]
+            try:
+                self._build_one(pid)
+            except Exception:  # a worker that dies would leave the product "updating" forever
+                logging.getLogger(__name__).exception("on-demand build of %s failed", pid)
+                with contextlib.suppress(Exception):
+                    fp = site_service.fingerprint(self._project, self._products[pid])
+                    self._failed[pid] = fp
+            finally:
+                with self._wake:
+                    self._queue.remove(pid)
+
+    def _build_one(self, pid: str) -> None:
+        with self._lock:
+            self.building = True
+            try:
+                fp = site_service.fingerprint(self._project, self._products[pid])
+                results = site_service.build(self._project, only=[pid])
+                error = next((r.error for r in results if r.error), None)
+                if error is None:
+                    self._failed.pop(pid, None)
+                else:
+                    self._failed[pid] = fp
+                    self.last_error = error
+            finally:
+                self.building = False
 
     def statuses(self) -> list[site_service.ProductStatus]:
         with self._lock:
@@ -604,11 +717,11 @@ class Slot:
     """One project's live parts inside a server: its built `site/` folder, rebuilder, write lock,
     advance gate and resume runner. A write for one project never takes another's lock."""
 
-    def __init__(self, project: Project, *, min_gap: float) -> None:
+    def __init__(self, project: Project, *, min_gap: float, eager: bool = False) -> None:
         self.project = project
         self.slug = project.paths.slug
         self.root = site_service.site_dir(project)
-        self.rebuilder = Rebuilder(project, min_gap=min_gap)
+        self.rebuilder = Rebuilder(project, min_gap=min_gap, eager=eager)
         self.write_lock = threading.Lock()
         self.advance_gate = threading.Lock()
         self.resumer = ResumeRunner()
@@ -782,6 +895,7 @@ def _handler_class(
                     200,
                     {
                         "building": tried is None or slot.rebuilder.building,
+                        "queued": slot.rebuilder.queued(),
                         "error": slot.rebuilder.last_error,
                         "products": [s.model_dump(mode="json") for s in tried or []],
                     },
@@ -812,9 +926,32 @@ def _handler_class(
                     },
                 )
                 return
+            if self._product_gate(url, slot):
+                return
             self.directory = str(slot.root)
             self.path = mount.rel
             super().do_GET()
+
+        def _product_gate(self, url: str, slot: Slot) -> bool:
+            """Build a stale product when its page is opened (IDEA-96); True when this answered.
+
+            Only a product's entry page is held (`/<id>/`, `/<id>/<entry>`); the files inside a
+            product folder are served as they are. While the product builds, a small page stands
+            in and reloads itself; a failed build serves the previous output, or the error."""
+            pid, _, rest = url.lstrip("/").partition("/")
+            product = slot.rebuilder.product(pid)
+            if product is None or not url.startswith(f"/{pid}/") or rest not in ("", product.entry):
+                return False
+            state = slot.rebuilder.ensure(pid)
+            if state == "fresh":
+                return False
+            if state == "failed":
+                if (slot.root / pid / product.entry).is_file():
+                    return False
+                self._html(updating_page(product.title, failed=slot.rebuilder.last_error))
+                return True
+            self._html(updating_page(product.title))
+            return True
 
         def _refuse(self) -> None:
             self._deny(405, "read-only")
@@ -891,11 +1028,13 @@ def make_server(
     *,
     min_gap: float = 300.0,
     background: bool = True,
+    eager: bool = False,
     authenticator: site_auth.Authenticator | None = None,
 ) -> tuple[ThreadingHTTPServer, Rebuilder]:
     """A server for `<project>/site/` on 127.0.0.1:`port` (0 picks a free port) and its rebuilder
-    (started when `background`). The hub page is written first, so the server never starts empty."""
-    slot = Slot(project, min_gap=min_gap)
+    (started when `background`; products are built when opened, and all stale ones every `min_gap`
+    seconds too with `eager`). The hub page is written first, so the server never starts empty."""
+    slot = Slot(project, min_gap=min_gap, eager=eager)
     slot.prepare()
     holder: list[ThreadingHTTPServer] = []
     default = site_auth.LoopbackTokenAuth()
@@ -989,6 +1128,7 @@ class MainHub:
         *,
         min_gap: float,
         background: bool,
+        eager: bool = False,
         feed: FeedRunner | None = None,
         feed_every: float = FEED_CHECK_EVERY,
         create: Callable[[object, object, object], site_create.Created] | None = None,
@@ -1003,6 +1143,7 @@ class MainHub:
         self._open = open_project
         self._min_gap = min_gap
         self._background = background
+        self._eager = eager
         self._slots: dict[str, Slot] = {}
         self._lock = threading.Lock()
         self._warm_stop = threading.Event()
@@ -1030,7 +1171,7 @@ class MainHub:
                 return found
             if slug not in self._slugs():
                 return None
-            fresh = Slot(self._open(slug), min_gap=self._min_gap)
+            fresh = Slot(self._open(slug), min_gap=self._min_gap, eager=self._eager)
             fresh.prepare()
             if self._background:
                 fresh.rebuilder.start()

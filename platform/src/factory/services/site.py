@@ -715,7 +715,11 @@ def built_count(project: Project) -> int:
 def _write_manifest(project: Project, manifest: dict[str, dict[str, str | None]]) -> None:
     root = site_dir(project)
     root.mkdir(parents=True, exist_ok=True)
-    (root / MANIFEST).write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
+    # written aside and swapped in, so a reader never sees half a manifest (IDEA-96: the server
+    # reads statuses while a product builds)
+    tmp = root / f".{MANIFEST}.tmp"
+    tmp.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
+    tmp.replace(root / MANIFEST)
 
 
 def status(project: Project, registry: Sequence[Product] | None = None) -> list[ProductStatus]:

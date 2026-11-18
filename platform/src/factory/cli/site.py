@@ -93,8 +93,18 @@ def site_serve_cmd(
     ),
     every: Annotated[
         int,
-        typer.Option("--every", help="Seconds between background rebuilds of stale products."),
+        typer.Option(
+            "--every", help="With --eager: seconds between background rebuilds of stale products."
+        ),
     ] = 300,
+    eager: Annotated[
+        bool,
+        typer.Option(
+            "--eager",
+            help="Also rebuild every stale product in the background (by default a product is "
+            "rebuilt only when it is opened).",
+        ),
+    ] = False,
     all_projects: Annotated[
         bool,
         typer.Option(
@@ -111,7 +121,7 @@ def site_serve_cmd(
         ),
     ] = True,
 ) -> None:
-    """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
+    """Serve the hub on 127.0.0.1; a stale product is rebuilt when it is opened."""
     from factory.cli.main import _authorized, _reporting_errors, _resolve_project, _state
     from factory.services.context import list_projects, open_project
     from factory.services.site_create import create_project
@@ -128,6 +138,7 @@ def site_serve_cmd(
             ),
             min_gap=float(every),
             background=True,
+            eager=eager,
             feed=runner,
             create=lambda slug, title, profile: create_project(
                 state.settings, slug, title, profile, session=state.session, clock=state.clock
@@ -149,7 +160,7 @@ def site_serve_cmd(
         return
     with _reporting_errors():
         project = _resolve_project(state)
-    httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every))
+    httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every), eager=eager)
     typer.echo(f"site on http://{server_service.HOST}:{httpd.server_port}/ (Ctrl-C to stop)")
     try:
         httpd.serve_forever()
