@@ -9,6 +9,7 @@ the same output. `METHODS` holds the plain-English definitions shown to the rese
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from collections import Counter, defaultdict
@@ -594,6 +595,28 @@ def load_reference_rows(project: Project) -> list[tuple[str, str]]:
         ]
 
 
+def outside_info(project: Project, ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Title, first author and year of each work in `ids` that has a stored work record."""
+    wanted = set(ids)
+    out: dict[str, dict[str, Any]] = {}
+    with project.index.connect() as conn:
+        for wid, data in conn.execute(text("SELECT work_id, data FROM works")):
+            if str(wid) not in wanted:
+                continue
+            d = json.loads(str(data))
+            title = str(d.get("title") or "").strip()
+            if not title:
+                continue
+            authors = d.get("authors") or []
+            pub = str((d.get("dates") or {}).get("published") or "")
+            out[str(wid)] = {
+                "title": title,
+                "author": str(authors[0].get("name") or "") if authors else "",
+                "year": int(pub[:4]) if pub[:4].isdigit() else None,
+            }
+    return dict(sorted(out.items()))
+
+
 def graph_payload(
     project: Project,
     corpus_ids: Iterable[str],
@@ -608,11 +631,16 @@ def graph_payload(
     cluster_of = {w: s.id for s in sch for w in s.members}
     land = landscape(graph, corpus, cluster_of, labels)
     mp = main_path(graph, corpus)
+    found = foundations(graph, corpus)
     health = reference_health(load_reference_rows(project), corpus)
     return {
         "methods": METHODS,
         "landscape": asdict(land),
-        "foundations": [asdict(f) for f in foundations(graph, corpus)],
+        "foundations": [asdict(f) for f in found],
+        "outside_info": outside_info(
+            project,
+            {n.id for n in land.nodes if not n.in_corpus} | {f.id for f in found},
+        ),
         "coupling": {
             "pairs": [asdict(p) for p in coup.pairs],
             "refs_per_work": {w: len(r) for w, r in coup.refs.items()},

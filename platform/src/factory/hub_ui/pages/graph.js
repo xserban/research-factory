@@ -88,9 +88,10 @@ svg text{user-select:none;font-family:var(--f-ui)}
   const reduced = () => matchMedia('(prefers-reduced-motion:reduce)').matches;
   const pcs = (a, b) => b ? Math.round(100 * a / b) : 0;
   const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-  /* a readable name for any work: the corpus title, else the person-and-words part of its id (payload carries no title for outside works) */
+  /* a readable name for any work: the corpus title, else the person-and-words part of its id (outside works: the title from the payload's outside_info when the work has a record) */
   function nm(id) {
     const w = BY.get(id); if (w) return w.title;
+    const o = (G.outside_info || {})[id]; if (o && o.title) return o.title + (o.author ? ' (' + o.author.split(',')[0].trim() + (o.year ? ' ' + o.year : '') + ')' : o.year ? ' (' + o.year + ')' : '');
     const s = String(id).replace(/^rf:/, '').replace(/-[0-9a-f]{8}$/, '');
     const m = s.match(/^(\D*?)(\d{4})(?:\d{4})?-(.*)$/);
     return m ? cap(m[3].replace(/-/g, ' ')) + (m[1] ? ' (' + cap(m[1]) + ' ' + m[2] + ')' : ' (' + m[2] + ')') : cap(s.replace(/-/g, ' '));

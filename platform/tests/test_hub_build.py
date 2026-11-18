@@ -434,3 +434,15 @@ def test_mining_data_is_loaded_once_for_mining_and_grids(
     report = hb.build_static(mined_world, tmp_path / "ui", only={"mining", "grid"})
     assert report.errors == {}
     assert len(calls) == 1
+
+
+def test_journeys_payload_carries_the_journey_index(world: Project, tmp_path: Path) -> None:
+    report = hb.build_static(world, tmp_path / "ui", only={"journeys"})
+    assert "journeys" in report.payloads, report.errors
+    payload = json.loads((tmp_path / "ui/data/journeys.json").read_text(encoding="utf-8"))
+    idx = payload["journey_index"]
+    assert idx["scope"] == "included" and idx["bytes"] == len(
+        json.dumps(idx["works"], separators=(",", ":"))
+    )
+    assert any(len(stop) == 9 for stops in idx["works"].values() for stop in stops)
+    assert report.payloads["journeys"].bytes < 3_000_000

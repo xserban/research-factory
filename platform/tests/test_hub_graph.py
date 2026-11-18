@@ -6,6 +6,8 @@ import json
 import math
 import random
 
+from sqlalchemy import text
+
 from factory.services import hub_graph as hg
 from factory.services.context import Project
 from tests.test_references_index import FUZZY, _extract, _resolve
@@ -148,6 +150,17 @@ def test_main_path_breaks_cycle_by_date_and_reports() -> None:
     assert mp.path == ("X", "Y", "Z")
 
 
+def test_main_path_runs_from_cited_to_citing_in_date_order() -> None:
+    # (citing, cited): B (2021) cites A (2020); C (2022) cites B
+    graph = g(
+        [("B", "A"), ("C", "B")],
+        {"A": "2020-03", "B": "2021-05", "C": "2022-01"},
+    )
+    mp = hg.main_path(graph, ["A", "B", "C"])
+    assert mp.path == ("A", "B", "C")
+    assert [graph.nodes[w] for w in mp.path] == ["2020-03", "2021-05", "2022-01"]
+
+
 def test_main_path_empty_and_big_integers() -> None:
     assert hg.main_path(g([]), ["a"]).path == ()
     # a ladder of diamonds makes 2**69 paths: no overflow with ints
@@ -220,3 +233,23 @@ def test_loaders_and_payload_on_a_small_project(project: Project) -> None:
     assert payload["landscape"]["total_edges"] == 1
     assert payload["reference_health"]["totals"]["unconfirmed"] == 1
     assert set(payload["methods"]) >= {"landscape", "main_path", "reference_health"}
+
+
+def test_outside_nodes_carry_title_author_and_year(project: Project) -> None:
+    _extract(project)
+    _resolve(project, [resolution(1, confidence="identifier"), FUZZY])
+    project.index.sync()
+    data = {
+        "title": "Kernels revisited",
+        "dates": {"published": "2019-04-02"},
+        "authors": [{"name": "Smith, A."}, {"name": "Other, B."}],
+    }
+    with project.index._engine.begin() as conn:  # fixture: a stored record for the cited work
+        conn.execute(
+            text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, :d, 'e')"),
+            {"w": CITED, "d": json.dumps(data)},
+        )
+    payload = hg.graph_payload(project, [WORK], {WORK: "rl"})
+    info = payload["outside_info"]
+    assert info[CITED] == {"title": "Kernels revisited", "author": "Smith, A.", "year": 2019}
+    assert WORK not in info

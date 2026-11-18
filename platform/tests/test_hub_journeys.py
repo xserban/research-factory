@@ -209,6 +209,60 @@ def test_journey_index_scope_and_text_limit() -> None:
     assert all(len(s[6]) <= 4 for s in cut["works"]["w1"] if s[6])
 
 
+def test_journey_index_stops_carry_the_quote_and_event_id() -> None:
+    r, t = build()
+    stops = hj.journey_index(r, t, True)["works"]["w1"]
+    assert all(len(s) == 9 for s in stops)
+    screens = [s for s in stops if s[0] == hj.STAGES.index("title-abstract")]
+    assert screens and all(s[7] == "a quote" for s in screens)
+    assert all(s[8] is None for s in stops)  # hand-built steps hold no event id
+
+
+def test_trail_steps_hold_the_event_id_and_index_passes_it_on(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mock_sources: SourcesFor,
+    listed_miners: None,
+) -> None:
+    _ft_world(project, agent, human, mock_sources)
+    data = hp.load_flow_data(project)
+    trails = flow_trails(project)
+    decided = [s for ss in trails.values() for s in ss if s.kind == "decision"]
+    assert decided and all(s.event_id and s.event_id.startswith("ev_") for s in decided)
+    idx = hj.journey_index(list(data.rows), trails, data.prisma.full_text.stage_run, scope="all")
+    ids = {s[8] for ss in idx["works"].values() for s in ss if s[8]}
+    assert ids & {s.event_id for s in decided}
+
+
+def test_reference_extras_feed_references_and_cited_by_stops(project: Project) -> None:
+    from tests.test_references_index import FUZZY, _extract, _resolve
+    from tests.test_references_model import CITED, WORK, resolution
+
+    _extract(project)
+    _resolve(project, [resolution(1, confidence="identifier"), FUZZY])
+    project.index.sync()
+    extra = hj.reference_extras(project)
+    mine = extra[WORK]
+    ref = [s for s in mine if s.stage == "references-extracted"]
+    assert len(ref) == 1 and ref[0].text == "2 references, 1 resolved"
+    cited = [s for s in extra[CITED] if s.stage == "cited-by-corpus"]
+    assert len(cited) == 1 and cited[0].text == "1 corpus work"
+    assert cited[0].ts == ref[0].ts
+
+
+def test_journeys_payload_has_the_index_and_reference_stages(project: Project) -> None:
+    from tests.test_references_index import FUZZY, _extract, _resolve
+    from tests.test_references_model import resolution
+
+    _extract(project)
+    _resolve(project, [resolution(1, confidence="identifier"), FUZZY])
+    payload = hj.journeys_payload(project)
+    idx = payload["journey_index"]
+    assert idx["bytes"] > 0 and idx["scope"] == "included"
+    assert "references-extracted" in payload["replay"]["stages"]
+
+
 def test_reference_stages_come_from_extra_stops() -> None:
     r, t = build()
     extra = {"w1": [hj.Stop.make("cited-by-corpus", "2026-03-09T00:00:00.000Z", "cited", text="3")]}

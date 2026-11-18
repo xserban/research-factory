@@ -15,7 +15,7 @@ Invariants:
   from the optional `extra` argument; none are invented.
 - Output is a function of the data, not of input order: ids, stops and dict keys are sorted.
 - A criterion loses its protocol prefix (`<protocol id>:EX04` is `EX04`).
-- Stops carry no `event_id` yet: `TrailStep` does not hold it, so the field is None.
+- A stop carries the `event_id` of its `TrailStep` (None for found, counted and derived steps).
 
 Cost: `flow_trails` is one pass over the events (the dominant cost, reads every event once);
 `replay_frames` and `journey_index` are linear in the number of trail steps.
@@ -29,6 +29,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
@@ -128,10 +130,11 @@ class Stop:
         quote: str | None = None,
         label: str | None = None,
         figure_id: str | None = None,
+        event_id: str | None = None,
     ) -> Stop:
         return cls(
             stage, STAGES.index(stage), ts, actor_kind, actor, model, outcome, criterion,
-            text, quote, label, None, figure_id,
+            text, quote, label, event_id, figure_id,
         )  # fmt: skip
 
 
@@ -157,7 +160,7 @@ def _stop(work_id: str, s: TrailStep) -> Stop | None:
     crit = str(d["criterion"]).rsplit(":", 1)[-1] if "criterion" in d else None
 
     def make(stage: str, outcome: str, **kw: Any) -> Stop:
-        return Stop.make(stage, s.at, outcome, **kw)
+        return Stop.make(stage, s.at, outcome, event_id=s.event_id, **kw)
 
     if s.kind == "found":
         method = str(d.get("method", ""))
@@ -489,8 +492,9 @@ def journey_index(
     extra: Mapping[str, Sequence[Stop]] | None = None,
 ) -> dict[str, Any]:
     """Stop lists to embed in a static page: per work (the included works, or `all`) a list of
-    `[stage index, ts, actor kind, model, outcome, criterion, text]` over own stops, texts cut to
-    `text_limit`. `bytes` is the compact JSON size of `works`."""
+    `[stage index, ts, actor kind, model, outcome, criterion, text, quote, event id]` over own
+    stops (the `build_stops` list, `extra` included), texts and quotes cut to `text_limit`.
+    `bytes` is the compact JSON size of `works`."""
     if scope not in ("included", "all"):
         raise FactoryValidationError([ValidationIssue("scope", "must be 'included' or 'all'")])
     extra = extra or {}
@@ -505,6 +509,8 @@ def journey_index(
                 s.outcome,
                 s.criterion,
                 _cut(s.text, text_limit),
+                _cut(s.quote, text_limit),
+                s.event_id,
             ]
             for s in build_stops(i, trails.get(i, ()), extra.get(i, ()))
         ]
@@ -517,6 +523,66 @@ def journey_index(
 # ------------------------------------------------------------------ loaders
 
 
+def reference_extras(project: Project) -> dict[str, list[Stop]]:
+    """Stops for the two stages `flow_trails` has no source for, from the live extractions.
+
+    `references-extracted`: per work with a live extraction, at the event's time, with the number
+    of references and how many resolved. `cited-by-corpus`: per cited work (a resolved link), at
+    the earliest live extraction time among the works citing it, with the number of distinct
+    citing works. Read-only; no time is invented (an extraction with no event row is skipped)."""
+    with project.index.connect() as conn:
+        ex = {
+            str(x): (str(w), str(ts), str(e))
+            for x, w, ts, e in conn.execute(
+                text(
+                    "SELECT x.extraction_id, x.work_id, v.ts, x.event_id "
+                    "FROM reference_extractions x "
+                    "JOIN events v ON v.id = x.event_id WHERE x.live = 1"
+                )
+            )
+        }
+        entries = {
+            str(x): int(n)
+            for x, n in conn.execute(
+                text("SELECT extraction_id, COUNT(*) FROM reference_entries GROUP BY 1")
+            )
+        }
+        resolved: dict[str, int] = {}
+        cited: dict[str, dict[str, str]] = {}
+        for x, target in conn.execute(
+            text("SELECT extraction_id, work_id FROM reference_links WHERE state = 'resolved'")
+        ):
+            if str(x) not in ex:
+                continue
+            resolved[str(x)] = resolved.get(str(x), 0) + 1
+            if target and str(target) != ex[str(x)][0]:
+                citing = cited.setdefault(str(target), {})
+                citing[ex[str(x)][0]] = min(ex[str(x)][1], citing.get(ex[str(x)][0], "~"))
+    out: dict[str, list[Stop]] = {}
+    for x, (work, ts, eid) in sorted(ex.items()):
+        n, r = entries.get(x, 0), resolved.get(x, 0)
+        out.setdefault(work, []).append(
+            Stop.make(
+                "references-extracted",
+                ts,
+                "extracted",
+                text=f"{n} references, {r} resolved",
+                event_id=eid,
+            )
+        )
+    for work, citing in sorted(cited.items()):
+        n = len(citing)
+        out.setdefault(work, []).append(
+            Stop.make(
+                "cited-by-corpus",
+                min(citing.values()),
+                "cited",
+                text=f"{n} corpus work{'' if n == 1 else 's'}",
+            )
+        )
+    return out
+
+
 def journeys_payload(
     project: Project,
     flow_data: FlowData | None = None,
@@ -526,7 +592,12 @@ def journeys_payload(
     data = flow_data or load_flow_data(project)
     got = trails if trails is not None else flow_trails(project)
     stage_run = data.prisma.full_text.stage_run
-    return {"methods": METHODS, "replay": replay_frames(data.rows, got, stage_run)}
+    extra = reference_extras(project)
+    return {
+        "methods": METHODS,
+        "replay": replay_frames(data.rows, got, stage_run, extra),
+        "journey_index": journey_index(data.rows, got, stage_run, extra=extra),
+    }
 
 
 def swimlanes_payload(

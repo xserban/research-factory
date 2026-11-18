@@ -472,7 +472,7 @@ def build_journeys(ctx: HubContext) -> dict[str, Any]:
         fn = mod.journeys_payload
     except (ImportError, AttributeError) as exc:
         raise RuntimeError(f"hub_journeys.journeys_payload is not available: {exc}") from exc
-    payload: dict[str, Any] = fn(ctx.project)
+    payload: dict[str, Any] = fn(ctx.project, ctx.flow_data)
     return payload
 
 
