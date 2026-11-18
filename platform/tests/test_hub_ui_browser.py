@@ -100,23 +100,6 @@ def test_theme_query_sets_the_attribute(built: Path, tmp_path: Path) -> None:
     assert re.search(r'<html[^>]*data-theme="lcars"', dom)
 
 
-def test_corpus_hash_id_opens_the_detail(built: Path, tmp_path: Path) -> None:
-    corpus = json.loads((built / "data" / "corpus.json").read_text(encoding="utf-8"))
-    works = corpus["works"]
-    if not works:
-        # the fixture's mined rows do not reach `corpus_payload`, so the corpus is empty:
-        # still check the page survives an unknown id in the hash
-        dom, err = dump(built / "corpus.html", tmp_path, "#id=rf:unknown")
-        assert "Uncaught" not in err
-        assert "<h1" in _main(dom)
-        return
-    wid = works[0]["id"]
-    dom, err = dump(built / "corpus.html", tmp_path, f"#id={wid}")
-    assert "Uncaught" not in err
-    opened = re.search(r'<aside id="cdet"[^>]*\bopen\b[^>]*>(.*?)</aside>', dom, flags=re.S)
-    assert opened and opened.group(1).strip(), "detail panel not opened"
-
-
 def test_flow_lanes_hash_renders_lanes(built: Path, tmp_path: Path) -> None:
     shell = json.loads((built / "data" / "shell.json").read_text(encoding="utf-8"))
     wid = shell["works"][0]["id"]
@@ -130,3 +113,99 @@ def test_lenses_view_assoc_renders_the_heatmap(built: Path, tmp_path: Path) -> N
     assert "Uncaught" not in err
     main = _main(dom)
     assert "More papers than chance" in main or "<rect" in main
+
+
+XSS_IMG = "<img src=x onerror=\"document.body.setAttribute('data-xss','1')\">"
+XSS_SVG = "\"><svg onload=\"document.body.setAttribute('data-xss','1')\">"
+
+
+@pytest.fixture
+def hostile(mined_world: Project) -> tuple[Project, list[str]]:  # noqa: F811
+    """The mined world with the first two included works carrying markup in their title, venue,
+    abstract and classification values and quotes (rows under the default `cls` miner, so they
+    reach the corpus). Returns the project and the work ids."""
+    from sqlalchemy import text
+
+    from factory.services import hub_payloads as hp
+    from tests.test_hub_mining import _insert_field, _insert_row
+
+    ids = sorted(hp.load_flow_data(mined_world).sets.included)[:2]
+    with mined_world.index._engine.begin() as conn:
+        for n, wid in enumerate(ids):
+            row = conn.execute(
+                text("SELECT data FROM works WHERE work_id = :w"), {"w": wid}
+            ).first()
+            assert row is not None
+            data = json.loads(row[0])
+            data["title"] = (XSS_IMG, XSS_SVG)[n] + " title"
+            data["venue"] = {"name": XSS_SVG}
+            data["abstract"] = XSS_IMG + " abstract"
+            conn.execute(
+                text("UPDATE works SET data = :d WHERE work_id = :w"),
+                {"d": json.dumps(data), "w": wid},
+            )
+    for n, wid in enumerate(ids):
+        eid = f"x{n}"
+        _insert_row(mined_world, eid, wid, "A", "m-classification@1")
+        _insert_field(mined_world, eid, "technique_primary", XSS_IMG, XSS_SVG)
+        _insert_field(mined_world, eid, "field_primary", XSS_SVG, XSS_IMG)
+    return mined_world, ids
+
+
+@pytest.fixture
+def hostile_built(hostile: tuple[Project, list[str]], tmp_path: Path) -> tuple[Path, list[str]]:
+    out = tmp_path / "ui"
+    report = hb.build_static(hostile[0], out)
+    assert not report.errors, report.errors
+    return out, hostile[1]
+
+
+def _states(ids: list[str]) -> list[tuple[str, str]]:
+    a = ids[0]
+    return [
+        ("corpus.html", f"#id={a}"),
+        ("corpus.html", "#view=list"),
+        ("flow.html", f"#tab=paths&lanes={a},{ids[1]}"),
+        ("flow.html", ""),
+        ("findings.html", ""),
+        ("data.html", ""),
+        ("miners.html", ""),
+        ("explore.html", ""),
+        ("lenses.html", "#view=assoc"),
+        ("lenses.html", ""),
+        ("graph.html", ""),
+        ("overview.html", ""),
+        ("living.html", ""),
+    ]
+
+
+def test_hostile_strings_never_execute_on_any_page(
+    hostile_built: tuple[Path, list[str]], tmp_path: Path
+) -> None:
+    out, ids = hostile_built
+    corpus = json.loads((out / "data" / "corpus.json").read_text(encoding="utf-8"))
+    assert {w["id"] for w in corpus["works"]} >= set(ids), "the hostile rows must reach the corpus"
+    failures = []
+    for page, suffix in _states(ids):
+        if not (out / page).is_file():
+            continue
+        dom, err = dump(out / page, tmp_path, suffix)
+        if "Uncaught" in err:
+            failures.append((page, suffix, "Uncaught"))
+        if re.search(r"<body[^>]*\bdata-xss", dom):
+            failures.append((page, suffix, "script ran"))
+        if re.search(r"<img[^>]*\bsrc=\"?x\"?", dom):
+            failures.append((page, suffix, "injected img element"))
+    assert not failures, failures
+
+
+def test_corpus_hash_id_opens_a_real_detail_with_escaped_text(
+    hostile_built: tuple[Path, list[str]], tmp_path: Path
+) -> None:
+    out, ids = hostile_built
+    dom, err = dump(out / "corpus.html", tmp_path, f"#id={ids[0]}")
+    assert "Uncaught" not in err
+    opened = re.search(r'<aside id="cdet"[^>]*\bopen\b[^>]*>(.*?)</aside>', dom, flags=re.S)
+    assert opened and opened.group(1).strip(), "detail panel not opened"
+    assert "&lt;img" in opened.group(1), "the literal markup must be shown as text"
+    assert "data-xss" not in dom.split("<body", 1)[-1].split(">", 1)[0]

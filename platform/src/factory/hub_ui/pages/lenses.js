@@ -131,8 +131,8 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
     if (o.kb) { el.setAttribute('tabindex', '0'); el.setAttribute('role', 'button'); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); o.click(e); } }); }
     if (o.click) el.addEventListener('click', o.click);
     if (o.tip) {
-      el.addEventListener('mousemove', e => H.tip(o.tip, e)); el.addEventListener('mouseleave', () => H.tip(null));
-      if (o.kb) { el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); H.tip(o.tip, { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }); }); el.addEventListener('blur', () => H.tip(null)); }
+      el.addEventListener('mousemove', e => H.tipHtml(o.tip, e)); el.addEventListener('mouseleave', () => H.tipHtml(null));
+      if (o.kb) { el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); H.tipHtml(o.tip, { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }); }); el.addEventListener('blur', () => H.tipHtml(null)); }
     }
     if (o.over) { el.addEventListener('mouseenter', o.over); el.addEventListener('mouseleave', o.out); }
     return el;
@@ -354,7 +354,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       lead: `Directly, <b>“${esc(short(f.title, 70))}”</b> builds on <b>${fmt(L.left[1].length)}</b> paper${L.left[1].length === 1 ? '' : 's'} and is built on by <b>${fmt(L.right[1].length)}</b>${L.right[1].length ? ` (${pc(core, L.right[1].length)}% of them core)` : ''}${hops === 2 ? `. Two ${T('hop', 'hops')} out it reaches ${fmt(L.left[2].length)} earlier and ${fmt(L.right[2].length)} later papers` : ''}.`,
       controls: `<span class="meta">Centre on</span><input type="search" id="fsel" list="wlist" value="${esc(f.title)}" size="46" aria-label="Choose a paper by title" placeholder="Type a title…"><datalist id="wlist">${[...EW].sort(byCic).map(w => `<option value="${esc(w.title)}">`).join('')}</datalist><span class="meta">${T('hop', 'Hops')}</span><div class="seg" role="group" aria-label="Hops">${[1, 2].map(h => `<button aria-pressed="${h === hops}" data-p="hops" data-v="${h}">${h}</button>`).join('')}</div>`,
       defSel: `ctx:${f.id}/${hops}`,
-      extra: w => `<button class="btn" data-centre="${w.id}" style="height:26px;padding:0 9px">Centre</button>`,
+      extra: w => `<button class="btn" data-centre="${esc(w.id)}" style="height:26px;padding:0 9px">Centre</button>`,
       draw(host, W, sel) {
         const Wc = Math.max(W, hops === 2 ? 760 : 560), wr = document.createElement('div'); wr.className = 'scrollx'; host.appendChild(wr);
         const defs = hops === 2 ? [['L2', L.left[2], 'Builds on, hop 2'], ['L1', L.left[1], 'Builds on, hop 1'], ['C', [f], 'Focus'], ['R1', L.right[1], 'Built on by, hop 1'], ['R2', L.right[2], 'Built on by, hop 2']] : [['L1', L.left[1], 'Builds on, hop 1'], ['C', [f], 'Focus'], ['R1', L.right[1], 'Built on by, hop 1']];
@@ -579,7 +579,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
           document.getElementById('wcount').textContent = q ? `${m.length} of ${wq.length} quotes match “${q}”` : `${wq.length} quotes`;
           const shown = showAll ? m : m.slice(0, 48), re = q ? new RegExp('(' + esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig') : null;
           const hl = t => re ? esc(t).replace(re, '<mark>$1</mark>') : esc(t);
-          document.getElementById('wallbox').innerHTML = shown.length ? shown.map(w => `<article class="wcard" tabindex="0" role="button" data-open="${w.id}" aria-label="${esc(w.title)}"><blockquote class="quote">“${hl(quote(w, ef))}”</blockquote><div class="meta"><b>${esc(short(w.title, 90))}</b><br><span class="dot" style="background:${H.layerColor(w.layer)}"></span> ${esc(H.layerLabel(w.layer))} · ${esc(monthName(w))} · cited ${w.cited_here}×</div></article>`).join('') : `<p class="empty">No quote contains “${esc(q)}”. Clear the search to see all ${wq.length}.</p>`;
+          document.getElementById('wallbox').innerHTML = shown.length ? shown.map(w => `<article class="wcard" tabindex="0" role="button" data-open="${esc(w.id)}" aria-label="${esc(w.title)}"><blockquote class="quote">“${hl(quote(w, ef))}”</blockquote><div class="meta"><b>${esc(short(w.title, 90))}</b><br><span class="dot" style="background:${H.layerColor(w.layer)}"></span> ${esc(H.layerLabel(w.layer))} · ${esc(monthName(w))} · cited ${w.cited_here}×</div></article>`).join('') : `<p class="empty">No quote contains “${esc(q)}”. Clear the search to see all ${wq.length}.</p>`;
           const mb = document.getElementById('wmore'); mb.hidden = showAll || m.length <= 48; mb.textContent = `Show all ${m.length} quotes`; mb.onclick = () => { showAll = true; paint(); };
           H.hash.set({ q: q || null });
         };
@@ -659,7 +659,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
     return `<div class="hd"><h3 class="h3" style="margin:0">Papers in this selection</h3>
       <button class="chip" aria-pressed="true" id="clrSel" aria-label="Remove selection: ${esc(res.parts.join(', '))}"><span>+</span> ${esc(res.parts.join(' and '))} <span class="n">${fmt(n)} paper${n === 1 ? '' : 's'}</span><span class="x" aria-hidden="true">×</span></button></div>
       ${n ? `<div class="scrollx"><table class="t"><thead><tr><th>Title</th><th>Layer</th><th class="c-h">Human role</th><th class="c-m">Month</th><th class="r">Cited</th>${extra ? '<th></th>' : ''}</tr></thead><tbody>
-      ${shown.map(w => `<tr tabindex="0" data-open="${w.id}"><td><span class="ttl">${esc(w.title)}</span><div class="meta2">${esc(lab('human', hv(w)))} · ${esc(monthName(w))}</div></td><td class="lay"><span class="dot" style="background:${H.layerColor(w.layer)}"></span> ${esc(H.layerLabel(w.layer))}</td><td class="c-h"><span class="dot" style="background:${H.humanColor(hv(w))}"></span> ${esc(lab('human', hv(w)))}</td><td class="c-m num">${esc(monthName(w))}</td><td class="r">${w.cited_here}</td>${extra ? `<td>${extra(w)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+      ${shown.map(w => `<tr tabindex="0" data-open="${esc(w.id)}"><td><span class="ttl">${esc(w.title)}</span><div class="meta2">${esc(lab('human', hv(w)))} · ${esc(monthName(w))}</div></td><td class="lay"><span class="dot" style="background:${H.layerColor(w.layer)}"></span> ${esc(H.layerLabel(w.layer))}</td><td class="c-h"><span class="dot" style="background:${H.humanColor(hv(w))}"></span> ${esc(lab('human', hv(w)))}</td><td class="c-m num">${esc(monthName(w))}</td><td class="r">${w.cited_here}</td>${extra ? `<td>${extra(w)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
       ${n > shown.length ? `<p><button class="btn" id="showAll">Show all ${fmt(n)} papers</button></p>` : ''}` : '<p class="empty">No paper matches this selection. This combination is a gap in the corpus.</p>'}`;
   }
   function render() {

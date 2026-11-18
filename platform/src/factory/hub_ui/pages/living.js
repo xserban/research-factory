@@ -234,8 +234,8 @@ HUB.load(['shell', 'living']).then(d => {
     main.querySelectorAll('rect.cell[tabindex]').forEach(c => {
       const x = HB.days.find(z => z.day === c.dataset.day);
       const split = x ? FAMS.filter(f => x.families[f]).map(f => `${famLabel(f)} ${fmt(x.families[f])}`).join('<br>') : '';
-      c.onmousemove = e => H.tip(`<b>${dlabY(c.dataset.day)}</b><br>${x ? plural(x.total, 'event', 'events') + '<br>' + split : 'No events'}`, e);
-      c.onmouseleave = () => H.tip('');
+      c.onmousemove = e => H.tipHtml(`<b>${dlabY(c.dataset.day)}</b><br>${x ? plural(x.total, 'event', 'events') + '<br>' + split : 'No events'}`, e);
+      c.onmouseleave = () => H.tipHtml('');
       c.onclick = () => go({ day: c.dataset.day });
       c.onkeydown = e => { if (e.key === 'Enter') go({ day: c.dataset.day }); };
     });

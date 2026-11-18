@@ -294,9 +294,9 @@ function wireGraph(ws) {
   const pick = e => { const [x, y] = pos(e); let b = null, bd = 1e9; for (const n of nodes) { const dd = (n.x - x) ** 2 + (n.y - y) ** 2; if (dd < (n.r + 4) ** 2 && dd < bd) { b = n; bd = dd; } } return b; };
   let moved = 0;
   cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); moved = 0; const n = pick(e); if (n) { drag = n; it = Math.min(it, 300); } else drag = {pan: true, sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y}; };
-  cv.onpointermove = e => { if (drag && drag.pan) { cam.x = drag.cx + e.clientX - drag.sx; cam.y = drag.cy + e.clientY - drag.sy; moved++; } else if (drag) { [drag.x, drag.y] = pos(e); moved++; } else { hover = pick(e); HUB.tip(hover ? esc(hover.label || hover.w.title) : '', e); } };
+  cv.onpointermove = e => { if (drag && drag.pan) { cam.x = drag.cx + e.clientX - drag.sx; cam.y = drag.cy + e.clientY - drag.sy; moved++; } else if (drag) { [drag.x, drag.y] = pos(e); moved++; } else { hover = pick(e); HUB.tipHtml(hover ? esc(hover.label || hover.w.title) : '', e); } };
   cv.onpointerup = e => { const n = pick(e); if (drag && !drag.pan && n === drag && n.w && moved < 4) openWork(n.w); drag = null; };
-  cv.onpointerleave = () => { hover = null; HUB.tip('', {}); };
+  cv.onpointerleave = () => { hover = null; HUB.tipHtml('', {}); };
   cv.onwheel = e => { e.preventDefault(); cam.z = Math.min(4, Math.max(.2, cam.z * (e.deltaY < 0 ? 1.1 : .9))); };
 }
 
@@ -391,9 +391,9 @@ const cv = $('#cv');
 cv.addEventListener('click', e => {
   if (e.target.closest('input.xs')) { const c = e.target.closest('input.xs'); c.checked ? ST.sel.add(c.dataset.id) : ST.sel.delete(c.dataset.id); c.closest('.cr').setAttribute('aria-selected', c.checked); paintBar(W.filter(w => ok(w))); return; }
   const r = e.target.closest('.cr, .td, .card2'); if (r && r.dataset.id) { if (r.classList.contains('cr')) { ST.cur = VIS.indexOf(r.dataset.id); mark(); } openWork(idMap.get(r.dataset.id)); } });
-document.addEventListener('mouseover', e => { const t = e.target.closest('.td'); if (t) return HUB.tip(esc(t.dataset.tt), e); const n = e.target.closest('[data-dna]'); if (n) HUB.tip(tipDNA(idMap.get(n.dataset.dna)), e); });
-document.addEventListener('mousemove', e => { if (e.target.closest('.td, [data-dna]') && $('#tip').style.display === 'block') HUB.tip($('#tip').innerHTML, e); });
-document.addEventListener('mouseout', e => { if (e.target.closest('.td, [data-dna]')) HUB.tip('', e); });
+document.addEventListener('mouseover', e => { const t = e.target.closest('.td'); if (t) return HUB.tip(t.dataset.tt, e); const n = e.target.closest('[data-dna]'); if (n) HUB.tipHtml(tipDNA(idMap.get(n.dataset.dna)), e); });
+document.addEventListener('mousemove', e => { if (e.target.closest('.td, [data-dna]') && $('#tip').style.display === 'block') HUB.tipAt(e); });
+document.addEventListener('mouseout', e => { if (e.target.closest('.td, [data-dna]')) HUB.tipHtml('', e); });
 document.addEventListener('keydown', e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Escape' && $('#cdet').hasAttribute('open') && !$('#drawer').hasAttribute('open')) { closeWork(); return; }

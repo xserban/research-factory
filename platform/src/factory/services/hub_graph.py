@@ -42,8 +42,9 @@ METHODS: dict[str, str] = {
     "schools": (
         "Groups of corpus works that cite similar literature, found by weighted label propagation "
         "on the coupling graph with a fixed seed and id-ordered ties, so a rerun gives the same "
-        "groups. Works with no coupling partner are grouped as unclustered. The dominant label "
-        "is the most frequent value of the chosen label among members, with its share."
+        "groups. Works with no coupling partner, and works left alone in a community of one, "
+        "are grouped as unclustered. The dominant label is the most frequent value of the chosen "
+        "label among members, with its share."
     ),
     "main_path": (
         "Search Path Count on the citation network inside the corpus, with knowledge flowing from "

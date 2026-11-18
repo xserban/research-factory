@@ -168,3 +168,23 @@ def test_no_digits_typed_in_sentence_templates(page: str) -> None:
         if _WORDS.search(prose) and _DIGIT.search(prose):
             hits.append((line_of(text, pos), prose.strip()[:70]))
     assert not hits, (page, hits)
+
+
+def test_no_page_passes_dataset_or_attribute_text_to_an_html_sink() -> None:
+    """`tip()` is text-only; `tipHtml()` and `innerHTML` are for HTML built from escaped parts.
+    Attribute values decode on read, so a `data-tip` string must never reach an HTML sink."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "src" / "factory" / "hub_ui"
+    bad = []
+    for f in [root / "shell.js", *sorted((root / "pages").glob("*.js"))]:
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"tipHtml\([^;]*(dataset\.(tip|tt)|getAttribute\()", line) or re.search(
+                r"innerHTML\s*\+?=\s*[^;]*(dataset\.(tip|tt)|getAttribute\(['\"]data-tip)", line
+            ):
+                bad.append(f"{f.name}:{n}")
+    assert not bad, bad
+    shell = (root / "shell.js").read_text(encoding="utf-8")
+    m = re.search(r"function tip\(.*?\n", shell)
+    assert m and "textContent" in m.group(0) and "innerHTML" not in m.group(0)

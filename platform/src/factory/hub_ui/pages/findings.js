@@ -227,7 +227,7 @@ HUB.load(['shell', 'findings']).then(d => {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeList(); });
   const tipOn = e => { const t = e.target.closest('[data-tip]'); if (t) H.tip(t.dataset.tip, e); };
   document.addEventListener('mouseover', tipOn); document.addEventListener('mousemove', tipOn);
-  document.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) H.tip(''); });
+  document.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) H.tipHtml(''); });
 
   /* ---------- lead, from the cards ---------- */
   function leadText() {

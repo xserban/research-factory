@@ -159,12 +159,11 @@ svg text{user-select:none;font-family:var(--f-ui)}
     if (LS.running || LS.done) return;
     LS.running = true; const t0 = performance.now();
     const finish = () => { LS.done = true; LS.running = false; LS.ms = Math.round(performance.now() - t0); console.log('graph-layout ms', LS.ms, 'nodes', LS.nodes.length, 'edges', LS.edges.length, 'iterations', LS.ITER); fit(); paintLand(); const st = document.getElementById('gstat'); if (st) st.textContent = ''; };
-    if (reduced()) { while (LS.iter < LS.ITER) step(); finish(); return; }
     const chunk = () => {
       const t1 = performance.now();
       while (LS.iter < LS.ITER && performance.now() - t1 < 12) step();
-      if (!LS.userView) fit();
-      paintLand();
+      /* reduced motion: still chunked (the page must not freeze), but nothing is drawn until the layout is done */
+      if (!reduced()) { if (!LS.userView) fit(); paintLand(); }
       const st = document.getElementById('gstat'); if (st) st.textContent = LS.iter < LS.ITER ? 'Arranging… ' + Math.round(100 * LS.iter / LS.ITER) + '%' : '';
       if (LS.iter < LS.ITER) requestAnimationFrame(chunk); else finish();
     };
@@ -218,14 +217,14 @@ svg text{user-select:none;font-family:var(--f-ui)}
     const rect = e => { const r = cvs.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     cvs.addEventListener('pointerdown', e => { cvs.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, vx: LS.view.x, vy: LS.view.y }; moved = false; });
     cvs.addEventListener('pointermove', e => {
-      if (drag) { const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) moved = true; if (moved) { LS.userView = true; LS.view.x = drag.vx + dx; LS.view.y = drag.vy + dy; H.tip(null); paintLand(); } return; }
+      if (drag) { const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) moved = true; if (moved) { LS.userView = true; LS.view.x = drag.vx + dx; LS.view.y = drag.vy + dy; H.tipHtml(null); paintLand(); } return; }
       if (!LS.done && LS.running) return;
       const [px, py] = rect(e), i = pickNode(px, py);
       if (i !== LS.hover) { LS.hover = i; paintLand(); }
-      if (i >= 0) H.tip(nodeTip(i), e); else H.tip(null);
+      if (i >= 0) H.tipHtml(nodeTip(i), e); else H.tipHtml(null);
     });
     cvs.addEventListener('pointerup', e => { if (drag && !moved) { const [px, py] = rect(e), i = pickNode(px, py); if (i >= 0) chooseNode(i); } drag = null; });
-    cvs.addEventListener('pointerleave', () => { H.tip(null); if (LS.hover >= 0) { LS.hover = -1; paintLand(); } });
+    cvs.addEventListener('pointerleave', () => { H.tipHtml(null); if (LS.hover >= 0) { LS.hover = -1; paintLand(); } });
     const zoom = (f, cx, cy) => { const v = LS.view, k = Math.min(Math.max(v.k * f, .1), 30), r = k / v.k; LS.userView = true; v.x = cx - (cx - v.x) * r; v.y = cy - (cy - v.y) * r; v.k = k; paintLand(); };
     cvs.addEventListener('wheel', e => { e.preventDefault(); const [px, py] = rect(e); zoom(e.deltaY < 0 ? 1.2 : 1 / 1.2, px, py); }, { passive: false });
     stage.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { if (b.dataset.z === '0') { LS.userView = false; fit(); paintLand(); } else zoom(+b.dataset.z, cvs.clientWidth / 2, cvs.clientHeight / 2); });
@@ -329,7 +328,7 @@ svg text{user-select:none;font-family:var(--f-ui)}
           const up = i % 2 === 1, out = MP.spc.filter(e => (e.cited === id || e.citing === id) && !(onPath.has(e.cited) && onPath.has(e.citing))).sort((a, b) => b.spc - a.spc || (a.cited + a.citing).localeCompare(b.cited + b.citing)).slice(0, 16);
           out.forEach((e, j) => { const o = e.cited === id ? e.citing : e.cited, bx = xs[i] + (j - (out.length - 1) / 2) * Math.min(gap / 18, 9), by = y0 + (up ? -1 : 1) * (50 + (j % 4) * 16);
             mk('line', { x1: xs[i], y1: y0, x2: bx, y2: by, stroke: 'var(--mut)', 'stroke-width': .8, opacity: .2 }, svg);
-            const c = mk('circle', { cx: bx, cy: by, r: 3, fill: lcol(o), opacity: .5 }, svg); c.style.cursor = 'pointer'; c.addEventListener('click', () => openWork(o)); c.addEventListener('mousemove', ev => H.tip(`<b>${esc(nm(o))}</b><br>${esc(BY.get(o) ? BY.get(o).year : '')}`, ev)); c.addEventListener('mouseleave', () => H.tip(null)); });
+            const c = mk('circle', { cx: bx, cy: by, r: 3, fill: lcol(o), opacity: .5 }, svg); c.style.cursor = 'pointer'; c.addEventListener('click', () => openWork(o)); c.addEventListener('mousemove', ev => H.tipHtml(`<b>${esc(nm(o))}</b><br>${esc(BY.get(o) ? BY.get(o).year : '')}`, ev)); c.addEventListener('mouseleave', () => H.tipHtml(null)); });
         });
         for (let i = 1; i < n; i++) { const s = spc.get(path[i - 1] + '|' + path[i]) || 0; mk('line', { x1: xs[i - 1], y1: y0, x2: xs[i], y2: y0, stroke: 'var(--acc)', 'stroke-width': 2 + 12 * s / maxS, 'stroke-linecap': 'round', opacity: .75 }, svg); if (s) tx(svg, (xs[i - 1] + xs[i]) / 2, y0 - 10 - 6 * s / maxS, fmt(s), { 'text-anchor': 'middle', fill: 'var(--mut)', 'font-size': 11, class: 'halo' }); }
         path.forEach((id, i) => {
@@ -372,14 +371,14 @@ svg text{user-select:none;font-family:var(--f-ui)}
           const vis = mk('path', { d, stroke: lcol(a.citing), 'stroke-width': 1, opacity: .28 }, gA);
           const hit = mk('path', { d, stroke: 'transparent', 'stroke-width': 8, 'pointer-events': 'stroke' }, gA); hit.style.cursor = 'pointer';
           hit.addEventListener('mouseenter', () => { vis.setAttribute('opacity', 1); vis.setAttribute('stroke-width', 2); });
-          hit.addEventListener('mousemove', ev => H.tip(`<b>${esc(short(nm(a.citing), 70))}</b><br>cites ${esc(short(nm(a.cited), 70))}<br>${fmt(a.lag_months)} months earlier`, ev));
-          hit.addEventListener('mouseleave', () => { vis.setAttribute('opacity', .28); vis.setAttribute('stroke-width', 1); H.tip(null); });
+          hit.addEventListener('mousemove', ev => H.tipHtml(`<b>${esc(short(nm(a.citing), 70))}</b><br>cites ${esc(short(nm(a.cited), 70))}<br>${fmt(a.lag_months)} months earlier`, ev));
+          hit.addEventListener('mouseleave', () => { vis.setAttribute('opacity', .28); vis.setAttribute('stroke-width', 1); H.tipHtml(null); });
           hit.addEventListener('click', () => openWork(a.citing));
         });
         const lw = Math.max(lh.clientWidth || 900, 520), lhH = 150, mx = Math.max(...bins.map(b => b || 0), 1), bw = (lw - 2 * px) / Math.max(bins.length, 1);
         const s2 = mk('svg', { width: lw, height: lhH + 44, viewBox: `0 0 ${lw} ${lhH + 44}`, role: 'group' }); lh.appendChild(s2);
         for (let i = 0; i < bins.length; i++) { const n = bins[i] || 0, h = n / mx * (lhH - 20); const r = mk('rect', { x: px + i * bw + 1, y: lhH - h, width: Math.max(bw - 2, 1), height: h, fill: 'var(--acc)', opacity: .8, rx: 2 }, s2);
-          r.addEventListener('mousemove', ev => H.tip(`${fmt(i * BW)}–${fmt(i * BW + BW - 1)} months<br><b>${fmt(n)}</b> citations`, ev)); r.addEventListener('mouseleave', () => H.tip(null)); if (bins.length < 14 || i % 2 === 0) tx(s2, px + i * bw + bw / 2, lhH + 16, String(i * BW), { 'text-anchor': 'middle', fill: 'var(--dim)' }); }
+          r.addEventListener('mousemove', ev => H.tipHtml(`${fmt(i * BW)}–${fmt(i * BW + BW - 1)} months<br><b>${fmt(n)}</b> citations`, ev)); r.addEventListener('mouseleave', () => H.tipHtml(null)); if (bins.length < 14 || i % 2 === 0) tx(s2, px + i * bw + bw / 2, lhH + 16, String(i * BW), { 'text-anchor': 'middle', fill: 'var(--dim)' }); }
         tx(s2, lw - px, lhH + 38, 'months between paper and cited source', { 'text-anchor': 'end', fill: 'var(--dim)', 'font-size': 11 });
       },
     };

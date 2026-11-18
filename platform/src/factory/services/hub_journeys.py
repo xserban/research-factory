@@ -133,9 +133,23 @@ class Stop:
         event_id: str | None = None,
     ) -> Stop:
         return cls(
-            stage, STAGES.index(stage), ts, actor_kind, actor, model, outcome, criterion,
+            stage, STAGES.index(stage), iso(ts), actor_kind, actor, model, outcome, criterion,
             text, quote, label, event_id, figure_id,
         )  # fmt: skip
+
+
+def when(ts: str) -> datetime:
+    """A stored timestamp as an aware datetime. `Z`, `+00:00` and other offsets are honoured; a
+    timestamp without an offset is taken as UTC. Ordering and differences use this, never the
+    string, because the stored forms differ (`Z`, `+00:00`, fractional seconds)."""
+    d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
+
+
+def iso(ts: str) -> str:
+    """One output format for every stop: UTC with milliseconds, `YYYY-MM-DDTHH:MM:SS.mmmZ`."""
+    d = when(ts)
+    return d.strftime("%Y-%m-%dT%H:%M:%S") + f".{d.microsecond // 1000:03d}Z"
 
 
 def _cut(text: str | None, limit: int = TEXT_LIMIT) -> str | None:
@@ -237,7 +251,7 @@ def build_stops(work_id: str, steps: Iterable[TrailStep], extra: Iterable[Stop] 
     """The stops of one work, ordered by time then stage (stable, so event order breaks ties)."""
     out = [x for x in (_stop(work_id, s) for s in steps) if x is not None]
     out.extend(extra)
-    return sorted(out, key=lambda x: (x.ts, x.stage_index))
+    return sorted(out, key=lambda x: (when(x.ts), x.stage_index))
 
 
 # ------------------------------------------------------------------ journeys
@@ -274,9 +288,9 @@ def _journey(
     canon = row.canonical_id
     if canon is not None and canon in by_id:
         merged = [s.ts for s in stops if s.stage == "deduplicated" and s.outcome == "merged"]
-        since = merged[-1] if merged else ""
+        since = max(merged, key=when) if merged else None
         shown = build_stops(canon, trails.get(canon, ()), extra.get(canon, ()))
-        stops += [replace_of(s, canon) for s in shown if s.ts >= since]
+        stops += [replace_of(s, canon) for s in shown if since is None or when(s.ts) >= when(since)]
     return Journey(row.work_id, row.title, fate, criterion, canon, tuple(stops))
 
 
@@ -364,7 +378,7 @@ def _refuse(reason: str) -> FactoryValidationError:
 
 def epoch(ts: str) -> int:
     """Whole seconds since the Unix epoch of a stored timestamp."""
-    return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(UTC).timestamp())
+    return int(when(ts).timestamp())
 
 
 def _outcomes(j: Journey) -> dict[str, str]:
@@ -436,7 +450,7 @@ def swimlanes(
         Lane(j.work_id, j.title, j.fate, j.criterion, j.canonical_id, j.stops, o, d, _durations(j))
         for j, o, d in zip(js, outs, div, strict=True)
     )
-    return SwimlaneSet(lanes, (min(times), max(times)) if times else None)
+    return SwimlaneSet(lanes, (min(times, key=when), max(times, key=when)) if times else None)
 
 
 # ------------------------------------------------------------------ replay
@@ -526,10 +540,11 @@ def journey_index(
 def reference_extras(project: Project) -> dict[str, list[Stop]]:
     """Stops for the two stages `flow_trails` has no source for, from the live extractions.
 
-    `references-extracted`: per work with a live extraction, at the event's time, with the number
-    of references and how many resolved. `cited-by-corpus`: per cited work (a resolved link), at
-    the earliest live extraction time among the works citing it, with the number of distinct
-    citing works. Read-only; no time is invented (an extraction with no event row is skipped)."""
+    `references-extracted`: one stop per work, at the earliest live extraction's event time, with
+    the number of references and how many resolved (later live extractions are counted in the
+    text). `cited-by-corpus`: per cited work (a resolved link), at the earliest live extraction
+    time among the works citing it, with the number of distinct citing works. Read-only; no time
+    is invented (an extraction with no event row is skipped)."""
     with project.index.connect() as conn:
         ex = {
             str(x): (str(w), str(ts), str(e))
@@ -557,17 +572,25 @@ def reference_extras(project: Project) -> dict[str, list[Stop]]:
             resolved[str(x)] = resolved.get(str(x), 0) + 1
             if target and str(target) != ex[str(x)][0]:
                 citing = cited.setdefault(str(target), {})
-                citing[ex[str(x)][0]] = min(ex[str(x)][1], citing.get(ex[str(x)][0], "~"))
+                w = ex[str(x)][0]
+                if w not in citing or when(ex[str(x)][1]) < when(citing[w]):
+                    citing[w] = ex[str(x)][1]
     out: dict[str, list[Stop]] = {}
-    for x, (work, ts, eid) in sorted(ex.items()):
-        n, r = entries.get(x, 0), resolved.get(x, 0)
+    by_work: dict[str, list[str]] = {}
+    for x, (work, _ts, _eid) in ex.items():
+        by_work.setdefault(work, []).append(x)
+    for work, xs in sorted(by_work.items()):
+        first = min(xs, key=lambda x: (when(ex[x][1]), x))
+        n, r = entries.get(first, 0), resolved.get(first, 0)
+        again = len(xs) - 1
+        note = f"; {again} later re-extraction{'' if again == 1 else 's'}" if again else ""
         out.setdefault(work, []).append(
             Stop.make(
                 "references-extracted",
-                ts,
+                ex[first][1],
                 "extracted",
-                text=f"{n} references, {r} resolved",
-                event_id=eid,
+                text=f"{n} references, {r} resolved{note}",
+                event_id=ex[first][2],
             )
         )
     for work, citing in sorted(cited.items()):
@@ -575,7 +598,7 @@ def reference_extras(project: Project) -> dict[str, list[Stop]]:
         out.setdefault(work, []).append(
             Stop.make(
                 "cited-by-corpus",
-                min(citing.values()),
+                min(citing.values(), key=when),
                 "cited",
                 text=f"{n} corpus work{'' if n == 1 else 's'}",
             )
@@ -609,4 +632,7 @@ def swimlanes_payload(
     """Swimlanes for the chosen works as JSON-safe data."""
     data = flow_data or load_flow_data(project)
     got = trails if trails is not None else flow_trails(project)
-    return swimlanes(data.rows, got, work_ids, data.prisma.full_text.stage_run).to_payload()
+    extra = reference_extras(project)
+    return swimlanes(
+        data.rows, got, work_ids, data.prisma.full_text.stage_run, extra=extra
+    ).to_payload()

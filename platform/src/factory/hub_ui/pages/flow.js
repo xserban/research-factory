@@ -150,7 +150,7 @@ document.querySelectorAll('#tabs [data-t]').forEach(b => b.onclick = () => showT
 addEventListener('hashchange', () => { loadHash(); showTab(S.tab, true); });
 document.addEventListener('hub:theme', () => showTab(S.tab, true));
 const infoPanel = (what, read, how) => `<b>What it shows</b>${what}${read ? `<p><span class=k>How to read it.</span> ${read}</p>` : ''}${how ? `<p><span class=k>How it's computed.</span> ${how}</p>` : ''}`;
-const miniTip = (html, el) => { const r = el.getBoundingClientRect(); H.tip(html, { clientX: r.right, clientY: r.top }); };
+const miniTip = (html, el) => { const r = el.getBoundingClientRect(); H.tipHtml(html, { clientX: r.right, clientY: r.top }); };
 
 /* ================= tab 1: where the records went ================= */
 function nodeModel() {
@@ -198,15 +198,15 @@ function drawSankey() {
   const heads = ['Sources', 'Identified', 'Screening', 'Title and abstract', 'Full text sought', 'Full text', 'Outcome'];
   let s = heads.map((t, c) => `<text class="ch" x="${c * colW}" y="12">${t}</text>`).join('');
   s += Lk.map(l => { const x0 = l.a.x + nw, x1 = l.b.x, mx = (x0 + x1) / 2, w = l.w;
-    return `<path class="lk ${l.b.cls}" data-n="${l.b.id}" d="M${x0},${l.sy - w / 2} C${mx},${l.sy - w / 2} ${mx},${l.ty - w / 2} ${x1},${l.ty - w / 2} L${x1},${l.ty + w / 2} C${mx},${l.ty + w / 2} ${mx},${l.sy + w / 2} ${x0},${l.sy + w / 2}Z"/>`; }).join('');
+    return `<path class="lk ${l.b.cls}" data-n="${esc(l.b.id)}" d="M${x0},${l.sy - w / 2} C${mx},${l.sy - w / 2} ${mx},${l.ty - w / 2} ${x1},${l.ty - w / 2} L${x1},${l.ty + w / 2} C${mx},${l.ty + w / 2} ${mx},${l.sy + w / 2} ${x0},${l.sy + w / 2}Z"/>`; }).join('');
   s += N.map(n => { const sg = n.cls === 'out' ? '− ' : n.cls === 'inc' ? '+ ' : '', lab = sg + (n.crit || n.label), col = n.cls === 'out' ? 'var(--exc)' : n.cls === 'inc' ? 'var(--inc)' : 'var(--fg)';
-    return `<g class="nd ${n.cls} ${S.node === n.id ? 'sel' : ''}" data-n="${n.id}" tabindex="0" role="button" aria-label="${esc(n.label)} ${n.n}"><rect class="b" x="${n.x}" y="${n.y.toFixed(1)}" width="${nw}" height="${n.h.toFixed(1)}" rx="2"/><rect x="${n.x - 2}" y="${(n.y - 3).toFixed(1)}" width="${Math.min(colW - 6, nw + 130)}" height="${(Math.max(n.h, 16) + 6).toFixed(1)}" fill="transparent"/><text class="halo lbl" x="${n.x + nw + 7}" y="${(n.y + n.h / 2 + 4.3).toFixed(1)}" style="font-size:12.5px;${n.cls !== 'out' ? 'font-weight:600' : ''}"><tspan fill="${col}">${esc(lab)}</tspan> <tspan class="lbl-m" fill="var(--mut)">${fmt(n.n)}</tspan></text></g>`; }).join('');
+    return `<g class="nd ${n.cls} ${S.node === n.id ? 'sel' : ''}" data-n="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(n.label)} ${n.n}"><rect class="b" x="${n.x}" y="${n.y.toFixed(1)}" width="${nw}" height="${n.h.toFixed(1)}" rx="2"/><rect x="${n.x - 2}" y="${(n.y - 3).toFixed(1)}" width="${Math.min(colW - 6, nw + 130)}" height="${(Math.max(n.h, 16) + 6).toFixed(1)}" fill="transparent"/><text class="halo lbl" x="${n.x + nw + 7}" y="${(n.y + n.h / 2 + 4.3).toFixed(1)}" style="font-size:12.5px;${n.cls !== 'out' ? 'font-weight:600' : ''}"><tspan fill="${col}">${esc(lab)}</tspan> <tspan class="lbl-m" fill="var(--mut)">${fmt(n.n)}</tspan></text></g>`; }).join('');
   svg.innerHTML = s;
   svg.querySelectorAll('.nd,.lk').forEach(el => { const id = el.dataset.n;
     el.addEventListener('click', () => selectNode(id));
-    el.addEventListener('mouseenter', () => { svg.classList.add('hl'); svg.querySelectorAll(`.lk[data-n="${id}"]`).forEach(p => p.classList.add('hot')); });
-    el.addEventListener('mousemove', e => { const i = nodeInfo(id); i && H.tip(`<b>${esc(i.title)}</b><br>${pctTxt(i)}`, e); });
-    el.addEventListener('mouseleave', () => { svg.classList.remove('hl'); svg.querySelectorAll('.lk.hot').forEach(p => p.classList.remove('hot')); H.tip(null); });
+    el.addEventListener('mouseenter', () => { svg.classList.add('hl'); svg.querySelectorAll(`.lk[data-n="${CSS.escape(id)}"]`).forEach(p => p.classList.add('hot')); });
+    el.addEventListener('mousemove', e => { const i = nodeInfo(id); i && H.tipHtml(`<b>${esc(i.title)}</b><br>${pctTxt(i)}`, e); });
+    el.addEventListener('mouseleave', () => { svg.classList.remove('hl'); svg.querySelectorAll('.lk.hot').forEach(p => p.classList.remove('hot')); H.tipHtml(null); });
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(id); } }); });
 }
 const ROWS = 24, PITCH = 9;
@@ -227,18 +227,18 @@ function dotsSvg(g) {
 }
 function drawWaffle() {
   const gs = wGroups(), mk = sec => gs.filter(g => g.sec === sec).map(g => { const w = Math.max(Math.ceil(g.n / ROWS) * PITCH, g.sec ? 152 : 128);
-    return `<button class="g" data-n="${g.id}" aria-pressed="${S.node === g.id}" style="width:${w + 20}px"><div class="gh"><span style="color:${g.sg === '−' ? 'var(--exc)' : g.sg === '+' ? 'var(--inc)' : 'var(--fg)'}">${g.sg || '·'}</span>${esc(g.code)} <span class="n">${fmt(g.n)}</span></div>${dotsSvg(g)}<div class="gt">${esc(g.txt)}</div></button>`; }).join('');
+    return `<button class="g" data-n="${esc(g.id)}" aria-pressed="${S.node === g.id}" style="width:${w + 20}px"><div class="gh"><span style="color:${g.sg === '−' ? 'var(--exc)' : g.sg === '+' ? 'var(--inc)' : 'var(--fg)'}">${g.sg || '·'}</span>${esc(g.code)} <span class="n">${fmt(g.n)}</span></div>${dotsSvg(g)}<div class="gt">${esc(g.txt)}</div></button>`; }).join('');
   const t1 = gs.filter(g => !g.sec).reduce((a, g) => a + g.n, 0), t2 = gs.filter(g => g.sec).reduce((a, g) => a + g.n, 0);
   $('#wf').innerHTML = `<h3 class="h3">Excluded at title and abstract <span class="meta">− ${fmt(t1)} of ${fmt(st.screened)} screened</span></h3><div class="groups">${mk(0)}</div>
    <h3 class="h3" style="margin-top:30px">Passed title and abstract <span class="meta">${fmt(t2)} of ${fmt(st.screened)} screened</span></h3><div class="groups">${mk(1)}</div>`;
   const all = document.querySelectorAll('#wf .groups');
   document.querySelectorAll('#wf .g').forEach(b => { b.onclick = () => selectNode(b.dataset.n);
-    b.onmouseenter = () => all.forEach(x => x.classList.add('hl')); b.onmouseleave = () => { all.forEach(x => x.classList.remove('hl')); H.tip(null); };
-    b.onmousemove = e => { const i = nodeInfo(b.dataset.n); i && H.tip(`<b>${esc(i.title)}</b><br>${pctTxt(i)}`, e); }; });
+    b.onmouseenter = () => all.forEach(x => x.classList.add('hl')); b.onmouseleave = () => { all.forEach(x => x.classList.remove('hl')); H.tipHtml(null); };
+    b.onmousemove = e => { const i = nodeInfo(b.dataset.n); i && H.tipHtml(`<b>${esc(i.title)}</b><br>${pctTxt(i)}`, e); }; });
   return infoPanel(`What happened to each of the ${fmt(st.screened)} records that were screened.`, 'One dot is one record. Filled means decided; a ring means no decision yet (not retrieved, pending).',
     `${fmt(t1)} + ${fmt(t2)} = ${fmt(t1 + t2)} ${t1 + t2 === st.screened ? '✓' : '✗'} screened records. Dots fill column by column, ${ROWS} to a column, so a block is as wide as its count. The ${fmt(st.dup)} duplicates were removed before screening and are not shown.`);
 }
-function selectNode(id) { S.node = id; S.more = 100; saveHash(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+function selectNode(id) { S.node = id; S.more = 100; saveHash(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'nearest' }); }
 function markSel() { document.querySelectorAll('#sk .nd').forEach(n => n.classList.toggle('sel', n.dataset.n === S.node)); document.querySelectorAll('#wf .g').forEach(b => b.setAttribute('aria-pressed', b.dataset.n === S.node)); }
 const FACETS = [['outcome', 'Outcome', r => outcomeOf(r), v => v, null], ['layer', 'Layer', r => (H.byId.get(r.id) || {}).layer, H.layerLabel, v => H.LAYERS.find(l => l[0] === v)?.[2]],
   ['human', 'Human role', r => { const w = H.byId.get(r.id); return w ? (H.val(w, 'human') || 'null') : null; }, v => H.humanLabel(v === 'null' ? null : v), v => (H.HUMAN.find(h => h[0] === v) || [, , '--h-null'])[2]],
@@ -284,7 +284,7 @@ function tabWhere(p) {
     <div id="lens"></div><section class="panel" id="panel" aria-live="polite"></section>`;
   const lens = () => { document.querySelectorAll('.seg [data-v]').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.view)); const L = $('#lens');
     if (S.view === 'flow') {
-      $('#lensq').innerHTML = H.header({ title: 'Records at each step', infoHtml: infoPanel('How many records survive each stage, and why the rest leave.', 'Band width is proportional to the record count, on one scale for every column. Click a band or box to list its records below.', `Every band is drawn at ${(470 / st.identified * 1000).toFixed(0)} px per 1,000 records; bands under 2 px are drawn at 2 px. The checks under the figure are recomputed from the counts.`) });
+      $('#lensq').innerHTML = H.header({ title: 'Records at each step', infoHtml: infoPanel('How many records survive each stage, and why the rest leave.', 'Band width is proportional to the record count, on one scale for every column. Click a band or box to list its records below.', `Every band is drawn at ${(st.identified ? 470 / st.identified * 1000 : 0).toFixed(0)} px per 1,000 records; bands under 2 px are drawn at 2 px. The checks under the figure are recomputed from the counts.`) });
       L.innerHTML = `<div class="card" style="padding:16px 12px"><div class="scroll"><svg class="sk" id="sk" role="img" aria-label="PRISMA flow, band width proportional to record count"></svg></div></div><div class="eqs">${['identified', 'screened', 'ta-included', 'sought', 'assessed', 'included'].map(k => EQ[k]).join('')}</div>`; drawSankey();
     } else { L.innerHTML = '<div class="card wf" id="wf"></div>'; const ip = drawWaffle(); $('#lensq').innerHTML = H.header({ title: 'Every record', sub: `<span class="meta">${fmt(st.screened)} records screened</span>`, infoHtml: ip }); }
     markSel(); };
@@ -327,11 +327,11 @@ function tabScreening(p) {
   <section>${H.header({ title: 'Reasons for exclusion', sub: 'Why records were left out, with the reader’s own words.', infoHtml: infoPanel('Each exclusion criterion, how many records cited it, and examples of the reasoning.', 'Every example shows the reader’s rationale and the sentence it was based on. Counts are records with an exclude verdict from either screener, so they can differ slightly from the final counts in the flow.', esc(SC.methods.reasons_wall)) })}
    ${wallStages.map(sg => `<h3 class="h3" style="margin:18px 0 10px">${lbl(sg)}</h3><div class="wall">${SC.reasons_wall.filter(w => w.stage === sg).map(w => `<article class="wc"><div class="hd">${H.term(w.criterion, w.criterion)}<b>${esc(w.label || '')}</b><span class="cn">${fmt(w.count)}</span></div>
      <p class="rule">${esc(w.rule || '')}</p>${w.examples.map(e => `<div class="ex"><span class="meta">${recLink(e.work_id)} · screener ${esc(e.pass_label)}</span>${esc(e.rationale)}${e.quote ? `<blockquote class="quote">“${esc(e.quote)}”</blockquote>` : ''}</div>`).join('')}
-     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${w.criterion}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section></div>`;
+     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section></div>`;
   const cv = $('#curve'), hv = $('#cvh');
   hv.onmousemove = e => { const b = cv.getBoundingClientRect(), f = Math.min(1, Math.max(0, ((e.clientX - b.left) / b.width * 920 - 62) / (920 - 62 - 20))), i = Math.max(1, Math.round(f * N));
-    H.tip(`After <b>${fmt(i)}</b> records: <b>${fmt(rc.points[i - 1])}</b> included (${Math.round(100 * rc.points[i - 1] / rc.included_total)}% of all inclusions)`, e); };
-  hv.onmouseleave = () => H.tip(null);
+    H.tipHtml(`After <b>${fmt(i)}</b> records: <b>${fmt(rc.points[i - 1])}</b> included (${Math.round(100 * rc.points[i - 1] / rc.included_total)}% of all inclusions)`, e); };
+  hv.onmouseleave = () => H.tipHtml(null);
   p.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { S.stage = b.dataset.s; S.dmore = 20; saveHash({ stage: S.stage }); showTab('screening', true); });
   p.querySelectorAll('[data-node]').forEach(a => a.onclick = e => { e.preventDefault(); S.node = a.dataset.node; S.facet = {}; showTab('where'); });
   wireOpen(p); twoBody(cur);
@@ -461,7 +461,7 @@ function tabPaths(p) {
   const root = $('#lanes'); wireOpen(root);
   root.querySelectorAll('.pt').forEach(el => { const l = lanes[+el.dataset.l], s = [...l.stops, l.fin][+el.dataset.k];
     const html = `<b>${esc(rowName(s.si))}</b><br>${esc(stampFmt(s.t))}${s.kind ? `<br>${esc(s.kind)}${s.model ? ' · ' + esc(s.model) : ''}` : ''}<br>${esc(s.outcome === 'reached' ? '' : s.outcome)}${s.criterion ? ' · ' + esc(s.criterion) : ''}${s.text ? `<br><i>${esc(s.text)}</i>` : ''}${s.quote ? `<br>“${esc(s.quote)}”` : ''}`;
-    el.onmousemove = e => H.tip(html, e); el.onmouseleave = () => H.tip(null); el.onfocus = () => miniTip(html, el); el.onblur = () => H.tip(null); });
+    el.onmousemove = e => H.tipHtml(html, e); el.onmouseleave = () => H.tipHtml(null); el.onfocus = () => miniTip(html, el); el.onblur = () => H.tipHtml(null); });
 }
 
 showTab(S.tab, true);

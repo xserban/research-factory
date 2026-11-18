@@ -566,6 +566,7 @@ class BuildReport:
     errors: dict[str, str] = field(default_factory=dict)
     pages: list[str] = field(default_factory=list)
     skipped_pages: dict[str, list[str]] = field(default_factory=dict)
+    removed: list[str] = field(default_factory=list)
 
 
 def dumps(payload: object) -> str:
@@ -579,7 +580,9 @@ def build_static(
     """Write ``data/<name>.json`` and ``.js``, ``assets/*`` and the pages whose payloads built.
 
     ``only`` limits the payload names (unknown names raise ValueError before anything is
-    written); pages are written when every payload they need was built in this run."""
+    written); pages are written when every payload they need was built in this run. A failed
+    payload's stale ``data/<name>.json|js`` and the stale ``.html`` of pages skipped because of
+    it are deleted and listed in ``report.removed``."""
     only_set = None if only is None else set(only)
     if only_set is not None:
         unknown = sorted(
@@ -619,6 +622,10 @@ def build_static(
             text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
+            for stale in (data_dir / f"{name}.json", data_dir / f"{name}.js"):
+                if stale.is_file():  # an old file must not outlive a failed rebuild
+                    stale.unlink()
+                    report.removed.append(f"data/{stale.name}")
             continue
         (data_dir / f"{name}.json").write_text(text + "\n", encoding="utf-8")
         (data_dir / f"{name}.js").write_text(
@@ -639,6 +646,10 @@ def build_static(
             continue
         if missing:
             report.skipped_pages[spec.id] = missing
+            stale_page = out_dir / f"{spec.id}.html"
+            if stale_page.is_file():
+                stale_page.unlink()
+                report.removed.append(stale_page.name)
             continue
         (out_dir / f"{spec.id}.html").write_text(
             hub_ui.page_html(spec.id, spec.title, [spec.script], spec.payloads, version),
@@ -656,4 +667,5 @@ def format_report(report: BuildReport) -> list[str]:
     lines += [
         f"page {p}: not written, missing {', '.join(m)}" for p, m in report.skipped_pages.items()
     ]
+    lines += [f"removed stale {r}" for r in report.removed]
     return lines

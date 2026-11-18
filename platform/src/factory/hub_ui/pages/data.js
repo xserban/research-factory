@@ -262,8 +262,8 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     };
     c.onfocus = () => { paintCov(); announce(); };
     c.onblur = () => paintCov();
-    c.onmousemove = e => { const h = covHit(e); if (!h) { H.tip('', e); return; } c.style.cursor = 'pointer'; const t = covText(covRows[h.r], CW[h.c]); H.tip(`<b>${esc(t.head)}</b><div class=meta>${esc(t.meta)}</div><div>${esc(t.line)}</div>`, e); };
-    c.onmouseleave = e => H.tip('', e);
+    c.onmousemove = e => { const h = covHit(e); if (!h) { H.tipHtml('', e); return; } c.style.cursor = 'pointer'; const t = covText(covRows[h.r], CW[h.c]); H.tipHtml(`<b>${esc(t.head)}</b><div class=meta>${esc(t.meta)}</div><div>${esc(t.line)}</div>`, e); };
+    c.onmouseleave = e => H.tipHtml('', e);
     c.onclick = e => { const h = covHit(e); if (h) { covState.r = h.r; covState.c = h.c; paintCov(); announce(); H.openDrawer(CW[h.c].id); } };
   }
   function covHit(e) {
@@ -369,29 +369,29 @@ table.cvt{width:100%;border-collapse:collapse;font-size:var(--t-s);margin-top:14
     return e ? `<b>${esc(vlab(col, e.v))}</b> <span class=meta>· ${esc(col.label)}</span>${e.n > 1 ? `<div class=meta style="margin-top:6px">${fmt(e.n)} values recorded for this paper</div>` + e.all.map(x => `<div>${esc(vlab(col, x))}</div>`).join('') : ''}${e.q ? `<div class=quote style="font-size:13px;margin:6px 0 0">“${esc(e.q)}”</div>` : '<div class=meta>No quotation recorded.</div>'}` : `<b>${esc(col.label)}</b><div class=meta>No value recorded for this paper.</div>`;
   }
   main.addEventListener('mouseover', e => {
-    const c = e.target.closest('td[data-r]'); if (c) { H.tip(cellTip(c), e); return; }
+    const c = e.target.closest('td[data-r]'); if (c) { H.tipHtml(cellTip(c), e); return; }
     const d = e.target.closest('[data-dist]');
-    if (d) { const col = COL[d.dataset.dist], dd = dist(cur.rows, col); H.tip(`<b>${esc(col.label)}</b><div class=meta>${fmt(dd.n)} papers in view</div>` + dd.top.slice(0, 6).map(t => `<div>${esc(vlab(col, t[0]))} <span class=num>${fmt(t[1])}</span></div>`).join('') + `<div class=meta>No value <span class=num>${fmt(dd.emp)}</span></div>`, e); return; }
-    if (!e.target.closest('#cov')) H.tip('', e);
+    if (d) { const col = COL[d.dataset.dist], dd = dist(cur.rows, col); H.tipHtml(`<b>${esc(col.label)}</b><div class=meta>${fmt(dd.n)} papers in view</div>` + dd.top.slice(0, 6).map(t => `<div>${esc(vlab(col, t[0]))} <span class=num>${fmt(t[1])}</span></div>`).join('') + `<div class=meta>No value <span class=num>${fmt(dd.emp)}</span></div>`, e); return; }
+    if (!e.target.closest('#cov')) H.tipHtml('', e);
   });
   main.addEventListener('mousemove', e => {
     if (!e.target.closest('td[data-r],[data-dist]')) return;
     const t = $('#tip'); if (t.style.display === 'block') { t.style.left = Math.min(e.clientX + 14, innerWidth - t.offsetWidth - 8) + 'px'; t.style.top = Math.min(e.clientY + 14, innerHeight - t.offsetHeight - 8) + 'px'; }
   });
-  main.addEventListener('mouseleave', e => H.tip('', e));
+  main.addEventListener('mouseleave', e => H.tipHtml('', e));
   main.addEventListener('focusin', e => {
     const c = e.target.closest('td[data-r]'); if (!c) return;
     S.cur = {r: +c.dataset.r, c: +c.dataset.c}; document.querySelectorAll('td[tabindex="0"]').forEach(x => x.tabIndex = -1); c.tabIndex = 0;
-    const r = c.getBoundingClientRect(); H.tip(cellTip(c), {clientX: r.left + 10, clientY: r.bottom - 6});
+    const r = c.getBoundingClientRect(); H.tipHtml(cellTip(c), {clientX: r.left + 10, clientY: r.bottom - 6});
   });
-  main.addEventListener('focusout', e => { if (e.target.closest('td[data-r]')) H.tip('', e); });
+  main.addEventListener('focusout', e => { if (e.target.closest('td[data-r]')) H.tipHtml('', e); });
   main.addEventListener('keydown', e => {
     const c = e.target.closest('td[data-r]'); if (!c) return;
     const r = +c.dataset.r, k = +c.dataset.c, mv = {ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1]}[e.key];
     if (mv) { e.preventDefault(); const n = document.querySelector(`td[data-r="${r + mv[0]}"][data-c="${k + mv[1]}"]`); if (n) n.focus(); }
     else if (e.key === 'Enter') { e.preventDefault(); const row = cur.page[r]; if (row) H.openDrawer(row.id); }
     else if (e.key === ' ') { e.preventDefault(); c.click(); }
-    else if (e.key === 'Escape') H.tip('', e);
+    else if (e.key === 'Escape') H.tipHtml('', e);
   });
   document.addEventListener('click', e => { const p = $('#picker'); if (p && p.hasAttribute('open') && !e.target.closest('#picker')) p.removeAttribute('open'); });
   const redraw = () => { if (S.view === 'coverage' && $('#cov')) paintCov(); };

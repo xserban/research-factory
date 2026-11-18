@@ -192,7 +192,7 @@ ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How
   const isHollow = w => w.layer === 'unlayered' || !LAYERS.some(l => l[0] === w.layer);
   function tipFor(id, e) {
     const w = H.byId.get(id); if (!w || !e) return;
-    H.tip(`<b>${esc(w.title)}</b><div class="meta">${ym(mkey(w))} · ${esc(H.layerLabel(w.layer))}<br>cited here ${fmt(cic(id))}×</div>`, e);
+    H.tipHtml(`<b>${esc(w.title)}</b><div class="meta">${ym(mkey(w))} · ${esc(H.layerLabel(w.layer))}<br>cited here ${fmt(cic(id))}×</div>`, e);
   }
   const unfocus = () => { svg.classList.remove('dim'); svg.querySelectorAll('.pt.nb').forEach(d => d.classList.remove('nb')); };
   function focus(id, e) {
@@ -235,7 +235,7 @@ ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How
     svg.innerHTML = s;
     svg.querySelectorAll('.pt').forEach(dd => {
       dd.addEventListener('mouseenter', e => focus(dd.dataset.id, e)); dd.addEventListener('mousemove', e => tipFor(dd.dataset.id, e));
-      dd.addEventListener('mouseleave', () => { unfocus(); H.tip(null); });
+      dd.addEventListener('mouseleave', () => { unfocus(); H.tipHtml(null); });
       dd.addEventListener('focus', () => focus(dd.dataset.id)); dd.addEventListener('blur', unfocus);
       dd.addEventListener('click', () => H.openDrawer(dd.dataset.id));
       dd.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); H.openDrawer(dd.dataset.id); } });
@@ -281,7 +281,7 @@ ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How
       mcounts.map((v, i) => `<rect class="gb" data-m="${months[i]}" data-n="${v}" x="${(i * bw + 1).toFixed(1)}" y="${(H2 - H2 * v / vm).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${(H2 * v / vm).toFixed(1)}" fill="var(--mut)" ${i === mcounts.length - 1 ? 'fill-opacity=".45"' : ''}/>`).join('') +
       `<text class="axis" x="0" y="${H2 + 16}">${ym(months[0])}</text><text class="axis" x="${W2}" y="${H2 + 16}" text-anchor="end">${ym(months[months.length - 1])}</text><text class="lbl" x="${(iM * bw + bw / 2).toFixed(1)}" y="${(H2 - H2 * vm / vm - 4).toFixed(1)}" text-anchor="middle">${fmt(vm)}</text></svg>`;
     g.querySelectorAll('.gb').forEach(r => {
-      r.addEventListener('mousemove', e => H.tip(`<b>${ym(r.dataset.m)}</b><br>${fmt(+r.dataset.n)} papers`, e)); r.addEventListener('mouseleave', () => H.tip(null));
+      r.addEventListener('mousemove', e => H.tipHtml(`<b>${ym(r.dataset.m)}</b><br>${fmt(+r.dataset.n)} papers`, e)); r.addEventListener('mouseleave', () => H.tipHtml(null));
       r.style.cursor = 'pointer'; r.onclick = () => { location.href = 'corpus.html#year=' + r.dataset.m.slice(0, 4); };
     });
   })();

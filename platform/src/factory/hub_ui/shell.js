@@ -220,14 +220,19 @@ function openDrawer(id){
 function closeDrawer(){ const d=$('#drawer'); if(d && d.hasAttribute('open')){ d.removeAttribute('open'); lastFocus && lastFocus.focus && lastFocus.focus(); document.dispatchEvent(new CustomEvent('hub:close')); } }
 
 /* ---------- tooltip ---------- */
-function tip(html, ev){ const t=$('#tip'); if(!html){t.style.display='none';return;} t.innerHTML=html; t.style.display='block';
+/* tip(text) shows plain text (textContent; "\n" breaks lines): safe for any payload or dataset string.
+   tipHtml(html) is for HTML built in JS from HUB.esc()-escaped parts only; never pass dataset/getAttribute values to it. */
+function tipShow(ev){ const t=$('#tip'); t.style.display='block';
   const x=Math.min(ev.clientX+14, innerWidth-t.offsetWidth-8), y=Math.min(ev.clientY+14, innerHeight-t.offsetHeight-8); t.style.left=x+'px'; t.style.top=y+'px'; }
+function tip(text, ev){ const t=$('#tip'); if(!text){t.style.display='none';return;} t.classList.add('pl'); t.textContent=String(text); tipShow(ev||{clientX:0,clientY:0}); }
+function tipHtml(html, ev){ const t=$('#tip'); if(!html){t.style.display='none';return;} t.classList.remove('pl'); t.innerHTML=html; tipShow(ev||{clientX:0,clientY:0}); }
+function tipAt(ev){ if($('#tip').style.display==='block') tipShow(ev); }
 
 /* ---------- hash state (shareable views) ---------- */
 const hash = { get(){ return new URLSearchParams(location.hash.slice(1)); }, set(obj){ const p=new URLSearchParams(location.hash.slice(1)); for(const [k,v] of Object.entries(obj)){ if(v==null||v==='') p.delete(k); else p.set(k,v);} history.replaceState(null,'','#'+p.toString()); } };
 
 const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, pretty, humanColor, layerColor, cssv, val, quote,
-  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, tip, hash, setTheme, init };
+  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, tip, tipHtml, tipAt, hash, setTheme, init };
 
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){

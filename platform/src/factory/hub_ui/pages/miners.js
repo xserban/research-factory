@@ -232,7 +232,7 @@ HUB.load(['shell', 'mining']).then(d => {
   }
   function track(r, thr, alt, col) {
     const [lo, hi] = wilson(r.a, r.c), L = p => (100 * p).toFixed(2) + '%';
-    return `<div class="trk${alt ? ' alt' : ''}" tabindex=0 role=img aria-label="${esc(flab(r.f))}: ${pc(r.s)}% agreement, ${r.a} of ${r.c}" data-tip="${esc(flab(r.f))}<br>${r.a} of ${r.c} match (${pc(r.s)}%)<br>95% range ${pc(lo)}–${pc(hi)}%"><i class=base></i><i class=fill style="width:${L(r.s)};background:${col}"></i><i class=wh style="left:${L(lo)};width:${L(hi - lo)}"></i><i class=dt style="left:${L(r.s)};background:${col}"></i><i class=thr style="left:${L(thr)}"></i></div>`;
+    return `<div class="trk${alt ? ' alt' : ''}" tabindex=0 role=img aria-label="${esc(flab(r.f))}: ${pc(r.s)}% agreement, ${r.a} of ${r.c}" data-tip="${esc(flab(r.f) + '\n' + r.a + ' of ' + r.c + ' match (' + pc(r.s) + '%)\n95% range ' + pc(lo) + '–' + pc(hi) + '%')}"><i class=base></i><i class=fill style="width:${L(r.s)};background:${col}"></i><i class=wh style="left:${L(lo)};width:${L(hi - lo)}"></i><i class=dt style="left:${L(r.s)};background:${col}"></i><i class=thr style="left:${L(thr)}"></i></div>`;
   }
   function agreementSection(m) {
     const thr = m.regime.field_agreement_min, dk = defMeasure(m);
@@ -300,7 +300,7 @@ HUB.load(['shell', 'mining']).then(d => {
       };
       el.onclick = show; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); } };
     });
-    main.querySelectorAll('[data-tip]').forEach(s => { s.onmousemove = e => HUB.tip(s.dataset.tip, e); s.onmouseleave = () => HUB.tip(''); });
+    main.querySelectorAll('[data-tip]').forEach(s => { s.onmousemove = e => HUB.tip(s.dataset.tip, e); s.onmouseleave = () => HUB.tipHtml(''); });
   }
   function render() {
     const name = H.hash.get().get('m'), m = M.find(x => x.name === name);

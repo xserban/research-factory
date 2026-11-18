@@ -472,3 +472,33 @@ def test_adoption_records_read_technique_miners_by_their_m_tech_names() -> None:
     assert {r[2] for r in recs} <= set(data.codebook)
     adoption = hb.hub_lenses.technique_adoption(recs, {}).cells
     assert adoption and all(c.ids for c in adoption)
+
+
+FLOW_SET = {"shell", "flow", "screening", "journeys"}
+
+
+def test_a_failed_payload_deletes_its_stale_files_and_the_pages_that_need_it(
+    world: Project, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "ui"
+    first = hb.build_static(world, out, only=FLOW_SET)
+    assert "journeys" in first.payloads and (out / "data/journeys.json").is_file()
+    needing = [
+        p
+        for p, spec in hub_ui.PAGES.items()
+        if "journeys" in spec.payloads and set(spec.payloads) <= FLOW_SET
+    ]
+    assert needing and all((out / f"{p}.html").is_file() for p in needing)
+
+    def boom(_ctx: object) -> dict[str, object]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(hb.BUILDERS, "journeys", boom)
+    again = hb.build_static(world, out, only=FLOW_SET)
+    assert "journeys" in again.errors
+    assert not (out / "data/journeys.json").exists() and not (out / "data/journeys.js").exists()
+    assert not any((out / f"{p}.html").exists() for p in needing)
+    assert {"data/journeys.json", "data/journeys.js", *(f"{p}.html" for p in needing)} <= set(
+        again.removed
+    )
+    assert all(f"removed stale {r}" in hb.format_report(again) for r in again.removed)

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 import pytest
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
@@ -298,3 +299,53 @@ def test_on_a_screened_project_every_fate_is_consistent(
     assert [ln["work_id"] for ln in lanes["lanes"]] == ids
     json.dumps(lanes)
     assert hj.journey_index(list(data.rows), trails, stage_run)["works"]
+
+
+def test_when_and_iso_normalise_mixed_timestamp_forms() -> None:
+    forms = [
+        "2026-03-09T10:00:00Z",
+        "2026-03-09T10:00:00+00:00",
+        "2026-03-09T10:00:00",  # naive: taken as UTC
+        "2026-03-09T11:00:00+01:00",
+    ]
+    assert {hj.epoch(t) for t in forms} == {hj.epoch(forms[0])}
+    assert {hj.iso(t) for t in forms} == {"2026-03-09T10:00:00.000Z"}
+    assert hj.iso("2026-03-09T10:00:00.250+00:00") == "2026-03-09T10:00:00.250Z"
+    assert hj.when("2026-03-09T10:00:00.250Z") > hj.when("2026-03-09T10:00:00Z")
+
+
+def test_stops_are_ordered_by_instant_not_by_string() -> None:
+    early, late = "2026-03-09T10:00:00+01:00", "2026-03-09T09:30:00Z"  # 09:00Z and 09:30Z
+    assert early > late  # the string order is wrong for these two
+    stops = hj.build_stops(
+        "w",
+        (),
+        [
+            hj.Stop.make("cited-by-corpus", late, "cited"),
+            hj.Stop.make("references-extracted", early, "extracted"),
+        ],
+    )
+    assert [s.stage for s in stops] == ["references-extracted", "cited-by-corpus"]
+    assert all(s.ts.endswith("Z") for s in stops)
+
+
+def test_one_references_stop_per_work_and_swimlanes_carry_the_extras(project: Project) -> None:
+    from tests.test_references_index import _extract
+    from tests.test_references_model import WORK
+
+    _extract(project)
+    project.index.sync()
+    one = hj.reference_extras(project)[WORK]
+    assert len([s for s in one if s.stage == "references-extracted"]) == 1
+    # a second live extraction of the same work adds a count, not a second stop
+    with project.index._engine.begin() as conn:
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(reference_extractions)"))]
+        sel = ", ".join("'rex_later'" if c == "extraction_id" else c for c in cols)
+        conn.execute(
+            text(
+                f"INSERT INTO reference_extractions ({', '.join(cols)}) "
+                f"SELECT {sel} FROM reference_extractions WHERE live = 1"
+            )
+        )
+    stops = [s for s in hj.reference_extras(project)[WORK] if s.stage == "references-extracted"]
+    assert len(stops) == 1 and "1 later re-extraction" in str(stops[0].text)

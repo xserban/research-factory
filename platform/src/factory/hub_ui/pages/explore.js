@@ -653,18 +653,18 @@ cnv.addEventListener('pointerdown',e=>{cv.focus({preventScroll:true});cnv.setPoi
 cnv.addEventListener('pointermove',e=>{const p=pos(e);
   if(ptrs.has(e.pointerId)){ptrs.set(e.pointerId,p);
     if(ptrs.size===2){const[a,b]=[...ptrs.values()];const dist=Math.hypot(a[0]-b[0],a[1]-b[1]);if(pinch)zoomAt(dist/pinch,(a[0]+b[0])/2,(a[1]+b[1])/2);pinch=dist;return}
-    if(drag){const dx=p[0]-drag.x,dy=p[1]-drag.y;drag.moved=Math.max(drag.moved,Math.hypot(dx,dy));if(drag.moved>4){cancelAnimationFrame(anim);const k=cam.z*k0,cs=Math.cos(-cam.rot),sn=Math.sin(-cam.rot);cam.cx=drag.cx-(dx*cs-dy*sn)/k;cam.cy=drag.cy-(dx*sn+dy*cs)/k;cnv.style.cursor='grabbing';dirty();writeHashSoon();HUB.tip('',e)}return}}
+    if(drag){const dx=p[0]-drag.x,dy=p[1]-drag.y;drag.moved=Math.max(drag.moved,Math.hypot(dx,dy));if(drag.moved>4){cancelAnimationFrame(anim);const k=cam.z*k0,cs=Math.cos(-cam.rot),sn=Math.sin(-cam.rot);cam.cx=drag.cx-(dx*cs-dy*sn)/k;cam.cy=drag.cy-(dx*sn+dy*cs)/k;cnv.style.cursor='grabbing';dirty();writeHashSoon();HUB.tipHtml('',e)}return}}
   const h=hitAt(p[0],p[1]);
   const nh=h&&h.d?h.d:null;const lab=h&&h.lab?h.lab.key:null;
   if(nh!==hover||(hover&&hover.lab!==lab)){hover=nh;if(nh)cur=nh;if(!nh&&lab)hover=null;dirty()}
   cnv.style.cursor=h?'pointer':'grab';
-  if(h&&h.part==='dna'){const s=SEGS[h.seg];HUB.tip(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(h.d)))}</b>`,e)}
-  else if(h&&h.part==='pin')HUB.tip('Pin to the compare tray (P)',e);
-  else if(h&&h.d)HUB.tip(tipHTML(h.d),e);
-  else if(h&&h.lab)HUB.tip(`<div class="t1">${esc(h.lab.label)}</div><div class="t2">${h.lab.n} papers use this technique. Click to fly here.</div>`,e);
-  else HUB.tip('',e);
+  if(h&&h.part==='dna'){const s=SEGS[h.seg];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(h.d)))}</b>`,e)}
+  else if(h&&h.part==='pin')HUB.tipHtml('Pin to the compare tray (P)',e);
+  else if(h&&h.d)HUB.tipHtml(tipHTML(h.d),e);
+  else if(h&&h.lab)HUB.tipHtml(`<div class="t1">${esc(h.lab.label)}</div><div class="t2">${h.lab.n} papers use this technique. Click to fly here.</div>`,e);
+  else HUB.tipHtml('',e);
 });
-cnv.addEventListener('pointerleave',e=>{HUB.tip('',e);if(hover){hover=null;dirty()}});
+cnv.addEventListener('pointerleave',e=>{HUB.tipHtml('',e);if(hover){hover=null;dirty()}});
 const endPtr=e=>{const p=pos(e);const was=drag;ptrs.delete(e.pointerId);if(ptrs.size<2)pinch=0;
   if(was&&was.moved<=4&&e.type==='pointerup'){const h=hitAt(p[0],p[1]);
     if(h&&h.part==='pin')togglePin(h.d.id);else if(h&&h.d)HUB.openDrawer(h.d.id);else if(h&&h.lab)zoomSector(h.lab)}
@@ -707,11 +707,11 @@ $('#wall').addEventListener('keydown',e=>{const r=e.target.closest&&e.target.clo
   if(e.key==='Enter'||e.key===' '){e.preventDefault();HUB.openDrawer(r.dataset.id)}
   else if(e.key==='ArrowDown'){r.nextElementSibling?.focus();e.preventDefault()}else if(e.key==='ArrowUp'){r.previousElementSibling?.focus?.();e.preventDefault()}});
 $('#wall').addEventListener('mousemove',e=>{
-  const i=e.target.closest('i[data-seg]');const r=e.target.closest('.wr');if(!r){HUB.tip('',e);return}
+  const i=e.target.closest('i[data-seg]');const r=e.target.closest('.wr');if(!r){HUB.tipHtml('',e);return}
   const d=DB.get(r.dataset.id);cur=d;
-  if(i){const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tip(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b><div class="t3">${esc(d.title.slice(0,70))}</div>`,e)}
-  else HUB.tip(tipHTML(d),e)});
-$('#wall').addEventListener('mouseleave',e=>HUB.tip('',e));
+  if(i){const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b><div class="t3">${esc(d.title.slice(0,70))}</div>`,e)}
+  else HUB.tipHtml(tipHTML(d),e)});
+$('#wall').addEventListener('mouseleave',e=>HUB.tipHtml('',e));
 $('#wall').addEventListener('focusin',e=>{const r=e.target.closest&&e.target.closest('.wr');if(r)cur=DB.get(r.dataset.id)});
 
 /* ======================= pins, compare tray, similar ======================= */
@@ -769,9 +769,9 @@ function renderTray(){
   document.body.style.paddingBottom=el.offsetHeight+'px';
 }
 new ResizeObserver(()=>{document.body.style.paddingBottom=tray.offsetHeight+'px'}).observe(tray);
-tray.addEventListener('mousemove',e=>{const i=e.target.closest('i[data-seg]');if(!i){HUB.tip('',e);return}const d=DB.get(i.closest('.cl').dataset.dna);
-  if(!d)return;const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tip(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b>`,e)});
-tray.addEventListener('mouseleave',e=>HUB.tip('',e));
+tray.addEventListener('mousemove',e=>{const i=e.target.closest('i[data-seg]');if(!i){HUB.tipHtml('',e);return}const d=DB.get(i.closest('.cl').dataset.dna);
+  if(!d)return;const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b>`,e)});
+tray.addEventListener('mouseleave',e=>HUB.tipHtml('',e));
 
 /* ======================= global wiring ======================= */
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ST.view=b.dataset.view;commit(ST.view==='wall'?'DNA wall':'rings',true);refresh()});
