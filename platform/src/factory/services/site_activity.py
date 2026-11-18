@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from factory.services.activity import STALE_MINUTES, Activity, activity
+from factory.services.activity import STALE_MINUTES, Activity, PassRow, activity
 from factory.services.context import Project
 from factory.services.site_widgets import REPORT_CSS, esc
 
@@ -52,10 +52,16 @@ function render(d){
       return [[a.session.slice(-6)],[task],[(a.title||a.work_id||'')],[a.minutes_held],[a.rows_recorded],[a.last_event_at||'none'],
         [a.stale?'stale (no event for '+STALE+' min)':'active',a.stale?'stale':'']];}),
     'No task is held.');
-  fill('passes',['Pass','Done','Total','Held','Done in 30 min','Rate (estimate, per hour)','Left (estimate, min)','Released'],
-    d.passes.map(function(p){return [[p.name+(p.version!=null?' v'+p.version:'')],[p.done],[p.total],[p.claimed],[p.completed_recent],
+  fill('passes',['Pass','Done','Total','Held','Abandoned','Done in 30 min','Rate (estimate, per hour)','Left (estimate, min)','Released'],
+    d.passes.map(function(p){return [[p.name+(p.version!=null?' v'+p.version:'')+(p.pass_label?' pass '+p.pass_label:'')+(p.mode?' '+p.mode:'')],[p.done],[p.total],[p.claimed],[p.abandoned],[p.completed_recent],
       [p.rate_estimate_per_hour],[p.eta_estimate_minutes==null?'unknown':p.eta_estimate_minutes],[p.released]];}),
     'No pass is open.');
+  var dm=document.getElementById('dormant');
+  if(dm){dm.replaceChildren();if(d.dormant.length){var dt=document.createElement('details'),sm=document.createElement('summary');
+    sm.textContent=d.dormant.length+' dormant passes';dt.appendChild(sm);
+    d.dormant.forEach(function(p){var l=document.createElement('div');l.className='dim';
+      l.textContent=p.name+(p.version!=null?' v'+p.version:'')+(p.pass_label?' pass '+p.pass_label:'')+(p.mode?' '+p.mode:'')+': '+p.done+'/'+p.total+' done, '+p.abandoned+' abandoned';dt.appendChild(l);});
+    dm.appendChild(dt);}}
   fill('operations',['Operation','State','Done','Total','Elapsed (s)'],
     d.operations.map(function(o){return [[o.label||o.op_id],[o.state],[o.done],[o.total==null?'':o.total],[o.elapsed_seconds==null?'':Math.round(o.elapsed_seconds)]];}),
     'No long operation is running.');
@@ -85,6 +91,27 @@ def _td(value: object, cls: str = "") -> str:
     return f"<td{f' class={cls}' if cls else ''}>{esc('' if value is None else value)}</td>"
 
 
+def _pass_name(p: PassRow) -> str:
+    return (
+        p.name
+        + (f" v{p.version}" if p.version is not None else "")
+        + (f" pass {p.pass_label}" if p.pass_label else "")
+        + (f" {p.mode}" if p.mode else "")
+    )
+
+
+def _dormant(found: Activity) -> str:
+    """One collapsed `<details>` for the passes with nothing held or done in the last day."""
+    if not found.dormant:
+        return ""
+    lines = "".join(
+        f"<div class=dim>{esc(_pass_name(p))}: {p.done}/{p.total} done, "
+        f"{p.abandoned} abandoned</div>"
+        for p in found.dormant
+    )
+    return f"<details><summary>{len(found.dormant)} dormant passes</summary>{lines}</details>"
+
+
 def panels(found: Activity) -> str:
     """The four panels as HTML, every value escaped; the script redraws the same panels."""
     active = [
@@ -109,10 +136,11 @@ def panels(found: Activity) -> str:
     ]
     passes = [
         [
-            _td(p.name + (f" v{p.version}" if p.version is not None else "")),
+            _td(_pass_name(p)),
             _td(p.done),
             _td(p.total),
             _td(p.claimed),
+            _td(p.abandoned),
             _td(p.completed_recent),
             _td(p.rate_estimate_per_hour),
             _td("unknown" if p.eta_estimate_minutes is None else p.eta_estimate_minutes),
@@ -152,6 +180,7 @@ def panels(found: Activity) -> str:
                 "Done",
                 "Total",
                 "Held",
+                "Abandoned",
                 "Done in 30 min",
                 "Rate (estimate, per hour)",
                 "Left (estimate, min)",
@@ -160,7 +189,7 @@ def panels(found: Activity) -> str:
             passes,
             "No pass is open.",
         )
-        + "</div><h2>Long operations</h2><div id=operations>"
+        + f"</div><div id=dormant>{_dormant(found)}</div><h2>Long operations</h2><div id=operations>"
         + _table(
             ["Operation", "State", "Done", "Total", "Elapsed (s)"],
             operations,

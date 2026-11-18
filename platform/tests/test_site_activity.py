@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from factory.clock import SystemClock
 from factory.events.envelope import Actor
 from factory.services import site_activity, site_server
 from factory.services.context import Project
@@ -20,6 +21,8 @@ from factory.services.tasks import TaskSpec, claim_next, create_tasks
 
 
 def _hold(project: Project, agent: Actor, title: str) -> None:
+    # the page and endpoint read the real time, so the claim needs a lease that is valid now
+    project.clock = SystemClock()
     create_tasks(
         project,
         project.system_actor(),
@@ -86,7 +89,7 @@ def test_the_endpoint_answers_the_four_panels(hub: int) -> None:
     status, body = _get(hub, "/api/activity")
     assert status == 200, body
     data = json.loads(body)
-    assert set(data) == {"now", "active", "passes", "operations", "traces"}
+    assert set(data) == {"now", "active", "passes", "dormant", "operations", "traces"}
     assert data["active"][0]["title"] == "A <b>bold</b> title"
     assert data["active"][0]["kind"] == "demo"
 
@@ -97,3 +100,29 @@ def test_serving_and_polling_write_no_event(hub: int, project: Project) -> None:
     _get(hub, "/api/activity")
     _get(hub, "/api/activity")
     assert before == {p: p.read_bytes() for p in events.rglob("*") if p.is_file()}
+
+
+def test_dormant_passes_are_one_collapsed_details_and_abandoned_has_a_column() -> None:
+    from factory.services.activity import Activity, PassRow
+
+    row = PassRow(
+        kind="miner",
+        name="m-x",
+        version=2,
+        pass_label="B",
+        mode="production",
+        abandoned=4,
+        done=3,
+        total=5,
+        claimed=0,
+        completed_recent=0,
+        rate_estimate_per_hour=0.0,
+        eta_estimate_minutes=None,
+        released=0,
+    )
+    html = site_activity.panels(
+        Activity(now="t", active=[], passes=[row], dormant=[row, row], operations=[], traces=[])
+    )
+    assert html.count("<details>") == 1 and "2 dormant passes" in html
+    assert "m-x v2 pass B production: 3/5 done, 4 abandoned" in html
+    assert "<th>Abandoned</th>" in html

@@ -13,14 +13,13 @@ import pytest
 from sqlalchemy import text
 
 from factory.events.envelope import Actor
+from factory.model.task import TASK_LEASE
 from factory.services import activity as activity_service
 from factory.services.activity import (
-    STALE_MINUTES,
     activity,
     activity_cached,
 )
 from factory.services.context import Project
-from factory.services.mining import MineStatus
 from factory.services.tasks import (
     TaskSpec,
     claim_next,
@@ -88,14 +87,18 @@ def test_a_completed_or_released_task_disappears(project: Project, agent: Actor)
     assert activity(project, T0).active == []
 
 
-def test_stale_at_the_threshold(project: Project, agent: Actor) -> None:
+def test_stale_at_the_threshold(
+    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the lease equals the default threshold, so a held (valid-lease) task could never be stale
+    monkeypatch.setattr(activity_service, "STALE_MINUTES", 10)
     _make(project, "demo", {"n": 1})
     claim_next(project, agent, "demo")
-    before = activity(project, T0 + timedelta(minutes=STALE_MINUTES) - timedelta(seconds=1))
-    at = activity(project, T0 + timedelta(minutes=STALE_MINUTES))
+    before = activity(project, T0 + timedelta(minutes=10) - timedelta(seconds=1))
+    at = activity(project, T0 + timedelta(minutes=10))
     assert before.active[0].stale is False
     assert at.active[0].stale is True
-    assert at.active[0].minutes_held == float(STALE_MINUTES)
+    assert at.active[0].minutes_held == 10.0
 
 
 def test_rows_recorded_by_the_holder_are_counted(project: Project, agent: Actor) -> None:
@@ -123,62 +126,113 @@ def _claim_event_id(project: Project) -> str:
         )
 
 
-def _fixed_mine(monkeypatch: pytest.MonkeyPatch, units: int, closed: int) -> None:
-    listed = [
-        MineStatus(
-            name="m-claims",
-            version=2,
-            digest="d",
-            units=units,
-            open=units - closed,
-            closed=closed,
-            rows=0,
-            stale=0,
-            agreement=None,
-        )
-    ]
-    monkeypatch.setattr(activity_service, "mine_status", lambda *_, **__: listed)
-
-
-def test_a_miner_pass_has_done_total_rate_and_eta(
-    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_miner_pass_has_done_total_rate_and_eta(project: Project, agent: Actor) -> None:
     ids = _make(project, "mine_a", *[_mine(f"wrk_{n}") for n in range(4)])
     for task_id in ids[:2]:
         claim_next(project, agent, "mine_a")
         complete_task(project, agent, task_id)
     claim_next(project, agent, "mine_a")
     release_task(project, agent, ids[2], "stopping")
-    _fixed_mine(monkeypatch, units=10, closed=2)
     row = activity(project, T0 + timedelta(minutes=10)).passes[0]
     assert (row.kind, row.name, row.version) == ("miner", "m-claims", 2)
-    assert (row.done, row.total, row.completed_recent, row.released) == (2, 10, 2, 1)
+    assert (row.pass_label, row.mode) == ("A", "production")
+    assert (row.done, row.total, row.completed_recent, row.released) == (2, 4, 2, 1)
     assert row.rate_estimate_per_hour == 4.0  # 2 in the last 30 minutes
-    assert row.eta_estimate_minutes == 120.0  # 8 left at 4 an hour
+    assert row.eta_estimate_minutes == 30.0  # 2 left at 4 an hour
+
+
+def test_passes_are_split_by_label_and_calibration(project: Project, agent: Actor) -> None:
+    _make(
+        project,
+        "mine_a",
+        _mine("wrk_1"),
+        _mine("wrk_2", calibration="cal_1"),
+        _mine("wrk_3", label="B"),
+    )
+    for _ in range(3):
+        claim_next(project, agent, "mine_a")
+    found = activity(project, T0 + timedelta(minutes=1)).passes
+    assert sorted((p.pass_label, p.mode, p.total, p.claimed) for p in found) == [
+        ("A", "calibration", 1, 1),
+        ("A", "production", 1, 1),
+        ("B", "production", 1, 1),
+    ]
 
 
 def test_the_eta_is_none_when_nothing_completed_in_the_window(
-    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
+    project: Project, agent: Actor
 ) -> None:
-    ids = _make(project, "mine_a", _mine("wrk_1"))
+    ids = _make(project, "mine_a", _mine("wrk_1"), _mine("wrk_2"))
     claim_next(project, agent, "mine_a")
     complete_task(project, agent, ids[0])
-    _fixed_mine(monkeypatch, units=5, closed=1)
     old = activity(project, T0 + timedelta(minutes=31)).passes[0]
     assert old.completed_recent == 0
     assert old.rate_estimate_per_hour == 0.0 and old.eta_estimate_minutes is None
 
 
-def test_another_task_kind_with_open_tasks_is_a_pass(
-    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _fixed_mine(monkeypatch, units=0, closed=0)
+def test_another_task_kind_with_open_tasks_is_a_pass(project: Project, agent: Actor) -> None:
     ids = _make(project, "demo", {"n": 1}, {"n": 2}, {"n": 3})
     claim_next(project, agent, "demo")
     complete_task(project, agent, ids[0])
     row = activity(project, T0 + timedelta(minutes=1)).passes[0]
     assert (row.kind, row.done, row.total, row.completed_recent) == ("demo", 1, 3, 1)
+    assert row.pass_label is None and row.mode is None
     assert row.rate_estimate_per_hour == 2.0 and row.eta_estimate_minutes == 60.0
+
+
+def test_an_expired_lease_is_not_held_and_is_counted_abandoned(
+    project: Project, agent: Actor
+) -> None:
+    ids = _make(project, "demo", {"n": 1}, {"n": 2}, {"n": 3})
+    claim_next(project, agent, "demo")
+    claim_next(project, agent, "demo")
+    complete_task(project, agent, ids[1])
+    live = activity(project, T0 + TASK_LEASE - timedelta(seconds=1))
+    assert len(live.active) == 1 and live.passes[0].abandoned == 0
+    late = activity(project, T0 + TASK_LEASE + timedelta(minutes=1))
+    assert late.active == []
+    assert late.passes[0].abandoned == 1 and late.passes[0].claimed == 0
+    assert late.passes[0].done == 1
+
+
+def test_a_pass_with_nothing_held_or_done_in_a_day_is_dormant(
+    project: Project, agent: Actor
+) -> None:
+    ids = _make(project, "mine_a", _mine("wrk_1"), _mine("wrk_2"))
+    _make(project, "demo", {"n": 1})
+    claim_next(project, agent, "mine_a")
+    complete_task(project, agent, ids[0])
+    soon = activity(project, T0 + timedelta(hours=23))
+    assert [p.kind for p in soon.passes] == ["miner"]
+    assert [p.kind for p in soon.dormant] == ["demo"]
+    later = activity(project, T0 + timedelta(hours=25))
+    assert later.passes == []
+    assert sorted(p.kind for p in later.dormant) == ["demo", "miner"]
+
+
+def test_a_held_pass_is_never_dormant(project: Project, agent: Actor) -> None:
+    _make(project, "demo", {"n": 1})
+    claim_next(project, agent, "demo")
+    found = activity(project, T0 + timedelta(minutes=5))
+    assert [p.kind for p in found.passes] == ["demo"] and found.dormant == []
+
+
+def test_activity_syncs_the_index_at_most_once(
+    project: Project, agent: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make(project, "mine_a", _mine("wrk_1"))
+    claim_next(project, agent, "mine_a")
+    index_type = type(project.index)
+    real = index_type.sync
+    calls: list[int] = []
+
+    def counting(self: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(index_type, "sync", counting)
+    activity(project, T0)
+    assert len(calls) <= 1
 
 
 def _live(project: Project, name: str, body: str, age_minutes: float) -> Path:

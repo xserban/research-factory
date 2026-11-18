@@ -6,14 +6,19 @@ Invariants:
   files, as it always does; that is the one filesystem write and it is not a record.)
 - Deterministic given the event log, the files under `ops/` and `now`. The clock is never read
   here except by `activity_cached`, which supplies it.
-- Every count comes from the projected index or an existing service: the totals of a miner are
-  `mining.mine_status` (`units`, `closed`), the other task kinds count rows of `tasks`. Nothing
-  re-derives a total. Rate and estimated time left are estimates over the last
-  `RATE_WINDOW_MINUTES` and are named so (`rate_estimate_per_hour`, `eta_estimate_minutes`); the
-  estimate is None when the rate is 0.
-- An active row is a task whose projected status is `claimed`. `claimed_at` is the lease end less
-  `TASK_LEASE` (the lease every claim takes). It is `stale` when the holder's session wrote no
-  event for `STALE_MINUTES`; the lease itself may still be live.
+- Every count comes from the projected index: the rows of `tasks`, grouped by miner, version,
+  pass label and calibration flag for a mining task (read from its content blob), else by kind.
+  `total` is the tasks of the pass, `done` the completed ones. `mining.mine_status` is not used:
+  it folds every extraction of the project and takes minutes on the pilot. Rate and estimated
+  time left are estimates over the last `RATE_WINDOW_MINUTES` and are named so
+  (`rate_estimate_per_hour`, `eta_estimate_minutes`); the estimate is None when the rate is 0.
+- An active row is a task whose projected status is `claimed` and whose lease is still valid at
+  `now`. A claimed task whose lease has expired is not held: it is counted in `abandoned` of its
+  pass. `claimed_at` is the lease end less `TASK_LEASE`. A row is `stale` when the holder's session
+  wrote no event for `STALE_MINUTES`; the lease itself may still be live.
+- A pass is shown in `passes` only when it has a held task or a completion in the last
+  `DORMANT_HOURS` hours; the others are in `dormant`.
+- One index sync per call (`activity` holds one snapshot).
 - `activity_cached` keeps the last answer per project for `CACHE_SECONDS`, keyed on the size and
   newest modification time of the event files, so a polled endpoint does not recompute on every
   request. An answer is never older than `CACHE_SECONDS`, and a change of the log ends the cache.
@@ -37,12 +42,13 @@ from factory.events.reader import event_files
 from factory.model.base import StrictModel
 from factory.model.task import TASK_LEASE
 from factory.services.context import Project
-from factory.services.mining import mine_status
 from factory.services.progress import progress_list
 from factory.services.stages import is_mine_kind
 
 STALE_MINUTES: Final = 30
 """A session that holds a task and wrote no event for this long is shown as stale."""
+DORMANT_HOURS: Final = 24
+"""A pass with no held task and no completion for this long is dormant."""
 RATE_WINDOW_MINUTES: Final = 30
 """The window the completion rate is counted over."""
 TRACE_WINDOW_MINUTES: Final = 120
@@ -81,6 +87,11 @@ class PassRow(StrictModel):
     """`miner` or the task kind."""
     name: str
     version: int | None = None
+    pass_label: str | None = None
+    mode: str | None = None
+    """`calibration` or `production` for a miner, else None."""
+    abandoned: int = 0
+    """Claimed tasks whose lease has expired without completion or release."""
     done: int
     total: int
     claimed: int
@@ -101,6 +112,7 @@ class Activity(StrictModel):
     now: str
     active: list[ActiveRow]
     passes: list[PassRow]
+    dormant: list[PassRow]
     operations: list[dict[str, JsonValue]]
     traces: list[TraceRow]
 
@@ -162,6 +174,8 @@ def _active(project: Project, now: datetime) -> list[ActiveRow]:
         }
     out: list[ActiveRow] = []
     for r in claimed:
+        if parse_ts(str(r.lease_until)) <= now:
+            continue  # an expired lease is not held; `_passes` counts it as abandoned
         content = _as_dict(project.blobs.get_json(str(r.content_blob)))
         record = _first_record(content)
         mine = is_mine_kind(str(r.kind))
@@ -206,9 +220,9 @@ def _rate(done_recent: int, left: int) -> tuple[float, float | None]:
 def _events_by_task(
     project: Project, event_type: str, since: str | None
 ) -> list[tuple[str, str, str]]:
-    """(task id, kind, content blob) of the tasks an event of `event_type` names."""
+    """(kind, content blob, ts) of the tasks an event of `event_type` names."""
     sql = (
-        "SELECT t.task_id, t.kind, t.content_blob FROM events e "
+        "SELECT t.kind, t.content_blob, e.ts FROM events e "
         "JOIN event_refs r ON r.event_id = e.id JOIN tasks t ON t.task_id = r.ref "
         "WHERE e.type = :type" + ("" if since is None else " AND e.ts >= :since")
     )
@@ -219,80 +233,94 @@ def _events_by_task(
         return [(str(a), str(b), str(c)) for a, b, c in conn.execute(text(sql), params).all()]
 
 
-def _passes(project: Project, now: datetime, active: list[ActiveRow]) -> list[PassRow]:
-    since = format_ts(now - timedelta(minutes=RATE_WINDOW_MINUTES))
-    recent: dict[tuple[str, str], int] = {}
-    released: dict[tuple[str, str], int] = {}
-    miner_names: dict[str, str] = {}
+_PassKey = tuple[str, str, int | None, str | None, str | None]
 
-    def key(kind: str, blob: str) -> tuple[str, str]:
-        if not is_mine_kind(kind):
-            return (kind, kind)
-        if blob not in miner_names:
-            miner_names[blob] = str(_as_dict(project.blobs.get_json(blob)).get("miner", ""))
-        return ("miner", miner_names[blob])
 
-    for _, kind, blob in _events_by_task(project, "task.completed", since):
-        recent[key(kind, blob)] = recent.get(key(kind, blob), 0) + 1
-    for _, kind, blob in _events_by_task(project, "task.released", None):
-        released[key(kind, blob)] = released.get(key(kind, blob), 0) + 1
-    claimed_by: dict[tuple[str, str], int] = {}
-    for r in active:
-        k = ("miner", r.scope) if r.mode is not None else (r.kind, r.kind)
-        claimed_by[k] = claimed_by.get(k, 0) + 1
+class _Count:
+    __slots__ = ("abandoned", "claimed", "day", "done", "recent", "released", "total")
 
-    out: list[PassRow] = []
-    for m in mine_status(project, with_agreement=False):
-        k = ("miner", m.name)
-        done_recent = recent.get(k, 0)
-        left = m.units - m.closed
-        if left <= 0 and not done_recent:
-            continue
-        per_hour, eta = _rate(done_recent, left)
-        out.append(
-            PassRow(
-                kind="miner",
-                name=m.name,
-                version=m.version,
-                done=m.closed,
-                total=m.units,
-                claimed=claimed_by.get(k, 0),
-                completed_recent=done_recent,
-                rate_estimate_per_hour=per_hour,
-                eta_estimate_minutes=eta,
-                released=released.get(k, 0),
-            )
+    def __init__(self) -> None:
+        self.total = self.done = self.claimed = self.abandoned = 0
+        self.recent = self.day = self.released = 0
+
+
+def _pass_key(project: Project, kind: str, blob: str, memo: dict[str, _PassKey]) -> _PassKey:
+    """The pass a task belongs to: miner, version, pass label and mode; else its kind."""
+    if not is_mine_kind(kind):
+        return (kind, kind, None, None, None)
+    hit = memo.get(blob)
+    if hit is None:
+        content = _as_dict(project.blobs.get_json(blob))
+        version = content.get("version")
+        hit = (
+            "miner",
+            str(content.get("miner", "")),
+            version if isinstance(version, int) else None,
+            _pass_label(kind, content),
+            "calibration" if content.get("calibration_id") else "production",
         )
+        memo[blob] = hit
+    return hit
+
+
+def _passes(project: Project, now: datetime) -> tuple[list[PassRow], list[PassRow]]:
+    """(shown passes, dormant passes). Counts come from `tasks` and the task events."""
+    from factory.clock import parse_ts
+
+    memo: dict[str, _PassKey] = {}
+    counts: dict[_PassKey, _Count] = {}
+
+    def of(kind: str, blob: str) -> _Count:
+        return counts.setdefault(_pass_key(project, kind, blob, memo), _Count())
+
     with project.index.connect() as conn:
-        counts = conn.execute(
-            text("SELECT kind, status, COUNT(*) FROM tasks GROUP BY kind, status ORDER BY kind")
+        tasks = conn.execute(
+            text("SELECT kind, status, content_blob, lease_until FROM tasks")
         ).all()
-    per_kind: dict[str, dict[str, int]] = {}
-    for kind, status, n in counts:
-        if not is_mine_kind(str(kind)):
-            per_kind.setdefault(str(kind), {})[str(status)] = int(n)
-    for kind in sorted(per_kind):
-        by_status = per_kind[kind]
-        total = sum(by_status.values())
-        done = by_status.get("completed", 0)
-        done_recent = recent.get((kind, kind), 0)
-        if done == total and not done_recent:
-            continue
-        per_hour, eta = _rate(done_recent, total - done)
-        out.append(
-            PassRow(
-                kind=kind,
-                name=kind,
-                done=done,
-                total=total,
-                claimed=claimed_by.get((kind, kind), 0),
-                completed_recent=done_recent,
-                rate_estimate_per_hour=per_hour,
-                eta_estimate_minutes=eta,
-                released=released.get((kind, kind), 0),
-            )
+    for kind, status, blob, lease in tasks:
+        c = of(str(kind), str(blob))
+        c.total += 1
+        if status == "completed":
+            c.done += 1
+        elif status == "claimed" and lease is not None:
+            if parse_ts(str(lease)) > now:
+                c.claimed += 1
+            else:
+                c.abandoned += 1
+    since = format_ts(now - timedelta(minutes=RATE_WINDOW_MINUTES))
+    for kind, blob, ts in _events_by_task(
+        project, "task.completed", format_ts(now - timedelta(hours=DORMANT_HOURS))
+    ):
+        c = of(kind, blob)
+        c.day += 1
+        c.recent += ts >= since
+    for kind, blob, _ in _events_by_task(project, "task.released", None):
+        of(kind, blob).released += 1
+
+    shown: list[PassRow] = []
+    dormant: list[PassRow] = []
+    for key in sorted(
+        counts, key=lambda k: (k[0] != "miner", k[1], k[2] or 0, k[3] or "", k[4] or "")
+    ):
+        c = counts[key]
+        per_hour, eta = _rate(c.recent, c.total - c.done)
+        row = PassRow(
+            kind=key[0],
+            name=key[1],
+            version=key[2],
+            pass_label=key[3],
+            mode=key[4],
+            abandoned=c.abandoned,
+            done=c.done,
+            total=c.total,
+            claimed=c.claimed,
+            completed_recent=c.recent,
+            rate_estimate_per_hour=per_hour,
+            eta_estimate_minutes=eta,
+            released=c.released,
         )
-    return out
+        (shown if c.claimed or c.day else dormant).append(row)
+    return shown, dormant
 
 
 def _last_line(path: Path) -> str:
@@ -342,14 +370,14 @@ def _traces(project: Project, now: datetime) -> list[TraceRow]:
 
 def activity(project: Project, now: datetime) -> Activity:
     """The four panels as of `now` (timezone-aware). Read-only; see the module invariants."""
-    project.index.sync()
-    with project.index.snapshot():
+    with project.index.snapshot():  # syncs once; the reads below do not sync again
         active = _active(project, now)
-        passes = _passes(project, now, active)
+        passes, dormant = _passes(project, now)
     return Activity(
         now=format_ts(now),
         active=active,
         passes=passes,
+        dormant=dormant,
         operations=progress_list(project, now.timestamp()),
         traces=_traces(project, now),
     )

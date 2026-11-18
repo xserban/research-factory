@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import typer
 
-from factory.services.activity import STALE_MINUTES, Activity, activity
+from factory.services.activity import DORMANT_HOURS, STALE_MINUTES, Activity, activity
 
 
 def format_activity(found: Activity) -> list[str]:
@@ -34,14 +34,24 @@ def format_activity(found: Activity) -> list[str]:
     lines += ["", "Passes"]
     for p in found.passes:
         eta = "unknown" if p.eta_estimate_minutes is None else f"{p.eta_estimate_minutes} min"
-        name = p.name + (f" v{p.version}" if p.version is not None else "")
+        name = (
+            p.name
+            + (f" v{p.version}" if p.version is not None else "")
+            + (f" pass {p.pass_label}" if p.pass_label else "")
+            + (f" {p.mode}" if p.mode else "")
+        )
         lines.append(
-            f"  {name}: {p.done}/{p.total} done, {p.claimed} held, {p.completed_recent} in the "
-            f"last 30 min, rate (estimate) {p.rate_estimate_per_hour}/h, left (estimate) {eta}, "
-            f"{p.released} released"
+            f"  {name}: {p.done}/{p.total} done, {p.claimed} held, {p.abandoned} abandoned, "
+            f"{p.completed_recent} in the last 30 min, rate (estimate) "
+            f"{p.rate_estimate_per_hour}/h, left (estimate) {eta}, {p.released} released"
         )
     if not found.passes:
         lines.append("  no pass is open")
+    if found.dormant:
+        lines.append(
+            f"  {len(found.dormant)} dormant passes (nothing held or done in the last "
+            f"{DORMANT_HOURS} h)"
+        )
     lines += ["", "Long operations"]
     for o in found.operations:
         lines.append(
