@@ -17,6 +17,12 @@ Invariants:
   selected.
 - `chars` is the sum of the characters of the canonical Markdown of the kept conversions;
   `est_tokens` is an estimate only (`chars // CHARS_PER_TOKEN`).
+- `resolve_selection_cached` reuses a result for the same spec in the same project while the event
+  log is unchanged: the key is the canonical JSON of the spec and the project directory, the
+  validity check is the log signature (total size and newest modification time of the event
+  files). Any appended event changes the size, so it ends the cache; nothing else does, and a
+  result is never older than the log it was read from. The cache is per process and holds
+  `CACHE_ENTRIES` results at most (oldest dropped first).
 - `digest` is the sha256 of the canonical JSON of the sorted `[work_id, conversion_id]` pairs, so
   it does not depend on input order and changes when a conversion changes.
 """
@@ -24,12 +30,14 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass
 
 from pydantic import Field, JsonValue
 from sqlalchemy import text
 
 from factory.canonical import canonical_json
+from factory.events.reader import event_files
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.mining.spec import Population
 from factory.model.base import StrictModel
@@ -42,11 +50,14 @@ from factory.services.work_layers import layers_for
 from factory.services.work_ref import resolve_work_ids
 
 __all__ = [
+    "CACHE_ENTRIES",
     "CHARS_PER_TOKEN",
     "SelectedWork",
     "Selection",
     "SelectionSpec",
+    "event_log_signature",
     "resolve_selection",
+    "resolve_selection_cached",
 ]
 
 CHARS_PER_TOKEN = 4
@@ -158,3 +169,41 @@ def resolve_selection(project: Project, spec: SelectionSpec) -> Selection:
         est_tokens=total // CHARS_PER_TOKEN,
         digest=hashlib.sha256(canonical_json(pairs)).hexdigest(),
     )
+
+
+CACHE_ENTRIES = 16
+"""The most results `resolve_selection_cached` keeps."""
+
+_CACHE: dict[tuple[str, bytes], tuple[tuple[int, float], Selection]] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def event_log_signature(project: Project) -> tuple[int, float]:
+    """(total size, newest modification time) of the project's event files."""
+    size, newest = 0, 0.0
+    for path in event_files(project.paths.events_dir):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        size += stat.st_size
+        newest = max(newest, stat.st_mtime)
+    return size, newest
+
+
+def resolve_selection_cached(project: Project, spec: SelectionSpec) -> Selection:
+    """`resolve_selection`, reused while the event log is unchanged (see the module invariants).
+    A refused spec raises as `resolve_selection` does and is not cached."""
+    key = (str(project.paths.dir), canonical_json(spec.model_dump(mode="json")))
+    signature = event_log_signature(project)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit is not None and hit[0] == signature:
+            return hit[1]
+    fresh = resolve_selection(project, spec)
+    with _CACHE_LOCK:
+        _CACHE.pop(key, None)
+        _CACHE[key] = (signature, fresh)
+        while len(_CACHE) > CACHE_ENTRIES:
+            del _CACHE[next(iter(_CACHE))]
+    return fresh

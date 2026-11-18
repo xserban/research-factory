@@ -34,7 +34,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.passage_index import IndexReport, ensure_indexed, open_index
 from factory.services.search import get_work
-from factory.services.selection import SelectionSpec, resolve_selection
+from factory.services.selection import SelectionSpec, resolve_selection_cached
 from factory.services.withholding import held_out_tokens, withhold
 
 __all__ = ["CANDIDATES", "MAX_QUERIES", "RRF_K", "Hit", "SearchResult", "corpus_search"]
@@ -116,7 +116,7 @@ def corpus_search(
     """Search the pinned conversions of `spec` (see the module invariants)."""
     matches = _validate(queries)
     kind_values = _validate_kinds(kinds)
-    selection = resolve_selection(project, spec)
+    selection = resolve_selection_cached(project, spec)
     report = ensure_indexed(project, selection.works)
     pinned = [w.conversion_id for w in selection.works]
     ranked: list[dict[tuple[str, str], int]] = []

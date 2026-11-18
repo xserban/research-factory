@@ -176,3 +176,31 @@ def test_digest_stable_under_order_and_changes_with_a_conversion(
     changed = resolve_selection(project, SelectionSpec())
     assert changed.digest != one.digest
     assert [w.work_id for w in changed.works] == works
+
+
+def test_cached_resolution_reused_until_the_log_changes(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import selection as sel_mod
+
+    _convert(project)
+    calls: list[int] = []
+    real = sel_mod.resolve_selection
+
+    def counting(p: Project, s: SelectionSpec) -> sel_mod.Selection:
+        calls.append(1)
+        return real(p, s)
+
+    monkeypatch.setattr(sel_mod, "resolve_selection", counting)
+    spec = SelectionSpec()
+    first = sel_mod.resolve_selection_cached(project, spec)
+    second = sel_mod.resolve_selection_cached(project, SelectionSpec())
+    assert second is first and len(calls) == 1
+    other = sel_mod.resolve_selection_cached(project, SelectionSpec(exclude=[screened[0]]))
+    assert len(calls) == 2 and other.digest != first.digest
+    _convert(project, "9.9", override=True)  # appends events
+    third = sel_mod.resolve_selection_cached(project, spec)
+    assert len(calls) == 3 and third.digest != first.digest
+    with pytest.raises(FactoryValidationError):
+        sel_mod.resolve_selection_cached(project, SelectionSpec(layers=["nope"]))
+    assert len(calls) == 4
