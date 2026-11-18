@@ -110,7 +110,14 @@ def test_loader_two_days_and_no_ranking(project: Project) -> None:
 
 def test_horizon_summary() -> None:
     view = HorizonView(
-        meta=ViewMeta.model_construct(notices=[ViewNotice(code="c", text="note")]),
+        meta=ViewMeta(
+            view="horizon",
+            version=1,
+            project="p",
+            as_of=None,
+            filter={},
+            notices=[ViewNotice(code="c", text="note")],
+        ),
         years=[2023, 2025],
         idea_members={},
         new_ideas={2023: ["i1", "i2"], 2025: ["i3"]},
