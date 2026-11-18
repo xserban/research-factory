@@ -546,6 +546,7 @@ def test_scope_is_the_layer_and_count_of_the_works_actually_read() -> None:
         "works": 2,
         "of_included": 4,
         "complete": False,
+        "by_layer": {"core": 2},
         "text": "core papers, 2",
     }
     mixed = dataclasses.replace(base, layers={"w1": "core", "w2": "applied"})
@@ -586,3 +587,14 @@ def test_technique_miner_titles_come_from_the_stage_names() -> None:
     assert hm.miner_label("m-tech-data-analysis", "")["group"] == "Technique per stage"
     assert hm.miner_label("m-tech-other", "")["title"] == "Other stages"
     assert hm.miner_label("m-mapping", "")["title"] == "Human role and span"
+
+
+def test_scope_names_the_dominant_layer_when_nearly_all_works_share_it() -> None:
+    ids = [f"w{i}" for i in range(10)]
+    sets = mk_sets(ids, ids, {})
+    rows = [mk_row(f"a{i}", w, "A", stance="pro") for i, w in enumerate(ids)]
+    layers = {w: "core" for w in ids[:9]}  # the tenth has no layer
+    d = dataclasses.replace(mk_data(rows, sets), layers=layers)
+    sc = hm.miners(d)["miners"][0]["scope"]
+    assert sc["layer"] == "core" and sc["text"] == "mostly core papers, 10"
+    assert sc["by_layer"] == {"core": 9, "unlayered": 1}

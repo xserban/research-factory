@@ -52,6 +52,7 @@ MAX_PAGE_SIZE = 200
 NO_MODEL = "unknown"
 # First values that say nothing: counted as "undetermined" next to the empty cells (Holes).
 UNLAYERED = site_corpus.UNLAYERED
+SCOPE_DOMINANT = 0.9  # share of a miner's works in one layer that names the layer
 GAP_VALUES = frozenset({"not-determinable", "other", "not-stated", "none-stated", "unclear"})
 GRID_PREFIX = "grid-"
 HOLES_SKIP = frozenset({"m-release.artefact_scope"})
@@ -424,19 +425,23 @@ def _models(data: MiningData, name: str, label: str) -> tuple[str, ...]:
 
 
 def _scope(data: MiningData, read: Mapping[str, Sequence[MRow]]) -> dict[str, Any]:
-    """The works a miner's first pass actually read: their number, the one layer they share (None
-    when mixed or unknown) and a short name. The registered population is a ceiling, not this."""
-    layers = {data.layers.get(w) or UNLAYERED for w in read}
-    only = next(iter(layers)) if len(layers) == 1 else None
-    layer = None if only in (None, UNLAYERED) else only
+    """The works a miner's first pass actually read: their number, their layers and a short name.
+
+    `layer` is the layer of all of them, or of at least `SCOPE_DOMINANT` of them (then the text
+    says "mostly"); None when mixed or unknown. The registered population is a ceiling, not this."""
+    by_layer = Counter(data.layers.get(w) or UNLAYERED for w in read)
     n = len(read)
     total = len(data.sets.included)
+    top, top_n = max(by_layer.items(), key=lambda kv: (kv[1], kv[0]), default=(UNLAYERED, 0))
+    layer = top if n and top != UNLAYERED and top_n >= SCOPE_DOMINANT * n else None
+    lead = "" if layer is None or top_n == n else "mostly "
     return {
         "layer": layer,
         "works": n,
         "of_included": total,
         "complete": n == total,
-        "text": f"{layer} papers, {n}" if layer else f"papers, {n}",
+        "by_layer": dict(sorted(by_layer.items())),
+        "text": f"{lead}{layer} papers, {n}" if layer else f"papers, {n}",
     }
 
 
