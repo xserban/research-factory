@@ -10,6 +10,10 @@ Invariants:
   and the hub code (`code_hash`: the `hub_*` services and the served assets). Finer per-payload keys
   were not cheap: a payload reads through shared inputs (flow ledger, graph, layers) that span most
   event types. A payload on disk is served only when its recorded fingerprint is the current one.
+- Prewarm (on unless `FACTORY_HUB_PREWARM=0`): every payload is queued once per fingerprint, in
+  the order a researcher is likely to open them, grids last; a request for one jumps the queue.
+  The fingerprint is checked at most every `WATCH_SECONDS`. A payload on disk for an older
+  fingerprint is served as `Stale` (200 with `X-Hub-Stale`) while the fresh one is built.
 - Payloads are built on demand by one worker thread, one build at a time, all stale payloads that
   were asked for sharing one `HubContext` (the flow ledger takes about 80 s on the pilot). A request
   never waits for a build: it gets `Building` (the server answers 503 with `Retry-After`). A payload
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import threading
 import time
@@ -54,6 +59,27 @@ _LOG: Final = logging.getLogger(__name__)
 go of the shared context (the next page's payloads arrive within moments of the first)."""
 RETRY_AFTER: Final = 2
 CACHE_DIR: Final = "hub-ui"
+PREWARM_ENV: Final = "FACTORY_HUB_PREWARM"
+"""`0` (or `false`, `no`, `off`) switches the prewarm off; it is on by default."""
+WATCH_SECONDS: Final = 30.0
+"""The prewarm checks the fingerprint (one index query) at most this often."""
+PREWARM_ORDER: Final = (
+    "shell",
+    "overview",
+    "corpus",
+    "flow",
+    "explore",
+    "lenses",
+    "findings",
+    "mining",
+    "graph",
+    "screening",
+    "journeys",
+    "living",
+)
+GRIDS: Final = "grids"
+"""Queue entry that builds every `grid-<miner>` payload (their names are known only once the
+mining data is loaded); it comes last in a prewarm."""
 PAYLOAD_NAME: Final = re.compile(r"^[a-z][a-z0-9_.-]{0,80}$")
 SNOWBALL_NOTE: Final = "added to the snowball from the hub (Foundations)"
 _LINK_ORDER: Final = ("doi", "arxiv", "openalex", "pmid", "pmcid")
@@ -128,6 +154,13 @@ class Ready:
 
 
 @dataclass(frozen=True)
+class Stale:
+    """The payload as built for an older fingerprint, served while the fresh one is built."""
+
+    body: bytes
+
+
+@dataclass(frozen=True)
 class Building:
     progress: dict[str, Any]
 
@@ -144,7 +177,7 @@ class Unknown:
     pass
 
 
-Answer = Ready | Building | Failed | Unknown
+Answer = Ready | Stale | Building | Failed | Unknown
 
 
 def known_name(name: str) -> bool:
@@ -170,8 +203,22 @@ class PayloadService:
         self._unknown: dict[str, str] = {}
         self._ctx: tuple[str, hub_build.HubContext] | None = None
         self._worker: threading.Thread | None = None
+        self._watcher: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._prewarmed: str | None = None  # the fingerprint a prewarm was last queued for
 
     # -- reading
+
+    def _read_stale(self, name: str) -> bytes | None:
+        """The payload on disk whatever fingerprint it was built for (None when there is none)."""
+        try:
+            return (self._dir / f"{name}.json").read_bytes()
+        except OSError:
+            return None
+
+    def is_fresh(self, name: str) -> bool:
+        """Whether `name` is on disk at the current fingerprint."""
+        return known_name(name) and self._read(name, fingerprint(self._project)) is not None
 
     def _read(self, name: str, fp: str) -> bytes | None:
         try:
@@ -191,17 +238,20 @@ class PayloadService:
         body = self._read(name, fp)
         if body is not None:
             return Ready(body, f'"{fp}"')
+        old = self._read_stale(name)
         with self._cond:
             failed = self._failed.get(name)
             if failed is not None and failed[0] == fp:
                 if self._clock() - failed[1] < FAILED_RETRY_SECONDS:
-                    return Failed(name)
+                    return Failed(name) if old is None else Stale(old)
                 del self._failed[name]  # the window has passed: build it again
-            if name not in self._queue and name != self._current:
-                self._queue.append(name)
+            if name != self._current:
+                if name in self._queue:
+                    self._queue.remove(name)
+                self._queue.insert(0, name)  # a request jumps the queue
             self._ensure_worker()
             self._cond.notify_all()
-            return Building(self._progress())
+            return Building(self._progress()) if old is None else Stale(old)
 
     def _progress(self) -> dict[str, Any]:
         return {
@@ -210,6 +260,54 @@ class PayloadService:
             "done": self._done,
             "seconds": None if self._started is None else round(time.monotonic() - self._started),
         }
+
+    # -- prewarm
+
+    def prewarm(self) -> None:
+        """Queue every payload now and again whenever the fingerprint changes (a no-op when the
+        env switch is off). The first pass runs here; later checks run on a daemon thread."""
+        if os.environ.get(PREWARM_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+            return
+        self.prewarm_check()
+        if self._watcher is None or not self._watcher.is_alive():
+            self._watcher = threading.Thread(
+                target=self._watch, name="hub-ui-prewarm", daemon=True
+            )
+            self._watcher.start()
+
+    def stop(self) -> None:
+        """Stop the fingerprint watch (a build in progress finishes)."""
+        self._stop.set()
+
+    def _watch(self) -> None:
+        while not self._stop.wait(WATCH_SECONDS):
+            try:
+                self.prewarm_check()
+            except Exception as exc:  # the watch outlives a transient index fault
+                _LOG.warning("hub prewarm check failed: %s", exc)
+
+    def prewarm_check(self) -> bool:
+        """Queue the payloads that are not current when the fingerprint is new since the last
+        check; cheap otherwise (the fingerprint only). True when anything was queued."""
+        fp = fingerprint(self._project)
+        with self._cond:
+            if self._prewarmed == fp:
+                return False
+            self._prewarmed = fp
+        names = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
+        names += [n for n in hub_build.BUILDERS if n not in names]
+        names = [n for n in names if self._read(n, fp) is None]
+        grids = sorted(self._dir.glob("grid-*.fp")) if self._dir.is_dir() else []
+        if not grids or any(g.read_text(encoding="utf-8").strip() != fp for g in grids):
+            names.append(GRIDS)
+        with self._cond:
+            for name in names:
+                if name not in self._queue and name != self._current:
+                    self._queue.append(name)
+            if self._queue:
+                self._ensure_worker()
+                self._cond.notify_all()
+        return bool(names)
 
     # -- building
 
@@ -247,10 +345,22 @@ class PayloadService:
             self._ctx = (fp, hub_build.HubContext(self._project))
         return self._ctx[1]
 
+    def _write(self, name: str, payload: dict[str, Any], fp: str) -> None:
+        text = hub_build.dumps(payload)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._dir / f"{name}.json.tmp"
+        tmp.write_text(text + "\n", encoding="utf-8")
+        tmp.replace(self._dir / f"{name}.json")
+        (self._dir / f"{name}.fp").write_text(fp + "\n", encoding="utf-8")
+
     def _build(self, name: str) -> None:
         fp = fingerprint(self._project)  # taken first: an event landing meanwhile reads as stale
         try:
             ctx = self._context(fp)
+            if name == GRIDS:
+                for grid, body in ctx.grids.items():
+                    self._write(grid, body, fp)
+                return
             if name in hub_build.BUILDERS:
                 payload = hub_build.BUILDERS[name](ctx)
             else:
@@ -259,12 +369,7 @@ class PayloadService:
                     self._unknown[name] = fp
                     return
                 payload = grids[name]
-            text = hub_build.dumps(payload)
-            self._dir.mkdir(parents=True, exist_ok=True)
-            tmp = self._dir / f"{name}.json.tmp"
-            tmp.write_text(text + "\n", encoding="utf-8")
-            tmp.replace(self._dir / f"{name}.json")
-            (self._dir / f"{name}.fp").write_text(fp + "\n", encoding="utf-8")
+            self._write(name, payload, fp)
         except Exception as exc:  # one broken payload never stops the others
             _LOG.exception("hub payload %s failed to build: %s", name, exc)
             self._failed[name] = (fp, self._clock())

@@ -37,6 +37,13 @@ from tests.helpers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_hub_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Served test projects build hub payloads only when a test asks (the prewarm is on by
+    default in a real server); a prewarm test sets `FACTORY_HUB_PREWARM` itself."""
+    monkeypatch.setenv("FACTORY_HUB_PREWARM", "0")
+
+
 @pytest.fixture
 def clock() -> FixedClock:
     return FixedClock(T0)
