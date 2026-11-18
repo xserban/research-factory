@@ -205,6 +205,7 @@ def test_miners_names_exact_fairer_and_platform_measures() -> None:
     assert ag["by_model"] == {
         "a": "claude-sonnet-5-5",
         "b": "claude-haiku-5",
+        "miners": ["m-test"],
         "works_both": 2,
         "agreed": 3,
         "total": 4,

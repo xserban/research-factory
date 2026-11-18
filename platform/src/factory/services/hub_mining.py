@@ -477,6 +477,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
             {
                 "a": key[0],
                 "b": key[1],
+                "miners": [info.name],
                 "works_both": both,
                 "agreed": e_agreed,
                 "total": e_total,
