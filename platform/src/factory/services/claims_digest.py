@@ -13,9 +13,8 @@ Invariants:
   digest the codes are therefore stable.
 - Rows are those of the named miner at its listed version (`listed_miner_versions`), read with
   `load_miner_work_rows`: final rows, else the live pass A rows (`pass-a-only`), else for a work in
-  a calibration sample of that version the researcher's gold rows (`gold`), else the calibration session's
-  rows (`calibration`); never mixed for one work. A miner
-  that is not listed in the protocol is refused on field `miner`.
+  a calibration sample of that version the researcher's gold rows (`gold`), else the calibration
+  session's rows (`calibration`); never mixed for one work. A miner that is not listed in the protocol is refused on field `miner`.
 - Rows of a paper are ordered limitation, negative-result, failure-analysis, finding, mechanism,
   no-limitation-stated, then any other claim type; ties by row key.
 - `gap` is `reviewed-empty` when pass B has reviewed the work and left no final row (its pass A
