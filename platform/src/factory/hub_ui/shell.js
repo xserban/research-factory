@@ -271,6 +271,30 @@ function init(payload){
 /* Decided once, while shell.js runs: mounting a page may replace the body and its script tags. */
 const STATIC_BUILD = !!document.querySelector('script[src^="data/"]');
 const loaders = {};
+/* Served mode: a payload being built answers 503 with Retry-After; ask again, with a quiet note. */
+let waiting = 0;
+function updating(on){
+  waiting += on ? 1 : -1;
+  let el = document.getElementById('hub-updating');
+  if (waiting > 0 && !el) {
+    el = document.createElement('div'); el.id = 'hub-updating'; el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;right:16px;bottom:14px;z-index:50;padding:6px 12px;border-radius:999px;background:var(--raised,#222);color:var(--mut,#999);font:400 12px var(--f-ui,sans-serif)';
+    el.textContent = 'Updating…'; document.body.appendChild(el);
+  } else if (waiting <= 0 && el) el.remove();
+}
+function fetchPayload(n){
+  let started = false;
+  const attempt = () => fetch('data/' + n + '.json').then(r => {
+    if (r.status === 503) {
+      if (!started) { started = true; updating(true); }
+      const s = Math.max(1, parseInt(r.headers.get('Retry-After') || '2', 10));
+      return new Promise(res => setTimeout(res, s * 1000)).then(attempt);
+    }
+    if (!r.ok) throw new Error(n + ': HTTP ' + r.status);
+    return r.json();
+  });
+  return attempt().finally(() => { if (started) updating(false); });
+}
 function loadOne(n){
   const D = window.HUB_DATA;
   if (n in D) return Promise.resolve(D[n]);
@@ -283,8 +307,7 @@ function loadOne(n){
         el.onerror = () => rej(new Error(n + ': script failed to load'));
         document.head.appendChild(el);
       })
-    : fetch('data/' + n + '.json').then(r => { if (!r.ok) throw new Error(n + ': HTTP ' + r.status); return r.json(); })
-        .then(j => (D[n] = j));
+    : fetchPayload(n).then(j => (D[n] = j));
   loaders[n] = done.catch(e => { delete loaders[n]; throw e; });
   return loaders[n];
 }
@@ -292,6 +315,28 @@ HUB.load = function(names){
   window.HUB_DATA = window.HUB_DATA || {};
   return Promise.all(names.map(loadOne))
     .then(vals => Object.fromEntries(names.map((n, i) => [n, vals[i]])));
+};
+/* Served mode (the server adds <meta name="factory-served">, the write token and the API prefix); the
+   static build has none of them, so every act stays off there. */
+const meta = n => { const m = document.querySelector('meta[name="' + n + '"]'); return m ? m.content : ''; };
+HUB.served = !!meta('factory-served');
+/* POST a researcher act to the server; resolves to the Response (the caller reads json or a zip). */
+HUB.act = (path, body) => fetch(meta('factory-api') + path, {method: 'POST', body: JSON.stringify(body),
+  headers: {'Content-Type': 'application/json', 'X-Factory-Token': meta('factory-token')}});
+HUB.get = path => fetch(meta('factory-api') + path);
+HUB.issues = j => ((j && j.issues) || []).map(i => i.field + ' ' + i.message).join('; ') || 'refused';
+/* An inline confirmation inside `host` (no browser dialog): the message, then Confirm and Cancel. */
+HUB.confirm = (host, message, onYes, extra) => {
+  host.innerHTML = '';
+  const box = document.createElement('span'); box.className = 'meta'; box.setAttribute('role', 'alert');
+  box.textContent = message + ' ';
+  const yes = document.createElement('button'); yes.type = 'button'; yes.className = 'btn primary'; yes.textContent = 'Confirm';
+  const no = document.createElement('button'); no.type = 'button'; no.className = 'btn'; no.textContent = 'Cancel';
+  if (extra) box.append(extra, ' ');
+  box.append(yes, ' ', no); host.appendChild(box);
+  no.onclick = () => { host.innerHTML = ''; };
+  yes.onclick = () => { yes.disabled = true; Promise.resolve(onYes(host)).catch(e => { host.textContent = String(e && e.message || e); }); };
+  yes.focus();
 };
 window.HUB = HUB;
 

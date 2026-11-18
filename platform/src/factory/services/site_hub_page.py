@@ -262,6 +262,7 @@ def render_hub(
         + hub_bar(
             "projects",
             context=f"<span class=crumb>// {slug}</span>"
+            "<a href='ui/' title='The new hub (hub v2), served beside this one'>New hub</a>"
             f"<span class=ro>{ready} &middot; EVENTS <b>{num.get('events', 0):,}</b>"
             f" &middot; LAST <b title='the newest event id: the data version'>{e(last_event)}</b>"
             f" &middot; CODE <b title='the factory code version that wrote this hub'>"
