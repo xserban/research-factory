@@ -298,6 +298,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "merge_revert": Permission.WORK_RUN,
     "task_release": Permission.WORK_RUN,
     "mine_import": Permission.HUMAN_CONFIRM,
+    "mine_reopen": Permission.HUMAN_CONFIRM,
     "review_decide": Permission.REVIEW_DECIDE,
     # Mutating CLI commands, as `cli:<group> <command>`. Read-only commands have no row, but for
     # the three lists of the admin groups, which are authorised like the rest of those groups.
@@ -422,6 +423,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:mine audit sample": Permission.HUMAN_LABEL,
     "cli:mine audit label": Permission.HUMAN_LABEL,
     "cli:mine request": Permission.HUMAN_CONFIRM,
+    "cli:miner reopen": Permission.HUMAN_CONFIRM,
     "cli:layers move": Permission.HUMAN_CONFIRM,
     "cli:extract resolve": Permission.HUMAN_LABEL,
     "cli:extract audit-sample": Permission.HUMAN_LABEL,

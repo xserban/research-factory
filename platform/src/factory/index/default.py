@@ -42,6 +42,7 @@ from factory.index.living import digest_handlers, digest_tables, living_handlers
 from factory.index.manuscripts import manuscript_handlers, manuscript_tables
 from factory.index.members import member_handlers, member_tables
 from factory.index.mine_imports import mine_import_handlers, mine_import_tables
+from factory.index.mine_reopen import mine_reopen_handlers, mine_reopen_tables
 from factory.index.miners import miner_handlers, miner_tables
 from factory.index.notices import notice_handlers, notice_tables
 from factory.index.probe import probe_handlers, probe_tables
@@ -69,7 +70,7 @@ from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "86"
+PROJECTION_VERSION = "87"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -122,6 +123,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     miners = miner_tables(metadata)
     taxonomies = taxonomy_tables(metadata)
     mine_imports = mine_import_tables(metadata)
+    mine_reopen = mine_reopen_tables(metadata)
     hypotheses = hypothesis_tables(metadata, protocol.protocols, project)
     labels = label_tables(metadata)
     decisions = decision_tables(metadata)
@@ -180,6 +182,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **miner_handlers(miners),
         **taxonomy_handlers(taxonomies),
         **mine_import_handlers(mine_imports, extraction, conversions, fulltext, miners),
+        **mine_reopen_handlers(mine_reopen, extraction, miners),
         **hypothesis_handlers(hypotheses),
         **label_handlers(labels),
         **decision_handlers(decisions),

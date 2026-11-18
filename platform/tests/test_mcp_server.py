@@ -101,6 +101,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "mine_resolve",
             "miner_calibration_label",
             "mine_import",
+            "mine_reopen",
             "import_status",
             "import_coverage",
             "contribution_next",

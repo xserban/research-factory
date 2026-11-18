@@ -28,6 +28,7 @@ RESOLVES: dict[str, frozenset[str]] = {
     "taxonomy_propose": frozenset({"works"}),
     "mine_resolve": frozenset({"work_id"}),
     "miner_calibration_label": frozenset({"work_id"}),
+    "mine_reopen": frozenset({"work_id"}),
     "references_extract": frozenset({"work_ids"}),
     "references_list": frozenset({"work_id"}),
     "reference_decide": frozenset({"work_id"}),

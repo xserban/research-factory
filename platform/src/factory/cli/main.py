@@ -156,6 +156,7 @@ from factory.services import leads as leads_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
+from factory.services import mine_reopen as mine_reopen_service
 from factory.services import miner_add as miner_add_service
 from factory.services import miner_gold as miner_gold_service
 from factory.services import miner_report as miner_report_service
@@ -2684,6 +2685,32 @@ def miner_retire_cmd(
         project = _resolve_project(state)
         miners_service.retire_miner(project, project.human_actor(), name, version, reason)
     typer.echo(f"retired {name} version {version}")
+
+
+@miner_app.command("reopen")
+def miner_reopen_cmd(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="The miner's name.")],
+    version: Annotated[int, typer.Argument(help="The version it was mined under.")],
+    work_id: Annotated[str, typer.Argument(help="The work to mine again.")],
+    pass_label: Annotated[PassLabel, typer.Option("--pass", help="The pass: A or B.")],
+    reason: Annotated[str, typer.Option("--reason", help="Why the work is mined again.")],
+) -> None:
+    """Reopen one mined work after a selector miss (the researcher's act, IDEA-99): allowed only
+    when its completed task's heading patterns matched under 10 % of the paragraph words and the
+    selector can fall back (heading patterns; element kinds empty or including paragraphs). The
+    next `mine_next` of that version serves a fresh task; the earlier rows are stale at once and
+    stay out of final views until the fresh task is mined. Reopening one pass leaves the other
+    as it was; reopen both passes when agreement matters."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = mine_reopen_service.reopen_unit(
+            project, project.human_actor(), name, version, work_id, pass_label, reason
+        )
+    typer.echo(
+        f"reopened {work_id} in pass {pass_label.value} of {name} version {version} ({event_id})"
+    )
 
 
 @miner_app.command("admit")
