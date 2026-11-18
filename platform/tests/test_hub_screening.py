@@ -1,0 +1,217 @@
+"""Hub screening analytics (plan hub-ui, step 4): kappa, curve, stop point, reasons."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from factory.events.envelope import Actor
+from factory.model.protocol import Criterion
+from factory.model.screening import PassLabel, Verdict
+from factory.services import hub_screening as hs
+from factory.services.context import Project
+from factory.services.ranked_queue import stop_status
+from factory.services.screening import live_decisions
+from tests.helpers import SourcesFor
+from tests.screening_helpers import _decide
+from tests.test_screening_ranked import _ranked_world
+
+IN, EX = Verdict.INCLUDE, Verdict.EXCLUDE
+
+
+def dec(
+    n: int,
+    work: str,
+    label: str,
+    verdict: str,
+    criterion: str | None = None,
+    *,
+    stage: str = "title-abstract",
+    phase: str = "screening",
+    rationale: str = "",
+) -> hs.Dec:
+    return hs.Dec(
+        decision_id=f"d{n}",
+        work_id=work,
+        pass_label=label,
+        phase=phase,
+        stage=stage,
+        verdict=verdict,
+        criterion=criterion,
+        quote=f"q-{work}-{label}",
+        rationale=rationale or f"r-{work}-{label}",
+        order=n,
+    )
+
+
+def paired(a: list[str], b: list[str], **kw: str) -> list[hs.Dec]:
+    out: list[hs.Dec] = []
+    for i, (x, y) in enumerate(zip(a, b, strict=True)):
+        crit_a = "EX01" if x == "exclude" else None
+        crit_b = "EX01" if y == "exclude" else None
+        out.append(dec(2 * i, f"w{i:02d}", "A", x, crit_a, **kw))
+        out.append(dec(2 * i + 1, f"w{i:02d}", "B", y, crit_b, **kw))
+    return out
+
+
+def test_kappa_hand_computed() -> None:
+    # 2x2: both include 20, A only 5, B only 10, neither 65 (n = 100).
+    # observed = 0.85; A includes 25, B includes 30: chance = .25*.30 + .75*.70 = 0.60.
+    # kappa = (0.85 - 0.60) / (1 - 0.60) = 0.625
+    a = ["include"] * 20 + ["include"] * 5 + ["exclude"] * 10 + ["exclude"] * 65
+    b = ["include"] * 20 + ["exclude"] * 5 + ["include"] * 10 + ["exclude"] * 65
+    (result,) = hs.two_screeners(paired(a, b))
+    assert result.n == 100 and result.agree == 85 and result.agreement == pytest.approx(0.85)
+    assert result.table == {
+        "both_proceed": 20,
+        "only_a_proceeds": 5,
+        "only_b_proceeds": 10,
+        "neither_proceeds": 65,
+    }
+    assert result.kappa == pytest.approx(0.625)
+    assert len(result.disagreements) == 15
+
+
+def test_kappa_undefined_when_chance_agreement_is_complete() -> None:
+    (result,) = hs.two_screeners(paired(["exclude"] * 4, ["exclude"] * 4))
+    assert result.kappa is None and result.agreement == 1.0 and result.disagreements == ()
+
+
+def test_per_criterion_and_same_criterion_among_both_excluded() -> None:
+    rows = [
+        dec(0, "w1", "A", "exclude", "EX01"),
+        dec(1, "w1", "B", "exclude", "EX01"),
+        dec(2, "w2", "A", "exclude", "EX01"),
+        dec(3, "w2", "B", "exclude", "EX02"),
+        dec(4, "w3", "A", "include"),
+        dec(5, "w3", "B", "exclude", "EX02"),
+        dec(6, "w4", "A", "include"),
+        dec(7, "w4", "B", "include"),
+    ]
+    (result,) = hs.two_screeners(rows, ["EX03"])
+    assert result.both_excluded == 2 and result.same_criterion == 1
+    # EX01: A cites it on w1, w2; B on w1: pairs (T,T)(T,F)(F,F)(F,F); kappa = 0.5.
+    assert result.kappa_by_criterion["EX01"] == pytest.approx(0.5)
+    assert result.kappa_by_criterion["EX03"] is None
+    assert set(result.kappa_by_criterion) == {"EX01", "EX02", "EX03"}
+
+
+def test_disagreements_carry_both_sides_sorted_and_calibration_is_separate() -> None:
+    rows = [
+        dec(0, "w2", "A", "include", rationale="A says in"),
+        dec(1, "w2", "B", "exclude", "EX01", rationale="B says out"),
+        dec(2, "w1", "A", "unsure"),
+        dec(3, "w1", "B", "include"),
+        dec(4, "w3", "A", "include", phase="calibration"),
+        dec(5, "w3", "B", "include", phase="calibration"),
+        dec(6, "w9", "A", "include", stage="full-text"),
+    ]
+    groups = hs.two_screeners(rows)
+    assert [(g.stage, g.phase, g.n) for g in groups] == [
+        ("title-abstract", "calibration", 1),
+        ("title-abstract", "screening", 2),
+    ]
+    first, second = groups[1].disagreements
+    assert (first.work_id, first.reason) == ("w1", "unsure")
+    assert (second.work_id, second.reason) == ("w2", "outcome")
+    assert second.a_rationale == "A says in" and second.b_rationale == "B says out"
+    assert second.b_criterion == "EX01" and second.a_quote == "q-w2-A"
+    assert groups[0].disagreements == ()
+
+
+def test_curve_is_monotone_ends_at_total_and_shares() -> None:
+    order = [f"w{i}" for i in range(10)]
+    curve = hs.ranked_curve(order, {"w0", "w1", "w4", "w9"})
+    assert curve.points == (1, 2, 2, 2, 3, 3, 3, 3, 3, 4)
+    assert all(x <= y for x, y in zip(curve.points, curve.points[1:], strict=False))
+    assert curve.points[-1] == curve.included_total == 4
+    # 10% = 1 record, 25% = 3 records, 50% = 5 records.
+    assert curve.shares == {"10": 0.25, "25": 0.5, "50": 0.75}
+    assert curve.stop_at is None
+
+
+def test_curve_shares_use_all_records_when_screening_stopped_early() -> None:
+    curve = hs.ranked_curve(["a", "b"], {"a"}, total_records=20, stop_at=2, stop_rule="r")
+    # 50% of 20 = 10 records, but only 2 were screened: all inclusions found by then.
+    assert curve.shares["50"] == 1.0 and curve.stop_at == 2 and curve.total_records == 20
+    empty = hs.ranked_curve([], set())
+    assert empty.points == () and empty.shares["10"] is None
+
+
+def test_stop_point_matches_the_platform_walk() -> None:
+    sequence = ["a", "b", "c", "d", "e"]
+    verdicts = {"a": IN, "b": EX, "c": EX}
+    assert stop_status(sequence, verdicts, set(), 2).stopped
+    assert hs.screened_prefix(sequence, verdicts) == 3
+    assert hs.screened_prefix(sequence, {}) == 0
+    assert hs.screened_prefix(sequence, dict.fromkeys(sequence, EX)) == 5
+
+
+def test_order_uses_rank_then_decision_order() -> None:
+    rows = [dec(0, "x", "A", "include"), dec(1, "b", "A", "exclude"), dec(2, "a", "A", "exclude")]
+    order, mode = hs.order_screened(rows, {"a": 1, "b": 2})
+    assert (order, mode) == (["a", "b", "x"], "ranked")
+    order, mode = hs.order_screened(rows, None)
+    assert (order, mode) == (["x", "b", "a"], "decision-order")
+
+
+def test_reasons_wall_counts_examples_and_labels() -> None:
+    rows = [
+        dec(0, "w3", "A", "exclude", "EX01"),
+        dec(1, "w3", "B", "exclude", "EX01"),
+        dec(2, "w1", "A", "exclude", "EX01"),
+        dec(3, "w2", "A", "exclude", "EX01"),
+        dec(4, "w4", "B", "exclude", "EX02"),
+        dec(5, "w5", "A", "exclude"),
+        dec(6, "w6", "A", "include"),
+        dec(7, "w7", "A", "exclude", "EX01", phase="calibration"),
+    ]
+    crit = Criterion(
+        id="EX01",
+        parent="NG01",
+        statement="Off topic",
+        rule="Not about X",
+        applies_at="either",
+        priority=1,
+    )
+    wall = hs.reasons_wall(rows, {"EX01": crit}, k=2)
+    assert [(g.criterion, g.count) for g in wall] == [("EX01", 3), ("EX02", 1), ("unspecified", 1)]
+    first = wall[0]
+    assert first.label == "Off topic" and first.rule == "Not about X"
+    assert [e.work_id for e in first.examples] == ["w1", "w2"]
+    assert wall[1].label is None
+    assert hs.reasons_wall(rows, k=0)[0].examples == ()
+
+
+def test_superseded_decisions_are_ignored(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    protocol_id, ordered = _ranked_world(project, agent, human, mock_sources, 2)
+    w1, w2, w3 = ordered[:3]
+    old = _decide(project, agent, w1, "A", "screening", "include", None, protocol_id)
+    _decide(project, agent, w1, "A", "screening", "exclude", "EX01", protocol_id, supersedes=old)
+    _decide(project, agent, w2, "A", "screening", "exclude", "EX01", protocol_id)
+    _decide(project, agent, w3, "A", "screening", "exclude", "EX01", protocol_id)
+    _decide(project, agent, w1, "B", "screening", "include", None, protocol_id)
+    _decide(project, agent, w2, "B", "screening", "exclude", "EX01", protocol_id)
+    decisions = hs.load_decisions(project)
+    assert old not in {d.decision_id for d in decisions}
+    assert len(decisions) == len(live_decisions(project, stage=None))
+
+    curve = hs.load_curve(project, decisions)
+    assert curve.mode == "ranked" and curve.screened == 3
+    assert curve.included_total == 0 and curve.points == (0, 0, 0)
+    assert curve.stop_at == 3 and curve.stop_rule is not None
+    assert "consecutive exclusions" in curve.stop_rule
+
+    payload = hs.screening_payload(project)
+    json.dumps(payload)
+    assert payload["ranked_curve"]["stop_at"] == 3
+    (pair,) = [p for p in payload["two_screeners"] if p["phase"] == "screening"]
+    assert pair["n"] == 2 and [d["work_id"] for d in pair["disagreements"]] == [w1]
+    assert pair["disagreements"][0]["a_verdict"] == "exclude"
+    wall = payload["reasons_wall"]
+    assert wall and wall[0]["criterion"] == "EX01" and wall[0]["count"] == 3
+    assert set(payload["methods"]) == {"ranked_curve", "two_screeners", "reasons_wall"}
+    assert PassLabel.A.value == "A"
