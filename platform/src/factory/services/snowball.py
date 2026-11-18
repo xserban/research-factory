@@ -78,6 +78,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import Field
@@ -93,6 +94,7 @@ from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import (
     FORWARD_ROUND_RE,
     MAX_QUERY,
+    BackwardSelection,
     CitingEntry,
     CoreSelection,
     Direction,
@@ -100,6 +102,7 @@ from factory.model.references import (
     LinkState,
     SnowballCandidate,
     SnowballRoundStarted,
+    TakenCandidate,
     Unextracted,
     Via,
 )
@@ -145,7 +148,8 @@ from factory.services.search import (
 )
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import ReflistEntry
-from factory.sources.registry import SourceFactory, reflist_factory
+from factory.sources.registry import SourceFactory, reflist_factory, stored_factory
+from factory.sources.stored import NAME as STORED
 
 NOT_EXTRACTED = "not-extracted"
 NO_DOCUMENT = "no-document"
@@ -170,6 +174,11 @@ class RoundCandidate(StrictModel):
     openalex: str | None = None
     arxiv: str | None = None
     doi: str | None = None
+    stored: bool = False
+    """The candidate's work is stored (a lookup returned it): the round serves that record
+    offline through the `stored` source (decision 135) instead of asking a network source."""
+    published: date | None = None
+    """The stored work's publication date, when it has one (the selection's date step)."""
 
 
 class SnowballPlanState(StrictModel):
@@ -216,6 +225,9 @@ class RoundResult(StrictModel):
     """The delegated `search_chase` round of a recorded forward round."""
     selection: ForwardSelection | None = None
     """How a capped forward round chose its citing works; None for any other round."""
+    backward_selection: BackwardSelection | None = None
+    """How a selected backward round chose its candidates (decision 135), a dry run's included;
+    None for any other round."""
 
 
 class RecordedRound(StrictModel):
@@ -232,6 +244,8 @@ class RecordedRound(StrictModel):
     chase_round_id: str | None = None
     selection: ForwardSelection | None = None
     """How a capped forward round chose its works (slice 8); None for any other round."""
+    backward_selection: BackwardSelection | None = None
+    """How a selected backward round chose its candidates (decision 135); None for any other."""
 
 
 class RoundYield(StrictModel):
@@ -292,8 +306,11 @@ def recorded_rounds(project: Project) -> list[RecordedRound]:
             extraction_ids=[str(x) for x in json.loads(str(extractions))],
             chase_round_id=None if chase is None else str(chase),
             selection=None
-            if selection is None
+            if selection is None or Direction(str(direction)) is not Direction.FORWARD
             else ForwardSelection.model_validate_json(selection),
+            backward_selection=None
+            if selection is None or Direction(str(direction)) is not Direction.BACKWARD
+            else BackwardSelection.model_validate_json(selection),
         )
         for (
             round_id,
@@ -652,6 +669,8 @@ def snowball_candidates(project: Project, sources: Sequence[str]) -> list[RoundC
                 if work is None
                 else _arxiv(work.identifiers.arxiv, work.identifiers.doi),
                 doi=None if work is None else work.identifiers.doi,
+                stored=work is not None,
+                published=None if work is None else work.dates.published,
             )
         )
     return sorted(out, key=lambda c: (-c.cited_by_included, c.work_key))
@@ -661,12 +680,25 @@ def _arxiv(arxiv: str | None, doi: str | None) -> str | None:
     return arxiv or (arxiv_id_from_doi(doi) if doi else None)
 
 
-def _route(candidate: RoundCandidate) -> tuple[str, str] | None:
+def selects_backward(rule: SnowballPlan | None) -> bool:
+    """The plan sets a backward selection option, so its backward rounds are selected rounds."""
+    return rule is not None and (
+        rule.backward_published_from is not None
+        or rule.backward_min_cited_by is not None
+        or rule.backward_min_similarity is not None
+    )
+
+
+def _route(candidate: RoundCandidate, selected: bool = False) -> tuple[str, str] | None:
     """(query family, id) naming the candidate, or None when no query can name it: no usable
-    identifier, a DOI the filter syntax cannot carry, or an id too long for one query."""
+    identifier, a DOI the filter syntax cannot carry, or an id too long for one query. Only in a
+    `selected` backward round is a stored candidate served offline from its stored record
+    (decision 135); otherwise it is asked of a network source as before."""
     route: tuple[str, str] | None = None
     if candidate.no_source_record:
         route = "reflist", candidate.work_key
+    elif selected and candidate.stored and candidate.work_id is not None:
+        route = "stored", candidate.work_id
     elif candidate.openalex:
         route = "openalex", candidate.openalex
     elif candidate.arxiv:
@@ -678,9 +710,9 @@ def _route(candidate: RoundCandidate) -> tuple[str, str] | None:
     return route
 
 
-def unqueryable_keys(candidates: Sequence[RoundCandidate]) -> list[str]:
+def unqueryable_keys(candidates: Sequence[RoundCandidate], selected: bool = False) -> list[str]:
     """Keys of the candidates no query can name, in the given order (listed, never dropped)."""
-    return [c.work_key for c in candidates if _route(c) is None]
+    return [c.work_key for c in candidates if _route(c, selected) is None]
 
 
 _FAMILIES: tuple[tuple[str, str, QueryKind, str, str], ...] = (
@@ -689,6 +721,7 @@ _FAMILIES: tuple[tuple[str, str, QueryKind, str, str], ...] = (
     ("doi", "openalex", QueryKind.FILTER, "doi:", "|"),
     ("arxiv", "arxiv", QueryKind.ID_LIST, "", ","),
     ("reflist", REFLIST, QueryKind.ID_LIST, "", ","),
+    ("stored", STORED, QueryKind.ID_LIST, "", ","),
 )
 _PREFIX = {family: prefix for family, _, _, prefix, _ in _FAMILIES}
 _GATE_PLACEHOLDER = QuerySpec(
@@ -711,12 +744,14 @@ def _pack(ids: Sequence[str], prefix: str, separator: str) -> list[str]:
     return texts
 
 
-def snowball_queries(candidates: Sequence[RoundCandidate]) -> list[QuerySpec]:
+def snowball_queries(
+    candidates: Sequence[RoundCandidate], selected: bool = False
+) -> list[QuerySpec]:
     """The chase-purpose queries that retrieve `candidates`: OpenAlex `openalex:` then `doi:`
     filters, arXiv `id_list`, then `reflist` entry keys; ids sorted within each family."""
     ids: dict[str, set[str]] = {family: set() for family, *_ in _FAMILIES}
     for candidate in candidates:
-        route = _route(candidate)
+        route = _route(candidate, selected)
         if route is not None:
             ids[route[0]].add(route[1])
     return [
@@ -926,8 +961,9 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
         )
     if direction is Direction.BACKWARD:
         candidates = snowball_candidates(project, sources)
-        queries = snowball_queries(candidates)
-        unqueryable = unqueryable_keys(candidates)
+        selected = selects_backward(rule)
+        queries = snowball_queries(candidates, selected)
+        unqueryable = unqueryable_keys(candidates, selected)
         if not candidates:
             refusals.append(
                 ValidationIssue("candidates", "no resolved reference outside the corpus")
@@ -992,10 +1028,17 @@ def plan_round(project: Project, direction: Direction) -> RoundPlan:
 def round_sources(
     project: Project, sources: Mapping[str, SourceFactory]
 ) -> dict[str, SourceFactory]:
-    """`sources` with the offline `reflist` source bound to this project, unless one is given."""
+    """`sources` with the offline `reflist` and `stored` sources bound to this project, unless
+    one is given."""
     out = dict(sources)
     out.setdefault(REFLIST, reflist_factory(lambda keys: reflist_entries(project, keys)))
+    out.setdefault(STORED, stored_factory(lambda ids: stored_works(project, ids)))
     return out
+
+
+def stored_works(project: Project, ids: Sequence[str]) -> dict[str, Work]:
+    """The stored works among `ids` (probe-only ones included), keyed by work id."""
+    return {w.id: w for w in stored_works_by_ids(project, ids)}
 
 
 def reflist_entries(project: Project, keys: Sequence[str]) -> dict[str, ReflistEntry]:
@@ -1061,12 +1104,17 @@ def snowball_round(
     adapters = round_sources(project, sources)
     chase: ChaseStart | None = None
     picked: _Picked | None = None
+    chosen: _Chosen | None = None
     if direction is Direction.FORWARD and not dry_run:
         picked = _pick_forward(project, actor, adapters, embedder)
+    if direction is Direction.BACKWARD:
+        chosen = _choose_backward(project, embedder)
     with project.index.exclusive():
         plan = plan_round(project, direction)
+        if chosen is not None:
+            plan = _apply_chosen(project, plan, chosen)
         if dry_run:
-            return _result(plan, None, [], 0)
+            return _result(plan, None, [], 0, None if chosen is None else chosen.selection)
         if picked is not None and picked.sources != plan.sources:
             raise FactoryValidationError(
                 [
@@ -1128,6 +1176,7 @@ def snowball_round(
                 queries=tuple(spec.text for spec in specs),
                 rule=rule,
                 unextracted=_unextracted(plan),
+                backward_selection=None if chosen is None else chosen.selection,
             )
             project.record([_ledger_event(project, actor, payload)])
         else:
@@ -1179,7 +1228,13 @@ def snowball_round(
                 runs.append(run_query(project, query_id, sources=adapters, actor=actor))
                 reporter.update(len(runs))
     after, _ = corpus_size(project)
-    result = _result(plan, payload.round_id, runs, after - before)
+    result = _result(
+        plan,
+        payload.round_id,
+        runs,
+        after - before,
+        None if chosen is None else chosen.selection,
+    )
     if chase is None:
         return result
     update: dict[str, Any] = {"chase_round_id": chase.payload.round_id}
@@ -1355,6 +1410,168 @@ def _pick_forward(
     )
 
 
+@dataclass(frozen=True)
+class _Chosen:
+    """A selected backward round's choice: the candidates it was made from (keys, in plan order),
+    the ones taken, the selection to record and what it was ranked against."""
+
+    considered: tuple[str, ...]
+    taken: tuple[str, ...]
+    selection: BackwardSelection
+    references: tuple[str, ...]
+
+
+def _choose_backward(project: Project, embedder: Embedder | None) -> _Chosen | None:
+    """The candidates a selected backward round takes, or None when the plan sets no backward
+    option (ruling 7: every candidate). Writes nothing.
+
+    The steps run in this order, each on the survivors of the one before: publication on or after
+    `backward_published_from` (a candidate with no known date is dropped and counted), cited by at
+    least `backward_min_cited_by` source works, and a maximum cosine to the development seed
+    references of at least `backward_min_similarity` (`services.ranking`; only the survivors are
+    embedded; a candidate with no stored work, a `no-source-record` one, is dropped and counted as
+    unscored, as an undated one is by the date step). The similarity step needs
+    the ranker, and is refused with the remedy when its extra or weights are missing. A plan that
+    refuses returns None here, so the refusal is reported by the plan itself. The embedding runs
+    outside the write lock, so the caller compares the candidates and references again under it.
+    A dry run with `backward_min_similarity` runs the embedder but writes no events. Stored records
+    are served as stored (they may lack an abstract), only in selected rounds."""
+    project.index.sync()
+    rule = _plan_rule(project)
+    if rule is None or not selects_backward(rule):
+        return None
+    plan = plan_round(project, Direction.BACKWARD)
+    if plan.state.refusals:
+        return None
+    survivors = list(plan.candidates)
+    considered = tuple(c.work_key for c in survivors)
+    before_window = undated = low_cited = 0
+    if rule.backward_published_from is not None:
+        kept: list[RoundCandidate] = []
+        for c in survivors:
+            if c.published is None:
+                undated += 1
+            elif c.published < rule.backward_published_from:
+                before_window += 1
+            else:
+                kept.append(c)
+        survivors = kept
+    if rule.backward_min_cited_by is not None:
+        floor = rule.backward_min_cited_by
+        low_cited = sum(c.cited_by_included < floor for c in survivors)
+        survivors = [c for c in survivors if c.cited_by_included >= floor]
+    unscored = low_similarity = 0
+    scores: dict[str, float] = {}
+    identity: tuple[str, str, str] | None = None
+    references: tuple[str, ...] = ()
+    if rule.backward_min_similarity is not None:
+        threshold = rule.backward_min_similarity
+        ranker = embedder if embedder is not None else Specter2Embedder()
+        identity = (ranker.model_id, ranker.weights_hash, ranker.software)
+        refs, _ = reference_works(project)
+        if not refs:
+            raise FactoryValidationError(
+                [ValidationIssue("seeds", "no development positive seed has a title")]
+            )
+        references = tuple(w.id for w in refs)
+        stored = [c for c in survivors if c.stored and c.work_id is not None]
+        unscored = len(survivors) - len(stored)
+        works = stored_works(project, [str(c.work_id) for c in stored])
+        pool = [works[i] for i in sorted(works)]
+        if pool:
+            with track(
+                project,
+                "ranking",
+                "backward round: SPECTER2 embedding",
+                unit="records",
+                total=len(refs) + len(pool),
+            ) as reporter:
+                by_work = max_cosine_scores(ranker, refs, pool, reporter.update)
+        else:
+            by_work = {}
+        scores = {c.work_key: by_work[str(c.work_id)] for c in stored if str(c.work_id) in by_work}
+        unscored += len(stored) - len(scores)
+        kept = [c for c in stored if c.work_key in scores]
+        low_similarity = sum(scores[c.work_key] < threshold for c in kept)
+        survivors = [c for c in kept if scores[c.work_key] >= threshold]
+    taken = tuple(
+        TakenCandidate(
+            work_key=c.work_key, cited_by=c.cited_by_included, score=scores.get(c.work_key)
+        )
+        for c in survivors
+    )
+    selection = BackwardSelection(
+        published_from=rule.backward_published_from,
+        min_cited_by=rule.backward_min_cited_by,
+        min_similarity=rule.backward_min_similarity,
+        model_id=None if identity is None else identity[0],
+        weights_hash=None if identity is None else identity[1],
+        software=None if identity is None else identity[2],
+        considered=len(considered),
+        dropped_before_window=before_window,
+        dropped_undated=undated,
+        dropped_cited_by=low_cited,
+        dropped_unscored=unscored,
+        dropped_similarity=low_similarity,
+        taken=taken,
+    )
+    return _Chosen(
+        considered=considered,
+        taken=tuple(t.work_key for t in taken),
+        selection=selection,
+        references=references,
+    )
+
+
+def _apply_chosen(project: Project, plan: RoundPlan, chosen: _Chosen) -> RoundPlan:
+    """`plan` narrowed to the chosen candidates, under the lock that computed it.
+
+    Refused, writing nothing, when the candidates or the reference seeds changed since the choice
+    was made, or when the selection took nothing. (The ranker's weights are not rechecked: only the
+    seeds and the candidates are.) A plan that already
+    refuses is returned as it is, so its refusals are reported."""
+    if plan.state.refusals:
+        return plan
+    if tuple(c.work_key for c in plan.candidates) != chosen.considered:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "candidates",
+                    "the candidates changed while they were ranked; run the round again",
+                )
+            ]
+        )
+    if chosen.selection.min_similarity is not None:
+        now_refs = tuple(w.id for w in reference_works(project)[0])
+        if now_refs != chosen.references:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "seeds",
+                        "the reference seeds changed while candidates "
+                        "were ranked; rank again by running the round again",
+                    )
+                ]
+            )
+    taken = set(chosen.taken)
+    candidates = [c for c in plan.candidates if c.work_key in taken]
+    queries = snowball_queries(candidates, True)
+    refusals = list(plan.state.refusals)
+    if not candidates:
+        refusals.append(ValidationIssue("candidates", "the selection took no candidate"))
+    elif not queries:
+        refusals.append(ValidationIssue("candidates", "no queryable candidate"))
+    state = plan.state.model_copy(update={"refusals": refusals, "allowed": not refusals})
+    return plan.model_copy(
+        update={
+            "candidates": candidates,
+            "queries": queries,
+            "unqueryable": unqueryable_keys(candidates, True),
+            "state": state,
+        }
+    )
+
+
 def _no_document(unextracted: Sequence[tuple[str, str]]) -> int:
     return sum(reason == NO_DOCUMENT for _, reason in unextracted)
 
@@ -1376,7 +1593,11 @@ def _ledger_event(project: Project, actor: Actor, payload: SnowballRoundStarted)
 
 
 def _result(
-    plan: RoundPlan, round_id: str | None, runs: list[RunSummary], new_works: int
+    plan: RoundPlan,
+    round_id: str | None,
+    runs: list[RunSummary],
+    new_works: int,
+    backward_selection: BackwardSelection | None = None,
 ) -> RoundResult:
     return RoundResult(
         round_id=round_id,
@@ -1390,4 +1611,5 @@ def _result(
         runs=runs,
         new_works=new_works,
         no_document=plan.no_document,
+        backward_selection=backward_selection,
     )
