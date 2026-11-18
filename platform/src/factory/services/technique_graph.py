@@ -59,7 +59,9 @@ from factory.services import mining as mining_service
 from factory.services import taxonomies as tax_service
 from factory.services.call_memo import entering
 from factory.services.context import Project
-from factory.services.extraction import live_rows, stale_extractions
+from factory.services.extraction import live_rows, scope_ledger, stale_extractions
+from factory.services.extraction_agreement import agreement_overall
+from factory.services.protocol import current_protocol
 from factory.services.search import works_by_ids
 from factory.services.work_layers import layers_for
 
@@ -159,6 +161,45 @@ def read_inputs(project: Project) -> Inputs:
     return inputs
 
 
+_AGREEMENT: dict[str, tuple[str | None, Inputs]] = {}
+"""Project directory -> (last folded event id, inputs with the stage agreement filled in)."""
+
+
+def with_agreement(project: Project, inputs: Inputs) -> Inputs:
+    """`inputs` with each stage miner's agreement (all rows and aligned rows) filled in: computed
+    only for the technique miners, once per last folded event, because the figure is the slowest
+    read. A miner with no second pass has none."""
+    key = str(project.paths.dir)
+    head = project.index.last_event_id()
+    hit = _AGREEMENT.get(key)
+    if hit is not None and hit[0] == head and hit[1].rows is inputs.rows:
+        return hit[1]
+    filled: list[StageInfo] = []
+    with project.index.snapshot(), entering():
+        for info in inputs.stages:
+            overall = agreement_overall(
+                project,
+                scope=MinerScope(info.miner),
+                ledger=scope_ledger(project, MinerScope(info.miner)),
+            )
+            filled.append(
+                StageInfo(
+                    info.stage,
+                    info.miner,
+                    info.version,
+                    info.residual_rows,
+                    overall.overall_all_rows,
+                    overall.overall,
+                )
+            )
+    result = Inputs(
+        inputs.catalogue, inputs.rows, tuple(filled), inputs.works, inputs.cites, inputs.extra
+    )
+    _AGREEMENT.pop(key, None)
+    _AGREEMENT[key] = (head, result)
+    return result
+
+
 def _technique_miners(project: Project) -> list[tuple[str, int, str, int]]:
     """`(miner, version, taxonomy, taxonomy version)` of the latest non-retired derived miner of
     each technique taxonomy, by stage name."""
@@ -182,7 +223,8 @@ def _read(project: Project) -> Inputs:
     rows: list[RawRow] = []
     stages: list[StageInfo] = []
     with project.index.snapshot(), entering():
-        status = {s.name: s for s in mining_service.mine_status(project)}
+        protocol = current_protocol(project)
+        listed = {u.name for u in (protocol.spec.miners or ())} if protocol is not None else set()
         for miner, version, tname, tversion in _technique_miners(project):
             spec = tax_service.registered_taxonomy(project, tname, tversion)
             if spec is None or not spec.dimensions:
@@ -192,7 +234,7 @@ def _read(project: Project) -> Inputs:
             for c in dimension.categories:
                 catalogue.setdefault(c.id, (stage, c.name, c.definition))
             keep: set[str] | None = None
-            if miner in status:
+            if miner in listed:
                 keep = set(mining_service.miner_population(project, miner))
             stale = stale_extractions(project, scope=MinerScope(miner))
             residual = 0
@@ -221,17 +263,7 @@ def _read(project: Project) -> Inputs:
                         parameters=_text(r.fields.get("parameters")),
                     )
                 )
-            st = status.get(miner)
-            stages.append(
-                StageInfo(
-                    stage,
-                    miner,
-                    version,
-                    residual,
-                    None if st is None else st.agreement,
-                    None if st is None else st.agreement_aligned,
-                )
-            )
+            stages.append(StageInfo(stage, miner, version, residual, None, None))
         ids = sorted({r.work_id for r in rows})
         layers = layers_for(project, ids)
         works: dict[str, WorkMeta] = {}
@@ -742,6 +774,7 @@ def technique_landscape(
     lens = Lens(
         layer=layer, stage=stage, evidence=evidence, status=status, min_co_works=min_co_works
     )
+    inputs = with_agreement(project, inputs)
     return build_landscape(inputs, lens, max_edges=max_edges, include_uses=include_uses)
 
 

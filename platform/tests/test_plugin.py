@@ -29,6 +29,7 @@ SKILLS = (
     "rf-run",
     "rf-screen",
     "rf-search",
+    "rf-technique-bounce",
     "rf-verify",
     "rf-write",
 )
@@ -299,3 +300,23 @@ def test_rf_write_names_its_tools_and_never_types_a_citation_or_number() -> None
     procedure, _, stopping = text.partition("## Stopping and human steps")
     assert "draft_release" not in procedure
     assert "draft_release" in stopping.partition("## Tool arguments")[0]
+
+
+def test_technique_bounce_names_its_tools_and_the_labelling_rule() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-technique-bounce" / "SKILL.md").read_text("utf-8")
+    for needed in (
+        "technique_landscape",
+        "technique_view",
+        "technique_neighbors",
+        "technique_gaps",
+        "technique_combinations",
+        "technique_challenges",
+        "interpretation_record",
+        "intuition_next",
+        "lead_record",
+        "hypothesis_draft",
+        "document_read",
+        "exploratory, pass A of m-tech-",
+        "Never call a `derives-from`",
+    ):
+        assert needed in text, needed
