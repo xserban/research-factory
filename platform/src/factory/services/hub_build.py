@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -300,9 +300,14 @@ def build_graph(ctx: HubContext) -> dict[str, Any]:
     return hub_graph.graph_payload(ctx.project, ctx.included, graph_labels(ctx))
 
 
-def lens_works(ctx: HubContext) -> list[hub_lenses.LensWork]:
-    """The included set as lens records, with the DNA dimensions the Explore wall uses."""
-    fields = {k: ctx.field(k) for k in LENS_DIMS}
+def lens_works(
+    ctx: HubContext, fields: Mapping[str, Mapping[str, str | None]] | None = None
+) -> list[hub_lenses.LensWork]:
+    """The included set as lens records, with the DNA dimensions the Explore wall uses.
+
+    `fields` (dimension -> work -> value) defaults to the context's fields; the explore builder
+    passes the values of the DNA cells it already holds so the index is read once."""
+    fields = fields or {k: ctx.field(k) for k in LENS_DIMS}
     cited = ctx.cited_here
     out = []
     for w in sorted(ctx.included):
@@ -390,17 +395,44 @@ def build_findings(ctx: HubContext) -> dict[str, Any]:
 
 
 EXPLORE_DIMS = ("technique", "architecture", "span", "human")
+EXPLORE_SIMILAR_K = 8  # similar papers listed per work
+
+EXPLORE_METHODS: dict[str, str] = {
+    "filter": (
+        "Filtering runs on the fields the miners recorded. Counts and percentages are "
+        "calculated from the papers that match; no model is involved."
+    ),
+    "rings": (
+        "Sector widths, ring counts and sizes are counted from the recorded fields. Positions "
+        "inside a ring are spread to avoid overlap, so distance within a ring means nothing."
+    ),
+    "wall": (
+        "Colours come from the recorded values; a grey square means the field was not coded. "
+        "Sorting is by the value order shown in the key."
+    ),
+    "tray": (
+        "Differences are plain comparisons of recorded values. Shared citations count papers in "
+        "this review that two or more pinned papers cite, or that cite them."
+    ),
+}
 
 
 def build_explore(ctx: HubContext) -> dict[str, Any]:
-    """Per included work: id, title, date, layer, cited-here count and the DNA dimensions, each
-    as {"v": value, "q": quote} (null when the work has no value). Nothing else is included."""
+    """Per included work: id, title, date, layer, cited-here count, the DNA dimensions, each
+    as {"v": value, "q": quote} (null when the work has no value), and its top
+    `EXPLORE_SIMILAR_K` similar works from `hub_lenses.similar` (id, score, matched fields,
+    shared cited works). `methods` carries the texts of the page's information panels."""
     all_dna = ctx.dna
     cited = ctx.cited_here
+    lw = lens_works(
+        ctx,
+        {k: {w: (c["v"] if (c := all_dna[w][k]) else None) for w in all_dna} for k in LENS_DIMS},
+    )
+    inc = set(ctx.included)
+    cites = {a: sorted(set(b) & inc) for a, b in lens_cites(ctx).items()}
     works = []
     for w in sorted(ctx.included):
         year, month = ctx.year_month(w)
-        dna = all_dna[w]
         works.append(
             {
                 "id": w,
@@ -409,16 +441,30 @@ def build_explore(ctx: HubContext) -> dict[str, Any]:
                 "month": month,
                 "layer": ctx.layer_of[w],
                 "cited_here": cited[w].count,
-                "dna": dna,
+                "dna": all_dna[w],
+                "similar": [
+                    {
+                        "id": r.id,
+                        "score": r.score,
+                        "matched_dims": r.matched_dims,
+                        "shared_cites": r.shared_cites,
+                    }
+                    for r in hub_lenses.similar(lw, cites, w, EXPLORE_SIMILAR_K)
+                ],
             }
         )
-    return {"works": works, "dims": list(EXPLORE_DIMS), "layer_order": _layer_order()}
+    return {
+        "works": works,
+        "dims": list(EXPLORE_DIMS),
+        "layer_order": _layer_order(),
+        "methods": {**EXPLORE_METHODS, "similar": hub_lenses.METHODS["similar"]},
+    }
 
 
 def _layer_order() -> list[str]:
     from factory.services.site_layers import LAYER_ORDER  # imports site_corpus
 
-    return list(LAYER_ORDER)
+    return [*LAYER_ORDER, hp.UNLAYERED]
 
 
 def build_corpus(ctx: HubContext) -> dict[str, Any]:

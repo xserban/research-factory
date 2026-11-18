@@ -32,20 +32,7 @@ BANNED = (
     "human position",
 )
 # page -> {check: reason}; each is a strict xfail (see module docstring).
-KNOWN: dict[tuple[str, str], str] = {
-    (
-        "explore",
-        "colour",
-    ): "explore.js:104 box-shadow rgba(0,0,0,.35) literal; use a kit shadow token",
-    (
-        "lenses",
-        "colour",
-    ): "lenses.js:449 literal #fff / #101114 for label contrast; derive from tokens",
-    (
-        "explore",
-        "digits",
-    ): "explore.js:735 'Compare 0 of 4 pinned' types 0 and 4; take the limit from a constant",
-}
+KNOWN: dict[tuple[str, str], str] = {}
 
 
 def source(page: str) -> str:

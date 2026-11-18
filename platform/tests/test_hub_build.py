@@ -249,10 +249,21 @@ def test_explore_has_only_included_works_with_dna_and_quotes(
     assert isinstance(works, list)
     assert [w["id"] for w in works] == sorted(ctx.included)
     for w in works:
-        assert {"id", "title", "year", "month", "layer", "cited_here", "dna"} == set(w)
+        assert {"id", "title", "year", "month", "layer", "cited_here", "dna", "similar"} == set(w)
         assert set(w["dna"]) == set(hb.EXPLORE_DIMS)
         for cell in w["dna"].values():
             assert cell is None or set(cell) == {"v", "q"}
+    ids = {w["id"] for w in works}
+    for w in works:
+        sim = w["similar"]
+        assert len(sim) <= hb.EXPLORE_SIMILAR_K
+        assert all(r["id"] in ids and r["id"] != w["id"] for r in sim)
+        assert [r["score"] for r in sim] == sorted((r["score"] for r in sim), reverse=True)
+        assert all(r["score"] == len(r["matched_dims"]) + len(r["shared_cites"]) > 0 for r in sim)
+    assert payload["layer_order"][-1] == "unlayered"  # type: ignore[index]
+    methods = payload["methods"]
+    assert isinstance(methods, dict) and methods["similar"] == hb.hub_lenses.METHODS["similar"]
+    assert {"filter", "rings", "wall", "tray"} <= set(methods)
 
 
 def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_path: Path) -> None:

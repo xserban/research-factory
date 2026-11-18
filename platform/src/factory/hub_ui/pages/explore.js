@@ -4,6 +4,8 @@ HUB.load(['shell', 'explore']).then(d => {
 HUB.init(d.shell);
 const main = HUB.mount({ page: 'explore', crumb: 'Explore' });
 const RF = { works: d.explore.works.map(x => ({ ...x, ...x.dna, cic: x.cited_here || 0 })), layer_order: d.explore.layer_order };
+const XM = d.explore.methods || {}, PIN_MAX = 4;  /* the tray holds at most this many papers */
+const SIM = new Map(d.explore.works.map(x => [x.id, x.similar || []]));
 if (!document.getElementById('xp-style')) { const st = document.createElement('style'); st.id = 'xp-style'; st.textContent = String.raw`
 .xhead{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:32px;align-items:end;padding:6px 0 18px}
 .xhead .lead{max-width:46ch;font-size:25px}
@@ -101,7 +103,7 @@ if (!document.getElementById('xp-style')) { const st = document.createElement('s
 .wall .empty2{padding:40px;color:var(--mut);text-align:center}
 
 /* compare tray */
-.tray{position:fixed;left:var(--rail);right:0;bottom:0;z-index:30;background:var(--surface);box-shadow:0 -8px 32px rgba(0,0,0,.35);max-height:58vh;overflow:auto;padding:0 24px 12px}
+.tray{position:fixed;left:var(--rail);right:0;bottom:0;z-index:30;background:var(--surface);box-shadow:0 -8px 32px color-mix(in srgb,var(--bg) 60%,transparent);max-height:58vh;overflow:auto;padding:0 24px 12px}
 .tray .th{position:sticky;top:0;background:var(--surface);z-index:2;display:flex;gap:12px;align-items:center;padding:10px 0;flex-wrap:wrap}
 .tray .th .h3{white-space:nowrap}
 .tray .th .grow{flex:1}
@@ -196,7 +198,7 @@ SECT.forEach(s=>{s.n=D.filter(d=>d.sec===s.key).length});
 })();
 
 /* ======================= DNA: six segments ======================= */
-const ORD={technique:dist('technique').map(a=>a[0]),architecture:dist('architecture').map(a=>a[0]),span:dist('span').map(a=>a[0]),human:HUMAN.map(h=>h[0]),layer:RF.layer_order&&RF.layer_order.length?[...RF.layer_order,'unlayered']:LAYERS.map(l=>l[0]),era:ERAS};
+const ORD={technique:dist('technique').map(a=>a[0]),architecture:dist('architecture').map(a=>a[0]),span:dist('span').map(a=>a[0]),human:HUMAN.map(h=>h[0]),layer:RF.layer_order&&RF.layer_order.length?RF.layer_order:LAYERS.map(l=>l[0]),era:ERAS};
 const SEGS=[
  {k:'technique',l:'Technique',s:'Tech',get:d=>d.tech,lab:v=>pretty(v),h0:20},
  {k:'architecture',l:'Architecture',s:'Arch',get:d=>d.arch,lab:v=>pretty(v),h0:150},
@@ -267,7 +269,6 @@ const faceText=key=>{
 
 /* ======================= sentence UI ======================= */
 const $=s=>document.querySelector(s);
-const SIMTXT0='Score = identical values across the six DNA squares (a field that is not coded never counts) + papers in this review that both cite';
 const root=document.createElement('div');
 root.innerHTML=`
 <div class="xhead">
@@ -303,18 +304,18 @@ main.appendChild(root);
 const ringN=RINGS.map(r=>`${r[1].toLowerCase()} ${D.filter(d=>d.ring===r[0]).length}`).join(', ');
 const INFO_PAGE=`<b>What it shows</b> Where in the field a kind of system sits, and how the papers relate.
 <p><span class=k>How to read it.</span> Complete the sentence by picking an option in each slot; the rings, the wall, the counts and the compare tray all follow it. Each option shows how many papers it would keep.</p>
-<p><span class=k>How it's computed.</span> Filtering runs on the fields the miners recorded. Counts and percentages are calculated from the papers that match; no model is involved.</p>`;
+<p><span class=k>How it's computed.</span> ${XM.filter||''}</p>`;
 const INFO_RINGS=`<b>What it shows</b> Every paper as a dot, placed by how central it is, what ${HUB.term('technique','technique')} it uses and when it appeared.
 <p><span class=k>How to read it.</span> Rings are the ${HUB.term('layer','layer')}, core at the centre (${ringN}; outer holds background, off-topic and unlayered papers). Sectors are the technique, widest where there are most papers. Inside a sector the angle is the publication month, ${mLabel(0)} to ${mLabel(NM-1)}, older to newer clockwise; the distance within a ring is jitter and means nothing. Size is ${HUB.term('cic','how often other papers here cite it')}; colour follows the buttons above. Faded dots are papers the sentence leaves out. Zooming adds detail: dots, then titles, then cards with month and role, then cards with the first evidence ${HUB.term('quote','quote')}.</p>
-<p><span class=k>How it's computed.</span> Sector widths, ring counts and sizes are counted from the recorded fields. Positions inside a ring are spread to avoid overlap. Scores and similar lists use shared field values and shared citations only.</p>`;
+<p><span class=k>How it's computed.</span> ${XM.rings||''}</p>`;
 const INFO_WALL=`<b>What it shows</b> One row per matching paper, with its ${HUB.term('dna','DNA')}: six coloured squares, one per field.
 <p><span class=k>How to read it.</span> The squares are technique, architecture, automated span, human role, layer and half-year, left to right. Click a column name to sort; click again to reverse. Hover a square for its value; the key below the header lists the colours.</p>
-<p><span class=k>How it's computed.</span> Colours come from the recorded values; a grey square means the field was not coded. Sorting is by the value order shown in the key.</p>`;
+<p><span class=k>How it's computed.</span> ${XM.wall||''}</p>`;
 const INFO_TRAY=`<b>What it shows</b> Up to four pinned papers side by side: DNA, every field with its evidence quote, and shared citations.
 <p><span class=k>How to read it.</span> Rows that differ between papers are marked with ≠ and shown in bold. Press P over a paper, or use Pin, to add it. "Similar to this" ranks all papers against one pinned paper.</p>
-<p><span class=k>How it's computed.</span> Differences are plain comparisons of recorded values. Shared citations count papers in this review that two or more pinned papers cite, or that cite them.</p>`;
+<p><span class=k>How it's computed.</span> ${XM.tray||''}</p>`;
 const INFO_SIM=`<b>What it shows</b> Papers most like the chosen one.
-<p><span class=k>How it's computed.</span> ${SIMTXT0}.</p>`;
+<p><span class=k>How it's computed.</span> ${XM.similar||''}</p>`;
 const I_PAGE=HUB.info(INFO_PAGE,'About Explore'),I_RINGS=HUB.info(INFO_RINGS,'About Rings'),I_WALL=HUB.info(INFO_WALL,'About the DNA wall'),I_TRAY=HUB.info(INFO_TRAY,'About Compare'),I_SIM=HUB.info(INFO_SIM,'About similar papers');
 $('#ph').innerHTML=HUB.header({title:'Explore',sub:'Complete the sentence; everything below follows it.',infoHtml:INFO_PAGE,level:1});
 const SH={rings:HUB.header({title:'Rings',infoHtml:INFO_RINGS}),wall:HUB.header({title:'DNA wall',infoHtml:INFO_WALL})};
@@ -405,7 +406,7 @@ function applyHash(animate){
   const p=new URLSearchParams(location.hash.slice(1));applying=true;
   ST.t=p.get('t')||'';ST.h=p.get('h')||'';ST.l=p.get('l')||'';ST.s=p.get('s')??'';ST.x=p.get('x')||'';ST.r=p.get('r')||'in';
   ST.view=p.get('view')==='wall'?'wall':'rings';ST.col=['era','none'].includes(p.get('col'))?p.get('col'):'human';
-  ST.pins=(p.get('pin')||'').split(',').filter(id=>DB.has(id)).slice(0,4);ST.sim=ST.pins.includes(p.get('sim'))?p.get('sim'):'';
+  ST.pins=(p.get('pin')||'').split(',').filter(id=>DB.has(id)).slice(0,PIN_MAX);ST.sim=ST.pins.includes(p.get('sim'))?p.get('sim'):'';
   ST.sort=(p.get('sort')||'').split(',').filter(Boolean);ST.sec=p.get('sec')||'';
   const o=p.get('o')||'';
   const v=(p.get('v')||'').split(',').map(Number);
@@ -719,25 +720,23 @@ let trayCollapsed=false;
 function togglePin(id){
   const i=ST.pins.indexOf(id);
   if(i>=0){ST.pins.splice(i,1);if(ST.sim===id)ST.sim='';commit('unpinned '+DB.get(id).title.slice(0,24)+'…',true)}
-  else if(ST.pins.length>=4){$('#live').textContent='The tray holds four papers; unpin one first.';flash('The tray holds four papers. Unpin one first.');return}
+  else if(ST.pins.length>=PIN_MAX){$('#live').textContent=`The tray holds ${PIN_MAX} papers; unpin one first.`;flash(`The tray holds ${PIN_MAX} papers. Unpin one first.`);return}
   else{ST.pins.push(id);commit('pinned '+DB.get(id).title.replace(/:.*/,'').slice(0,26),true)}
   refresh();
 }
 const pathsHref=ids=>'flow.html#lanes='+ids.slice(0,20).map(encodeURIComponent).join(',');
 function flash(t){const el=$('#tray');const s=document.createElement('div');s.className='slim';s.style.color='var(--exc)';s.textContent='− '+t;el.prepend(s);setTimeout(()=>s.remove(),2200)}
 function similarTo(id){
-  const a=DB.get(id),oa=new Set(citesOut.get(id)||[]);
-  return D.filter(d=>d.id!==id).map(d=>{let f=0;for(const s of SEGS){const v=s.get(a);if(v!=null&&v===s.get(d))f++}
-    let sh=0;for(const c of(citesOut.get(d.id)||[]))if(oa.has(c))sh++;return{d,f,sh,s:f+sh}}).sort((x,y)=>y.s-x.s||y.d.cic-x.d.cic).slice(0,8);
+  return (SIM.get(id)||[]).map(r=>({d:DB.get(r.id),f:r.matched_dims.length,sh:r.shared_cites.length,s:r.score})).filter(r=>r.d);
 }
 function renderTray(){
   const P=ST.pins.map(id=>DB.get(id)).filter(Boolean);const el=$('#tray');
-  if(!P.length){el.innerHTML=`<div class="slim"><span class="h3">Compare ${I_TRAY}</span><span>0 of 4 pinned. Press <span class="kbd">P</span> over a paper to pin it.</span></div>`;document.body.style.paddingBottom=el.offsetHeight+'px';return}
+  if(!P.length){el.innerHTML=`<div class="slim"><span class="h3">Compare ${I_TRAY}</span><span>0 of ${PIN_MAX} pinned. Press <span class="kbd">P</span> over a paper to pin it.</span></div>`;document.body.style.paddingBottom=el.offsetHeight+'px';return}
   const n=P.length;
   const rowsF=[['technique','Technique',d=>d.tech,v=>pretty(v)],['architecture','Architecture',d=>d.arch,v=>pretty(v)],['span','Automated span',d=>d.span,v=>pretty(v)],['human','Human role',d=>d.hum,v=>humanLabel(v)]];
   const rowsS=[['Layer',d=>d.layer,v=>layerLabel(v)],['Month',d=>mLabel(d.mi),v=>v],['Cited here',d=>d.cic,v=>v+' times']];
   const gt=`grid-template-columns:128px repeat(${n},minmax(210px,1fr))`;
-  let h=`<div class="th"><span class="h3">Compare ${I_TRAY}</span><span class="meta">${n} of 4 pinned</span><span class="grow"></span><a class="btn" href="${esc(pathsHref(P.map(d=>d.id)))}">See their paths</a><button class="btn" id="tcol" aria-expanded="${!trayCollapsed}">${trayCollapsed?'Expand':'Collapse'}</button><button class="btn" id="tclr">Unpin all</button></div><div class="tb" style="${gt}">`;
+  let h=`<div class="th"><span class="h3">Compare ${I_TRAY}</span><span class="meta">${n} of ${PIN_MAX} pinned</span><span class="grow"></span><a class="btn" href="${esc(pathsHref(P.map(d=>d.id)))}">See their paths</a><button class="btn" id="tcol" aria-expanded="${!trayCollapsed}">${trayCollapsed?'Expand':'Collapse'}</button><button class="btn" id="tclr">Unpin all</button></div><div class="tb" style="${gt}">`;
   h+=`<div class="rl"></div>`+P.map((d,i)=>`<div class="cl hd"><div style="display:flex;align-items:flex-start"><span class="badge">${'ABCD'[i]}</span><span class="ptitle" data-o="${esc(d.id)}">${esc(d.title)}</span></div><div class="acts"><button class="btn" data-sim="${esc(d.id)}" aria-pressed="${ST.sim===d.id}">${ST.sim===d.id?'Similar to this: shown':'Similar to this'}</button><button class="btn" data-un="${esc(d.id)}" aria-label="Unpin">− Unpin</button></div></div>`).join('');
   h+=`<div class="rl">DNA</div>`+P.map(d=>`<div class="cl" data-dna="${esc(d.id)}">${dnaHTML(d,26,16).replace(/<i /g,'<i data-seg="1" ')}</div>`).join('');
   for(const[k,l,get,lab] of rowsF){const vals=P.map(d=>get(d)??null);const diff=new Set(vals).size>1&&n>1;
