@@ -40,6 +40,7 @@ from typing import Final
 from sqlalchemy import text
 
 from factory.model.base import StrictModel
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.site_chrome import CONTAINER_WIDTH
 from factory.services.site_panel import with_panel
@@ -640,7 +641,7 @@ def _imports(tree: ast.AST, *, top_only: bool) -> set[str]:
     return out
 
 
-_PRODUCT_CODE: dict[tuple[object, object], str] = {}
+_PRODUCT_CODE: dict[tuple[object, ...], str] = {}
 
 
 def product_code_hash(product: Product) -> str:
@@ -648,12 +649,14 @@ def product_code_hash(product: Product) -> str:
     imports, and every hub module imported, directly or through another hub module, by the
     product's `build` and `stamp` functions or by the module that defines them. Code outside the
     hub code set is not followed, as in `code_hash`. When a function's source cannot be read the
-    whole set is used. Cached per process: a process runs the code it loaded at start."""
-    key = (product.build, product.stamp)
+    whole set is used. Cached while the files keep their size and modification time, so a server
+    sees an edited page as stale at once (its builds run the code on disk, `child_builder`)."""
+    files = _code_files()
+    stamp = tuple(sorted((n, f.stat().st_mtime_ns, f.stat().st_size) for n, f in files.items()))
+    key = (product.build, product.stamp, stamp)
     cached = _PRODUCT_CODE.get(key)
     if cached is not None:
         return cached
-    files = _code_files()
     seen: set[str] = {"site"}
     todo = set(_imports(ast.parse(files["site"].read_text(encoding="utf-8")), top_only=True))
     for fn in (product.build, product.stamp):
@@ -812,7 +815,11 @@ def build(
         shutil.rmtree(scratch, ignore_errors=True)
         scratch.mkdir(parents=True)
         try:
-            product.build(project, scratch)
+            # one memo scope per product (`call_memo`): the derivations its parts share (corpus,
+            # outcomes, miner populations) are computed once. Events added meanwhile are not seen;
+            # the fingerprint was taken before, so the product reads stale and is built again.
+            with entering():
+                product.build(project, scratch)
             if not (scratch / product.entry).exists():
                 raise RuntimeError(f"the build did not write {product.entry}")
         except Exception as exc:  # a product failure is recorded, never raised across products

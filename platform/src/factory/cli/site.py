@@ -94,9 +94,19 @@ def site_serve_cmd(
     every: Annotated[
         int,
         typer.Option(
-            "--every", help="With --eager: seconds between background rebuilds of stale products."
+            "--every",
+            help="Settle window: a product is rebuilt at most once per this many seconds; "
+            "meanwhile its previous build is served with an 'as of' badge.",
         ),
-    ] = 300,
+    ] = 600,
+    dev: Annotated[
+        bool,
+        typer.Option(
+            "--dev",
+            help="Development: no settle window, so a changed page or new events show on the "
+            "next open (builds still run in a child process with the code on disk).",
+        ),
+    ] = False,
     eager: Annotated[
         bool,
         typer.Option(
@@ -136,9 +146,10 @@ def site_serve_cmd(
                 state,
                 open_project(state.settings, slug, session=state.session, clock=state.clock),
             ),
-            min_gap=float(every),
+            min_gap=0.0 if dev else float(every),
             background=True,
             eager=eager,
+            child_builds=True,
             feed=runner,
             create=lambda slug, title, profile: create_project(
                 state.settings, slug, title, profile, session=state.session, clock=state.clock
@@ -160,7 +171,9 @@ def site_serve_cmd(
         return
     with _reporting_errors():
         project = _resolve_project(state)
-    httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every), eager=eager)
+    httpd, rebuilder = server_service.make_server(
+        project, port, min_gap=0.0 if dev else float(every), eager=eager, child_builds=True
+    )
     typer.echo(f"site on http://{server_service.HOST}:{httpd.server_port}/ (Ctrl-C to stop)")
     try:
         httpd.serve_forever()

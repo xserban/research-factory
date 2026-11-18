@@ -46,7 +46,7 @@ from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
 from factory.packs import Pack
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.call_memo import entering
+from factory.services.call_memo import entering, memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
@@ -423,6 +423,7 @@ def calibration_sample(project: Project, name: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+@memoised
 def miner_population(project: Project, name: str, *, include_requested: bool = True) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never

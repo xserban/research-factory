@@ -54,6 +54,7 @@ from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
 from factory.services import site as site_service
 from factory.services import work_queue as work_queue_service
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.withholding import held_out_tokens, withhold
 
@@ -121,7 +122,7 @@ def dashboard_state(project: Project) -> dict[str, JsonValue]:
 
     Built inside one index snapshot, so live screeners do not make each read queue on the lock.
     """
-    with project.index.snapshot():
+    with project.index.snapshot(), entering():
         return _dashboard_state(project)
 
 
