@@ -158,7 +158,7 @@ def test_search_report_has_round_rows_with_yield(
     result, _ = _backward(project, agent)
     assert result.round_id is not None
     rows = [r for r in search_report(project).rows if r.round_id == result.round_id]
-    assert len(rows) == 3
+    assert len(rows) == 2  # the stored works, and the no-source-record entry
     assert all(r.via is Via.DOCUMENT_REFERENCE_LIST for r in rows)
     assert all(r.round_no == 1 and r.direction is Direction.BACKWARD for r in rows)
     yielded = round_yield(project, result.round_id)
@@ -185,7 +185,7 @@ def test_run_counts_agree_with_the_round_yield(
     result, _ = _backward(project, agent)
     assert result.round_id is not None
     assert result.new_works == 3
-    assert [r.new_works for r in result.runs] == [1, 1, 1]
+    assert sorted(r.new_works for r in result.runs) == [1, 2]
     yielded = round_yield(project, result.round_id)
     rows = [r for r in search_report(project).rows if r.round_id == result.round_id]
     assert sum(run.new_works for row in rows for run in row.runs) == yielded.new_after_dedup == 3
