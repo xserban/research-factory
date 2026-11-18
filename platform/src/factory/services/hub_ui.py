@@ -15,7 +15,9 @@ Invariants:
 from __future__ import annotations
 
 import hashlib
+import html
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import resources
 from typing import Final
@@ -160,6 +162,7 @@ THEMES: Final[tuple[ThemeSpec, ...]] = (
 ASSETS: Final[dict[str, tuple[str, str]]] = {
     "kit.css": ("hub_ui/kit.css", "text/css; charset=utf-8"),
     "shell.js": ("hub_ui/shell.js", "text/javascript; charset=utf-8"),
+    "pages/overview.js": ("hub_ui/pages/overview.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -329,6 +332,57 @@ LABELS: Final[dict[str, str]] = {
     "full-lifecycle": "Full lifecycle",
     "other": "Other",
 }
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """One hub page: its id, human title, page script (a served asset name) and payload names."""
+
+    id: str
+    title: str
+    script: str
+    payloads: tuple[str, ...]
+
+
+PAGES: Final[dict[str, PageSpec]] = {
+    "overview": PageSpec("overview", "Overview", "pages/overview.js", ("shell", "overview")),
+}
+
+
+def page_html(
+    page: str,
+    title: str,
+    scripts: Sequence[str],
+    payloads: Sequence[str],
+    asset_version: str,
+    *,
+    static_data: bool = True,
+) -> str:
+    """The static HTML of a page: kit.css, one data script per payload, shell.js, `scripts`.
+
+    Every URL is relative (`assets/<name>?v=<version>`, `data/<name>.js`), so the file works
+    from file:// and under the server. With `static_data` the payloads load as `data/<name>.js`
+    scripts that set `window.HUB_DATA[name]`; without it nothing is preloaded and
+    `HUB.load(names)` fetches `data/<name>.json`. Page scripts call `HUB.load` either way."""
+    v = html.escape(asset_version, quote=True)
+    data = (
+        [f'<script src="data/{html.escape(n, quote=True)}.js"></script>' for n in payloads]
+        if static_data
+        else []
+    )
+    assets = [f'<script src="assets/shell.js?v={v}"></script>'] + [
+        f'<script src="assets/{html.escape(s, quote=True)}?v={v}"></script>' for s in scripts
+    ]
+    return (
+        "<!doctype html>\n"
+        '<html lang="en" data-theme="dark">\n<head>\n<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{html.escape(title)}</title>\n"
+        f'<link rel="stylesheet" href="assets/kit.css?v={v}">\n</head>\n<body>\n'
+        "<noscript>This page needs JavaScript.</noscript>\n"
+        + "\n".join(data + assets)
+        + "\n</body>\n</html>\n"
+    )
 
 
 def asset_bytes(name: str) -> bytes:

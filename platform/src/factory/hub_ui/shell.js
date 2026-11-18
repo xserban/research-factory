@@ -42,7 +42,7 @@ const val = (w,f) => (w[f] && w[f].v) || null;
 const quote = (w,f) => (w[f] && w[f].q) || '';
 
 /* ---------- computed facts (never typed) ---------- */
-const sum = o => Object.values(o).reduce((a,b)=>a+b,0);
+const sum = o => Object.values(o||{}).reduce((a,b)=>a+b,0);
 
 /* ---------- glossary: plain definitions behind dotted terms ---------- */
 const GLOSSARY = {
@@ -124,7 +124,7 @@ function mount(opts){
     </nav>
     <div>
       <header class="topbar">
-        <span class="crumb">agentic-science · <b>${esc(opts.crumb||'')}</b></span>
+        <span class="crumb">${esc(RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
@@ -230,6 +230,10 @@ const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, p
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){
   RF = payload;
+  RF.works = RF.works || []; RF.cites = RF.cites || [];
+  /* The Python copies (services/hub_ui.py) are the source: the payload's wins when present. */
+  if (RF.labels) Object.assign(LABELS, RF.labels);
+  if (RF.glossary) Object.assign(GLOSSARY, RF.glossary);
   P = RF.prisma || {};
   byId = new Map(RF.works.map(w=>[w.id,w]));
   citesOut = new Map(); citesIn = new Map();
@@ -246,6 +250,15 @@ function init(payload){
   Object.assign(HUB, {RF, stats, SETS_NOTE, byId, citesOut, citesIn});
   return HUB;
 }
+/* Payloads: the static build writes data/<name>.js (file:// blocks fetch); the server serves
+   data/<name>.json. Resolves to {name: payload}. */
+HUB.load = function(names){
+  window.HUB_DATA = window.HUB_DATA || {};
+  return Promise.all(names.map(n => n in window.HUB_DATA ? window.HUB_DATA[n]
+    : fetch('data/'+n+'.json').then(r=>{ if(!r.ok) throw new Error(n+': HTTP '+r.status); return r.json(); })
+        .then(j=>(window.HUB_DATA[n]=j))))
+    .then(vals=>Object.fromEntries(names.map((n,i)=>[n,vals[i]])));
+};
 window.HUB = HUB;
 
 })();
