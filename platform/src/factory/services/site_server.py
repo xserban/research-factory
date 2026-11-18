@@ -88,6 +88,7 @@ from factory.services import (
     site_create,
     site_hub_feed,
     site_portal,
+    site_progress,
     site_settings,
     work_layers,
     work_queue,
@@ -565,10 +566,57 @@ BUILD_TIMEOUT: Final = 1800.0
 build (a held lock, a hung converter) never blocks the queue behind it."""
 
 
-def updating_page(title: str, *, failed: str | None = None) -> str:
+def _duration(seconds: object) -> str:
+    if not isinstance(seconds, (int, float)):
+        return ""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min"
+
+
+def progress_text(progress: dict[str, object] | None) -> str:
+    """One line for a running build: percentage, steps and time left, as far as known
+    (`site_progress.summary`)."""
+    if not progress:
+        return "building&hellip;"
+    waiting = progress.get("waiting")
+    if isinstance(waiting, int) and waiting > 0:
+        return f"waiting for {waiting} other page{'s' if waiting > 1 else ''} to build"
+    if not progress.get("started"):
+        return "starting&hellip;"
+    bits: list[str] = []
+    percent = progress.get("percent")
+    if isinstance(percent, int):
+        bits.append(f"{percent}%")
+    done, total, label = progress.get("done"), progress.get("total"), progress.get("label")
+    if isinstance(done, int) and isinstance(total, int) and total:
+        if done >= total:
+            so_far = _duration(progress.get("elapsed"))
+            return f"finishing (writing the page) &middot; {so_far} so far"
+        bits.append(f"{done:,} of {total:,} {html_lib.escape(str(label or 'steps'))}")
+    remaining = progress.get("remaining")
+    if isinstance(remaining, (int, float)):
+        bits.append(f"about {_duration(remaining)} left")
+    else:
+        bits.append(f"{_duration(progress.get('elapsed'))} so far")
+    return " &middot; ".join(bits)
+
+
+def _bar(progress: dict[str, object] | None) -> str:
+    percent = progress.get("percent") if progress else None
+    width = percent if isinstance(percent, int) else 0
+    return (
+        "<div style='border:1px solid var(--mut);height:10px;margin:14px 0 6px;max-width:520px'>"
+        f"<div style='height:100%;width:{width}%;background:var(--ac)'></div></div>"
+    )
+
+
+def updating_page(
+    title: str, *, failed: str | None = None, progress: dict[str, object] | None = None
+) -> str:
     """The page that stands in for a product that was never built, while it builds (it reloads
-    itself; a meta refresh replaces the history entry, so Back is not caught), or that shows its
-    failed build."""
+    itself; a meta refresh replaces the history entry, so Back is not caught), with the build's
+    progress; or that shows its failed build."""
     name = html_lib.escape(title)
     if failed is not None:
         return site_service.page(
@@ -580,46 +628,96 @@ def updating_page(title: str, *, failed: str | None = None) -> str:
     return site_service.page(
         f"Building {title}",
         f"<h1>Building {name}</h1><p>This page has not been built yet. It is being built now and "
-        "opens here when it is ready.</p>"
-        "<p class=dim>A large page (the dashboard, the conversion inspector) can take minutes.</p>",
+        f"opens here when it is ready.</p>{_bar(progress)}"
+        f"<p class=mono>{progress_text(progress)}</p>"
+        "<p class=dim>The percentage counts the build's steps where the page reports them, and "
+        "otherwise compares the time so far with its last build.</p>",
         head=f"<meta http-equiv=refresh content={UPDATING_REFRESH}>",
     )
 
 
 _BADGE_CSS: Final = (
-    "position:fixed;right:12px;bottom:12px;z-index:9999;padding:4px 10px;"
-    "font:11px ui-monospace,Menlo,monospace;background:rgba(8,9,16,.88);color:#e8b45a;"
-    "border:1px solid #e8b45a;letter-spacing:.04em"
+    "position:fixed;right:12px;bottom:12px;z-index:9999;padding:4px 10px;max-width:70vw;"
+    "font:11px ui-monospace,Menlo,monospace;background:rgba(8,9,16,.88);color:{c};"
+    "border:1px solid {c};letter-spacing:.04em"
 )
 
 
-def stale_badge(pid: str, state: Freshness, built_at: str | None, settle: float) -> str:
-    """The small fixed badge put on a previous build served in place of a current one (IDEA-96):
-    when it was built and why it is not newer. A queued update is watched through `api/status`
-    and offers a reload when it is done."""
-    when = html_lib.escape(built_at or "an earlier build")
+def version_text(status: site_service.ProductStatus, events_now: int | None) -> str:
+    """The version line of a served page: when it was built, from how many events (and how many
+    there are now, when more) and by which factory code."""
+    bits = [f"built {html_lib.escape(status.built_at or 'earlier')}"]
+    if status.built_events is not None:
+        events = f"{status.built_events:,} events"
+        if events_now is not None and events_now != status.built_events:
+            events += f" (now {events_now:,})"
+        bits.append(events)
+    if status.built_code:
+        bits.append(f"code {html_lib.escape(status.built_code)}")
+    return " &middot; ".join(bits)
+
+
+def page_badge(
+    pid: str,
+    state: Freshness,
+    status: site_service.ProductStatus,
+    *,
+    events_now: int | None,
+    settle: float,
+    progress: dict[str, object] | None,
+) -> str:
+    """The small fixed badge on every product page the server serves (IDEA-96): its version
+    (`version_text`) and, when it is not current, why: an update running (with its progress,
+    watched through `api/status`, offering a reload when done), waiting for the settle window, or
+    failed."""
+    version = version_text(status, events_now)
+    colour = "#6a6e95" if state == "fresh" else "#e8b45a"
     if state == "failed":
-        text = f"as of {when} &middot; the last update failed"
+        text = f"{version} &middot; the last update failed"
     elif state == "stale":
         text = (
-            f"as of {when} &middot; newer data; updates at most every {max(1, round(settle / 60))}"
-            " min"
+            f"{version} &middot; newer data; updates at most every {max(1, round(settle / 60))} min"
         )
+    elif state == "queued":
+        text = f"{version} &middot; updating: <span id=rf-prog>{progress_text(progress)}</span>"
     else:
-        text = f"as of {when} &middot; updating&hellip;"
+        text = version
     script = (
         ""
         if state != "queued"
-        else "<script>(function(){var b=document.getElementById('rf-stale');"
-        "function poll(){fetch('../api/status',{cache:'no-store'})"
+        else "<script>(function(){var b=document.getElementById('rf-stale'),id="
+        + json.dumps(pid)
+        + ";function poll(){fetch('../api/status',{cache:'no-store'})"
         ".then(function(r){return r.json();})"
-        ".then(function(s){if((s.queued||[]).indexOf(" + json.dumps(pid) + ")<0){"
+        ".then(function(s){if((s.queued||[]).indexOf(id)<0){"
         'b.innerHTML=\'updated &middot; <a href="#" style="color:#82FB9C">reload</a>\';'
-        "b.querySelector('a').onclick=function(e){e.preventDefault();location.reload();};}"
-        "else setTimeout(poll,4000);}).catch(function(){setTimeout(poll,8000);});}"
-        "setTimeout(poll,4000);})();</script>"
+        "b.querySelector('a').onclick=function(e){e.preventDefault();location.reload();};return;}"
+        "var t=(s.progress_text||{})[id],p=document.getElementById('rf-prog');"
+        "if(t&&p)p.innerHTML=t;setTimeout(poll,3000);})"
+        ".catch(function(){setTimeout(poll,8000);});}"
+        "setTimeout(poll,3000);})();</script>"
     )
-    return f"<div id=rf-stale style='{_BADGE_CSS}'>{text}</div>{script}"
+    style = _BADGE_CSS.replace("{c}", colour)
+    return f"<div id=rf-stale style='{style}'>{text}</div>{script}"
+
+
+def events_total(project: Project) -> int:
+    """How many events the project has (the data version shown beside a page's own)."""
+    return sum(n for n, _ in site_service.type_counts(project).values())
+
+
+def build_progress(
+    project: Project, pid: str, last_seconds: float | None, queue: list[str]
+) -> dict[str, object]:
+    """The progress of product `pid`'s build (`site_progress.summary`), with `waiting`: how many
+    queued builds are ahead of it (0 when it is the one running) and `started` (False until the
+    build process has opened its progress file)."""
+    root = site_service.site_dir(project)
+    found = site_progress.read(root, pid)
+    out = site_progress.summary(found, last_seconds)
+    out["waiting"] = queue.index(pid) if pid in queue else 0
+    out["started"] = found is not None
+    return out
 
 
 def with_badge(page_text: str, badge: str) -> str:
@@ -1070,11 +1168,20 @@ def _handler_class(
                 # one of the browser's six connections to the host, and enough of them stall
                 # every navigation; while building, answer at once with no product rows
                 tried = slot.rebuilder.try_statuses()
+                queued = slot.rebuilder.queued()
+                seconds = {s.id: s.built_seconds for s in tried or []}
+                progress = {
+                    pid: build_progress(slot.project, pid, seconds.get(pid), queued)
+                    for pid in queued
+                }
                 self._json(
                     200,
                     {
                         "building": tried is None or slot.rebuilder.building,
-                        "queued": slot.rebuilder.queued(),
+                        "queued": queued,
+                        "progress": progress,
+                        "progress_text": {k: progress_text(v) for k, v in progress.items()},
+                        "code": site_service.code_version(),
                         "error": slot.rebuilder.last_error,
                         "products": [s.model_dump(mode="json") for s in tried or []],
                     },
@@ -1157,14 +1264,26 @@ def _handler_class(
             if product is None or not url.startswith(f"/{pid}/") or rest not in ("", product.entry):
                 return False
             state, status = slot.rebuilder.ensure(pid)
-            if state == "fresh" or status is None:
+            if status is None:
                 return False
             entry = slot.root / pid / product.entry
+            progress = (
+                build_progress(slot.project, pid, status.built_seconds, slot.rebuilder.queued())
+                if state in ("queued", "building")
+                else None
+            )
             if state == "building" or not entry.is_file():
                 failed = slot.rebuilder.failure(pid) if state == "failed" else None
-                self._html(updating_page(product.title, failed=failed))
+                self._html(updating_page(product.title, failed=failed, progress=progress))
                 return True
-            badge = stale_badge(pid, state, status.built_at, slot.rebuilder.settle)
+            badge = page_badge(
+                pid,
+                state,
+                status,
+                events_now=events_total(slot.project),
+                settle=slot.rebuilder.settle,
+                progress=progress,
+            )
             self._html(with_badge(entry.read_text(encoding="utf-8"), badge))
             return True
 

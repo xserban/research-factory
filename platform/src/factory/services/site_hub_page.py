@@ -22,10 +22,12 @@ from factory.services.site import (
     Planned,
     Product,
     ProductStatus,
+    code_version,
     planned,
     products,
     site_dir,
     status,
+    type_counts,
 )
 from factory.services.site_charts import CHART_CSS, activity
 from factory.services.site_chrome import BAR_CSS, CHROME_SCRIPT, hub_bar
@@ -92,7 +94,7 @@ function show(){const id=(location.hash||'#home').slice(1);
   if(first)frame.setAttribute('src',cur);else frame.contentWindow.location.replace(cur);}}
 window.addEventListener('hashchange',show);show();
 document.querySelectorAll('[data-go]').forEach(r=>r.onclick=()=>{location.hash=r.dataset.go;});
-const WORD={ok:'Nominal',stale:'Updates on open',busy:'Updating',bad:'Fault'};
+const WORD={ok:'Nominal',stale:'Updates on open',busy:'Updating',bad:'Fault'};const PCT=(s,id)=>{const p=(s.progress||{})[id];return p&&p.percent!==null&&p.percent!==undefined?' '+p.percent+'%':'';};
 async function live(){if(!location.protocol.startsWith('http'))return;
  const ac=new AbortController();const t=setTimeout(()=>ac.abort(),8000);
  try{const r=await fetch('api/status',{cache:'no-store',signal:ac.signal});const s=await r.json();
@@ -102,7 +104,7 @@ async function live(){if(!location.protocol.startsWith('http'))return;
    if(a){a.querySelector('.led').className='led '+L(st);a.dataset.src=p.id+'/'+p.entry;}
    document.querySelectorAll('[data-led="'+p.id+'"]').forEach(l=>l.className='led '+L(st));
    const pn=document.querySelector('.pn[data-go="'+p.id+'"]');
-   if(pn){const b=pn.querySelector('.tg');if(b){b.className='tg '+(st==='ok'?'ok':st==='bad'?'bad':'warn');b.textContent=WORD[st];}
+   if(pn){const b=pn.querySelector('.tg');if(b){b.className='tg '+(st==='ok'?'ok':st==='bad'?'bad':'warn');b.textContent=WORD[st]+(st==='busy'?PCT(s,p.id):'');}
     const m=pn.querySelector('.when');if(m)m.textContent=p.built_at?'built '+p.built_at:'not built yet';}});
   document.getElementById('live').textContent=s.building?'REBUILDING':'LIVE';}catch(e){}
  finally{clearTimeout(t);setTimeout(live,10000);}}
@@ -250,6 +252,7 @@ def render_hub(
             f"<div class=s>{e(sub)}</div></div>"
         )
     slug = e(project.paths.slug)
+    last_event = max((m for _, m in type_counts(project).values()), default="") or "none"
     n_stale = sum(1 for s in stat if s.stale or s.error)
     ready = "SYSTEM NOMINAL" if not n_stale else f"{n_stale} MODULE(S) NEED A REBUILD"
     doc = (
@@ -260,6 +263,9 @@ def render_hub(
             "projects",
             context=f"<span class=crumb>// {slug}</span>"
             f"<span class=ro>{ready} &middot; EVENTS <b>{num.get('events', 0):,}</b>"
+            f" &middot; LAST <b title='the newest event id: the data version'>{e(last_event)}</b>"
+            f" &middot; CODE <b title='the factory code version that wrote this hub'>"
+            f"{e(code_version())}</b>"
             " &middot; <b id=live>SNAPSHOT</b></span>",
             main_hub_only=True,
         )

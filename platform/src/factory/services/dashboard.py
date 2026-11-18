@@ -21,8 +21,9 @@ import json
 import re
 from collections import Counter
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Final, cast
 
 from pydantic import JsonValue
 from sqlalchemy import text
@@ -53,6 +54,7 @@ from factory.services import runner as runner_service
 from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
 from factory.services import site as site_service
+from factory.services import site_progress
 from factory.services import work_queue as work_queue_service
 from factory.services.call_memo import entering
 from factory.services.context import Project
@@ -126,7 +128,12 @@ def dashboard_state(project: Project) -> dict[str, JsonValue]:
         return _dashboard_state(project)
 
 
+DASHBOARD_PARTS: Final = 17
+"""The `_guard`ed parts `_dashboard_state` builds, in order: the steps of its build progress."""
+
+
 def _dashboard_state(project: Project) -> dict[str, JsonValue]:
+    _DONE.set(0)
     status = _guard(lambda: _status(project), {})
     state: dict[str, JsonValue] = {
         "meta": _meta(project, status),
@@ -169,14 +176,21 @@ def screening_live(project: Project) -> dict[str, JsonValue]:
     )
 
 
+_DONE: ContextVar[int] = ContextVar("dashboard_parts_done", default=0)
+
+
 def _guard(build: Callable[[], JsonValue], empty: JsonValue) -> JsonValue:
-    """`build()`, or `empty` (with an `error` note in a dict) when the data is absent or refused."""
+    """`build()`, or `empty` (with an `error` note in a dict) when the data is absent or refused.
+    Each call is one step of the build progress (`site_progress`; a no-op outside a site build)."""
     try:
         return build()
     except FactoryValidationError as exc:
         note = "; ".join(f"{i.field}: {i.reason}" for i in exc.issues)
     except Exception as exc:  # a panel must never take the page down
         note = f"{type(exc).__name__}: {exc}"
+    finally:
+        _DONE.set(_DONE.get() + 1)
+        site_progress.report(min(_DONE.get(), DASHBOARD_PARTS), DASHBOARD_PARTS, "sections")
     return {"error": note[:300]} if isinstance(empty, dict) else empty
 
 

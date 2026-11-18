@@ -32,6 +32,7 @@ from sqlalchemy import text
 
 from factory.document.optional import converter_infos
 from factory.services import conversion_coverage as cov
+from factory.services import site_progress
 from factory.services.context import Project
 from factory.services.site_charts import scatter
 from factory.services.site_corpus import library_file, slug_of
@@ -463,7 +464,8 @@ def build_conversion_site(project: Project, out: Path) -> None:
     docs = documents(project, report)
     (out / "doc").mkdir(parents=True, exist_ok=True)
     (out / "files").mkdir(parents=True, exist_ok=True)
-    for d in docs:
+    for n, d in enumerate(docs):
+        site_progress.report(n, len(docs), "documents")
         try:
             write_files(project, d, out)
             write_document_page(project, d, out)

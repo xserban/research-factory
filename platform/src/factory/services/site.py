@@ -25,11 +25,14 @@ from __future__ import annotations
 import ast
 import hashlib
 import html
+import importlib.metadata
 import inspect
 import json
 import re
 import shutil
+import subprocess
 import textwrap
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -40,6 +43,7 @@ from typing import Final
 from sqlalchemy import text
 
 from factory.model.base import StrictModel
+from factory.services import site_progress
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.site_chrome import CONTAINER_WIDTH
@@ -130,6 +134,12 @@ class ProductStatus(StrictModel):
     error: str | None
     fingerprint: str
     needs_model: bool
+    built_seconds: float | None = None
+    """How long the product's last build took (the progress estimate of the next one)."""
+    built_events: int | None = None
+    """How many events the project had when the product was built (the data version)."""
+    built_code: str | None = None
+    """The factory code version that built it (`code_version`)."""
 
 
 class BuildResult(StrictModel):
@@ -808,9 +818,55 @@ def status(project: Project, registry: Sequence[Product] | None = None) -> list[
                 error=entry.get("error"),
                 fingerprint=fp,
                 needs_model=product.needs_model,
+                built_seconds=_number(entry.get("seconds")),
+                built_events=_whole(entry.get("events")),
+                built_code=entry.get("code"),
             )
         )
     return out
+
+
+def _number(value: object) -> float | None:
+    try:
+        return float(value) if isinstance(value, (str, int, float)) else None
+    except ValueError:
+        return None
+
+
+def _whole(value: object) -> int | None:
+    found = _number(value)
+    return None if found is None else int(found)
+
+
+@lru_cache(maxsize=1)
+def code_version() -> str:
+    """The factory code version: the git commit (8 characters) and its date, with `+changes` when
+    tracked files differ from it; the package version when the code is not a git checkout. Read
+    once per process (a child build reads the code on disk)."""
+    here = Path(__file__).resolve()
+    repo = next((d for d in here.parents if (d / ".git").exists()), None)
+    if repo is not None:
+        try:
+
+            def git(*args: str) -> str:
+                return subprocess.run(
+                    ["git", "-C", str(repo), *args],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                ).stdout.strip()
+
+            sha = git("rev-parse", "--short=8", "HEAD")
+            day = git("log", "-1", "--format=%cs")
+            dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
+            return f"{sha} {day}" + (" +changes" if dirty else "")
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        return importlib.metadata.version("factory")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 # --- building ---
@@ -836,6 +892,8 @@ def build(
     root = site_dir(project)
     root.mkdir(parents=True, exist_ok=True)
     results: list[BuildResult] = []
+    counts_now = type_counts(project)
+    events_now = sum(n for n, _ in counts_now.values())
     for product in reg:
         if only and product.id not in only:
             continue
@@ -860,7 +918,8 @@ def build(
             # outcomes, miner populations) are computed once. Events added meanwhile are not seen;
             # the fingerprint was taken before, so the product reads stale and is built again.
             as_lazy = lazy and product.index_build is not None
-            with entering():
+            began = time.monotonic()
+            with entering(), site_progress.tracking(root, product.id):
                 (product.index_build if as_lazy and product.index_build else product.build)(
                     project, scratch
                 )
@@ -884,6 +943,9 @@ def build(
             "fingerprint": fp,
             "error": None,
             "lazy": "1" if as_lazy else None,
+            "seconds": f"{time.monotonic() - began:.1f}",
+            "events": str(events_now),
+            "code": code_version(),
         }
         results.append(BuildResult(id=product.id, built=True, skipped=False, error=None))
     # merge only the entries this build wrote into the manifest as it is now: another process (the

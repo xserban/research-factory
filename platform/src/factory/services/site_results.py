@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections
 import json
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from sqlalchemy import text
 
 from factory.mining.spec import EnumKind
 from factory.services import mining as mining_service
+from factory.services import site_progress
 from factory.services.context import Project
 from factory.services.prisma import prisma_flow
 from factory.services.protocol import current_protocol
@@ -303,21 +305,30 @@ def _timeline(works: list[dict[str, Any]]) -> str:
 
 
 def build_results(project: Project, out: Path) -> None:
+    site_progress.report(0, 8, "parts")
     payload = corpus_payload(project)
     works: list[dict[str, Any]] = payload["works"]
+    site_progress.report(1, 8, "parts")
     intro = note(
         f"{len(works)} works with at least one miner row. All figures are computed from the "
         "recorded rows (pass A) and are not judgements; see Miner agreement for how stable "
         "pass A is."
     )
+    parts: list[str] = []
+    makers: tuple[Callable[[], str], ...] = (
+        lambda: _flow(project, out),
+        lambda: _timeline(works),
+        lambda: _distributions(project, works),
+        lambda: _stages(works),
+        lambda: _technique_by_stage(works),
+        lambda: _design(works),
+    )
+    for n, make in enumerate(makers, start=2):
+        parts.append(make())
+        site_progress.report(n, 8, "parts")
     body = (
         f"<h1>Results</h1>{intro}"
-        + _flow(project, out)
-        + _timeline(works)
-        + _distributions(project, works)
-        + _stages(works)
-        + _technique_by_stage(works)
-        + _design(works)
+        + "".join(parts)
         + note(
             "Limits: pass A is one model's reading; quotes are verified verbatim, which shows the "
             "evidence exists, not that the value is right; works not acquired or not in English "
