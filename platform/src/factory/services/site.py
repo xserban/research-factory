@@ -886,7 +886,12 @@ def build(
             "lazy": "1" if as_lazy else None,
         }
         results.append(BuildResult(id=product.id, built=True, skipped=False, error=None))
-    _write_manifest(project, manifest)
+    # merge only the entries this build wrote into the manifest as it is now: another process (the
+    # server's child build, a manual `site build`) may have recorded other products meanwhile
+    touched = {r.id for r in results if not r.skipped}
+    latest = _read_manifest(project)
+    latest.update({pid: manifest[pid] for pid in touched if pid in manifest})
+    _write_manifest(project, latest)
     render_hub(project, reg)
     return results
 

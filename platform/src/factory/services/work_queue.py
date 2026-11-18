@@ -260,6 +260,8 @@ def _inbox_items(project: Project) -> dict[str, InboxItemView]:
     return found
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not add works, tasks or units and then read this again
 @memoised
 def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
     """Miner name -> the works (sorted) that miner has an open need to mine: the works of

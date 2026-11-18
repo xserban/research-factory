@@ -423,6 +423,8 @@ def calibration_sample(project: Project, name: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not change the corpus or the miner listing and then read this again
 @memoised
 def miner_population(project: Project, name: str, *, include_requested: bool = True) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's

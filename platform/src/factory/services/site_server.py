@@ -559,7 +559,10 @@ Builder = Callable[[str], str | None]
 UPDATING_REFRESH: Final = 2
 """Seconds between the reloads of the page that stands in while a product builds."""
 BUILD_NICE: Final = 10
-"""How much lower the CPU priority of a child build is than the server's (`os.nice`)."""
+"""How much lower the CPU priority of a child build is than the server's (`nice -n`)."""
+BUILD_TIMEOUT: Final = 1800.0
+"""Seconds a child build may run before it is stopped and recorded as failed, so one wedged
+build (a held lock, a hung converter) never blocks the queue behind it."""
 
 
 def updating_page(title: str, *, failed: str | None = None) -> str:
@@ -610,9 +613,7 @@ def stale_badge(pid: str, state: Freshness, built_at: str | None, settle: float)
         else "<script>(function(){var b=document.getElementById('rf-stale');"
         "function poll(){fetch('../api/status',{cache:'no-store'})"
         ".then(function(r){return r.json();})"
-        ".then(function(s){if((s.queued||[]).indexOf("
-        + json.dumps(pid)
-        + ")<0&&!s.building_unknown){"
+        ".then(function(s){if((s.queued||[]).indexOf(" + json.dumps(pid) + ")<0){"
         'b.innerHTML=\'updated &middot; <a href="#" style="color:#82FB9C">reload</a>\';'
         "b.querySelector('a').onclick=function(e){e.preventDefault();location.reload();};}"
         "else setTimeout(poll,4000);}).catch(function(){setTimeout(poll,8000);});}"
@@ -636,7 +637,12 @@ def child_builder(project: Project) -> Builder:
     slug = project.paths.slug
 
     def build(pid: str) -> str | None:
+        # `nice` as a command, not `preexec_fn`: code run between fork and exec in a threaded
+        # server can deadlock the child
         cmd = [
+            "nice",
+            "-n",
+            str(BUILD_NICE),
             sys.executable,
             "-c",
             "from factory.cli.main import app; app()",
@@ -650,13 +656,14 @@ def child_builder(project: Project) -> Builder:
             "--only",
             pid,
         ]
-        done = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            preexec_fn=lambda: os.nice(BUILD_NICE),
-        )
+        try:
+            done = subprocess.run(
+                cmd, capture_output=True, text=True, check=False, timeout=BUILD_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:  # run() has killed the child
+            return f"the build of {pid} took over {BUILD_TIMEOUT:.0f} s and was stopped"
+        except OSError as exc:
+            return f"the build of {pid} could not start: {exc}"
         product = next(p for p in site_service.products() if p.id == pid)
         recorded = site_service.status(project, [product])[0].error
         if recorded is not None:
@@ -731,7 +738,8 @@ class Rebuilder:
         self._products = {p.id: p for p in site_service.products()}
         self._queue: list[str] = []
         self._wake = threading.Condition()
-        self._failed: dict[str, str] = {}
+        self._failed: dict[str, tuple[str, str]] = {}
+        """Per product: the fingerprint its last build failed at, and the error text."""
         self._built: dict[str, float] = {}
         self._started = False
         self.building = False
@@ -774,13 +782,22 @@ class Rebuilder:
                 return ("queued" if state.built else "building"), state
         if state.built and not state.stale and state.error is None:
             return "fresh", state
-        if self._failed.get(pid) == state.fingerprint:
+        if self._failed_at(pid) == state.fingerprint:
             return "failed", state
         last = self._built.get(pid)
         if state.built and last is not None and time.monotonic() - last < self._min_gap:
             return "stale", state
         self._enqueue(pid)
         return ("queued" if state.built else "building"), state
+
+    def _failed_at(self, pid: str) -> str | None:
+        found = self._failed.get(pid)
+        return None if found is None else found[0]
+
+    def failure(self, pid: str) -> str | None:
+        """The error of product `pid`'s last failed build, or None."""
+        found = self._failed.get(pid)
+        return None if found is None else found[1]
 
     def _enqueue(self, pid: str) -> None:
         with self._wake:
@@ -802,7 +819,7 @@ class Rebuilder:
                 logging.getLogger(__name__).exception("on-demand build of %s failed", pid)
                 with contextlib.suppress(Exception):
                     fp = site_service.fingerprint(self._project, self._products[pid])
-                    self._failed[pid] = fp
+                    self._failed[pid] = (fp, "the build raised; see the server log")
             finally:
                 self._built[pid] = time.monotonic()
                 with self._wake:
@@ -824,7 +841,7 @@ class Rebuilder:
         if error is None:
             self._failed.pop(pid, None)
         else:
-            self._failed[pid] = fp
+            self._failed[pid] = (fp, error)
             self.last_error = error
 
     def statuses(self) -> list[site_service.ProductStatus]:
@@ -863,7 +880,7 @@ class Rebuilder:
             for state in site_service.status(self._project):
                 last = self._built.get(state.id)
                 due = last is None or now - last >= self._min_gap
-                if state.stale and due and self._failed.get(state.id) != state.fingerprint:
+                if state.stale and due and self._failed_at(state.id) != state.fingerprint:
                     self._enqueue(state.id)
             self._stop.wait(self._poll)
 
@@ -1108,7 +1125,14 @@ def _handler_class(
                 return False
             if (slot.root / pid / rest).exists():
                 return False
-            found = render_item(slot.project, product, rest)
+            try:
+                found = render_item(slot.project, product, rest)
+            except OSError:  # a rebuild cleared the item cache meanwhile; the browser may retry
+                self.send_response(503)
+                self.send_header("Retry-After", "2")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
             if found is None:
                 self._deny(404, "not found")
                 return True
@@ -1137,7 +1161,7 @@ def _handler_class(
                 return False
             entry = slot.root / pid / product.entry
             if state == "building" or not entry.is_file():
-                failed = slot.rebuilder.last_error if state == "failed" else None
+                failed = slot.rebuilder.failure(pid) if state == "failed" else None
                 self._html(updating_page(product.title, failed=failed))
                 return True
             badge = stale_badge(pid, state, status.built_at, slot.rebuilder.settle)
