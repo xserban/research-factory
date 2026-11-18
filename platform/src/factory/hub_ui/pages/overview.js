@@ -90,7 +90,7 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
     <p class="lead">${fmt(lead.included)} papers made it through ${H.term('screened', 'screening')}. ${hum.coded ? share(sharePct) + ' of the systems run with no human in the loop.' : ''}${H.info(`<b>What it shows</b>The headline result of the review so far.<p><span class=k>How it's computed.</span> ${fmt(lead.included)} is the number included in the screening flow, out of ${fmt(lead.identified)} records identified. The share is the ${fmt(hum.none)} papers with human role "none" divided by the ${fmt(hum.coded)} papers that have a human role coded (${fmt(hum.not_coded)} not coded are left out): ${sharePct}%.</p><p>${esc((O.methods || {}).human_role || '')}</p>`, 'How these figures are computed')}</p>
   </div>
   <nav class="ov-next" aria-label="Next actions">
-    <a class="btn primary" href="corpus.html">Browse papers <span class="n">${fmt(lead.read_in_full)}</span></a>
+    <a class="btn primary" href="corpus.html">Browse papers <span class="n">${fmt(lead.included)}</span></a>
     <a class="btn" href="flow.html">Open the flow <span class="n">${fmt(lead.identified)} → ${fmt(lead.included)}</span></a>
     <a class="btn" href="explore.html">Explore papers</a>
     <a class="btn" href="lenses.html">Lenses</a>
