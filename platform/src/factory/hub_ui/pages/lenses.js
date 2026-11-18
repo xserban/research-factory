@@ -675,7 +675,7 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       ${H.header({ title: L.title, infoHtml: L.info })}
       ${L.lead ? `<p class="lead">${L.lead}</p>` : ''}
       ${L.controls ? `<div class="ctl">${L.controls}</div>` : ''}${L.pre || ''}
-      <div class="${L.side ? 'two' : ''}"><div id="chart"></div>${L.side ? `<aside>${L.side}</aside>` : ''}</div>
+      <div class="${L.side ? 'two' : ''}"><div><p class="sx-hint">Scroll sideways to see the rest →</p><div id="chart"></div></div>${L.side ? `<aside>${L.side}</aside>` : ''}</div>
     </section>
     <section class="card listpanel" id="listpanel" ${L.noList ? 'hidden' : ''} aria-live="polite">${res ? '' : '<div class="hd"><h3 class="h3" style="margin:0">Papers in this selection</h3></div><p class="empty">Nothing selected. Click a mark in the chart to list the papers behind it.</p>'}${res ? listHtml(res, L.extra) : ''}</section>
     <p class="meta" style="margin-top:22px">About these counts ${H.info(esc(H.SETS_NOTE), 'About these counts')}</p>`;
