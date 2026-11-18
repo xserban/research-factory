@@ -943,3 +943,24 @@ Status: merged into main 2026-11-18 (6bc3e975; untested, test pause; first serve
 **Why:** the server rebuilt about 25 products at every start (one code hash for all hub code; miner and feed events touch most products), and the hub froze or ran slow while it did.
 **Rigour notes:** products stay rebuildable projections; a product is never served as current when its fingerprint differs (an "updating" page stands in while it builds); a failed build is shown, not retried in a loop; `factory site build` still builds everything for a static copy.
 **Open questions:** whether a product whose build takes minutes (dashboard snapshot) should show the old page with a banner instead of the updating page.
+
+### IDEA-97 — Hub UI v2: one design system, lenses and paper exploration
+Status: triaged (plan `docs/plans/2026-11-18-hub-ui.md`; prototypes approved 2026-11-18, not built) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-54, IDEA-55, IDEA-96 (route hook after its merge)
+**What:** replace the cluttered hub shell with one calm design system (tokens, rail, Ctrl-K, paper drawer with evidence quotes) and four pages: home, flow (Sankey + every-record waffle), seven lenses, and an explore surface (sentence query, rings, semantic zoom, paper DNA + compare tray, trail). Pages load JSON payloads built by services instead of inlined data.
+**Why:** the researcher found the hub cluttered and wants innovative, question-led ways to read and explore the corpus; design note `docs/design-note-hub-ui-2026-11-18.md`.
+**Rigour notes:** every number computed from a payload and pinned by a test; included (PRISMA) and mined (miner rows) sets named and reconciled; one citation count; quotes shown with every classified value; held-out works never hidden; no model call (similarity is a stated formula); offline (vendored OFL fonts); WCAG AA on token pairs.
+**Open questions:** rulings R1–R7 in the plan.
+
+### IDEA-98 — Activity page: what each agent is working on, live
+Status: triaged (researcher asked to build it now, 2026-11-18; branch `activity-page`, not merged) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-55 (hub); to be carried into IDEA-97's shell when that is built
+**What:** a hub product "Activity" that shows, live, (1) one row per session holding a task: task kind and scope (miner, version, pass, calibration or production), the paper, minutes on it, rows recorded so far, last event time, stale flag; (2) one row per open pass or task kind: done of total, rate over the last 30 minutes, estimated finish, released and refused counts; (3) the platform's long operations from `progress_status`; (4) the headless workers' trace files under `ops/` (`*.live`: last tool call and its time). The page polls `GET /api/activity` when served by the hub; opened as a file it shows the build-time snapshot.
+**Why:** several agents and `claude -p` workers run at once (e.g. the m-claims pass A, 2026-11-18); Claude Code shows agents, not research progress, and the external `claude -p` workers are invisible to it. Everything needed is already in the event log and the progress files.
+**Rigour notes:** read-only, nothing recorded, no new event; every count from the index or an existing service (`mine_status` totals are not re-derived); rate and estimate are labelled as estimates; held-out works shown as in the other hub pages (decision 37.9).
+**Open questions:** stale threshold (30 min proposed); whether the trace panel should link a `.live` file to the session it belongs to (not derivable today).
+
+### IDEA-99 — Selector fallback when headings do not match
+Status: triaged (researcher ruled "platform fallback + re-mine", 2026-11-18; branch `selector-fallback`, not merged) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: —
+**What:** when a miner's heading selector serves less than a set share of a paper's paragraph words (proposed 10 %), serve every section instead (bibliography never), and record on the task that the fallback applied and the share that was matched. Applies to tasks created after the change; earlier tasks keep their selection. Then re-mine the works that were under-served (first: rf:gottweis2026-accelerating-scientific-discovery-71fbb6f8 for m-claims v2).
+**Why:** a Nature accelerated preview holds its whole main text under the heading "Summary"; the m-claims selector served 213 of 14,633 words (a reporting checklist) and the miner recorded a false `no-limitation-stated`. Coverage over the 92 core papers: one such miss, one garbled conversion, the rest 12–100 % by design.
+**Rigour notes:** deterministic (a function of the manifest and the selector), recorded on the task, visible in the miner's coverage; the threshold is a constant named in the docs; no previously served task changes.
+**Open questions:** the threshold; whether a miner can opt out (`fallback: false`) when its narrow selection is the point; how a completed work is re-mined under the same miner version.
