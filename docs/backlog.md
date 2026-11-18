@@ -936,3 +936,17 @@ Status: built and merged into main 2026-11-17 (commits 85fcf6ec and merge 73378e
 **Why:** the address is the researcher's private contact detail; outside services did not ask for it. Consequence: no polite-pool rate limits and no workaround planned.
 **Rigour notes:** read-only change to outbound requests; redaction kept; throttle, retry and the outbound guard unchanged.
 **Open questions:** reword `docs/specs/slice-5-teams-deployment.md:126` (binding spec), `docs/runbook-pdf-pilot.md:12` and about eight older plans that still mention the address; a decision-log entry for the ruling; whether to rename the constructors' `mailto` parameters (redaction only) and drop the unused `settings` argument of `default_http`.
+
+### IDEA-97 — Hub UI v2: one design system, lenses and paper exploration
+Status: triaged (plan `docs/plans/2026-11-18-hub-ui.md`; prototypes approved 2026-11-18, not built) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-54, IDEA-55, IDEA-96 (route hook after its merge)
+**What:** replace the cluttered hub shell with one calm design system (tokens, rail, Ctrl-K, paper drawer with evidence quotes) and four pages: home, flow (Sankey + every-record waffle), seven lenses, and an explore surface (sentence query, rings, semantic zoom, paper DNA + compare tray, trail). Pages load JSON payloads built by services instead of inlined data.
+**Why:** the researcher found the hub cluttered and wants innovative, question-led ways to read and explore the corpus; design note `docs/design-note-hub-ui-2026-11-18.md`.
+**Rigour notes:** every number computed from a payload and pinned by a test; included (PRISMA) and mined (miner rows) sets named and reconciled; one citation count; quotes shown with every classified value; held-out works never hidden; no model call (similarity is a stated formula); offline (vendored OFL fonts); WCAG AA on token pairs.
+**Open questions:** rulings R1–R7 in the plan.
+
+### IDEA-98 — Activity page: what each agent is working on, live
+Status: triaged (researcher asked to build it now, 2026-11-18; branch `activity-page`, not merged) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-55 (hub); to be carried into IDEA-97's shell when that is built
+**What:** a hub product "Activity" that shows, live, (1) one row per session holding a task: task kind and scope (miner, version, pass, calibration or production), the paper, minutes on it, rows recorded so far, last event time, stale flag; (2) one row per open pass or task kind: done of total, rate over the last 30 minutes, estimated finish, released and refused counts; (3) the platform's long operations from `progress_status`; (4) the headless workers' trace files under `ops/` (`*.live`: last tool call and its time). The page polls `GET /api/activity` when served by the hub; opened as a file it shows the build-time snapshot.
+**Why:** several agents and `claude -p` workers run at once (e.g. the m-claims pass A, 2026-11-18); Claude Code shows agents, not research progress, and the external `claude -p` workers are invisible to it. Everything needed is already in the event log and the progress files.
+**Rigour notes:** read-only, nothing recorded, no new event; every count from the index or an existing service (`mine_status` totals are not re-derived); rate and estimate are labelled as estimates; held-out works shown as in the other hub pages (decision 37.9).
+**Open questions:** stale threshold (30 min proposed); whether the trace panel should link a `.live` file to the session it belongs to (not derivable today).
