@@ -105,6 +105,28 @@ def test_exclude_removes_and_is_listed(project: Project, screened: list[str]) ->
     assert (works[0], "excluded") in sel.excluded
 
 
+def test_include_and_exclude_ids_pass_the_work_id_resolver(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Work ids here are ASCII, so an NFC-different spelling is simulated: the resolver (IDEA-66)
+    # maps an alias to the stored id, and exclude/include must go through it with their field.
+    works = sorted(screened)
+    _convert(project)
+    seen: list[str] = []
+
+    def fake(_project: Project, ids: object, *, field: str = "work_ids") -> list[str]:
+        seen.append(field)
+        return [works[0] if i == "rf:alias" else i for i in ids]  # type: ignore[attr-defined]
+
+    monkeypatch.setattr("factory.services.selection.resolve_work_ids", fake)
+    sel = resolve_selection(project, SelectionSpec(exclude=["rf:alias"]))
+    assert works[0] not in [w.work_id for w in sel.works]
+    assert (works[0], "excluded") in sel.excluded
+    narrow = resolve_selection(project, SelectionSpec(include=["rf:alias"], exclude=works[1:]))
+    assert [w.work_id for w in narrow.works] == [works[0]]
+    assert set(seen) == {"include", "exclude"}
+
+
 def test_include_outside_the_population_and_unknown_id(
     project: Project, screened: list[str]
 ) -> None:

@@ -8,6 +8,8 @@ Invariants:
 - Read-only: no event is written. The index is synced before reading.
 - Validated at the boundary: an unknown layer (not a layer of the project's current layer scheme)
   is refused on field `layers` before anything is read.
+- `include` and `exclude` ids pass the shared work-id resolver (IDEA-66): an NFC-different
+  spelling of a stored id names that work; one matching several works is refused on that field.
 - `works` and `excluded` are sorted by work id; a work appears in at most one of them.
 - A work is kept only with a default conversion; one without goes to `excluded` as
   `no-conversion`. An `include` id that is no work of the project goes to `excluded` as
@@ -37,6 +39,7 @@ from factory.services.document_read import default_conversions
 from factory.services.mining import population_works
 from factory.services.reference_layers import current_scheme
 from factory.services.work_layers import layers_for
+from factory.services.work_ref import resolve_work_ids
 
 __all__ = [
     "CHARS_PER_TOKEN",
@@ -118,14 +121,14 @@ def resolve_selection(project: Project, spec: SelectionSpec) -> Selection:
         base = [w for w in base if w in found and found[w].layer in wanted]
     candidates = set(base)
     excluded: dict[str, str] = {}
-    for work in spec.include:
+    for work in resolve_work_ids(project, spec.include, field="include"):
         if work in candidates:
             continue
         if _is_work(project, work):
             candidates.add(work)
         else:
             excluded[work] = "unknown-work"
-    for work in spec.exclude:
+    for work in resolve_work_ids(project, spec.exclude, field="exclude"):
         if work in candidates:
             candidates.discard(work)
             excluded[work] = "excluded"
