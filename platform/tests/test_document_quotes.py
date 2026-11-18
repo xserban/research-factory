@@ -134,3 +134,21 @@ def test_backslash_before_space_letter_or_digit_stays() -> None:
     assert not quote_in_element("a 1 b", "a \\1 b")
     assert not quote_in_element("a  b", "a \\ b")
     assert quote_in_element("a \\1 b", "a \\1 b")
+
+
+def test_quote_with_html_entities_as_served_is_found() -> None:
+    # The converter stores entities (`Planning &amp; Control`); markdown-it decodes them in the
+    # block text, while `document_read` serves them as stored. Observed 2026-11-17 (B2 test set).
+    markdown = (
+        "A Planning &amp; Control strategy with &lt;10 agents and &#8211; dashes &quot;x&quot;."
+    )
+    assert quote_in_element(markdown, "A Planning &amp; Control strategy with &lt;10 agents")
+    assert quote_in_element(markdown, "A Planning & Control strategy with <10 agents")
+    assert quote_in_element(markdown, '\N{EN DASH} dashes "x".')
+
+
+def test_entity_tolerance_does_not_loosen_the_match() -> None:
+    markdown = "Planning &amp; Control"
+    assert not quote_in_element(markdown, "Planning and Control")
+    assert not quote_in_element(markdown, "Planning &amp Control")  # not an entity without `;`
+    assert not quote_in_element("a < b", "a &gt; b")
