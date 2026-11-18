@@ -151,6 +151,7 @@ from factory.services import lineage as graph_service
 from factory.services import manuscript_verify as manuscript_verify_service
 from factory.services import manuscripts as manuscripts_service
 from factory.services import matching as matching_service
+from factory.services import mine_reopen as mine_reopen_service
 from factory.services import miner_gold as miner_gold_service
 from factory.services import mining as mining_service
 from factory.services import notices as notices_service
@@ -2492,6 +2493,39 @@ def build_server(
                 "imported_units": len(result.written),
                 "rejected": [error.model_dump(mode="json") for error in result.rejected],
             }
+
+        return _reply(project, run, include_work_ids=False)
+
+    @server.tool()
+    def mine_reopen(
+        project: str,
+        miner: str,
+        version: int,
+        work_id: str,
+        pass_label: str,
+        reason: str,
+    ) -> dict[str, JsonValue]:
+        """The human's reopening of one mined work after a selector miss (IDEA-99): the unit of
+        `work_id` in pass A or B of a registered miner version is mined again under the same
+        version, and its earlier rows give way to the new task's. Allowed only when the completed
+        task's selection served under 10 % of the paragraph words (recorded on the task, or
+        computed from its anchors for an older task) and it did not already fall back; refused
+        otherwise, or when the unit is already reopened. The next `mine_next` serves the fresh
+        task. Refused to a session that has joined a pass."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            event_id = mine_reopen_service.reopen_unit(
+                opened,
+                opened.human_actor(),
+                miner,
+                version,
+                work_id,
+                _pass_label(pass_label),
+                reason,
+            )
+            return {"event_id": event_id}
 
         return _reply(project, run, include_work_ids=False)
 

@@ -82,18 +82,26 @@ def _words(anchor: Anchor) -> int:
     return len(anchor.text.split())
 
 
+def paragraph_share(manifest: Manifest, anchors: tuple[str, ...]) -> float | None:
+    """The share of the manifest's paragraph words that lie in `anchors`, or None when the
+    manifest has no paragraph words (the share is then undefined and never triggers a fallback)."""
+    total = sum(_words(a) for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH)
+    if total == 0:
+        return None
+    ids = set(anchors)
+    matched = sum(
+        _words(a) for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH and a.id in ids
+    )
+    return matched / total
+
+
 def select_with_fallback(manifest: Manifest, selector: Selector) -> Selection:
     """`selected_anchors`, or every section of the selector's kinds when its heading patterns
     match under `SELECTION_FALLBACK_BELOW` of the paragraph words (see the module invariants)."""
     chosen = selected_anchors(manifest, selector)
-    total = sum(_words(a) for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH)
-    if total == 0:
+    share = paragraph_share(manifest, chosen)
+    if share is None:
         return Selection(chosen, 0.0, False)
-    ids = set(chosen)
-    matched = sum(
-        _words(a) for a in manifest.anchors if a.kind is AnchorKind.PARAGRAPH and a.id in ids
-    )
-    share = matched / total
     if not selector.heading_patterns or share >= SELECTION_FALLBACK_BELOW:
         return Selection(chosen, share, False)
     kinds = set(selector.elements)

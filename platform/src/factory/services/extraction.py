@@ -1765,9 +1765,10 @@ class UnitState(StrictModel):
     """One extraction unit: an included work in one pass in use, and whether its extraction is
     current. `queued`: no task yet, or its latest task waits unclaimed; `open`: its latest task
     is claimed; `current`: its latest task completed and is not stale; `stale`: its latest task
-    is stale, `reason` saying why (`schema`, `document-version`, or, for a contribution unit,
-    `references`: a live row cites a reference extraction that is no longer its work's current G1
-    extraction, slice 3b ruling 12). `reason` is otherwise None."""
+    is stale, `reason` saying why (`schema`, `document-version`, `reopened`: a `mine.reopened` was
+    recorded after the latest task closed (IDEA-99), or, for a contribution unit, `references`: a
+    live row cites a reference extraction that is no longer its work's current G1 extraction, slice
+    3b ruling 12). `reason` is otherwise None."""
 
     work_id: str
     pass_label: PassLabel
@@ -1820,6 +1821,10 @@ class _Ledger:
     reopened: frozenset[str] = frozenset()
     """Imported works to queue again: their source was corrected (`mine_next`). They stay filled
     (their rows in use) until a local row or claimed task shadows them."""
+    reopenings: dict[tuple[str, PassLabel], list[str]] = field(default_factory=dict)
+    """The event ID of each `mine.reopened` of a miner unit, in recording order (IDEA-99): the unit
+    is stale (`reopened`) while its latest task closed before one, and its rows recorded before
+    one are stale. Empty for a scope that is not a miner's and for a calibration."""
     _filled: set[str] | None = None
 
     def filled(self) -> set[str]:
@@ -1901,6 +1906,8 @@ class _Ledger:
                 return "schema"
             return None
         closed = self.closed_at.get(task.task_id, "")
+        if any(when > closed for when in self.reopenings.get((work_id, label), [])):
+            return "reopened"
         carried = [
             row
             for row in self.rows.get((work_id, label), [])
@@ -2036,6 +2043,12 @@ class _Ledger:
             replaced = current is not None and row.document_id != current.document_id
             if replaced or self.cites_old_references(row):
                 stale.add(row.extraction_id)
+        for (work_id, label), reopened_at in self.reopenings.items():
+            stale.update(  # a reopened unit's earlier rows give way to the fresh task's (IDEA-99)
+                row.extraction_id
+                for row in self.rows.get((work_id, label), [])
+                if any(row.event_id < when for when in reopened_at)
+            )
         return stale
 
 
@@ -2100,7 +2113,25 @@ def _ledger(
         notice_states=work_states(project),
         imported=imported,
         reopened=reopened,
+        reopenings=_reopenings(project, scope) if calibration_id is None else {},
     )
+
+
+def _reopenings(project: Project, scope: ScopeKey) -> dict[tuple[str, PassLabel], list[str]]:
+    """The `mine.reopened` event IDs of each unit of a miner scope, in recording order."""
+    if not isinstance(scope, MinerScope):
+        return {}
+    found: dict[tuple[str, PassLabel], list[str]] = {}
+    with project.index.connect() as conn:
+        for work_id, label, event_id in conn.execute(
+            text(
+                "SELECT work_id, pass_label, event_id FROM mine_reopenings "
+                "WHERE miner = :miner ORDER BY event_id"
+            ),
+            {"miner": scope.name},
+        ):
+            found.setdefault((str(work_id), PassLabel(str(label))), []).append(str(event_id))
+    return found
 
 
 def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str]:
