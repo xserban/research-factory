@@ -12,10 +12,10 @@ Invariants:
 - The researcher's act: a human actor (an agent relays it over MCP with the human actor); any other
   actor is refused on `actor`, with nothing written.
 - The guard: the unit's latest task is a completed, closed task of that miner version, it did not
-  already fall back, its selector has heading patterns, and the share of paragraph words its
-  anchors served is under `SELECTION_FALLBACK_BELOW`. The share is the one recorded on the task, or,
-  for a task created before it was recorded, computed from its stored anchors and its pinned
-  conversion's manifest by the rule `select_with_fallback` uses.
+  already fall back, its selector can fall back (heading patterns; element kinds empty or
+  including PARAGRAPH), and the share of paragraph words its heading patterns matched is under
+  `SELECTION_FALLBACK_BELOW`. The share is the one recorded on the task, or, for a task created
+  before it was recorded, `heading_share` of the selector over its pinned conversion's manifest.
 - A unit reopened and not yet completed again is refused.
 """
 
@@ -25,7 +25,8 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.mining.select import SELECTION_FALLBACK_BELOW, paragraph_share
+from factory.mining.select import SELECTION_FALLBACK_BELOW, can_fall_back, heading_share
+from factory.mining.spec import Selector
 from factory.model.extraction import MinerScope
 from factory.model.mine_reopen import MAX_REASON, MineReopened
 from factory.model.screening import PassLabel
@@ -42,15 +43,18 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field, reason)])
 
 
-def served_share(project: Project, content: MineBatchContent) -> float | None:
-    """The share of paragraph words the task's selection served: the recorded
-    `selection_matched_share`, else (a task created before it was recorded) the share of its stored
-    anchors in its pinned conversion's manifest. None when the document has no paragraph words.
-    Read-only."""
+def served_share(project: Project, content: MineBatchContent, selector: Selector) -> float | None:
+    """The share of paragraph words the task's selector matched: the recorded
+    `selection_matched_share`, else (a task created before it was recorded) `heading_share` of the
+    miner's selector over the task's pinned conversion. The old task's stored anchors are not used:
+    for a selector of tables or cells they are not paragraphs, so their paragraph share says
+    nothing about the heading match, while the selector's patterns over the pinned manifest give
+    the very number `select_with_fallback` would compute. None when the selector has no patterns
+    or the document has no paragraph words. Read-only."""
     if content.selection_matched_share is not None:
         return content.selection_matched_share
     manifest = conversion_manifest(project, content.records[0]["conversion_id"])
-    return paragraph_share(manifest, content.anchors)
+    return heading_share(manifest, selector)
 
 
 def reopen_unit(
@@ -66,9 +70,10 @@ def reopen_unit(
     return its event id. Refused (`FactoryValidationError`, nothing written): on `actor` unless
     human; on `reason` when blank or over `MAX_REASON`; on `miner` for an unregistered version;
     on `work_id` when the unit has no completed, closed task of that version as its latest, the
-    task already served every section (`selection_fallback`), its selector has no heading
-    patterns, its selection served `SELECTION_FALLBACK_BELOW` of the paragraph words or more (or
-    the document has none), or the unit is already reopened and not yet completed again."""
+    task already served every section (`selection_fallback`), its selector never falls back
+    (no heading patterns, or element kinds without paragraphs), its headings
+    matched `SELECTION_FALLBACK_BELOW` of the paragraph words or more (or the document has
+    none), or the unit is already reopened and not yet completed again."""
     if actor.kind != "human":
         raise _refuse("actor", "reopening a mined work is the researcher's act; an agent relays it")
     if not reason.strip():
@@ -107,9 +112,13 @@ def reopen_unit(
             raise _refuse("work_id", "this unit is already reopened and not yet completed again")
         if content.selection_fallback:
             raise _refuse("work_id", "the task already served every section (selection fallback)")
-        if not spec.selector.heading_patterns:
-            raise _refuse("work_id", "the miner's selector has no heading patterns to miss")
-        share = served_share(project, content)
+        if not can_fall_back(spec.selector):
+            raise _refuse(
+                "work_id",
+                "the miner's selector never falls back (no heading patterns, or element kinds "
+                "without paragraphs); a re-mine would serve the same selection",
+            )
+        share = served_share(project, content, spec.selector)
         if share is None:
             raise _refuse("work_id", "the document has no paragraph words; nothing was missed")
         if share >= SELECTION_FALLBACK_BELOW:

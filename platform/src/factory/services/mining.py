@@ -732,7 +732,9 @@ def mine_next(
             digest=digest,
             anchors=selection.anchors,
             selection_fallback=selection.fallback,
-            selection_matched_share=round(selection.matched_share, 3),
+            selection_matched_share=(
+                None if selection.matched_share is None else round(selection.matched_share, 3)
+            ),
             calibration_id=calibration_id,
             exploratory=exploratory,
             field_kinds=notes,

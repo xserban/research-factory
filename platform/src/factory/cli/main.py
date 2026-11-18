@@ -2687,8 +2687,11 @@ def miner_reopen_cmd(
     reason: Annotated[str, typer.Option("--reason", help="Why the work is mined again.")],
 ) -> None:
     """Reopen one mined work after a selector miss (the researcher's act, IDEA-99): allowed only
-    when its completed task's selection served under 10 % of the paragraph words. The next
-    `mine_next` of that version serves a fresh task; the earlier rows give way to its rows."""
+    when its completed task's heading patterns matched under 10 % of the paragraph words and the
+    selector can fall back (heading patterns; element kinds empty or including paragraphs). The
+    next `mine_next` of that version serves a fresh task; the earlier rows are stale at once and
+    stay out of final views until the fresh task is mined. Reopening one pass leaves the other
+    as it was; reopen both passes when agreement matters."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)

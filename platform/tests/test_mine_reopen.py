@@ -13,7 +13,7 @@ from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
-from factory.mining.select import SELECTION_FALLBACK_BELOW, paragraph_share
+from factory.mining.select import SELECTION_FALLBACK_BELOW, heading_share
 from factory.mining.spec import MinerSpec
 from factory.model.extraction import MinerScope
 from factory.model.mine_reopen import MineReopened
@@ -105,9 +105,9 @@ def test_old_task_share_is_computed_from_stored_anchors(
     content = scope_ledger(project, MinerScope(VISION_NAME)).tasks[(work, A)][-1].content
     assert isinstance(content, MineBatchContent)
     assert content.selection_matched_share is None and content.selection_fallback is False
-    share = served_share(project, content)
+    share = served_share(project, content, _unmatched().selector)
     manifest = conversion_manifest(project, content.records[0]["conversion_id"])
-    assert share == paragraph_share(manifest, content.anchors) == 0.0  # no section matched
+    assert share == heading_share(manifest, _unmatched().selector) == 0.0  # no section matched
     assert share is not None and share < SELECTION_FALLBACK_BELOW
 
 
@@ -311,3 +311,111 @@ def test_mcp_tool_is_registered_and_thin(settings: Settings, tmp_path: Path) -> 
 
     source = inspect.getsource(server.build_server)
     assert "mine_reopen_service.reopen_unit(" in source
+
+
+@pytest.fixture
+def recorded_share(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Tasks created with a given recorded share and no fallback (the 3-decimal value a task
+    stores), whatever the document holds."""
+
+    def set_share(share: float) -> None:
+        real = MineBatchContent
+
+        def with_share(**kw: Any) -> MineBatchContent:
+            return real(**{**kw, "selection_matched_share": share, "selection_fallback": False})
+
+        monkeypatch.setattr(mining_module, "MineBatchContent", with_share)
+
+    return set_share
+
+
+def test_reopen_refused_at_exactly_the_threshold(
+    project: Project, agent: Actor, human: Actor, mina: Actor, world: list[str], recorded_share: Any
+) -> None:
+    recorded_share(SELECTION_FALLBACK_BELOW)
+    list_miner(project, agent)
+    work = mine_pass(project, mina, A, lambda w: [mine_row()])[0]
+    with pytest.raises(FactoryValidationError) as raised:
+        reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
+    assert "not under" in raised.value.issues[0].reason
+    assert not _events(project, "mine.reopened")
+
+
+def test_reopen_accepted_just_below_the_threshold(
+    project: Project, agent: Actor, human: Actor, mina: Actor, world: list[str], recorded_share: Any
+) -> None:
+    recorded_share(0.099)
+    list_miner(project, agent)
+    work = mine_pass(project, mina, A, lambda w: [mine_row()])[0]
+    reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
+    assert len(_events(project, "mine.reopened")) == 1
+
+
+def test_reopen_refused_for_a_selector_that_never_falls_back(
+    project: Project, agent: Actor, human: Actor, mina: Actor, world: list[str], recorded_share: Any
+) -> None:
+    from factory.document.anchors import AnchorKind
+
+    recorded_share(0.0)  # a miss in paragraph words, but the selector asks for tables only
+    spec = method_vision()
+    tables = replace(spec, selector=replace(spec.selector, elements=(AnchorKind.TABLE,)))
+    list_miner(project, agent, tables)
+    work = mine_pass(project, mina, A, lambda w: [mine_row()])[0]
+    with pytest.raises(FactoryValidationError) as raised:
+        reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
+    assert "never falls back" in raised.value.issues[0].reason
+    assert not _events(project, "mine.reopened")
+
+
+def test_old_table_task_share_comes_from_the_selector_not_the_anchors(
+    project: Project, agent: Actor, mina: Actor, world: list[str], legacy_selection: None
+) -> None:
+    from factory.document.anchors import AnchorKind
+
+    spec = method_vision()
+    tables = replace(spec, selector=replace(spec.selector, elements=(AnchorKind.TABLE,)))
+    list_miner(project, agent, tables)
+    work = mine_pass(project, mina, A, lambda w: [mine_row()])[0]
+    content = scope_ledger(project, MinerScope(VISION_NAME)).tasks[(work, A)][-1].content
+    assert isinstance(content, MineBatchContent) and content.selection_matched_share is None
+    manifest = conversion_manifest(project, content.records[0]["conversion_id"])
+    assert served_share(project, content, tables.selector) == heading_share(
+        manifest, tables.selector
+    )
+
+
+def test_reopening_pass_a_leaves_pass_b_untouched(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mina: Actor,
+    world: list[str],
+    recorded_share: Any,
+) -> None:
+    from tests.miner_helpers import SESSION_M2
+
+    recorded_share(0.0)
+    list_miner(project, agent)
+    minb = miner_actor(SESSION_M2, "claude-sonnet-5-5")
+    work = mine_pass(project, mina, A, lambda w: [mine_row()])[0]
+    mine_pass(project, minb, PassLabel.B, lambda w: [mine_row()])
+    b_rows = {
+        r.extraction_id
+        for r in live_rows(project, scope=MinerScope(VISION_NAME))
+        if r.work_id == work and r.pass_label == PassLabel.B
+    }
+    assert b_rows
+    reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
+    states = {
+        (s.work_id, s.pass_label): s for s in unit_states(project, scope=MinerScope(VISION_NAME))
+    }
+    assert (states[(work, A)].state, states[(work, A)].reason) == ("stale", "reopened")
+    assert states[(work, PassLabel.B)].state == "current"
+    stale = stale_extractions(project, scope=MinerScope(VISION_NAME))
+    assert not (b_rows & stale)
+    still = {
+        r.extraction_id
+        for r in live_rows(project, scope=MinerScope(VISION_NAME))
+        if r.work_id == work and r.pass_label == PassLabel.B
+    }
+    assert still == b_rows

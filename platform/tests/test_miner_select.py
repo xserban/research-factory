@@ -196,7 +196,7 @@ def test_fallback_when_share_below_threshold() -> None:
     )
     result = select_with_fallback(manifest, selector)
     assert result.fallback is True
-    assert result.matched_share < SELECTION_FALLBACK_BELOW
+    assert result.matched_share is not None and result.matched_share < SELECTION_FALLBACK_BELOW
     texts = _texts(manifest, result.anchors)
     assert any(t.startswith("word word") for t in texts)  # the Summary paragraph is served now
     assert "Tiny note here." in texts
@@ -210,14 +210,14 @@ def test_no_fallback_when_share_above_threshold() -> None:
     result = select_with_fallback(manifest, selector)
     assert result.fallback is False
     assert result.anchors == selected_anchors(manifest, selector)
-    assert result.matched_share > 0.9
+    assert result.matched_share is not None and result.matched_share > 0.9
 
 
 def test_no_fallback_without_heading_patterns() -> None:
     manifest = _manifest(DOC_SUMMARY)
     selector = Selector(Population.CORPUS, elements=(AnchorKind.TABLE,))
     result = select_with_fallback(manifest, selector)
-    assert result.fallback is False and result.matched_share == 0.0
+    assert result.fallback is False and result.matched_share is None
 
 
 def test_no_fallback_without_paragraph_words() -> None:
@@ -237,3 +237,70 @@ def test_fallback_never_selects_bibliography_entries() -> None:
     assert AnchorKind.BIBLIOGRAPHY_ENTRY not in got
     if AnchorKind.BIBLIOGRAPHY_ENTRY in kinds:
         assert AnchorKind.PARAGRAPH in got
+
+
+def _doc_with_matched_words(matched: int, other: int) -> Manifest:
+    return _manifest(
+        "# Summary\n\n"
+        + " ".join(["a"] * matched)
+        + "\n\n# Elsewhere\n\n"
+        + " ".join(["b"] * other)
+        + "\n"
+    )
+
+
+def _summary_selector() -> Selector:
+    return Selector(
+        Population.CORPUS, elements=(AnchorKind.PARAGRAPH,), heading_patterns=("summary",)
+    )
+
+
+def test_share_exactly_at_the_threshold_does_not_fall_back() -> None:
+    result = select_with_fallback(_doc_with_matched_words(10, 90), _summary_selector())
+    assert result.matched_share == SELECTION_FALLBACK_BELOW
+    assert result.fallback is False
+
+
+def test_share_just_below_the_threshold_falls_back() -> None:
+    manifest = _doc_with_matched_words(9, 91)
+    result = select_with_fallback(manifest, _summary_selector())
+    assert result.matched_share == 0.09
+    assert result.fallback is True
+    assert len(result.anchors) > len(selected_anchors(manifest, _summary_selector()))
+
+
+def test_table_only_selector_with_matching_headings_does_not_fall_back() -> None:
+    manifest = _manifest(DOC_V1)
+    selector = Selector(
+        Population.CORPUS, elements=(AnchorKind.TABLE,), heading_patterns=("related",)
+    )
+    result = select_with_fallback(manifest, selector)
+    assert result.fallback is False
+    assert result.anchors == selected_anchors(manifest, selector)
+    # The share is that of the paragraphs under the matched sections, not of the table's.
+    assert result.matched_share is not None and result.matched_share > 0.0
+
+
+def test_table_only_selector_with_unmatched_headings_does_not_fall_back() -> None:
+    manifest = _manifest(DOC_SUMMARY)
+    selector = Selector(
+        Population.CORPUS, elements=(AnchorKind.TABLE,), heading_patterns=("zzz-no-such",)
+    )
+    result = select_with_fallback(manifest, selector)
+    assert result.fallback is False and result.matched_share == 0.0 and result.anchors == ()
+
+
+def test_share_counts_paragraphs_of_matched_sections_whatever_the_kinds() -> None:
+    manifest = _doc_with_matched_words(50, 50)
+    tables = Selector(
+        Population.CORPUS, elements=(AnchorKind.TABLE,), heading_patterns=("summary",)
+    )
+    assert select_with_fallback(manifest, tables).matched_share == 0.5
+    everything = Selector(Population.CORPUS, heading_patterns=("summary",))
+    assert select_with_fallback(manifest, everything).matched_share == 0.5
+
+
+def test_selector_of_all_kinds_with_a_miss_falls_back() -> None:
+    manifest = _manifest(DOC_SUMMARY)
+    selector = Selector(Population.CORPUS, heading_patterns=("checklist",))
+    assert select_with_fallback(manifest, selector).fallback is True
