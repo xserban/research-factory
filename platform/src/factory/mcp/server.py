@@ -91,6 +91,7 @@ from factory.model.screening_check import (
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.seed import SeedSpec
 from factory.model.taxonomies import ProposalKind
+from factory.model.technique_graph import NOTICE as TECHNIQUE_NOTICE
 from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
@@ -3065,11 +3066,14 @@ def build_server(
         def run() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
-            _require_pass_opened(opened)
+            _require_pass_opened(opened, "technique")
             result = build(opened).model_dump(mode="json", by_alias=True)
             return _withheld(opened, result, include_work_ids=False)
 
-        return _reply(project, run, include_work_ids=False)
+        reply = _reply(project, run, include_work_ids=False)
+        if reply.get("ok") is not True:
+            reply["notice"] = TECHNIQUE_NOTICE  # a refusal is labelled like a result
+        return reply
 
     @server.tool()
     def technique_landscape(

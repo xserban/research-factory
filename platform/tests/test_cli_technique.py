@@ -49,3 +49,21 @@ def test_the_cli_equals_the_service_and_every_output_is_labelled(
     assert "Lorem ipsum dolor sit amet." in out and "s3.p1" in out
     code, out, err = _run(settings.root, "show", "nope")
     assert code != 0 and "unknown approach" in (out + err)
+
+
+def test_the_cli_is_the_researchers_own_view_and_names_held_out_works(
+    settings: Settings, project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    """Open choice, documented: no `technique` CLI command calls `require_pass_opened` or scrubs,
+    as for every command in `CLI_READS` (decision 37 item 9: the CLI is the researcher's own and
+    shows corpus works, held-out ones included). The MCP path refuses before a pass opens and
+    scrubs. An agent reaching the CLI is held back by the CLI permission gate, not here."""
+    ordered = _setup(project, agent, human, world)
+    _mine(project, ordered)
+    code, out, err = _run(settings.root, "show", "ide-02")
+    assert code == 0, err
+    assert out.startswith("EXPLORATORY:")
+    assert ordered[1] in out and "not available yet" not in out
+    code, out, err = _run(settings.root, "candidates")
+    assert code == 0, err
+    assert out.startswith("EXPLORATORY:")

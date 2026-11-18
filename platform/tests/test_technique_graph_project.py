@@ -174,6 +174,18 @@ def test_held_out_works_are_corpus_works_and_nothing_is_masked(
     assert ordered[1] in text and "[withheld]" not in text
 
 
+def _use_every_technique_read(project: Project) -> None:
+    from factory.services.check import check
+
+    tg.technique_landscape(project, min_co_works=1)
+    tg.technique_view(project, "ide-01")
+    tg.technique_neighbors(project, "ide-01")
+    tg.technique_gaps(project, from_stage="ideation", to_stage="experiment", min_works=1)
+    tg.technique_combinations(project, min_works=1)
+    tg.technique_challenges(project)
+    check(project)  # `factory check`
+
+
 def test_report_output_is_identical_with_and_without_technique_rows(
     project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:
@@ -183,11 +195,93 @@ def test_report_output_is_identical_with_and_without_technique_rows(
         prisma_flow(project).model_dump_json(),
     )
     _mine(project, ordered)
+    _use_every_technique_read(project)
     after = (
         evidence_report(project).model_dump_json(),
         prisma_flow(project).model_dump_json(),
     )
     assert before == after
+
+
+def test_no_index_lock_is_held_across_the_scan(
+    project: Project, agent: Actor, human: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    ordered = _setup(project, agent, human, world)
+    _mine(project, ordered)
+    tg._CACHE.clear()
+    tg._AGREEMENT.clear()
+    seen: list[bool] = []
+    original = tg._read_cites
+
+    def probe(proj: Project, sources: object) -> object:
+        done = threading.Event()
+
+        def write_side() -> None:
+            with proj.index.exclusive():  # what any writer takes: waits while a snapshot is held
+                done.set()
+
+        thread = threading.Thread(target=write_side)
+        thread.start()
+        seen.append(done.wait(timeout=10))
+        thread.join(timeout=10)
+        return original(proj, sources)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tg, "_read_cites", probe)
+    tg.technique_landscape(project, min_co_works=1)
+    assert seen == [True]
+
+
+def test_concurrent_misses_share_one_scan_and_the_memo_survives_threads(
+    project: Project, agent: Actor, human: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    ordered = _setup(project, agent, human, world)
+    _mine(project, ordered)
+    tg._CACHE.clear()
+    scans: list[int] = []
+    original = tg._read
+
+    def slow(proj: Project) -> tg.Inputs:
+        scans.append(1)
+        time.sleep(0.3)
+        return original(proj)
+
+    monkeypatch.setattr(tg, "_read", slow)
+    errors: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            tg.read_inputs(project)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not errors and len(scans) == 1
+    # eviction under contention: many keys at once never raises
+    inputs = tg.read_inputs(project)
+
+    def store(i: int) -> None:
+        try:
+            for j in range(50):
+                with tg._GUARD:
+                    tg._store(tg._CACHE, f"k{i}-{j}", None, inputs)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=store, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not errors and len(tg._CACHE) <= tg._CACHE_MAX
 
 
 def test_check_reports_a_technique_taxonomy_no_miner_projects(

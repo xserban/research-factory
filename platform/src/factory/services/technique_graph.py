@@ -24,11 +24,12 @@ check, never findings.
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations as _pairs
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import bindparam, text
 
@@ -82,6 +83,7 @@ TECHNIQUE_TAXONOMY_PREFIX = "t-tech-"
 REUSED = "reused-cited"
 _CATEGORY = "category"
 _CACHE_MAX = 4
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -131,7 +133,13 @@ class Inputs:
 # --- reading -----------------------------------------------------------------------------------
 
 _CACHE: dict[str, tuple[str | None, Inputs]] = {}
-"""Project directory -> (last folded event id, inputs): a read-time memo per index snapshot."""
+"""Project directory -> (event id the inputs were built at, inputs): a read-time memo."""
+_AGREEMENT: dict[str, tuple[str | None, Inputs]] = {}
+"""Project directory -> (event id built at, inputs with the stage agreement filled in)."""
+_GUARD = threading.Lock()
+"""Guards the two memos and the key locks; never held across a scan."""
+_KEY_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+"""(memo name, project directory) -> the lock concurrent misses queue on, so one scan serves all."""
 
 
 def _refuse(field_: str, reason: str) -> FactoryValidationError:
@@ -145,59 +153,111 @@ def _text(stored: Any) -> str | None:
     return value or None
 
 
+def _store(
+    memo: dict[str, tuple[str | None, Inputs]], key: str, built: str | None, v: Inputs
+) -> None:
+    """Store under `_GUARD` (the caller holds it); evicts the oldest entry beyond the bound."""
+    memo.pop(key, None)
+    while len(memo) >= _CACHE_MAX:
+        memo.pop(next(iter(memo)), None)
+    memo[key] = (built, v)
+
+
+def _stable(project: Project, build: Callable[[], T]) -> tuple[T, str | None]:
+    """Run `build` (many short reads, no lock held across them) and return its result with the
+    event id it is consistent with: the last folded event id before and after must agree, else it
+    is run once more. If events still arrive, the id before the last run is returned, so the memo
+    entry is stale at once and the next call rebuilds."""
+    before = project.index.last_event_id()
+    result = build()
+    if project.index.last_event_id() != before:
+        before = project.index.last_event_id()
+        result = build()
+    return result, before
+
+
 def read_inputs(project: Project) -> Inputs:
-    """The inputs of the landscape from the index, memoised per last folded event. Read-only."""
+    """The inputs of the landscape from the index, memoised per last folded event. Read-only.
+    No index lock is held across the scan (writers and the hub are never blocked by it);
+    concurrent misses of one project share one scan."""
     project.index.sync()
     key = str(project.paths.dir)
-    head = project.index.last_event_id()
-    hit = _CACHE.get(key)
-    if hit is not None and hit[0] == head:
-        return hit[1]
-    inputs = _read(project)
-    _CACHE.pop(key, None)
-    while len(_CACHE) >= _CACHE_MAX:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = (head, inputs)
-    return inputs
-
-
-_AGREEMENT: dict[str, tuple[str | None, Inputs]] = {}
-"""Project directory -> (last folded event id, inputs with the stage agreement filled in)."""
+    with _GUARD:
+        head = project.index.last_event_id()
+        hit = _CACHE.get(key)
+        if hit is not None and hit[0] == head:
+            return hit[1]
+        lock = _KEY_LOCKS.setdefault(("inputs", key), threading.Lock())
+    with lock:
+        with _GUARD:
+            hit = _CACHE.get(key)
+            if hit is not None and hit[0] == project.index.last_event_id():
+                return hit[1]
+        inputs, built = _stable(project, lambda: _read(project))
+        with _GUARD:
+            _store(_CACHE, key, built, inputs)
+        return inputs
 
 
 def with_agreement(project: Project, inputs: Inputs) -> Inputs:
     """`inputs` with each stage miner's agreement (all rows and aligned rows) filled in: computed
     only for the technique miners, once per last folded event, because the figure is the slowest
-    read. A miner with no second pass has none."""
+    read. A miner with no second pass has none. No index lock is held across the computation."""
     key = str(project.paths.dir)
-    head = project.index.last_event_id()
-    hit = _AGREEMENT.get(key)
-    if hit is not None and hit[0] == head and hit[1].rows is inputs.rows:
-        return hit[1]
-    filled: list[StageInfo] = []
-    with project.index.snapshot(), entering():
-        for info in inputs.stages:
-            overall = agreement_overall(
-                project,
-                scope=MinerScope(info.miner),
-                ledger=scope_ledger(project, MinerScope(info.miner)),
+
+    def fresh() -> Inputs | None:
+        hit = _AGREEMENT.get(key)
+        if (
+            hit is not None
+            and hit[0] == project.index.last_event_id()
+            and hit[1].rows is inputs.rows
+        ):
+            return hit[1]
+        return None
+
+    with _GUARD:
+        found = fresh()
+        if found is not None:
+            return found
+        lock = _KEY_LOCKS.setdefault(("agreement", key), threading.Lock())
+    with lock:
+        with _GUARD:
+            found = fresh()
+        if found is not None:
+            return found
+
+        def build() -> Inputs:
+            filled: list[StageInfo] = []
+            with entering():
+                for info in inputs.stages:
+                    overall = agreement_overall(
+                        project,
+                        scope=MinerScope(info.miner),
+                        ledger=scope_ledger(project, MinerScope(info.miner)),
+                    )
+                    filled.append(
+                        StageInfo(
+                            info.stage,
+                            info.miner,
+                            info.version,
+                            info.residual_rows,
+                            overall.overall_all_rows,
+                            overall.overall,
+                        )
+                    )
+            return Inputs(
+                inputs.catalogue,
+                inputs.rows,
+                tuple(filled),
+                inputs.works,
+                inputs.cites,
+                inputs.extra,
             )
-            filled.append(
-                StageInfo(
-                    info.stage,
-                    info.miner,
-                    info.version,
-                    info.residual_rows,
-                    overall.overall_all_rows,
-                    overall.overall,
-                )
-            )
-    result = Inputs(
-        inputs.catalogue, inputs.rows, tuple(filled), inputs.works, inputs.cites, inputs.extra
-    )
-    _AGREEMENT.pop(key, None)
-    _AGREEMENT[key] = (head, result)
-    return result
+
+        result, built = _stable(project, build)
+        with _GUARD:
+            _store(_AGREEMENT, key, built, result)
+        return result
 
 
 def _technique_miners(project: Project) -> list[tuple[str, int, str, int]]:
@@ -222,7 +282,7 @@ def _read(project: Project) -> Inputs:
     catalogue: dict[str, tuple[str, str, str]] = {}
     rows: list[RawRow] = []
     stages: list[StageInfo] = []
-    with project.index.snapshot(), entering():
+    with entering():  # short per-call reads: a snapshot here would block writers for the scan
         protocol = current_protocol(project)
         listed = {u.name for u in (protocol.spec.miners or ())} if protocol is not None else set()
         for miner, version, tname, tversion in _technique_miners(project):
@@ -395,15 +455,40 @@ def derives_from(inputs: Inputs, rows: Sequence[RawRow]) -> list[Edge]:
     return [out[k] for k in sorted(out)]
 
 
+def _year_only(date: str) -> bool:
+    """A year-only publication date is stored as 1 January (list imports, reference lists), so a
+    1 January date cannot be told from a year: it is ordered by year only."""
+    return date.endswith("-01-01")
+
+
 def _earliest(
     inputs: Inputs, approach: str, rows: Sequence[RawRow]
 ) -> tuple[Edge | None, list[str]]:
     users = sorted({r.work_id for r in rows if r.approach == approach})
-    dated = [(inputs.works[w].date, w) for w in users if inputs.works[w].date]
+    dated = [(d, w) for w in users if (d := inputs.works[w].date)]
     skipped = [w for w in users if not inputs.works[w].date]
     if not dated:
         return None, skipped
-    date, work = min(dated)
+    year = min(d[:4] for d, _ in dated)
+    tied = sorted((d, w) for d, w in dated if d[:4] == year)
+    if any(_year_only(d) for d, _ in tied):
+        # a year-only date cannot be ordered against the others of its year: the year is the
+        # basis, every work of that year is listed, and the target is the first by id
+        works = tuple(sorted(w for _, w in tied))
+        return (
+            Edge(
+                kind="earliest-in-corpus",
+                source=approach,
+                target=works[0],
+                approach=approach,
+                works=works,
+                basis=year,
+                note="date rule at year precision: a user is dated by year only (or on 1 January), "
+                "so the works of that year cannot be ordered; not an origin claim",
+            ),
+            skipped,
+        )
+    date, work = tied[0]
     return (
         Edge(
             kind="earliest-in-corpus",
@@ -776,6 +861,12 @@ def technique_landscape(
     )
     inputs = with_agreement(project, inputs)
     return build_landscape(inputs, lens, max_edges=max_edges, include_uses=include_uses)
+
+
+def technique_derivations(project: Project, *, layer: str = "core") -> Landscape:
+    """The landscape with no co-use edge, for the candidate `derives-from` list: the stage
+    agreement, the slowest read, is not computed. Read-only."""
+    return build_landscape(read_inputs(project), Lens(layer=layer, min_co_works=10**9))
 
 
 def technique_view(

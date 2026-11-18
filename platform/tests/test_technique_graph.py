@@ -161,6 +161,23 @@ def test_earliest_in_corpus_breaks_ties_by_id_and_lists_undated_works() -> None:
     assert land_.undated_works == ("rf:d",)
 
 
+def test_a_year_only_date_is_not_ordered_against_a_full_date_of_its_year() -> None:
+    # year-only dates are stored as 1 January: 2023 (year only) must not beat 2023-03-10
+    works = dict(WORKS)
+    works["rf:b"] = WorkMeta("B", "2023-01-01", 2023, "core")
+    works["rf:c"] = WorkMeta("C", "2023-03-10", 2023, "core")
+    data = Inputs(
+        CATALOGUE, (row("rf:b", "ide-02"), row("rf:c", "ide-02")), inputs([]).stages, works, ()
+    )
+    edge = tg.build_view(data, "ide-02", Lens()).earliest
+    assert edge is not None and edge.basis == "2023" and edge.works == ("rf:b", "rf:c")
+    assert "year precision" in (edge.note or "")
+    # a clear earlier year still wins with its exact date
+    works["rf:c"] = WorkMeta("C", "2022-03-10", 2022, "core")
+    edge = tg.build_view(data, "ide-02", Lens()).earliest
+    assert edge is not None and edge.target == "rf:c" and edge.basis == "2022-03-10"
+
+
 def test_two_builds_are_byte_identical() -> None:
     data = inputs(BASE, (("rf:b", "rf:a", "cit:x:1"),))
     one = tg.build_landscape(data, Lens(), include_uses=True).model_dump_json(by_alias=True)

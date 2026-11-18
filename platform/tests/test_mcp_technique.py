@@ -49,6 +49,7 @@ async def test_an_empty_landscape_is_labelled_and_an_unknown_approach_is_refused
         assert data["lens"]["layer"] == "core"
         bad = await client.call("technique_view", project="demo", approach="nope")
         assert bad["ok"] is False and bad["errors"][0]["field"] == "approach"
+        assert "exploratory" in bad["notice"]  # a refusal is labelled too
         stage = await client.call("technique_landscape", project="demo", stage="nope")
         assert stage["ok"] is False
         gaps = await client.call("technique_gaps", project="demo", from_stage="a", to_stage="b")

@@ -24,6 +24,10 @@ CORPUS_SENTENCE = (
     "Counts are works of this corpus with a current pass-A row of the stage's technique miner "
     "in the named lens; a technique not found here may exist outside the corpus."
 )
+DERIVES_LENS_NOTE = (
+    "derives-from candidates follow the layer only: the evidence and status lens does not filter "
+    "them, so they can name rows the filtered lists above leave out"
+)
 CANDIDATE_SENTENCE = "hypothesis to check against the verified quotes, never a finding"
 EVIDENCE_LEVELS = (
     "independent-test",
@@ -152,6 +156,7 @@ class ApproachView(StrictModel):
     works: tuple[WorkNode, ...]
     uses: tuple[UseRow, ...]
     derives_from: tuple[Edge, ...]
+    derives_from_lens: str = DERIVES_LENS_NOTE
     earliest: Edge | None
     undated_works: tuple[str, ...]
     not_stated_share: float | None
@@ -180,6 +185,7 @@ class Neighbors(StrictModel):
     stages: tuple[StageReach, ...]
     works: tuple[str, ...]
     derives_from: tuple[Edge, ...]
+    derives_from_lens: str = DERIVES_LENS_NOTE
 
 
 class GapCandidate(StrictModel):

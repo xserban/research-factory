@@ -9,7 +9,7 @@ stage: [develop]
 Sets an idea against the landscape of approaches (techniques) that the technique miners read
 from the corpus, and proposes hypotheses from what the landscape shows is common, untried or
 contested. Everything the landscape shows is exploratory: it comes from uncalibrated miners
-(pass A; agreement between passes 0.21 to 0.61), it is an interpretation, never evidence, and no
+(pass A; quote the agreement between passes from the tool's own stage figures, never from memory), it is an interpretation, never evidence, and no
 figure from it enters a report. "Not found in this corpus" is not "absent from the field".
 You propose; the researcher accepts or discards. You never confirm, review, promote or register.
 

@@ -6152,7 +6152,7 @@ def technique_candidates_cmd(
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        result = technique_service.technique_landscape(project, layer=layer, min_co_works=10**9)
+        result = technique_service.technique_derivations(project, layer=layer)
     _technique_out(result, render.technique_candidate_lines, format_)
 
 
