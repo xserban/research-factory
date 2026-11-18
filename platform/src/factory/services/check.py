@@ -138,7 +138,7 @@ from factory.services.members import members
 from factory.services.methods import MethodsReport, methods_report, render_methods
 from factory.services.miner_report import calibration_passed
 from factory.services.miners import MinerState, miner_state
-from factory.services.mining import registered_miners
+from factory.services.mining import registered_miner, registered_miners
 from factory.services.modules import default_modules
 from factory.services.notices import (
     assessments,
@@ -170,6 +170,7 @@ from factory.services.status_lookup import (
     effective_last_checked,
     unrecovered_failures,
 )
+from factory.services.taxonomies import list_taxonomies, registered_taxonomy
 from factory.services.trace import dangling_refs
 from factory.services.unreferenced_files import unreferenced_files
 from factory.services.versions import link_conflicts, newer_versions, vor_available
@@ -560,6 +561,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _gate_policies(project),
         _mining(project),
         _miner_lifecycle(project),
+        _technique_layer(project),
         slice6_hits(project),
         _mine_imports(project),
         _drafts(project),
@@ -934,6 +936,44 @@ def _mining(project: Project) -> list[_Hit]:
                     tuple(sorted(single)),
                     f"miner {use.name}: {len(single)} work(s) are mined once, outside the "
                     "dual sample",
+                )
+            )
+    return hits
+
+
+def _technique_layer(project: Project) -> list[_Hit]:
+    """The technique landscape reads the latest derived miner of each `t-tech-` taxonomy
+    (IDEA-78). A technique taxonomy no non-retired derived miner projects, or one with no
+    category, leaves its stage out of the landscape: say so. Its figures are exploratory and no
+    report reads them; this finding says nothing about their content."""
+    taxonomies = {t.name: t for t in list_taxonomies(project) if t.name.startswith("t-tech-")}
+    if not taxonomies:
+        return []
+    projected: set[str] = set()
+    for row in registered_miners(project):
+        spec = None if row.retired else registered_miner(project, row.name, row.version)
+        if spec is not None and spec.taxonomy is not None:
+            projected.add(spec.taxonomy.name)
+    hits: list[_Hit] = []
+    for name in sorted(taxonomies):
+        latest = max(t.version for t in list_taxonomies(project) if t.name == name)
+        spec_ = registered_taxonomy(project, name, latest)
+        if spec_ is None or not any(d.categories for d in spec_.dimensions):
+            hits.append(
+                _Hit(
+                    "technique-taxonomy-empty",
+                    (),
+                    f"technique taxonomy {name} version {latest} has no category: "
+                    "the landscape shows no approach for its stage",
+                )
+            )
+        elif name not in projected:
+            hits.append(
+                _Hit(
+                    "technique-no-miner",
+                    (),
+                    f"technique taxonomy {name} has no registered, non-retired derived miner: "
+                    "the landscape shows no approach for its stage",
                 )
             )
     return hits

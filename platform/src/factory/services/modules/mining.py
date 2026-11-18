@@ -91,6 +91,8 @@ SPEC = ModuleSpec(
         CheckRule("miner-calibration-failed", ("warning", "warning", "warning")),
         CheckRule("miner-uncalibrated-evidence", ("error", "error", "error")),
         CheckRule("miner-version-unread", ("warning", "warning", "warning")),
+        CheckRule("technique-no-miner", ("warning", "warning", "warning")),
+        CheckRule("technique-taxonomy-empty", ("warning", "warning", "warning")),
     ),
 )
 

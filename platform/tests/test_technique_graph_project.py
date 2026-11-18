@@ -188,3 +188,23 @@ def test_report_output_is_identical_with_and_without_technique_rows(
         prisma_flow(project).model_dump_json(),
     )
     assert before == after
+
+
+def test_check_reports_a_technique_taxonomy_no_miner_projects(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    from factory.services.check import check
+
+    register_taxonomy(project, human, taxonomy_to_json(_taxonomy("ideation", ("ide-01",))))
+    codes = [f.code for f in check(project).findings]
+    assert "technique-no-miner" in codes
+    miner = derive_miner(
+        _taxonomy("ideation", ("ide-01",)),
+        ("technique",),
+        name="m-tech-ideation",
+        version=1,
+        selector=Selector(Population.INCLUDED_FT),
+        regime=MinerRegime(2, 3, 0.8, 0.9),
+    )
+    register_miner(project, agent, spec_to_json(miner))
+    assert "technique-no-miner" not in [f.code for f in check(project).findings]

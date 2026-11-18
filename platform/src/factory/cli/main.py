@@ -1,7 +1,7 @@
 """The `factory` command: parse arguments, call a service, format output. No business logic here."""
 
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -187,6 +187,7 @@ from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
 from factory.services import suggestions as suggestions_service
+from factory.services import technique_graph as technique_service
 from factory.services import trace as trace_service
 from factory.services import versions as versions_service
 from factory.services import view_coverage as view_coverage_service
@@ -435,6 +436,12 @@ graph_app = typer.Typer(
     help="The lineage graph: build, status, bounded queries and JSON or DOT export.",
     no_args_is_help=True,
 )
+technique_app = typer.Typer(
+    name="technique",
+    help="The landscape of approaches (techniques) read from the technique miners: exploratory, "
+    "derived at read time, never evidence.",
+    no_args_is_help=True,
+)
 view_app = typer.Typer(
     name="view",
     help="Read-only views over the log: onion rings, coverage map, group timeline and horizon.",
@@ -578,6 +585,7 @@ app.add_typer(taxonomy_app)
 app.add_typer(work_layers_app)
 mine_app.command("request")(mine_request_cmd)
 app.add_typer(graph_app)
+app.add_typer(technique_app)
 app.add_typer(view_app)
 app.add_typer(interpretations_app)
 app.add_typer(concepts_app)
@@ -6077,6 +6085,161 @@ def graph_query_cmd(
         )
     for line in render.graph_query_lines(result):
         typer.echo(line)
+
+
+_LAYER_OPT = typer.Option("--layer", help="core (default), all, or another layer id.")
+_FORMAT_OPT = typer.Option("--format", help="table or json.")
+
+
+def _technique_out(result: BaseModel, lines: Callable[[Any], list[str]], format_: str) -> None:
+    """Print a technique result as table lines or as JSON (class key written)."""
+    if format_ not in ("table", "json"):
+        raise typer.BadParameter("must be table or json", param_hint="--format")
+    if format_ == "json":
+        typer.echo(result.model_dump_json(by_alias=True, indent=2))
+        return
+    for line in lines(result):
+        typer.echo(line)
+
+
+@technique_app.command("landscape")
+def technique_landscape_cmd(
+    ctx: typer.Context,
+    stage: Annotated[str | None, typer.Option("--stage", help="One stage.")] = None,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    evidence: Annotated[str | None, typer.Option("--evidence", help="Evidence level.")] = None,
+    status: Annotated[str | None, typer.Option("--status", help="Use status.")] = None,
+    min_co_works: Annotated[int, typer.Option("--min-co-works")] = 2,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """The approaches by stage with the number of works and each stage miner's agreement."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_landscape(
+            project,
+            layer=layer,
+            stage=stage,
+            evidence=evidence,
+            status=status,
+            min_co_works=min_co_works,
+        )
+    _technique_out(result, render.technique_landscape_lines, format_)
+
+
+@technique_app.command("show")
+def technique_show_cmd(
+    ctx: typer.Context,
+    approach: Annotated[str, typer.Argument(help="An approach id such as ide-01.")],
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """One approach: its works, rows with quotes and anchors, derives-from candidates."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_view(project, approach, layer=layer)
+    _technique_out(result, render.technique_view_lines, format_)
+
+
+@technique_app.command("candidates")
+def technique_candidates_cmd(
+    ctx: typer.Context,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """The candidate derives-from edges (all exploratory; none is accepted before a decision)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_landscape(project, layer=layer, min_co_works=10**9)
+    _technique_out(result, render.technique_candidate_lines, format_)
+
+
+@technique_app.command("neighbors")
+def technique_neighbors_cmd(
+    ctx: typer.Context,
+    approach: Annotated[str, typer.Argument(help="An approach id.")],
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    min_works: Annotated[int, typer.Option("--min-works")] = 1,
+    limit: Annotated[int | None, typer.Option("--limit")] = 50,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Co-used approaches by weight, stages reached, works, derives-from candidates."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_neighbors(
+            project, approach, layer=layer, min_works=min_works, limit=limit
+        )
+    _technique_out(result, render.technique_neighbor_lines, format_)
+
+
+@technique_app.command("gaps")
+def technique_gaps_cmd(
+    ctx: typer.Context,
+    from_stage: Annotated[str, typer.Option("--from-stage")],
+    to_stage: Annotated[str, typer.Option("--to-stage")],
+    min_works: Annotated[int, typer.Option("--min-works")] = 3,
+    max_to_share: Annotated[float, typer.Option("--max-to-share")] = 0.0,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    limit: Annotated[int | None, typer.Option("--limit")] = 100,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Hypotheses to check: approaches used at one stage whose users show none at another."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_gaps(
+            project,
+            from_stage=from_stage,
+            to_stage=to_stage,
+            min_works=min_works,
+            max_to_share=max_to_share,
+            layer=layer,
+            limit=limit,
+        )
+    _technique_out(result, render.technique_candidate_list_lines, format_)
+
+
+@technique_app.command("combinations")
+def technique_combinations_cmd(
+    ctx: typer.Context,
+    min_works: Annotated[int, typer.Option("--min-works")] = 3,
+    max_co_works: Annotated[int, typer.Option("--max-co-works")] = 0,
+    stage: Annotated[str | None, typer.Option("--stage")] = None,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    limit: Annotated[int | None, typer.Option("--limit")] = 100,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Hypotheses to check: well-used approach pairs that no work uses together."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_combinations(
+            project,
+            min_works=min_works,
+            max_co_works=max_co_works,
+            stage=stage,
+            layer=layer,
+            limit=limit,
+        )
+    _technique_out(result, render.technique_candidate_list_lines, format_)
+
+
+@technique_app.command("challenges")
+def technique_challenges_cmd(
+    ctx: typer.Context,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    limit: Annotated[int | None, typer.Option("--limit")] = 100,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Hypotheses to check: approaches reported as failing in one work and supported in another."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = technique_service.technique_challenges(project, layer=layer, limit=limit)
+    _technique_out(result, render.technique_candidate_list_lines, format_)
 
 
 @graph_app.command("export")

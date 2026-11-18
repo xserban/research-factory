@@ -2003,3 +2003,111 @@ def flow_skipped_lines(records: Sequence[SkippedRecord], gaps: Sequence[RunGap])
     if not gaps:
         lines.append("none")
     return lines
+
+
+# --- The technique landscape (IDEA-78): every output starts with the exploratory notice ---
+
+
+def _technique_head(result: Any) -> list[str]:
+    lens = result.lens
+    named = [f"layer={lens.layer}"] + [
+        f"{k}={v}"
+        for k, v in (("stage", lens.stage), ("evidence", lens.evidence), ("status", lens.status))
+        if v
+    ]
+    return [f"EXPLORATORY: {technique_notice()}", "lens: " + ", ".join(named) + ", rows=pass-A"]
+
+
+def technique_notice() -> str:
+    from factory.model.technique_graph import NOTICE
+
+    return NOTICE
+
+
+def technique_landscape_lines(result: Any) -> list[str]:
+    lines = _technique_head(result)
+    for s in result.stages:
+        agreement = (
+            "no second pass"
+            if s.agreement is None
+            else (
+                f"agreement {s.agreement:.2f} (aligned "
+                f"{'-' if s.agreement_aligned is None else format(s.agreement_aligned, '.2f')}), "
+                f"{s.agreement_note}"
+            )
+        )
+        share = "-" if s.no_evidence_share is None else f"{s.no_evidence_share:.0%}"
+        lines.append(
+            f"stage {s.stage} ({s.miner} v{s.version}): {s.approaches} approaches, "
+            f"{s.works} works, "
+            f"{s.rows} rows, no evidence attribute {share}; {agreement}"
+        )
+        for a in (a for a in result.approaches if a.stage == s.stage):
+            lines.append(f"  {a.id}  {a.works} works  {a.name}")
+    co = [e for e in result.edges if e.kind == "co-used-with"]
+    for e in co:
+        lines.append(f"co-used {e.source} + {e.target}: {e.weight} works")
+    if result.edges_omitted:
+        lines.append(f"({result.edges_omitted} co-used edges omitted)")
+    if result.undated_works:
+        lines.append("undated works skipped by the date rule: " + ", ".join(result.undated_works))
+    return lines
+
+
+def technique_view_lines(result: Any) -> list[str]:
+    a = result.approach
+    lines = _technique_head(result)
+    lines.append(f"{a.id} {a.name} ({a.stage}): {a.works} works, {a.rows} rows")
+    lines.append("evidence: " + ", ".join(f"{k} {v}" for k, v in a.by_evidence.items()))
+    for u in result.uses:
+        lines.append(f"{u.work_id}  {u.status}  {u.evidence}  {u.anchor or '-'}")
+        if u.described_as:
+            lines.append(f"    as: {u.described_as}")
+        if u.quote:
+            lines.append(f"    quote: {u.quote}")
+    for e in result.derives_from:
+        lines.append(f"candidate derives-from {e.source} -> {e.target}  basis {e.basis}")
+    if result.earliest is not None:
+        lines.append(
+            "earliest-in-corpus (date rule, not an origin): "
+            f"{result.earliest.target} {result.earliest.basis}"
+        )
+    if result.undated_works:
+        lines.append("undated, skipped: " + ", ".join(result.undated_works))
+    return lines
+
+
+def technique_candidate_lines(result: Any) -> list[str]:
+    lines = _technique_head(result)
+    edges = [e for e in result.edges if e.kind == "derives-from"]
+    lines += [f"{e.source} -> {e.target}  {e.approach}  {e.state}  {e.basis}" for e in edges]
+    if not edges:
+        lines.append("no candidate derives-from edges")
+    return lines
+
+
+def technique_neighbor_lines(result: Any) -> list[str]:
+    a = result.approach
+    lines = _technique_head(result)
+    lines.append(f"{a.id} {a.name} ({a.stage}): {len(result.works)} works")
+    lines += [
+        f"co-used {c.approach.id} {c.approach.name}: {c.weight} works" for c in result.co_used
+    ]
+    lines += [f"stage {s.stage}: {s.works} works" for s in result.stages]
+    lines += [f"candidate derives-from {e.source} -> {e.target}" for e in result.derives_from]
+    return lines
+
+
+def technique_candidate_list_lines(result: Any) -> list[str]:
+    lines = [f"EXPLORATORY: {technique_notice()}", f"{result.kind}: {result.total} candidates"]
+    for g in result.gaps:
+        lines.append(f"{g.statement}  [{g.label}]")
+    for c in result.combinations:
+        lines.append(f"{c.statement}  [{c.label}]")
+    for h in result.challenges:
+        lines.append(f"{h.statement}  [{h.label}]")
+        lines += [f"    failed: {u.work_id} {u.anchor or '-'} {u.quote or ''}" for u in h.failed]
+        lines += [
+            f"    supported: {u.work_id} {u.anchor or '-'} {u.quote or ''}" for u in h.supported
+        ]
+    return lines

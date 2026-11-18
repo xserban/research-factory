@@ -270,7 +270,7 @@ def test_combinations_need_users_and_no_co_use() -> None:
     )
     assert [(c.a.id, c.b.id, c.co_works) for c in out.combinations] == [("ide-01", "ide-03", ())]
     assert out.total == 1 and out.exploratory is True
-    together = rows + [row("rf:a", "ide-03")]
+    together = [*rows, row("rf:a", "ide-03")]
     out2 = tg.build_combinations(
         inputs(together), Lens(), min_works=2, max_co_works=0, stage=None, limit=None
     )

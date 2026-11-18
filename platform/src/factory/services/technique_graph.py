@@ -43,8 +43,8 @@ from factory.model.technique_graph import (
     ApproachView,
     Candidates,
     ChallengeCandidate,
-    CoUse,
     CombinationCandidate,
+    CoUse,
     Edge,
     GapCandidate,
     Landscape,
@@ -698,7 +698,7 @@ def build_challenges(inputs: Inputs, lens: Lens, *, limit: int | None) -> Candid
         supported = [r for r in mine if r.evidence in SUPPORTIVE]
         fw = {r.work_id for r in failed}
         sw = {r.work_id for r in supported}
-        if not fw or not sw or fw == sw and len(fw) == 1:
+        if not fw or not sw or (fw == sw and len(fw) == 1):
             continue
         found.append(
             ChallengeCandidate(

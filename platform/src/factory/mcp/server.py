@@ -13,7 +13,7 @@ from typing import Annotated, Literal, TypeVar, cast, get_args
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
-from pydantic import Field, JsonValue, StringConstraints, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, StringConstraints, TypeAdapter, ValidationError
 
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
@@ -181,6 +181,7 @@ from factory.services import snowball as snowball_service
 from factory.services import tasks as tasks_service
 from factory.services import taxonomies as taxonomies_service
 from factory.services import taxonomy_agreement as taxonomy_agreement_service
+from factory.services import technique_graph as technique_service
 from factory.services import terms as terms_service
 from factory.services import trace as trace_service
 from factory.services import view_coverage as view_coverage_service
@@ -3054,6 +3055,153 @@ def build_server(
             return _withheld(opened, text, include_work_ids=False)
 
         return _reply(project, export, include_work_ids=False)
+
+    def _technique_reply(
+        project: str, build: Callable[[Project], BaseModel]
+    ) -> dict[str, JsonValue]:
+        """A read-only technique tool: refused to a pass session, labelled exploratory by its
+        model, scrubbed of held-out identifiers like the graph tools."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened)
+            result = build(opened).model_dump(mode="json", by_alias=True)
+            return _withheld(opened, result, include_work_ids=False)
+
+        return _reply(project, run, include_work_ids=False)
+
+    @server.tool()
+    def technique_landscape(
+        project: str,
+        layer: str = "core",
+        stage: str | None = None,
+        evidence: str | None = None,
+        status: str | None = None,
+        min_co_works: int = 2,
+        max_edges: int | None = 200,
+    ) -> dict[str, JsonValue]:
+        """The landscape of approaches (techniques) that AI research systems use, stage by stage,
+        derived at read time from the pass-A rows of the technique miners: approaches with the
+        number of works, evidence buckets, `co-used-with` edges (weight, works), candidate
+        `derives-from` edges and the `earliest-in-corpus` date rule, with each stage miner's
+        agreement. EXPLORATORY: uncalibrated miners, interpretation not evidence, not for a
+        report; the lens (`layer` core by default, `all` widens; `stage`, `evidence`, `status`)
+        is named in the result. Read-only; refused to a session that has joined a pass."""
+        return _technique_reply(
+            project,
+            lambda p: technique_service.technique_landscape(
+                p,
+                layer=layer,
+                stage=stage,
+                evidence=evidence,
+                status=status,
+                min_co_works=min_co_works,
+                max_edges=max_edges,
+            ),
+        )
+
+    @server.tool()
+    def technique_view(
+        project: str,
+        approach: str,
+        layer: str = "core",
+        evidence: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """One approach (an id such as `ide-01`): its works, one row per use with status, evidence
+        level, the miner's `described_as`, the verified quote and its anchor, candidate
+        `derives-from` edges and the earliest-in-corpus date rule. Read the quote with
+        `document_read` before relying on it. EXPLORATORY, never evidence. Read-only; refused to
+        a session that has joined a pass."""
+        return _technique_reply(
+            project,
+            lambda p: technique_service.technique_view(
+                p, approach, layer=layer, evidence=evidence, status=status
+            ),
+        )
+
+    @server.tool()
+    def technique_neighbors(
+        project: str,
+        approach: str,
+        layer: str = "core",
+        min_works: int = 1,
+        limit: int | None = 50,
+    ) -> dict[str, JsonValue]:
+        """For one approach: the approaches used in the same works (by weight, with work ids),
+        the stages its users have rows in, its works and candidate `derives-from` edges.
+        EXPLORATORY. Read-only; refused to a session that has joined a pass."""
+        return _technique_reply(
+            project,
+            lambda p: technique_service.technique_neighbors(
+                p, approach, layer=layer, min_works=min_works, limit=limit
+            ),
+        )
+
+    @server.tool()
+    def technique_gaps(
+        project: str,
+        from_stage: str,
+        to_stage: str,
+        min_works: int = 3,
+        max_to_share: float = 0.0,
+        layer: str = "core",
+        limit: int | None = 100,
+    ) -> dict[str, JsonValue]:
+        """Hypotheses to check, not findings: approaches used by at least `min_works` works at
+        `from_stage` of which at most `max_to_share` (0 means none) have any row at `to_stage`,
+        with the work ids. Cross-stage duplicate approaches stay two nodes. EXPLORATORY. Read-only;
+        refused to a session that has joined a pass."""
+        return _technique_reply(
+            project,
+            lambda p: technique_service.technique_gaps(
+                p,
+                from_stage=from_stage,
+                to_stage=to_stage,
+                min_works=min_works,
+                max_to_share=max_to_share,
+                layer=layer,
+                limit=limit,
+            ),
+        )
+
+    @server.tool()
+    def technique_combinations(
+        project: str,
+        min_works: int = 3,
+        max_co_works: int = 0,
+        stage: str | None = None,
+        layer: str = "core",
+        limit: int | None = 100,
+    ) -> dict[str, JsonValue]:
+        """Hypotheses to check, not findings: pairs of approaches each used by at least
+        `min_works` works and used together by at most `max_co_works` (0 means never), with the
+        counts and the co-using work ids. EXPLORATORY. Read-only; refused to a session that has
+        joined a pass."""
+        return _technique_reply(
+            project,
+            lambda p: technique_service.technique_combinations(
+                p,
+                min_works=min_works,
+                max_co_works=max_co_works,
+                stage=stage,
+                layer=layer,
+                limit=limit,
+            ),
+        )
+
+    @server.tool()
+    def technique_challenges(
+        project: str, layer: str = "core", limit: int | None = 100
+    ) -> dict[str, JsonValue]:
+        """Hypotheses to check, not contradictions: approaches with a `reported-failure` row in
+        one work and a supportive row (independent-test, own-ablation, own-comparison) in
+        another, with both sets of rows and quotes; the settings may differ. EXPLORATORY.
+        Read-only; refused to a session that has joined a pass."""
+        return _technique_reply(
+            project, lambda p: technique_service.technique_challenges(p, layer=layer, limit=limit)
+        )
 
     @server.tool()
     def vocabulary_propose(
