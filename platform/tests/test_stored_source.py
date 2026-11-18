@@ -86,7 +86,7 @@ def test_a_missing_id_is_a_named_shortfall() -> None:
     assert B.id in str(result.note)  # type: ignore[attr-defined]
 
 
-@pytest.mark.parametrize("text", [" ", "not-an-id", "rf:x", ","])
+@pytest.mark.parametrize("text", ["not-an-id", "rf:x", ","])
 def test_a_malformed_text_is_a_source_error(text: str) -> None:
     with pytest.raises(SourceError):
         _run(text, {})

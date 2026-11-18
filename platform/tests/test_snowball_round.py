@@ -48,7 +48,8 @@ from factory.services.snowball import (
     snowball_round,
     unqueryable_keys,
 )
-from factory.sources.registry import INTERFACES
+from factory.sources.base import SourceError
+from factory.sources.registry import INTERFACES, SourceFactory
 from tests.document_helpers import (
     StubConverter,
     event_bytes,
@@ -123,6 +124,24 @@ def _sources(**kw: Any) -> Any:
     return _lookups(**kw).sources()
 
 
+class _DownStored:
+    """A `stored` source that fails every run (the offline route has no network to take down)."""
+
+    name = "stored"
+    kinds = frozenset({QueryKind.ID_LIST})
+
+    def run(self, spec: QuerySpec, **_: Any) -> Any:
+        raise SourceError("scripted failure")
+
+
+def _stored_down() -> Any:
+    """The scripted sources with the `stored` source failing."""
+    return {
+        **_sources(),
+        "stored": SourceFactory(_DownStored.kinds, lambda _settings, _clock: _DownStored()),
+    }
+
+
 def _issue_fields(error: FactoryValidationError) -> list[str]:
     return [issue.field for issue in error.issues]
 
@@ -149,9 +168,10 @@ def test_dry_run_writes_nothing_and_ranks_by_cited_by(
     assert no_source.work_key.startswith("rex_") and no_source.work_key.endswith(":3")
     assert no_source.work_id == NO_SOURCE
     texts = {(q.source, q.kind, q.text) for q in result.queries}
+    stored_ids = sorted(str(c.work_id) for c in result.candidates if c.stored)
+    assert len(stored_ids) == 2 and all(c.stored != c.no_source_record for c in result.candidates)
     assert texts == {
-        ("openalex", QueryKind.FILTER, "openalex:W501"),
-        ("arxiv", QueryKind.ID_LIST, "2010.99999"),
+        ("stored", QueryKind.ID_LIST, ",".join(stored_ids)),
         ("reflist", QueryKind.ID_LIST, no_source.work_key),
     }
     assert all(q.purpose is QueryPurpose.CHASE for q in result.queries)
@@ -219,9 +239,7 @@ def test_exploratory_allowed_without_plan_rule_none(explore_world: Project, agen
 def test_failed_previous_round_does_not_trigger_the_no_yield_stop(
     project: Project, agent: Actor, planned: tuple[str, str]
 ) -> None:
-    snowball_round(
-        project, agent, Direction.BACKWARD, sources=_sources(fail_openalex=True), dry_run=False
-    )
+    snowball_round(project, agent, Direction.BACKWARD, sources=_stored_down(), dry_run=False)
     _screen_new(project, agent, "exclude")
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]
@@ -233,9 +251,7 @@ def test_failed_previous_round_keeps_the_maximum(
     project: Project, agent: Actor, world: tuple[str, str]
 ) -> None:
     _amend(project, agent, SnowballPlan(max_backward_rounds=1, max_forward_rounds=0))
-    snowball_round(
-        project, agent, Direction.BACKWARD, sources=_sources(fail_openalex=True), dry_run=False
-    )
+    snowball_round(project, agent, Direction.BACKWARD, sources=_stored_down(), dry_run=False)
     _screen_new(project, agent, "exclude")
     state = plan_round(project, Direction.BACKWARD).state
     assert [i.field for i in state.refusals] == ["round_no"]
@@ -386,7 +402,7 @@ def test_round_event_precedes_every_query(
     assert len(payload.candidates[0].cited_by) == 2
     registered = events_of_type(project, "query.registered")
     chase = [e for e in registered if e.payload["spec"]["purpose"] == "chase"]  # type: ignore[index]
-    assert len(chase) == 3 and all(e.id > event.id for e in chase)
+    assert len(chase) == 2 and all(e.id > event.id for e in chase)
     assert all(e.refs[-1] == result.round_id for e in chase)
     assert [e.payload["spec"]["text"] for e in chase] == list(payload.queries)  # type: ignore[index]
     assert {r.run_id for r in result.runs} == set(round_runs(project, result.round_id))
@@ -406,10 +422,11 @@ def test_candidates_are_pending_after_round_never_included(
 def test_prisma_s_fields_on_runs(project: Project, agent: Actor, planned: tuple[str, str]) -> None:
     result = snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     by_source = {r.source: r for r in result.runs}
-    assert set(by_source) == {"openalex", "arxiv", "reflist"}
+    assert set(by_source) == {"stored", "reflist"}
     for run in result.runs:
         assert run.status is RunStatus.COMPLETE
-        assert run.reported_count == 1 and run.retrieved_count == 1
+        assert run.reported_count == run.retrieved_count
+    assert by_source["stored"].retrieved_count == 2 and by_source["reflist"].retrieved_count == 1
     registered = events_of_type(project, "query.registered")
     reflist = next(e for e in registered if e.payload["spec"]["source"] == "reflist")  # type: ignore[index]
     assert reflist.payload["interface"] == INTERFACES["reflist"]
@@ -421,12 +438,12 @@ def test_prisma_s_fields_on_runs(project: Project, agent: Actor, planned: tuple[
 def test_source_error_in_one_query_leaves_others_run(
     project: Project, agent: Actor, planned: tuple[str, str]
 ) -> None:
-    sources = _sources(fail_openalex=True)
-    result = snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
+    result = snowball_round(
+        project, agent, Direction.BACKWARD, sources=_stored_down(), dry_run=False
+    )
     status = {r.source: r.status for r in result.runs}
-    assert status["openalex"] is RunStatus.FAILED
-    assert status["arxiv"] is RunStatus.COMPLETE and status["reflist"] is RunStatus.COMPLETE
-    assert result.new_works == 2
+    assert status["stored"] is RunStatus.FAILED and status["reflist"] is RunStatus.COMPLETE
+    assert result.new_works == 1
     assert len(events_of_type(project, "snowball.round_started")) == 1
 
 
@@ -460,15 +477,14 @@ def test_round_waives_only_its_own_texts(
     sources = _sources()
     result = snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
     assert result.round_id is not None
-    own = QuerySpec(
-        source="openalex", kind=QueryKind.FILTER, text="openalex:W501", purpose=QueryPurpose.CHASE
-    )
+    own = next(q for q in result.queries if q.source == "stored")
+    adapters = snowball.round_sources(project, sources)
     # the round's own text is waived only for a query that names the round
-    register_query(project, agent, own, sources=sources, round_id=result.round_id)
-    for wording in ("openalex:W501", "openalex:W999"):
+    register_query(project, agent, own, sources=adapters, round_id=result.round_id)
+    for wording in (own.text, "openalex:W999"):
         hand = own.model_copy(update={"text": wording})
         with pytest.raises(FactoryValidationError) as caught:
-            register_query(project, agent, hand, sources=sources)
+            register_query(project, agent, hand, sources=adapters)
         assert "query" in _issue_fields(caught.value)
 
 
@@ -481,11 +497,10 @@ def test_identically_worded_later_query_is_not_counted(
     assert result.round_id is not None
     runs = set(round_runs(project, result.round_id))
     assert runs == {r.run_id for r in result.runs}
-    same = QuerySpec(
-        source="openalex", kind=QueryKind.FILTER, text="openalex:W501", purpose=QueryPurpose.CHASE
-    )
-    query_id = register_query(project, agent, same, sources=sources)
-    run_query(project, query_id, sources=sources, actor=agent)
+    same = next(q for q in result.queries if q.source == "stored")
+    adapters = snowball.round_sources(project, sources)
+    query_id = register_query(project, agent, same, sources=adapters)
+    run_query(project, query_id, sources=adapters, actor=agent)
     assert set(round_runs(project, result.round_id)) == runs
 
 
@@ -499,11 +514,16 @@ def test_id_longer_than_a_query_is_unqueryable() -> None:
 def test_round_refused_when_query_does_not_fit(
     project: Project, agent: Actor, planned: tuple[str, str]
 ) -> None:
-    sources = {k: v for k, v in _sources().items() if k != "arxiv"}
+    sources = {
+        **_sources(),
+        "stored": SourceFactory(
+            frozenset({QueryKind.KEYWORD}), lambda _settings, _clock: _DownStored()
+        ),
+    }
     before = event_bytes(project)
     with pytest.raises(FactoryValidationError) as caught:
         snowball_round(project, agent, Direction.BACKWARD, sources=sources, dry_run=False)
-    assert "source" in _issue_fields(caught.value)
+    assert "kind" in _issue_fields(caught.value)
     assert event_bytes(project) == before
 
 
@@ -974,7 +994,7 @@ def test_round_with_missing_runs_skips_the_no_yield_stop(
     _screen_new(project, agent, "exclude")
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]
-    assert any("1 of 3 queries" in note for note in state.notes)
+    assert any("1 of 2 queries" in note for note in state.notes)
 
 
 def test_yield_is_unsettled_without_runs(

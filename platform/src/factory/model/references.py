@@ -35,6 +35,7 @@ This module is pure. Services in `factory.services` decide when these events are
 from __future__ import annotations
 
 import re
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Self
 
@@ -494,6 +495,72 @@ class ForwardSelection(StrictModel):
         return self
 
 
+class TakenCandidate(StrictModel):
+    """One candidate a selected backward round took: its key, the number of source works citing
+    it and, when the similarity step ran, its maximum cosine to the development references."""
+
+    work_key: str
+    cited_by: int = Field(ge=1)
+    score: float | None = Field(default=None, ge=-1, le=1)
+
+
+class BackwardSelection(StrictModel):
+    """How a selected backward round chose its candidates (decision 135): the thresholds, in the
+    order the steps ran (publication date, cited-by, similarity), the model that scored (when the
+    similarity step ran) and what each step dropped. `considered` is every candidate of the plan;
+    the number not taken is derived (R-05). `dropped_undated` counts the candidates with no known
+    publication date in the date step; `dropped_unscored` those with no stored work to embed in
+    the similarity step."""
+
+    published_from: date | None = None
+    min_cited_by: int | None = Field(default=None, ge=1)
+    min_similarity: float | None = Field(default=None, gt=0, le=1)
+    model_id: Annotated[NonBlank, Field(max_length=MAX_VERSION)] | None = None
+    weights_hash: str | None = Field(default=None, pattern=SHA256_HEX_RE)
+    software: Annotated[NonBlank, Field(max_length=200)] | None = None
+    considered: int = Field(ge=0)
+    dropped_before_window: int = Field(default=0, ge=0)
+    dropped_undated: int = Field(default=0, ge=0)
+    dropped_cited_by: int = Field(default=0, ge=0)
+    dropped_unscored: int = Field(default=0, ge=0)
+    dropped_similarity: int = Field(default=0, ge=0)
+    taken: tuple[TakenCandidate, ...] = ()
+
+    @property
+    def not_taken(self) -> int:
+        return self.considered - len(self.taken)
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if (
+            self.published_from is None
+            and self.min_cited_by is None
+            and self.min_similarity is None
+        ):
+            raise ValueError("a selection sets at least one threshold")
+        scored = (self.model_id, self.weights_hash, self.software)
+        if self.min_similarity is None:
+            if any(v is not None for v in scored):
+                raise ValueError("a model is recorded only when the similarity step ran")
+        elif any(v is None for v in scored):
+            raise ValueError("the similarity step records its model id, weights hash and software")
+        dropped = (
+            self.dropped_before_window
+            + self.dropped_undated
+            + self.dropped_cited_by
+            + self.dropped_unscored
+            + self.dropped_similarity
+        )
+        if dropped + len(self.taken) != self.considered:
+            raise ValueError("every considered candidate is dropped by one step or taken")
+        _unique(tuple(t.work_key for t in self.taken), "taken")
+        if self.min_similarity is not None and any(
+            t.score is None or t.score < self.min_similarity for t in self.taken
+        ):
+            raise ValueError("a taken candidate scores at least the similarity threshold")
+        return self
+
+
 class SnowballRoundStarted(StrictModel):
     round_id: str = Field(pattern=SNW_ID_RE)
     direction: Direction
@@ -510,6 +577,9 @@ class SnowballRoundStarted(StrictModel):
     unextracted: tuple[Unextracted, ...] = ()
     selection: ForwardSelection | None = None
     """How a capped forward round chose its works; absent for any other round."""
+    backward_selection: BackwardSelection | None = None
+    """How a selected backward round chose its candidates (decision 135); absent for any other
+    round."""
 
     @model_serializer(mode="wrap")
     def _omit_empty_selection(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -517,12 +587,21 @@ class SnowballRoundStarted(StrictModel):
         data: dict[str, Any] = handler(self)
         if self.selection is None:
             data.pop("selection", None)
+        if self.backward_selection is None:
+            data.pop("backward_selection", None)
         return data
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
         if self.selection is not None and self.direction is not Direction.FORWARD:
             raise ValueError("only a forward round has a selection")
+        if self.backward_selection is not None:
+            if self.direction is not Direction.BACKWARD:
+                raise ValueError("only a backward round has a backward selection")
+            if {t.work_key for t in self.backward_selection.taken} != {
+                c.work_key for c in self.candidates
+            }:
+                raise ValueError("a selected round's candidates are the ones the selection took")
         if self.direction is Direction.BACKWARD:
             if self.via is not Via.DOCUMENT_REFERENCE_LIST or self.chase_round_id is not None:
                 raise ValueError("a backward round goes via the reference list, without a chase")
