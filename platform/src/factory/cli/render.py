@@ -2108,11 +2108,17 @@ def _score_lines(score: Any) -> list[str]:
     ]
     parts.append(f"composite={score.composite:.3f}")
     extra = f"  flags: {', '.join(score.flags)}" if score.flags else ""
-    return [
+    lines = [
         f"    score {score.rank_by}={score.value:.3f}: "
         + " ".join(parts)
         + f" (works={score.popularity_raw}, links={score.bridge_links}){extra}"
     ]
+    lines += [
+        f"    lookalike of {lk.approach_id} in {lk.stage}: possibly the same technique "
+        f"({lk.of}, name tokens {lk.jaccard:.2f})"
+        for lk in score.lookalikes
+    ]
+    return lines
 
 
 def technique_candidate_list_lines(result: Any) -> list[str]:

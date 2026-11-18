@@ -11,7 +11,9 @@ Combination components, each in 0..1:
 - `stage`: the stage relation of the two approaches in the lifecycle order below
   (`STAGE_FACTORS`: adjacent stages 1.0, same stage 0.6, distant 0.3, unordered 0.3);
 - `bridge`: distinct live resolved `cites` links between the two work sets (either direction),
-  over min(works_a, works_b), capped at 1: the two communities know each other;
+  on a log scale: log(1 + links) / log(1 + min(works_a, works_b)), capped at 1: the two
+  communities know each other. The first version, min(1, links / min(works)), saturated: on the
+  pilot corpus 3,247 of 9,506 pairs scored exactly 1.0 and could no longer be told apart;
 - `evidence`: the mean over the two approaches of the share of their rows whose evidence is
   supportive (independent-test, own-ablation, own-comparison); `not-stated` counts as not
   supportive;
@@ -23,18 +25,23 @@ The composite is the weighted sum of popularity, stage, bridge and evidence, tim
 
 Gap components: `popularity` (works of the approach at the from stage over the pool maximum),
 `strength` (share of those works with no row at the to stage), `bridge` (distinct citation links
-between those works and the works with a row at the to stage, over the number of those works,
-capped at 1). The composite is their weighted sum (`GAP_WEIGHTS`).
+between those works and the works with a row at the to stage: log(1 + links) / log(1 + number of
+those works), capped at 1). The composite is their weighted sum (`GAP_WEIGHTS`).
+
+Flags (never part of the score): `same-name-across-stages` and `lookalike-across-stages` (an
+approach of the pair has a name-token Jaccard of at least `LOOKALIKE_MIN` with an approach of
+another stage in the lens: possibly one technique listed twice; see `lookalikes`).
 """
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping
 from math import log
 
 from factory.errors import FactoryValidationError, ValidationIssue
-from factory.model.technique_graph import SUPPORTIVE, Score
+from factory.model.technique_graph import SUPPORTIVE, Lookalike, Score
 
 __all__ = [
     "COMBINATION_KEYS",
@@ -42,15 +49,20 @@ __all__ = [
     "DEFAULT_TOP",
     "GAP_KEYS",
     "GAP_WEIGHTS",
+    "LOOKALIKE_MIN",
     "QUOTE_TOP",
     "STAGE_FACTORS",
     "STAGE_ORDER",
+    "bridge_norm",
     "check_rank_by",
     "check_top",
     "combination_score",
     "gap_score",
     "idf",
+    "jaccard",
     "links_between",
+    "lookalike_index",
+    "name_tokens",
     "stage_relation",
 ]
 
@@ -98,6 +110,35 @@ GAP_KEYS: tuple[str, ...] = ("composite", "popularity", "strength", "bridge")
 DEFAULT_TOP = 50
 QUOTE_TOP = 5
 """Candidates that carry one verbatim quote per side."""
+
+
+LOOKALIKE_MIN = 0.3
+"""Smallest name-token Jaccard that flags a cross-stage lookalike (researcher ruling 2026-11-18)."""
+
+_STOP = frozenset(
+    [
+        "of",
+        "the",
+        "and",
+        "for",
+        "with",
+        "by",
+        "in",
+        "on",
+        "to",
+        "a",
+        "an",
+        "over",
+        "from",
+        "via",
+        "using",
+        "into",
+        "at",
+        "as",
+        "or",
+    ]
+)
+_TOKEN = re.compile(r"[a-z0-9]+")
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:
@@ -148,6 +189,52 @@ def links_between(
     return len(seen)
 
 
+def bridge_norm(links: int, works: int) -> float:
+    """log(1 + links) / log(1 + works), capped at 1; 0.0 without works."""
+    if works < 1 or links < 1:
+        return 0.0
+    return min(1.0, log(1 + links) / log(1 + works))
+
+
+def name_tokens(name: str) -> frozenset[str]:
+    """Lower-cased alphanumeric tokens of a name, short words (under 3 characters) and stop words
+    dropped."""
+    return frozenset(t for t in _TOKEN.findall(name.lower()) if len(t) >= 3 and t not in _STOP)
+
+
+def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    union = a | b
+    return len(a & b) / len(union) if union else 0.0
+
+
+def lookalike_index(
+    catalogue: Mapping[str, tuple[str, str, str]], ids: Iterable[str]
+) -> dict[str, Lookalike]:
+    """For each id, its closest lookalike among `ids` of ANOTHER stage (highest Jaccard, ties by
+    id), when at least `LOOKALIKE_MIN`. Pure and deterministic."""
+    pool = sorted(set(ids))
+    toks = {i: name_tokens(catalogue[i][1]) for i in pool}
+    found: dict[str, Lookalike] = {}
+    for i in pool:
+        best: tuple[float, str] | None = None
+        for j in pool:
+            if catalogue[j][0] == catalogue[i][0]:
+                continue
+            value = jaccard(toks[i], toks[j])
+            if value >= LOOKALIKE_MIN and (best is None or value > best[0]):
+                best = (value, j)
+        if best is not None:
+            value, j = best
+            found[i] = Lookalike(
+                of=i,
+                approach_id=j,
+                stage=catalogue[j][0],
+                name=catalogue[j][1],
+                jaccard=_round(value),
+            )
+    return found
+
+
 def adjacency(cites: Iterable[tuple[str, str, str]]) -> dict[str, set[str]]:
     out: dict[str, set[str]] = defaultdict(set)
     for src, dst, _ in cites:
@@ -179,12 +266,13 @@ def combination_score(
     evidence_b: float,
     total_works: int,
     flags: tuple[str, ...] = (),
+    lookalikes: tuple[Lookalike, ...] = (),
 ) -> Score:
     low = min(works_a, works_b)
     popularity = low / pool_max if pool_max else 0.0
     relation = stage_relation(stage_a, stage_b)
     stage = STAGE_FACTORS[relation]
-    bridge = min(1.0, links / low) if low else 0.0
+    bridge = bridge_norm(links, low)
     evidence = (evidence_a + evidence_b) / 2
     generic = (idf(works_a, total_works) + idf(works_b, total_works)) / 2
     w = COMBINATION_WEIGHTS
@@ -217,6 +305,7 @@ def combination_score(
         composite=composite,
         weights=dict(w),
         flags=flags,
+        lookalikes=lookalikes,
     )
 
 
@@ -230,7 +319,7 @@ def gap_score(
 ) -> Score:
     popularity = works / pool_max if pool_max else 0.0
     strength = 1 - covered / works if works else 0.0
-    bridge = min(1.0, links / works) if works else 0.0
+    bridge = bridge_norm(links, works)
     w = GAP_WEIGHTS
     composite = _round(
         w["popularity"] * popularity + w["strength"] * strength + w["bridge"] * bridge

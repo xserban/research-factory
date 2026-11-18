@@ -18,6 +18,12 @@ CATALOGUE = {
     "exp-01": ("experiment-design", "Tree search", "Searches variants."),
     "exp-02": ("experiment-design", "Citation chasing", "Same name, other stage."),
     "wri-01": ("paper-writing", "Drafting", "Drafts text."),
+    "exp-03": ("experiment-design", "Staged experiment tree search", "One stage's version."),
+    "imp-01": (
+        "implementation-execution",
+        "Staged agentic tree search over experiment scripts",
+        "Another stage's version.",
+    ),
     "oth-01": ("other", "Misc", "Other."),
 }
 
@@ -279,3 +285,96 @@ def test_a_pairs_score_does_not_depend_on_the_threshold_when_the_pool_maximum_is
         assert by_wide[(c.a.id, c.b.id)] == c.score
     kept = [(c.a.id, c.b.id) for c in wide.combinations if min(c.works_a, c.works_b) >= 3]
     assert kept == [(c.a.id, c.b.id) for c in narrow.combinations]
+
+
+# --- log-scale bridge and name lookalikes ------------------------------------------------------
+
+
+def test_bridge_is_log_scaled_and_does_not_saturate_at_one_link_per_work() -> None:
+    import math
+
+    assert tr.bridge_norm(0, 5) == 0.0 and tr.bridge_norm(3, 0) == 0.0
+    assert tr.bridge_norm(1, 3) == pytest.approx(math.log(2) / math.log(4))
+    assert tr.bridge_norm(2, 3) < 1.0  # the old min(1, links/works) gave 0.67; 3 of 3 is 1.0
+    assert tr.bridge_norm(2, 3) > tr.bridge_norm(1, 3)
+    assert tr.bridge_norm(30, 100) < 1.0  # the old form gave 0.3, a link per 3 works
+    assert tr.bridge_norm(99, 3) == 1.0  # capped
+    cites = tuple(("rf:a", f"rf:{w}", f"e{w}") for w in "kl")
+    top = combos(inputs(BASE, cites), rank_by="bridge").combinations[0]
+    assert top.score is not None and top.score.bridge == pytest.approx(math.log(3) / math.log(4))
+
+
+def test_gap_bridge_is_log_scaled() -> None:
+    import math
+
+    cites = (("rf:e", "rf:a", "e1"), ("rf:f", "rf:x", "e2"), ("rf:a", "rf:x", "e3"))
+    out = gaps(inputs(GAPROWS, cites), rank_by="bridge")
+    by = {g.approach.id: g.score for g in out.gaps}
+    assert by["ide-02"] is not None and by["ide-02"].bridge == pytest.approx(
+        math.log(3) / math.log(3)
+    )
+    assert by["ide-01"] is not None and by["ide-01"].bridge == pytest.approx(
+        math.log(2) / math.log(5)
+    )
+
+
+def test_name_tokens_and_jaccard() -> None:
+    assert tr.name_tokens("The Staged tree-search of an Agent, by id") == frozenset(
+        {"staged", "tree", "search", "agent"}
+    )
+    a = tr.name_tokens("Staged experiment tree search")
+    b = tr.name_tokens("Staged agentic tree search over experiment scripts")
+    assert tr.jaccard(a, b) == pytest.approx(4 / 6)
+    assert tr.jaccard(frozenset(), frozenset()) == 0.0
+
+
+LOOK = [*users("exp-03", "abc"), *users("imp-01", "def"), *users("wri-01", "ghi")]
+
+
+def test_lookalike_names_in_other_stages_are_flagged_with_id_and_value() -> None:
+    out = combos(inputs(LOOK))
+    by = {(c.a.id, c.b.id): c for c in out.combinations}
+    c = by[("exp-03", "imp-01")]
+    assert c.score is not None and "lookalike-across-stages" in c.score.flags
+    seen = {(lk.of, lk.approach_id, lk.stage) for lk in c.score.lookalikes}
+    assert ("exp-03", "imp-01", "implementation-execution") in seen
+    assert all(lk.jaccard >= 0.3 for lk in c.score.lookalikes)
+    assert "lookalike of imp-01 in implementation-execution: possibly the same technique" in (
+        c.statement
+    )
+    # the unrelated approach is flagged only through the pair that contains a lookalike
+    other = by[("exp-03", "wri-01")]
+    assert other.score is not None and "lookalike-across-stages" in other.score.flags
+    assert {lk.of for lk in other.score.lookalikes} == {"exp-03"}
+
+
+def test_unrelated_names_carry_no_lookalike_flag() -> None:
+    out = combos(inputs(BASE))
+    for c in out.combinations:
+        assert c.score is not None
+        assert "lookalike-across-stages" not in c.score.flags and c.score.lookalikes == ()
+        assert "lookalike of" not in c.statement
+
+
+def test_lookalike_is_deterministic_and_never_changes_the_order_or_score() -> None:
+    data = inputs(LOOK)
+    assert combos(data).model_dump_json() == combos(data).model_dump_json()
+    flagged = combos(data)
+    plain = [(c.a.id, c.b.id, c.score.composite if c.score else None) for c in flagged.combinations]
+    ranked = sorted(plain, key=lambda t: (-(t[2] or 0), t[0], t[1]))
+    assert plain == ranked
+    c = flagged.combinations[0]
+    assert c.score is not None
+    expected = tr.combination_score(
+        rank_by="composite",
+        works_a=c.works_a,
+        works_b=c.works_b,
+        pool_max=3,
+        stage_a=c.a.stage,
+        stage_b=c.b.stage,
+        links=c.score.bridge_links,
+        evidence_a=1.0,
+        evidence_b=1.0,
+        total_works=9,
+    )
+    assert expected.composite == c.score.composite

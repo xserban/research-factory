@@ -50,6 +50,7 @@ from factory.model.technique_graph import (
     GapCandidate,
     Landscape,
     Lens,
+    Lookalike,
     Neighbors,
     Score,
     StageReach,
@@ -812,6 +813,13 @@ def _same_name(inputs: Inputs, a: str, b: str) -> bool:
     return sa != sb and na.casefold().strip() == nb.casefold().strip()
 
 
+def _flags(inputs: Inputs, a: str, b: str, lookalikes: Sequence[Lookalike]) -> tuple[str, ...]:
+    flags = ["same-name-across-stages"] if _same_name(inputs, a, b) else []
+    if lookalikes:
+        flags.append("lookalike-across-stages")
+    return tuple(flags)
+
+
 def build_combinations(
     inputs: Inputs,
     lens: Lens,
@@ -836,6 +844,7 @@ def build_combinations(
     share = {a: rank.supportive_share(r.evidence for r in mine) for a, mine in by.items()}
     total_works = len({r.work_id for r in rows})
     out = rank.adjacency(inputs.cites)
+    look = rank.lookalike_index(inputs.catalogue, by)
     big = sorted(a for a, w in users.items() if len(w) >= min_works)
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for a, b in _pairs(big, 2):
@@ -847,6 +856,7 @@ def build_combinations(
     pool_max = max((min(len(users[a]), len(users[b])) for a, b, _ in found), default=0)
     scored: list[tuple[Score, str, str, tuple[str, ...]]] = []
     for a, b, both in found:
+        lks = tuple(look[x] for x in (a, b) if x in look)
         score = rank.combination_score(
             rank_by=rank_by,
             works_a=len(users[a]),
@@ -858,7 +868,8 @@ def build_combinations(
             evidence_a=share[a],
             evidence_b=share[b],
             total_works=total_works,
-            flags=("same-name-across-stages",) if _same_name(inputs, a, b) else (),
+            flags=_flags(inputs, a, b, lks),
+            lookalikes=lks,
         )
         scored.append((score, a, b, both))
     scored.sort(key=lambda t: (-t[0].value, t[1], t[2]))
@@ -872,6 +883,11 @@ def build_combinations(
             relation = "not co-used in this corpus (exploratory, pass-A rows)"
         sa, sb = sorted(users[a]), sorted(users[b])
         flag = f" [{', '.join(score.flags)}: judge by hand]" if score.flags else ""
+        flag += "".join(
+            f"; lookalike of {lk.approach_id} in {lk.stage}: possibly the same technique"
+            f" (name tokens {lk.jaccard:.2f}, {lk.of})"
+            for lk in score.lookalikes
+        )
         cands.append(
             CombinationCandidate(
                 a=na,

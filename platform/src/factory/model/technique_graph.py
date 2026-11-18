@@ -188,11 +188,25 @@ class Neighbors(StrictModel):
     derives_from_lens: str = DERIVES_LENS_NOTE
 
 
+class Lookalike(StrictModel):
+    """An approach of another stage whose name shares most tokens with `of` (Jaccard of the
+    lower-cased name tokens, at least 0.3): possibly the same technique under two stages. A flag
+    to judge by hand; it never changes a score."""
+
+    of: str
+    approach_id: str
+    stage: str
+    name: str
+    jaccard: float
+
+
 class Score(StrictModel):
     """The components of a ranking score, each in 0..1 (`popularity_raw` and `bridge_links` are the
     counts they come from), the weights used and the composite. Nothing here is a probability or a
     measure of novelty: it orders a list of hypotheses to check. Components that do not apply to a
-    kind are None. `flags` name pairs to judge by hand (e.g. `same-name-across-stages`)."""
+    kind are None. `flags` name pairs to judge by hand (`same-name-across-stages`,
+    `lookalike-across-stages` with the `lookalikes` that caused it); flags never change the
+    score."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -210,6 +224,7 @@ class Score(StrictModel):
     composite: float
     weights: dict[str, float]
     flags: tuple[str, ...] = ()
+    lookalikes: tuple[Lookalike, ...] = ()
 
 
 class GapCandidate(StrictModel):

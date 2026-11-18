@@ -49,7 +49,10 @@ a candidate, the second a date rule.
    RANKED list (default `rank_by=composite`, `top=50`): start from the top of the list, read each
    candidate's score components (popularity, stage relation, citation bridge, evidence share,
    generic penalty; weights are a v1 heuristic, not a measure of novelty) and say which
-   component put it there; use `rank_by` to look at one component. The first five candidates
+   component put it there; use `rank_by` to look at one component. A candidate flagged
+   `lookalike-across-stages` has an approach whose name closely matches an approach of another
+   stage (possibly one technique listed twice): check the lookalike's definition and rows
+   before proposing the combination; the flag does not change the rank. The first five candidates
    carry one verbatim quote per side. Choose at most a few that fit the idea, and for each say
    why it may be empty (a stage a paper does not describe, a pair that does not combine) before
    proposing it.

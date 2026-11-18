@@ -3190,9 +3190,12 @@ def build_server(
         """Ranked hypotheses to check, not findings: pairs of approaches each used by at least
         `min_works` works and used together by at most `max_co_works` (0 means never), with the
         counts, the supporting work ids, the score components (popularity, stage relation, bridge,
-        evidence, generic) and, for the first few, one verbatim quote per side. `rank_by` is
-        `composite` or one component; `top` caps the list. EXPLORATORY. Read-only; refused to a
-        session that has joined a pass."""
+        evidence, generic; bridge on a log scale) and, for the first few, one verbatim quote per
+        side. A pair is flagged `lookalike-across-stages` (with the lookalike's id and stage) when
+        an approach's name shares at least 0.3 of its tokens with an approach of another stage:
+        possibly one technique, so check before proposing it; the flag never changes the score.
+        `rank_by` is `composite` or one component; `top` caps the list. EXPLORATORY. Read-only;
+        refused to a session that has joined a pass."""
         return _technique_reply(
             project,
             lambda p: technique_service.technique_combinations(
