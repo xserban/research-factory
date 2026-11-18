@@ -15,6 +15,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from factory.cli import appraisal_render, evidence_render, portfolio_render, render
+from factory.cli.activity import activity_cmd
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
@@ -609,6 +610,7 @@ app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)
 app.command("resume")(resume_cmd)
+app.command("activity")(activity_cmd)
 app.add_typer(budget_app)
 
 

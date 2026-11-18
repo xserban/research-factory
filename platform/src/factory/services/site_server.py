@@ -36,11 +36,15 @@ Invariants:
   a daemon thread, at most one per server; the reply is not delayed. A thread already running
   means the new call is skipped. Conversion runs only in that thread, never in a request.
   `GET /api/queue/runs` reads the runs and reconciles nothing.
+- `GET /api/activity` (IDEA-98) answers `services.activity.activity_cached` as JSON: the held
+  tasks, the open passes, the long operations and the `*.live` traces. Read-only; the answer is
+  reused for a few seconds while the event log is unchanged, so the Activity page's poll costs
+  one reading per project per window.
 - A POST needs, all at once: a loopback Host, the per-start token in `X-Factory-Token` (compared in
   constant time), `Content-Type: application/json`, a body of at most 16 KiB and, if an Origin is
   sent, this server's own origin. Otherwise 403 (413 or 415 for size or type) and nothing is
-  written. The token is made at server start, is injected into `/feed/`, `/queue/` and `/explorer/`
-  pages only and is never written to the files on disk.
+  written. The token is made at server start, is injected into `/feed/`, `/queue/`, `/explorer/`,
+  `/updates/` and `/activity/` pages only and is never written to the files on disk.
 - The actor is the local human principal and each act is authorised by its command row
   (`cli:feed react`, `cli:feed add`, `cli:queue process`, `cli:queue resume`), as the CLI does.
 - Loopback only: a request whose Host is not 127.0.0.1, localhost or [::1] is refused.
@@ -73,6 +77,7 @@ from sqlalchemy import text
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
+from factory.services import activity as activity_service
 from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import inbox as inbox_service
@@ -108,7 +113,7 @@ MAX_EXPORT_BODY: Final = 256 * 1024
 hundred characters), which the usual 16 KiB body limit would cut."""
 EXPORT_ROUTE: Final = "/api/export/works"
 TOKEN_HEADER: Final = "X-Factory-Token"
-_ACTION_PAGES: Final = ("feed", "queue", "explorer", "updates")
+_ACTION_PAGES: Final = ("feed", "queue", "explorer", "updates", "activity")
 _TOKEN_META: Final = "<meta name='factory-token' content='{}'>"
 _API_META: Final = "<meta name='factory-api' content='{}'>"
 PORTAL_LINK: Final = (
@@ -1206,6 +1211,14 @@ def _handler_class(
                     self._json(200, layers_payload(slot.project))
                 except FactoryError as exc:
                     self._json(500, _issues(ValidationIssue("layers", str(exc))))
+                return
+            if url == "/api/activity":
+                try:
+                    found = activity_service.activity_cached(slot.project)
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("activity", str(exc))))
+                    return
+                self._json(200, found.model_dump(mode="json"))
                 return
             if url == "/api/queue/runs":
                 runs = runner_service.run_status(slot.project, reconcile=False)
