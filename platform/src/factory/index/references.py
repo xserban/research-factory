@@ -567,6 +567,12 @@ def _fold(conn: Connection, t: ReferenceTables, extraction_id: str, ordinal: int
     )
 
 
+def _selection_json(p: SnowballRoundStarted) -> str | None:
+    """The round's forward or backward selection as JSON (one column; the direction says which)."""
+    chosen = p.selection if p.selection is not None else p.backward_selection
+    return None if chosen is None else _json(chosen.model_dump(mode="json"))
+
+
 def _round_started(t: ReferenceTables) -> Handler:
     def round_started(conn: Connection, event: Event) -> None:
         p = SnowballRoundStarted.model_validate(event.payload)
@@ -584,9 +590,7 @@ def _round_started(t: ReferenceTables) -> Handler:
                 extraction_ids=_json(list(p.extraction_ids)),
                 unextracted=_json([u.model_dump(mode="json") for u in p.unextracted]),
                 event_id=event.id,
-                selection=(
-                    None if p.selection is None else _json(p.selection.model_dump(mode="json"))
-                ),
+                selection=_selection_json(p),
             )
             .on_conflict_do_nothing(index_elements=["round_id"])
         )

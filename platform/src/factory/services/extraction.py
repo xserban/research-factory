@@ -2153,6 +2153,9 @@ def all_scopes(project: Project) -> list[ScopeKey]:
     return [Scope.EVIDENCE, Scope.CONTRIBUTION, *miners]
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not add works, tasks or units and then read this again
+@memoised
 def abandoned_task_ids(project: Project) -> set[str]:
     """The extraction tasks that are open or claimed (lease live or lapsed) and replaced by a
     newer task of their (work, pass) unit. The ledger serves only a unit's latest task, so an

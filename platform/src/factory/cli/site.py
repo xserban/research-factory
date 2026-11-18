@@ -29,6 +29,14 @@ def site_build_cmd(
     force: Annotated[
         bool, typer.Option("--force", help="Rebuild even when a product is up to date.")
     ] = False,
+    lazy: Annotated[
+        bool,
+        typer.Option(
+            "--lazy",
+            help="Skip the item pages of products that support it (the conversion inspector); "
+            "a served hub renders each on its first request. Used by `site serve`.",
+        ),
+    ] = False,
 ) -> None:
     """Build every stale product and the hub page (`<project>/site/index.html`)."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
@@ -37,7 +45,7 @@ def site_build_cmd(
     with _reporting_errors():
         project = _resolve_project(state)
         try:
-            results = site_service.build(project, only=only or (), force=force)
+            results = site_service.build(project, only=only or (), force=force, lazy=lazy)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     for r in results:
@@ -93,8 +101,28 @@ def site_serve_cmd(
     ),
     every: Annotated[
         int,
-        typer.Option("--every", help="Seconds between background rebuilds of stale products."),
-    ] = 300,
+        typer.Option(
+            "--every",
+            help="Settle window: a product is rebuilt at most once per this many seconds; "
+            "meanwhile its previous build is served with an 'as of' badge.",
+        ),
+    ] = 600,
+    dev: Annotated[
+        bool,
+        typer.Option(
+            "--dev",
+            help="Development: no settle window, so a changed page or new events show on the "
+            "next open (builds still run in a child process with the code on disk).",
+        ),
+    ] = False,
+    eager: Annotated[
+        bool,
+        typer.Option(
+            "--eager",
+            help="Also rebuild every stale product in the background (by default a product is "
+            "rebuilt only when it is opened).",
+        ),
+    ] = False,
     all_projects: Annotated[
         bool,
         typer.Option(
@@ -111,7 +139,7 @@ def site_serve_cmd(
         ),
     ] = True,
 ) -> None:
-    """Serve the hub on 127.0.0.1 and rebuild stale products in the background."""
+    """Serve the hub on 127.0.0.1; a stale product is rebuilt when it is opened."""
     from factory.cli.main import _authorized, _reporting_errors, _resolve_project, _state
     from factory.services.context import list_projects, open_project
     from factory.services.site_create import create_project
@@ -126,8 +154,10 @@ def site_serve_cmd(
                 state,
                 open_project(state.settings, slug, session=state.session, clock=state.clock),
             ),
-            min_gap=float(every),
+            min_gap=0.0 if dev else float(every),
             background=True,
+            eager=eager,
+            child_builds=True,
             feed=runner,
             create=lambda slug, title, profile: create_project(
                 state.settings, slug, title, profile, session=state.session, clock=state.clock
@@ -149,7 +179,9 @@ def site_serve_cmd(
         return
     with _reporting_errors():
         project = _resolve_project(state)
-    httpd, rebuilder = server_service.make_server(project, port, min_gap=float(every))
+    httpd, rebuilder = server_service.make_server(
+        project, port, min_gap=0.0 if dev else float(every), eager=eager, child_builds=True
+    )
     typer.echo(f"site on http://{server_service.HOST}:{httpd.server_port}/ (Ctrl-C to stop)")
     try:
         httpd.serve_forever()

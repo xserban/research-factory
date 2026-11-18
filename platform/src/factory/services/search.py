@@ -692,6 +692,9 @@ def _known_work_ids(project: Project, purpose: QueryPurpose) -> set[str]:
         return {str(row[0]) for row in conn.execute(text("SELECT work_id FROM works")).all()}
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not add works, tasks or units and then read this again
+@memoised
 def corpus_work_ids(project: Project) -> set[str]:
     """The ids of the corpus works, as `list_works` would give them, without loading the works."""
     project.index.sync()

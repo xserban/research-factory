@@ -65,6 +65,7 @@ from factory.services.agreement import (
     exclusion_criteria,
     final_outcomes,
 )
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.document_convert import convert_documents
 from factory.services.extraction import abandoned_task_ids, all_scopes, unit_states
@@ -259,6 +260,9 @@ def _inbox_items(project: Project) -> dict[str, InboxItemView]:
     return found
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not add works, tasks or units and then read this again
+@memoised
 def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
     """Miner name -> the works (sorted) that miner has an open need to mine: the works of
     `miner_population` of each protocol-listed miner that uses `layers` or `on_demand`, less those

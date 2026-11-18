@@ -46,7 +46,7 @@ from factory.model.screening import PassLabel
 from factory.model.search import QueryPurpose
 from factory.packs import Pack
 from factory.services.agreement import Outcome, final_outcomes
-from factory.services.call_memo import entering
+from factory.services.call_memo import entering, memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.document_read import default_conversion
@@ -423,6 +423,9 @@ def calibration_sample(project: Project, name: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so
+# a scope must not change the corpus or the miner listing and then read this again
+@memoised
 def miner_population(project: Project, name: str, *, include_requested: bool = True) -> list[str]:
     """The works the listed miner `name` mines in production, in work-id order: its selector's
     population less the units drawn into a calibration (M-D ruling 2: a calibration unit is never
@@ -832,6 +835,19 @@ class MineStatus(StrictModel):
     """Imported rows in use, split by whether the source had two agreeing, independent passes."""
     exploratory: bool = False
     """The protocol declares this use exploratory (IDEA-69): no quality claim on its rows."""
+
+
+def listed_miner_names(project: Project) -> set[str]:
+    """The names `mine_status(project)` reports (no session): the miners the current protocol
+    lists whose version is registered, without computing any status or agreement."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return set()
+    return {
+        use.name
+        for use in protocol.spec.miners or ()
+        if registered_miner(project, use.name, use.version) is not None
+    }
 
 
 def mine_status(

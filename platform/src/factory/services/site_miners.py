@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import text
 
 from factory.services import mining as mining_service
+from factory.services import site_progress
 from factory.services.context import Project
 from factory.services.miner_info import miner_detail
 from factory.services.site_agreement import _load, measure
@@ -144,7 +145,8 @@ def build_miners(project: Project, out: Path) -> None:
     statuses = mining_service.mine_status(project)
     slug = project.paths.slug
     index_rows: list[str] = []
-    for s in statuses:
+    for n, s in enumerate(statuses):
+        site_progress.report(n, len(statuses), "miners")
         detail = miner_detail(project, s.name, s.version)
         spec: dict[str, Any] = detail["spec"] or {}
         use: dict[str, Any] = detail["use"] or {}
