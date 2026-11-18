@@ -14,6 +14,7 @@ Invariants:
 - Stages without a source in `flow_trails` (references extracted, cited by corpus) take stops
   from the optional `extra` argument; none are invented.
 - Output is a function of the data, not of input order: ids, stops and dict keys are sorted.
+- A criterion loses its protocol prefix (`<protocol id>:EX04` is `EX04`).
 - Stops carry no `event_id` yet: `TrailStep` does not hold it, so the field is None.
 
 Cost: `flow_trails` is one pass over the events (the dominant cost, reads every event once);
@@ -153,7 +154,7 @@ def _stop(work_id: str, s: TrailStep) -> Stop | None:
     by = str(d["by"]) if "by" in d else None
     model = str(d["model"]) if "model" in d else None
     kind = _kind(by, model)
-    crit = str(d["criterion"]) if "criterion" in d else None
+    crit = str(d["criterion"]).rsplit(":", 1)[-1] if "criterion" in d else None
 
     def make(stage: str, outcome: str, **kw: Any) -> Stop:
         return Stop.make(stage, s.at, outcome, **kw)
@@ -321,7 +322,7 @@ def fate_consistent(j: Journey) -> bool:
     got = {s.outcome for s in at("retrieval")}
     if j.fate == "not_sought" and got:
         return False
-    return not (j.fate == "not_retrieved" and (not got or "retrieved" in got or "restored" in got))
+    return not (j.fate == "not_retrieved" and not got)
 
 
 # ------------------------------------------------------------------ swimlanes
