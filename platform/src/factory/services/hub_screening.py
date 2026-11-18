@@ -44,7 +44,9 @@ METHODS: dict[str, str] = {
         "included. The stop point is the number of records screened when the declared stop rule "
         "stopped serving (the first ranked record without a decision); it is absent while no rule "
         "has stopped. The shares are the part of all inclusions found within the first 10, 25 and "
-        "50 percent of the records the screening covers (rounded up to whole records)."
+        "50 percent of the records the screening covers (rounded up to whole records). Decisions "
+        "the platform marks stale (made under an earlier protocol version) are left out of the "
+        "curve and of the stop walk alike, so the two agree."
     ),
     "two_screeners": (
         "For each stage and phase, the works with a live decision from both pass A and pass B. "
@@ -364,12 +366,14 @@ def load_decisions(project: Project) -> list[Dec]:
 def load_curve(project: Project, decisions: Sequence[Dec]) -> RankedCurve:
     """The ranked curve of pass A at title/abstract, with the platform's stop point."""
     ta = ScreeningStage.TITLE_ABSTRACT
+    stale = stale_screening_decisions(project, stage=ta)
     mine = [
         d
         for d in decisions
         if d.pass_label == PassLabel.A.value
         and d.phase == ScreeningPhase.SCREENING.value
         and d.stage == ta.value
+        and d.decision_id not in stale
     ]
     positions = ranking_positions(project)
     order, mode = order_screened(mine, positions)
@@ -379,8 +383,7 @@ def load_curve(project: Project, decisions: Sequence[Dec]) -> RankedCurve:
     stop_rule: str | None = None
     stopped = [s for s in screening_stops(project, ta) if s.stopped]
     if stopped and positions:
-        stale = stale_screening_decisions(project, stage=ta)
-        verdicts = {d.work_id: Verdict(d.verdict) for d in mine if d.decision_id not in stale}
+        verdicts = {d.work_id: Verdict(d.verdict) for d in mine}
         stop_at = screened_prefix(ranked_sequence(positions, queue), verdicts)
         stop_rule = stop_rules_text(stopped)
     return ranked_curve(

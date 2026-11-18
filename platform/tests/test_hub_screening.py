@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import pytest
 
@@ -215,3 +216,89 @@ def test_superseded_decisions_are_ignored(
     assert wall and wall[0]["criterion"] == "EX01" and wall[0]["count"] == 3
     assert set(payload["methods"]) == {"ranked_curve", "two_screeners", "reasons_wall"}
     assert PassLabel.A.value == "A"
+
+
+@pytest.mark.parametrize(
+    ("verdict", "proceeds"),
+    [("include", True), ("cannot-assess", True), ("exclude", False), ("unsure", False)],
+)
+def test_promotes_follows_the_platform_rule(verdict: str, proceeds: bool) -> None:
+    assert dec(0, "w", "A", verdict).promotes is proceeds
+
+
+def test_cannot_assess_proceeds_in_the_pair_table() -> None:
+    rows = [
+        dec(0, "w", "A", "cannot-assess"),
+        dec(1, "w", "B", "include"),
+        dec(2, "v", "A", "cannot-assess"),
+        dec(3, "v", "B", "exclude", "EX01"),
+    ]
+    (group,) = hs.two_screeners(rows)
+    assert group.table["both_proceed"] == 1 and group.table["only_a_proceeds"] == 1
+    assert [d.work_id for d in group.disagreements] == ["v"]
+
+
+def test_shares_round_the_record_count_up() -> None:
+    order = [f"w{i}" for i in range(21)]
+    curve = hs.ranked_curve(order, set(order))  # every record included: share = records / 21
+    # 10% of 21 = 2.1 -> 3 records, 25% = 5.25 -> 6, 50% = 10.5 -> 11
+    assert curve.shares == {"10": 3 / 21, "25": 6 / 21, "50": 11 / 21}
+
+
+def test_reasons_wall_prefers_pass_a_when_both_passes_excluded() -> None:
+    rows = [
+        dec(0, "w", "B", "exclude", "EX01", rationale="from b"),
+        dec(1, "w", "A", "exclude", "EX01", rationale="from a"),
+    ]
+    (group,) = hs.reasons_wall(rows)
+    assert group.count == 1
+    assert [(e.pass_label, e.rationale) for e in group.examples] == [("A", "from a")]
+
+
+def test_per_criterion_kappa_counts_only_exclude_verdicts() -> None:
+    rows = [
+        dec(0, "w1", "A", "include", "IN01"),
+        dec(1, "w1", "B", "include", "IN01"),
+        dec(2, "w2", "A", "exclude", "EX01"),
+        dec(3, "w2", "B", "exclude", "EX01"),
+    ]
+    (group,) = hs.two_screeners(rows)
+    assert set(group.kappa_by_criterion) == {"EX01"}
+
+
+def test_disagreement_reason_splits_unsure_from_outcome() -> None:
+    rows = [
+        dec(0, "a", "A", "include"),
+        dec(1, "a", "B", "unsure"),
+        dec(2, "b", "A", "include"),
+        dec(3, "b", "B", "exclude", "EX01"),
+        dec(4, "c", "A", "unsure"),
+        dec(5, "c", "B", "unsure"),
+        dec(6, "d", "A", "include"),
+        dec(7, "d", "B", "cannot-assess"),
+        dec(8, "e", "A", "exclude", "EX01"),
+        dec(9, "e", "B", "exclude", "EX02"),
+    ]
+    (group,) = hs.two_screeners(rows)
+    assert {d.work_id: d.reason for d in group.disagreements} == {
+        "a": "unsure",
+        "b": "outcome",
+        "c": "unsure",
+    }
+
+
+def test_load_curve_and_stop_walk_both_leave_out_stale_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [dec(0, "a", "A", "exclude", "EX01"), dec(1, "b", "A", "include")]
+    monkeypatch.setattr(hs, "stale_screening_decisions", lambda _p, stage: {"d1"})
+    monkeypatch.setattr(hs, "ranking_positions", lambda _p: {"a": 1, "b": 2, "c": 3})
+    monkeypatch.setattr(hs, "stage_population", lambda _p, _s: {"a", "b", "c"})
+    monkeypatch.setattr(hs, "calibration_items", lambda _p, stage: set())
+    stop = type("S", (), {"stopped": True})()
+    monkeypatch.setattr(hs, "screening_stops", lambda _p, _s: [stop])
+    monkeypatch.setattr(hs, "stop_rules_text", lambda _s: "rule")
+    curve = hs.load_curve(cast(Project, None), rows)
+    # the stale include of b is in neither: the curve has one record, the walk stops after it
+    assert curve.screened == 1 and curve.included_total == 0
+    assert curve.stop_at == 1 and curve.total_records == 3
