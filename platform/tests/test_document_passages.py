@@ -190,7 +190,7 @@ def test_empty_document() -> None:
         (("Appendix B",), SectionKind.APPENDIX),
         (("A.1 Prompts",), SectionKind.APPENDIX),
         (("B.2.3 Details",), SectionKind.APPENDIX),
-        (("Prompt listings",), SectionKind.APPENDIX),
+        (("Prompt listings",), SectionKind.METHOD),
         (("2 Related Work",), SectionKind.RELATED),
         (("Background",), SectionKind.RELATED),
         (("1 Introduction",), SectionKind.FRONT),
@@ -207,15 +207,93 @@ def test_empty_document() -> None:
         # innermost matching heading decides
         (("Method", "Evaluation"), SectionKind.RESULTS),
         (("Experiments", "Plain heading"), SectionKind.RESULTS),
-        # back, appendix and related win at any depth, in that priority
+        # the innermost heading naming a kind decides; ancestors do not taint
         (("Method", "Related work"), SectionKind.RELATED),
-        (("Related work", "Method"), SectionKind.RELATED),
+        (("Related work", "Method"), SectionKind.METHOD),
+        (("Related work", "Plain heading"), SectionKind.RELATED),
+        # an appendix ancestor wins
         (("Appendix", "Related work", "Results"), SectionKind.APPENDIX),
-        (("References", "Appendix"), SectionKind.BACK),
+        (("References", "Appendix"), SectionKind.APPENDIX),
+        # B1 table
+        (("A Survey of X",), SectionKind.OTHER),
+        (("Prompting strategies",), SectionKind.METHOD),
+        (("Background and Motivation",), SectionKind.FRONT),
+        (("Competing baselines",), SectionKind.OTHER),
+        (("Competing interests",), SectionKind.BACK),
+        (("Reference-based evaluation",), SectionKind.RESULTS),
+        (("A.3 Code Execution Examples",), SectionKind.APPENDIX),
+        (("G Baseline Implementation Details",), SectionKind.METHOD),
+        (("Appendix A: Prompts",), SectionKind.APPENDIX),
+        (("Results and Discussion",), SectionKind.DISCUSSION),
+        (("IV. Related Work",), SectionKind.RELATED),
+        (("Contents",), SectionKind.BACK),
+        (("Broader Impact",), SectionKind.BACK),
+        (("Background and related work",), SectionKind.RELATED),
+        (("Supplementary Material",), SectionKind.APPENDIX),
+        (("Ethics of annotation",), SectionKind.BACK),
     ],
 )
 def test_section_kind(path: tuple[str, ...], kind: SectionKind) -> None:
     assert section_kind(path) is kind
+
+
+def test_bare_letter_is_appendix_only_after_back_matter() -> None:
+    heading = "G Baseline Implementation Details"
+    assert section_kind((heading,), (False,)) is SectionKind.METHOD
+    assert section_kind((heading,), (True,)) is SectionKind.APPENDIX
+    # a title-like heading with a bare letter, met after the references, is judged by its own flag
+    assert section_kind(("A Survey of X", "Method"), (False, True)) is SectionKind.METHOD
+
+
+def test_framework_title_is_not_appendix() -> None:
+    assert section_kind(("A Framework for Agentic Science",)) is SectionKind.METHOD
+
+
+def test_title_first_heading_uses_exact_forms_only() -> None:
+    title = "Appendix Generation with Contents of Related Work"
+    assert section_kind((title,), title_first=True) is SectionKind.OTHER
+    assert section_kind((title,)) is SectionKind.APPENDIX
+    assert section_kind(("References",), title_first=True) is SectionKind.BACK
+
+
+def test_cut_title_heading_does_not_taint_sections() -> None:
+    md = _doc(
+        _h("s1", "A Survey of Agentic Science"),
+        _h("s1.1", "Introduction"),
+        _p("s1.1.p1", _words(40)),
+        _h("s1.2", "Method"),
+        _p("s1.2.p1", _words(40)),
+        _h("s1.3", "Plain text"),
+        _p("s1.3.p1", _words(40)),
+        _h("s2", "References"),
+        _p("s2.p1", _words(40)),
+        _h("s3", "G Baseline Details"),
+        _p("s3.p1", _words(40)),
+    )
+    kinds = {p.passage_id: p.section_kind for p in cut_passages(md)}
+    assert kinds == {
+        "s1.1.p1": SectionKind.FRONT,
+        "s1.2.p1": SectionKind.METHOD,
+        "s1.3.p1": SectionKind.OTHER,
+        "s2.p1": SectionKind.BACK,
+        "s3.p1": SectionKind.APPENDIX,
+    }
+
+
+def test_cut_bare_letter_before_references_is_not_appendix() -> None:
+    md = _doc(
+        _h("s1", "Introduction"),
+        _p("s1.p1", _words(40)),
+        _h("s2", "G Baseline Details"),
+        _p("s2.p1", _words(40)),
+        _h("s3", "References"),
+        _p("s3.p1", _words(40)),
+        _h("s4", "G Baseline Details"),
+        _p("s4.p1", _words(40)),
+    )
+    kinds = {p.passage_id: p.section_kind for p in cut_passages(md)}
+    assert kinds["s2.p1"] is not SectionKind.APPENDIX
+    assert kinds["s4.p1"] is SectionKind.APPENDIX
 
 
 def test_passage_carries_section_kind() -> None:
