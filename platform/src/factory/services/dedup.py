@@ -99,6 +99,9 @@ def _reconcile(project: Project) -> DedupSummary:
     )
 
 
+# memoised (IDEA-96): inside a `call_memo.entering()` scope the first answer is reused, so a
+# scope must not run deduplication and then read this again
+@memoised
 def dedup_current(project: Project) -> bool:
     """Whether a `dedup_run` now would write nothing: no corpus work awaits deduplication.
 

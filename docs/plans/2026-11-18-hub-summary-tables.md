@@ -17,6 +17,11 @@ snapshot of the index, so it never waits on a writer.
   (plan hub-on-demand) took the dashboard from 377 s to 86 s on an idle machine, same output.
   What remains is per-unit work: `extraction._ledger` (58 s of 115 s profiled, 313k blob reads),
   `mine_status` (36 s), `resume._last_activity` (33 s, 2,472 calls), `abandoned_task_ids` (20 s).
+- Queue product: 712 s (profiled 2026-11-18, memo scope on): `index.sync()` 976 calls, 152 s
+  (each walks every event file; a build cannot simply hold `snapshot()`, which would block
+  writers for minutes; the published snapshot removes it); `extraction._ledger` 55 calls, 244 s
+  (not memoised: a mutable ledger the write path also uses); `dedup_current` 2 calls, 177 s
+  (memoised on hub-on-demand); `abandoned_task_ids` 114 s for one call (312k blob reads).
 - Taxonomy: more than 20 min in one build (not yet profiled).
 
 ## Scope (critical modules: projector and index; TDD; subagent-driven per CLAUDE.md)
