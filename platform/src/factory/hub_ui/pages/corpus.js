@@ -209,7 +209,7 @@ function snip(w) {
 function rowHTML(w) {
   const hv = w._d.human[0], c = w.cited_in_corpus;
   return `<div class="cr" role="button" tabindex="-1" data-id="${esc(w.id)}" aria-selected="${ST.sel.has(w.id)}"><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${ST.sel.has(w.id) ? 'checked' : ''} aria-label="Select this paper" title="Select"><div class="cm">
-    <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}</div>
+    <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}${w.not_read_yet ? ' <span class="meta" title="Included, but no miner has read it yet.">(not read yet)</span>' : ''}</div>
     <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}</div>
     ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span></div></div>`;
 }
@@ -316,6 +316,7 @@ function detailHTML(w) {
   <h2 class="display" style="font-size:28px;margin:14px 0 8px">${hl(w.title)}</h2>
   <p class="meta">${esc((w.authors || []).join(', ') || 'No author recorded')} · ${esc(dateOf(w))}${w.venue ? ' · ' + esc(w.venue) : ''}${w.cited_by != null ? ' · cited by ' + w.cited_by + ' elsewhere' : ''}</p>
   <p class="meta">${HUB.term('cic', 'Cited here')} <b class="num">${w.cited_in_corpus ?? 0}</b> times · ${links}${w.doc ? ` · full text on file (${esc(w.doc.kind)})` : ' · no full text on file'}</p>
+  ${w.not_read_yet ? `<p class="meta">Included, but no miner has read it yet, so it has no coded values.</p>` : ''}
   ${w.mapped_from ? `<p class="meta">Its fields were read from a duplicate record of the same paper (<span class="mono">${esc(w.mapped_from)}</span>).</p>` : ''}
   <p style="margin:8px 0">${dnaHTML(w)}</p>
   <details><summary class="h3" style="cursor:pointer">Abstract</summary><p style="font-size:var(--t-s)">${w.abstract ? hl(w.abstract) : '<span class="meta">No abstract recorded.</span>'}</p></details>
