@@ -959,7 +959,7 @@ Status: triaged (researcher asked to build it now, 2026-11-18; branch `activity-
 **Open questions:** stale threshold (30 min proposed); whether the trace panel should link a `.live` file to the session it belongs to (not derivable today).
 
 ### IDEA-99 — Selector fallback when headings do not match
-Status: built, not reviewed (researcher ruled "platform fallback + re-mine", 2026-11-18; branch `selector-fallback`, not merged; re-mining not built) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: —
+Status: built, not reviewed (researcher ruled "platform fallback + re-mine", 2026-11-18; branch `selector-fallback`, not merged; re-mining built as guarded `mine.reopened`, decision 136, not reviewed) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: —
 **What:** when a miner's heading selector serves less than a set share of a paper's paragraph words (proposed 10 %), serve every section instead (bibliography never), and record on the task that the fallback applied and the share that was matched. Applies to tasks created after the change; earlier tasks keep their selection. Then re-mine the works that were under-served (first: rf:gottweis2026-accelerating-scientific-discovery-71fbb6f8 for m-claims v2).
 **Why:** a Nature accelerated preview holds its whole main text under the heading "Summary"; the m-claims selector served 213 of 14,633 words (a reporting checklist) and the miner recorded a false `no-limitation-stated`. Coverage over the 92 core papers: one such miss, one garbled conversion, the rest 12–100 % by design.
 **Rigour notes:** deterministic (a function of the manifest and the selector), recorded on the task, visible in the miner's coverage; the threshold is a constant named in the docs; no previously served task changes.
