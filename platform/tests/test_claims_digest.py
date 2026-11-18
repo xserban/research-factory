@@ -1,15 +1,21 @@
 """The claims digest (plan chat T6): order, codes, gaps, status, scrub, render, size."""
 
 # ruff: noqa: F811
+from dataclasses import replace
+
 import pytest
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
+from factory.mining.spec import MinerRegime, spec_to_json
 from factory.model.extraction import ExtractedRowInput
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.services import claims_digest as cd
 from factory.services.claims_digest import claims_digest, render_claims_digest
 from factory.services.context import Project
+from factory.services.miner_gold import label_miner_calibration
+from factory.services.miners import draw_miner_calibration
+from factory.services.mining import mine_next, mine_record, register_miner
 from factory.services.selection import SelectionSpec
 from tests.claims_helpers import QUOTES, claim_row, claims_spec
 from tests.extraction_helpers import (
@@ -19,6 +25,8 @@ from tests.extraction_helpers import (
 from tests.miner_helpers import SESSION_M1, SESSION_M2, list_miner, mine_pass, miner_actor
 
 A, B = PassLabel.A, PassLabel.B
+SESSION_P = "01JZ9Q3K5M7N8P0R2S4T6V8W1J"
+SESSION_P2 = "01JZ9Q3K5M7N8P0R2S4T6V8W1G"
 
 
 @pytest.fixture
@@ -153,3 +161,36 @@ def test_held_out_scrub(
     assert "Lorem ipsum" not in scrubbed.rows[0].claim_quote
     assert "[withheld]" in scrubbed.rows[0].claim_quote
     assert scrubbed.work_id == plain.work_id
+
+
+def test_calibration_works_use_gold_else_calibration_rows(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    spec = replace(claims_spec(), regime=MinerRegime(2, 5, 0.8, 0.9))
+    register_miner(project, miner_actor(SESSION_P, "claude-opus-5-5"), spec_to_json(spec))
+    list_miner(project, agent, spec)
+    drawn = draw_miner_calibration(project, human, "m-claims", 1, random_seed=11)
+    works = [u.work_id for u in drawn.units]
+    gold = claim_row("limitation", QUOTES[1])
+    label_miner_calibration(
+        project, human, drawn.calibration_id, works[0], [gold], channel=Channel.CLI
+    )
+    for work in works[1:]:  # an empty label counts as no gold
+        label_miner_calibration(
+            project, human, drawn.calibration_id, work, [], empty=True, channel=Channel.CLI
+        )
+    judge = miner_actor(SESSION_P2, "claude-sonnet-5-5")
+    for _ in range(50):
+        batch = mine_next(project, judge, "m-claims", 1, A, calibration=True).batch
+        if batch is None:
+            break
+        mine_record(project, judge, batch.task_id, [claim_row("finding")], finish=True)
+    digest = claims_digest(project, SelectionSpec())
+    by_work = {p.work_id: p for p in digest.papers}
+    assert [(r.claim_type, r.status) for r in by_work[works[0]].rows] == [("limitation", "gold")]
+    for work in works[1:]:
+        assert [(r.claim_type, r.status) for r in by_work[work].rows] == [
+            ("finding", "calibration")
+        ]
+        assert by_work[work].gap is None
+    assert "(gold)" in render_claims_digest(digest)

@@ -7,19 +7,23 @@ import pytest
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
-from factory.mining.spec import EnumKind, MinerField, MinerSpec
+from factory.mining.spec import EnumKind, MinerField, MinerRegime, MinerSpec, spec_to_json
 from factory.mining.taxonomy import Category, Dimension, TaxonomySpec
 from factory.model.extraction import MinerScope
-from factory.model.screening import PassLabel
+from factory.model.screening import Channel, PassLabel
 from factory.services import paper_profile as pp
 from factory.services.context import Project
 from factory.services.extraction import live_rows
-from factory.services.mining import mine_record
+from factory.services.miner_gold import label_miner_calibration
+from factory.services.miners import draw_miner_calibration
+from factory.services.mining import mine_next, mine_record, register_miner
 from factory.services.paper_profile import (
     PROFILE_CHARS_PER_TOKEN,
     PaperProfile,
     ProfileRow,
+    RawMinerRow,
     category_names,
+    load_miner_rows,
     paper_profiles,
     profile_size,
     render_profile,
@@ -33,6 +37,7 @@ from tests.miner_helpers import (
     SESSION_M2,
     VISION_NAME,
     list_miner,
+    method_vision,
     mine_exploratory,
     mine_pass,
     mine_row,
@@ -40,6 +45,8 @@ from tests.miner_helpers import (
 )
 
 A, B = PassLabel.A, PassLabel.B
+SESSION_P = "01JZ9Q3K5M7N8P0R2S4T6V8W1J"
+SESSION_C = "01JZ9Q3K5M7N8P0R2S4T6V8W1G"
 
 
 @pytest.fixture
@@ -240,3 +247,52 @@ def test_held_out_scrub_applied_to_title_and_values(
     values = [v for r in scrubbed.rows for _, v in r.fields]
     assert "higher" not in values and "[withheld]" in values
     assert scrubbed.work_id == world[0]
+
+
+def _sample(project: Project, agent: Actor, human: Actor, labelled: int) -> tuple[list[str], str]:
+    """Register and list the fixture miner (5 calibration units), draw the sample, record a gold
+    label for the first `labelled` units (an empty label for the others, which counts as none),
+    and run the calibration session over all units. Returns the units and the miner's name."""
+    spec = replace(method_vision(), regime=MinerRegime(2, 5, 0.8, 0.9))
+    register_miner(project, miner_actor(SESSION_P, "claude-opus-5-5"), spec_to_json(spec))
+    list_miner(project, agent, spec)
+    drawn = draw_miner_calibration(project, human, VISION_NAME, 1, random_seed=11)
+    works = [u.work_id for u in drawn.units]
+    for i, work in enumerate(works):
+        gold = [mine_row("lower")] if i < labelled else []
+        label_miner_calibration(
+            project, human, drawn.calibration_id, work, gold, empty=not gold, channel=Channel.CLI
+        )
+    judge = miner_actor(SESSION_C, "claude-sonnet-5-5")
+    for _ in range(50):
+        batch = mine_next(project, judge, VISION_NAME, 1, A, calibration=True).batch
+        if batch is None:
+            break
+        mine_record(project, judge, batch.task_id, [mine_row("higher")], finish=True, reason=None)
+    return works, VISION_NAME
+
+
+def test_calibration_work_gold_else_calibration_rows(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works, name = _sample(project, agent, human, labelled=2)
+    found = load_miner_rows(project, name, works)
+    gold, plain = works[:2], works[2:]
+    for work in gold:
+        assert [r.status for r in found[work]] == ["gold"]
+        assert found[work][0].fields["direction"][0] == "lower"
+    for work in plain:
+        assert [r.status for r in found[work]] == ["calibration"]
+        assert found[work][0].fields["direction"][0] == "higher"
+    [profile] = paper_profiles(project, gold[:1])
+    assert [r.status for r in profile.rows] == ["gold"]
+
+
+def test_production_rows_win_over_calibration_rows() -> None:
+    production = [RawMinerRow("pass-a-only", "k", {})]
+    gold = [RawMinerRow("gold", "g", {})]
+    calibration = [RawMinerRow("calibration", "c", {})]
+    assert pp.choose_rows(production, gold, calibration) is production
+    assert pp.choose_rows([], gold, calibration) is gold
+    assert pp.choose_rows([], [], calibration) is calibration
+    assert pp.choose_rows([], [], []) == []

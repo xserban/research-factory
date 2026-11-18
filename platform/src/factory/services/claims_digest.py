@@ -12,7 +12,9 @@ Invariants:
   zero-padded to two digits (more when the selection has over 99 works); for one selection
   digest the codes are therefore stable.
 - Rows are those of the named miner at its listed version (`listed_miner_versions`), read with
-  `load_miner_rows`: final rows, else the live pass A rows (`pass-a-only`), never mixed. A miner
+  `load_miner_rows`: final rows, else the live pass A rows (`pass-a-only`), else for a work in the
+  miner's calibration sample the researcher's gold rows (`gold`), else the calibration session's
+  rows (`calibration`); never mixed for one work. A miner
   that is not listed in the protocol is refused on field `miner`.
 - Rows of a paper are ordered limitation, negative-result, failure-analysis, finding, mechanism,
   no-limitation-stated, then any other claim type; ties by row key.
@@ -30,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.paper_profile import (
     PROFILE_CHARS_PER_TOKEN,
@@ -172,6 +175,11 @@ def claims_digest(
     `FactoryValidationError` on field `miner` when it is not listed in the protocol, and on the
     selection's own fields as `resolve_selection` does."""
     project.index.sync()
+    with project.index.snapshot(), entering():  # one read view: no re-sync per reader
+        return _claims_digest(project, spec, miner)
+
+
+def _claims_digest(project: Project, spec: SelectionSpec, miner: str) -> ClaimsDigest:
     selection = resolve_selection_cached(project, spec)
     version = dict(listed_miner_versions(project)).get(miner)
     if version is None:

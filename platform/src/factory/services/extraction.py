@@ -420,6 +420,7 @@ def calibration_works(project: Project, calibration_id: str) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+@memoised
 def calibration_task_ids(
     project: Project, scope: ScopeKey, calibration_id: str | None = None
 ) -> frozenset[str]:
