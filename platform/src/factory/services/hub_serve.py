@@ -79,6 +79,8 @@ PREWARM_ORDER: Final = (
     "screening",
     "journeys",
     "living",
+    "landscape",
+    "landscape_uses",
 )
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the
