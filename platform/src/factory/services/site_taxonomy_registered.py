@@ -63,7 +63,7 @@ def derived_counts(project: Project, miner: str, version: int | None = None) -> 
     of works no longer in it are left out."""
     stale = stale_extractions(project, scope=MinerScope(miner))
     keep: set[str] | None = None
-    if version is not None and miner in {s.name for s in mining_service.mine_status(project)}:
+    if version is not None and miner in mining_service.listed_miner_names(project):
         keep = set(mining_service.miner_population(project, miner))
     pairs = [
         (row.work_id, str(row.fields[CATEGORY_FIELD].value))
@@ -107,7 +107,7 @@ def derived_miner(project: Project, name: str, version: int) -> DerivedMiner | N
     order = _registration_order(project, [e for _, e in candidates])
     best = max(candidates, key=lambda c: order.get(c[1], ("", c[1])))[0]
     assert best.taxonomy is not None
-    listed = {s.name for s in mining_service.mine_status(project)}
+    listed = mining_service.listed_miner_names(project)
     return DerivedMiner(
         best.name,
         best.version,

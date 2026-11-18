@@ -837,6 +837,19 @@ class MineStatus(StrictModel):
     """The protocol declares this use exploratory (IDEA-69): no quality claim on its rows."""
 
 
+def listed_miner_names(project: Project) -> set[str]:
+    """The names `mine_status(project)` reports (no session): the miners the current protocol
+    lists whose version is registered, without computing any status or agreement."""
+    protocol = current_protocol(project)
+    if protocol is None:
+        return set()
+    return {
+        use.name
+        for use in protocol.spec.miners or ()
+        if registered_miner(project, use.name, use.version) is not None
+    }
+
+
 def mine_status(
     project: Project, *, session: str | None = None, with_agreement: bool = True
 ) -> list[MineStatus]:

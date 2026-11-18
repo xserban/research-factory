@@ -22,7 +22,9 @@ snapshot of the index, so it never waits on a writer.
   writers for minutes; the published snapshot removes it); `extraction._ledger` 55 calls, 244 s
   (not memoised: a mutable ledger the write path also uses); `dedup_current` 2 calls, 177 s
   (memoised on hub-on-demand); `abandoned_task_ids` 114 s for one call (312k blob reads).
-- Taxonomy: more than 20 min in one build (not yet profiled).
+- Taxonomy: more than 30 min; it computed the full `mine_status` (with agreement) twice per
+  taxonomy version only to read the listed miner names. Fixed on hub-on-demand
+  (`mining.listed_miner_names`, same 18 names): 106 s.
 
 ## Scope (critical modules: projector and index; TDD; subagent-driven per CLAUDE.md)
 1. **Summary tables** (one projection version bump, rebuildable from the log):
