@@ -25,8 +25,8 @@ Invariants:
 - `gap` is `reviewed-empty` when pass B has reviewed the work and left no final row (its pass A
   rows are then not served); `newer-version-only` when the only rows of the work are of a
   version newer than the listed one (not shown); `no-rows` when the work has no row of the miner,
-  and `absence-only` when every one of its rows is `no-limitation-stated`; those rows are still listed. Otherwise
-  `gap` is None.
+  and `absence-only` when every one of its rows is `no-limitation-stated`; those rows are still
+  listed. Otherwise `gap` is None.
 - Held-out scrub: the title and every value and quote pass `withhold` of the held-out tokens
   (`held_out_tokens(include_work_ids=False)`); work ids are not scrubbed.
 - `size` is computed from the rendered text: characters, and estimated tokens at four characters
