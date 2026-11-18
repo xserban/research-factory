@@ -44,7 +44,7 @@ def test_chains_columns_sum_and_rest():
         assert sum(n for _, n in col) == 4
     assert sum(n for _, _, n, _ in c.links[0]) == 4
     assert all(len(ids) == n for _, _, n, ids in c.links[0])
-    assert ("x", "p", 1) == c.links[0][0][:3] or any(k[:3] == ("x", "p", 1) for k in c.links[0])
+    assert any(k[:3] == ("x", "p", 1) for k in c.links[0])
     assert any(k[:3] == (L.REST, L.REST, 1) for k in c.links[0])
 
 

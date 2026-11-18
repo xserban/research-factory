@@ -51,6 +51,7 @@ DEFAULT_COLUMNS = 8
 MAX_PAGE_SIZE = 200
 NO_MODEL = "unknown"
 # First values that say nothing: counted as "undetermined" next to the empty cells (Holes).
+UNLAYERED = site_corpus.UNLAYERED
 GAP_VALUES = frozenset({"not-determinable", "other", "not-stated", "none-stated", "unclear"})
 GRID_PREFIX = "grid-"
 HOLES_SKIP = frozenset({"m-release.artefact_scope"})
@@ -138,6 +139,7 @@ class FieldInfo:
     required: bool
     group: str
     compared: bool
+    desc: str = ""
 
     @property
     def is_quote(self) -> bool:
@@ -151,6 +153,7 @@ class FieldInfo:
             "required": self.required,
             "group": self.group,
             "compared": self.compared,
+            "desc": self.desc,
         }
 
 
@@ -173,6 +176,7 @@ def miner_info(spec: MinerSpec, listed: bool) -> MinerInfo:
             f.required,
             f.group,
             f.compared,
+            f.description,
         )
         for f in spec.fields
     )
@@ -183,7 +187,8 @@ def miner_info(spec: MinerSpec, listed: bool) -> MinerInfo:
 class MiningData:
     """What the pages share, loaded once. `models` maps `"<miner>|<pass>"` to the models that
     read the pass; `platform` maps a miner to its recorded (all-rows, aligned) agreement;
-    `codebook` maps a technique code to its stage and label."""
+    `codebook` maps a technique code to its stage and label; `layers` maps an included work to its
+    layer, so a miner's scope can be named (for example "core papers, 94")."""
 
     miners: tuple[MinerInfo, ...]
     rows: Mapping[str, tuple[MRow, ...]]
@@ -192,6 +197,8 @@ class MiningData:
     titles: Mapping[str, str]
     platform: Mapping[str, tuple[float | None, float | None]] = field(default_factory=dict)
     codebook: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    layers: Mapping[str, str] = field(default_factory=dict)
+    """Included work id -> its layer (absent or "unlayered" when none); gives a miner's scope."""
 
     def info(self, name: str) -> MinerInfo:
         for m in self.miners:
@@ -356,20 +363,21 @@ def _fairer(info: MinerInfo, att: Attributed) -> dict[str, Any]:
 
 
 def _distribution(info: MinerInfo, rows_by_work: Mapping[str, Sequence[MRow]]) -> dict[str, Any]:
-    out: dict[str, dict[str, dict[str, int]]] = {}
+    out: dict[str, dict[str, dict[str, Any]]] = {}
     for f in info.fields:
         if f.type != "enum":
             continue
         n_rows: Counter[str] = Counter()
-        n_works: Counter[str] = Counter()
-        for rows in rows_by_work.values():
+        ids: dict[str, list[str]] = defaultdict(list)
+        for w in sorted(rows_by_work):
             seen: set[str] = set()
-            for c in value_cells(rows, f.name):
+            for c in value_cells(rows_by_work[w], f.name):
                 n_rows[c.value] += 1
                 seen.add(c.value)
-            n_works.update(seen)
+            for v in seen:
+                ids[v].append(w)
         out[f.name] = {
-            v: {"rows": n_rows[v], "works": n_works[v]} for v in sorted(n_rows, key=lambda v: v)
+            v: {"rows": n_rows[v], "works": len(ids[v]), "ids": ids[v]} for v in sorted(n_rows)
         }
     return out
 
@@ -415,6 +423,23 @@ def _models(data: MiningData, name: str, label: str) -> tuple[str, ...]:
     return data.models.get(f"{name}|{label}", ())
 
 
+def _scope(data: MiningData, read: Mapping[str, Sequence[MRow]]) -> dict[str, Any]:
+    """The works a miner's first pass actually read: their number, the one layer they share (None
+    when mixed or unknown) and a short name. The registered population is a ceiling, not this."""
+    layers = {data.layers.get(w) or UNLAYERED for w in read}
+    only = next(iter(layers)) if len(layers) == 1 else None
+    layer = None if only in (None, UNLAYERED) else only
+    n = len(read)
+    total = len(data.sets.included)
+    return {
+        "layer": layer,
+        "works": n,
+        "of_included": total,
+        "complete": n == total,
+        "text": f"{layer} papers, {n}" if layer else f"papers, {n}",
+    }
+
+
 def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> dict[str, Any]:
     """The miner gallery and detail payload (see the module docstring for the measures)."""
     atts = atts or attributions(data)
@@ -443,6 +468,18 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
             p["agreed"] += e_agreed
             p["total"] += e_total
         regime = info.spec.regime
+        by_model = (
+            {
+                "a": key[0],
+                "b": key[1],
+                "works_both": both,
+                "agreed": e_agreed,
+                "total": e_total,
+                "rate": _rate(e_agreed, e_total),
+            }
+            if b
+            else None
+        )
         out.append(
             {
                 "name": info.name,
@@ -450,6 +487,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
                 "listed": info.listed,
                 "rationale": info.spec.rationale,
                 "population": info.spec.selector.population.value,
+                "scope": _scope(data, a),
                 "regime": {
                     "passes": regime.passes,
                     "calibration_size": regime.calibration_size,
@@ -488,6 +526,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
                         "all_rows": platform[0],
                         "aligned_rows": platform[1],
                     },
+                    "by_model": by_model,
                 },
                 "multi_row": rpw > MULTI_ROW_RATIO,
                 "rows_per_work": rpw,
@@ -772,6 +811,147 @@ def grid_manifest(grids: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+# ------------------------------------------------------------------ labels
+
+STAGE_NAMES: dict[str, str] = {
+    "literature-review": "Literature review",
+    "ideation-hypothesis": "Ideation and hypotheses",
+    "experiment-design": "Experiment design",
+    "implementation-execution": "Implementation and execution",
+    "data-analysis": "Data analysis",
+    "paper-writing": "Paper writing",
+    "review-verification": "Review and verification",
+    "other": "Other stages",
+}
+TECH_MINER_GROUP = "Technique per stage"
+OTHER_GROUP = "Other miners"
+# (title, group, blurb) of the miners the pilot registers; any other miner is titled from its name.
+MINER_META: dict[str, tuple[str, str, str]] = {
+    "m-descriptors": (
+        "Descriptors",
+        "Describe the paper",
+        "The paper's own words for its domain, system, data and process.",
+    ),
+    "m-summary": (
+        "Contribution summary",
+        "Describe the paper",
+        "What the paper contributes, how it innovates, what it builds on and where it stops.",
+    ),
+    "m-classification": (
+        "Classification",
+        "Describe the paper",
+        "Sorts each paper into fixed categories: technique, field, data, architecture, evaluation.",
+    ),
+    "m-mapping": (
+        "Human role and span",
+        "Describe the paper",
+        "Where a human sits in the loop and how much of the research cycle is automated.",
+    ),
+    "m-layer": (
+        "Layer",
+        "Describe the paper",
+        "How central the paper is to the question: core, benchmark, applied, adjacent or "
+        "background.",
+    ),
+    "m-release": (
+        "Code and data release",
+        "Describe the paper",
+        "Whether code and data are released, and how freely.",
+    ),
+    "m-stages": (
+        "Stages covered",
+        "Trace the process",
+        "Which research stages the system covers, and whether a machine or a person does each.",
+    ),
+    "m-stage-steps": (
+        "Steps in each stage",
+        "Trace the process",
+        "The steps inside each stage, in the order the paper describes them.",
+    ),
+    "m-design-approach": (
+        "Results by approach",
+        "Trace the process",
+        "One row per reported result: stage, approach, metric and the number as printed.",
+    ),
+    "m-lifecycle": (
+        "Lifecycle links",
+        "Trace the process",
+        "How the stages hand work to one another across the research lifecycle.",
+    ),
+    "m-claims": (
+        "Claims",
+        "Claims",
+        "The claims a paper makes, each tied to the sentence that makes it.",
+    ),
+}
+# Enum values whose label is not the value with dashes turned into spaces.
+VALUE_LABELS: dict[str, str] = {
+    "ideation-to-experiment": "Ideation → experiment",
+    "experiment-to-analysis": "Experiment → analysis",
+    "computer-science-ml": "Computer science / ML",
+    "biology-life-sciences": "Biology / life sciences",
+    "medicine-health": "Medicine / health",
+    "physics-astronomy": "Physics / astronomy",
+    "earth-climate-energy": "Earth / climate / energy",
+    "social-behavioural": "Social / behavioural",
+    "llm-judge": "LLM judge",
+    "baselines-ablation": "Baselines / ablation",
+    "omics-biological": "Omics / biological",
+    "simulation-synthetic": "Simulation / synthetic",
+    "images-signals": "Images / signals",
+    "knowledge-graphs-databases": "Knowledge graphs / databases",
+    "multi-domain": "Multi-domain",
+}
+
+
+def _cap(name: str) -> str:
+    words = name.replace("_", " ").replace("-", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def miner_label(name: str, rationale: str) -> dict[str, str]:
+    """Title, group and one-line blurb of a miner: the pilot's wording, the stage name for a
+    technique miner (`m-tech-<stage>`), else the name itself and the first 100 characters of the
+    rationale."""
+    if name in MINER_META:
+        title, group, blurb = MINER_META[name]
+        return {"title": title, "group": group, "blurb": blurb}
+    stage = name.removeprefix("m-tech-") if name.startswith("m-tech-") else None
+    if stage is not None:
+        label = STAGE_NAMES.get(stage, _cap(stage))
+        where = (
+            "stages outside the main seven"
+            if stage == "other"
+            else "its " + label.lower() + " stage"
+        )
+        return {
+            "title": label,
+            "group": TECH_MINER_GROUP,
+            "blurb": f"Which techniques the system uses in {where}.",
+        }
+    return {
+        "title": _cap(name.removeprefix("m-")),
+        "group": OTHER_GROUP,
+        "blurb": rationale[:100],
+    }
+
+
+def labels_payload(data: MiningData) -> dict[str, Any]:
+    """Display labels generated from the registered specs: miners, fields and enum values."""
+    fields: dict[str, str] = {}
+    values: dict[str, str] = {}
+    for info in data.miners:
+        for f in info.fields:
+            fields[f.name] = _cap(f.name)
+            for v in f.values:
+                values[v] = VALUE_LABELS.get(v) or _cap(v)
+    return {
+        "miners": {m.name: miner_label(m.name, m.spec.rationale) for m in data.miners},
+        "fields": dict(sorted(fields.items())),
+        "values": dict(sorted(values.items())),
+    }
+
+
 # ------------------------------------------------------------------ codebook
 
 
@@ -909,6 +1089,7 @@ def mining_payload_from(
         "columns": _catalogue(data, atts),
         "grids": grid_manifest(grids),
         "sets": sets_payload(data.sets),
+        "labels": labels_payload(data),
         "methods": METHODS,
     }
 

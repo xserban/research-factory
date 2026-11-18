@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Any
 
@@ -165,9 +166,9 @@ def test_duplicate_rows_attributed_to_canonical_and_excluded_counted_apart() -> 
         "excluded_works": ["x8", "x9"],
         "excluded_rows": 3,
     }
-    assert out["distributions"]["stance"]["pro"] == {"rows": 2, "works": 2}
+    assert out["distributions"]["stance"]["pro"] == {"rows": 2, "works": 2, "ids": ["c1", "c3"]}
     assert "con" in out["distributions"]["stance"]  # c2's row via its duplicate
-    assert out["distributions"]["stance"]["con"] == {"rows": 1, "works": 1}
+    assert out["distributions"]["stance"]["con"] == {"rows": 1, "works": 1, "ids": ["c2"]}
 
 
 # ---------------------------------------------------------------- miners
@@ -200,7 +201,15 @@ def test_miners_names_exact_fairer_and_platform_measures() -> None:
     assert m["pass_a"] == {"rows": 3, "works": 3, "models": ["claude-sonnet-5-5"]}
     assert m["pass_b"]["works"] == 2 and m["pass_b"]["models"] == ["claude-haiku-5"]
     ag = m["agreement"]
-    assert set(ag) == {"exact", "fairer", "platform"}
+    assert set(ag) == {"exact", "fairer", "platform", "by_model"}
+    assert ag["by_model"] == {
+        "a": "claude-sonnet-5-5",
+        "b": "claude-haiku-5",
+        "works_both": 2,
+        "agreed": 3,
+        "total": 4,
+        "rate": 0.75,
+    }
     assert ag["exact"]["measure"] == "set-equality (included works)"
     assert ag["exact"]["by_field"]["stance"] == {"agreed": 1, "total": 2, "rate": 0.5}
     assert ag["exact"]["overall"] == {"agreed": 3, "total": 4, "rate": 0.75}
@@ -216,6 +225,7 @@ def test_miners_names_exact_fairer_and_platform_measures() -> None:
         "required": True,
         "group": "g1",
         "compared": True,
+        "desc": "",
     }
     assert fld["evidence"]["type"] == "quote"
     assert out["by_model_pair"] == [
@@ -518,3 +528,61 @@ def test_loader_reads_latest_version_rows_models_and_applies_the_sets(
     assert by_id["w1"]["title"] == "T w1"
     assert by_id["c2"]["via"] == {"m-test": "d2"}
     assert hm.mining_payload(project, sets=sets)["miners"]["miners"][0]["name"] == "m-test"
+
+
+def test_a_miner_without_a_second_pass_has_no_model_pair_agreement() -> None:
+    sets = mk_sets(["w1"], ["w1"], {})
+    d = mk_data([mk_row("a1", "w1", "A", stance="pro")], sets)
+    assert hm.miners(d)["miners"][0]["agreement"]["by_model"] is None
+
+
+def test_scope_is_the_layer_and_count_of_the_works_actually_read() -> None:
+    sets = mk_sets(["w1", "w2", "w3", "w4"], ["w1", "w2"], {})
+    rows = [mk_row("a1", "w1", "A", stance="pro"), mk_row("a2", "w2", "A", stance="con")]
+    base = mk_data(rows, sets)
+    core = dataclasses.replace(base, layers={w: "core" for w in ("w1", "w2", "w3", "w4")})
+    assert hm.miners(core)["miners"][0]["scope"] == {
+        "layer": "core",
+        "works": 2,
+        "of_included": 4,
+        "complete": False,
+        "text": "core papers, 2",
+    }
+    mixed = dataclasses.replace(base, layers={"w1": "core", "w2": "applied"})
+    sc = hm.miners(mixed)["miners"][0]["scope"]
+    assert sc["layer"] is None and sc["text"] == "papers, 2"
+    assert hm.miners(base)["miners"][0]["scope"]["layer"] is None
+
+
+def test_field_descriptions_and_labels_come_from_the_spec() -> None:
+    spec = mk_spec(
+        extra=(
+            MinerField(
+                "domain",
+                "g2",
+                EnumKind(("computer-science-ml", "multi-domain")),
+                description="The field of study.",
+            ),
+        )
+    )
+    sets = mk_sets(["w1"], ["w1"], {})
+    d = mk_data([mk_row("a1", "w1", "A", stance="pro", domain="multi-domain")], sets, spec=spec)
+    p = hm.mining_payload_from(d)
+    fld = {f["name"]: f for f in p["miners"]["miners"][0]["fields"]}
+    assert fld["domain"]["desc"] == "The field of study." and fld["stance"]["desc"] == ""
+    lab = p["labels"]
+    assert lab["fields"]["domain"] == "Domain" and lab["fields"]["stance"] == "Stance"
+    assert lab["values"]["computer-science-ml"] == "Computer science / ML"
+    assert lab["values"]["multi-domain"] == "Multi-domain" and lab["values"]["pro"] == "Pro"
+    assert lab["miners"]["m-test"] == {
+        "title": "Test",
+        "group": "Other miners",
+        "blurb": "Reads the stance.",
+    }
+
+
+def test_technique_miner_titles_come_from_the_stage_names() -> None:
+    assert hm.miner_label("m-tech-data-analysis", "")["title"] == "Data analysis"
+    assert hm.miner_label("m-tech-data-analysis", "")["group"] == "Technique per stage"
+    assert hm.miner_label("m-tech-other", "")["title"] == "Other stages"
+    assert hm.miner_label("m-mapping", "")["title"] == "Human role and span"

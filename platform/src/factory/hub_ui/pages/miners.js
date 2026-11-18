@@ -72,6 +72,8 @@ HUB.load(['shell', 'mining']).then(d => {
 .bar .tr{height:8px;background:var(--hair);border-radius:2px;overflow:hidden}
 .bar .tr i{display:block;height:100%;background:var(--seq-3)}
 .bar .n{font-family:var(--f-mono);color:var(--mut);text-align:right}
+.bar[data-vals]{cursor:pointer;border-radius:4px}.bar[data-vals]:hover{background:var(--raised)}.bar[data-vals]:focus-visible{outline:2px solid var(--acc)}
+.vl{display:grid;gap:2px;max-height:220px;overflow:auto}.vl .ttl{all:unset;cursor:pointer;font-size:var(--t-xs);padding:3px 4px;border-radius:4px}.vl .ttl:hover{background:var(--raised)}
 .more{all:unset;cursor:pointer;font-size:var(--t-xs);color:var(--acc);padding:3px 4px;text-decoration:underline;text-underline-offset:3px}
 .more:focus-visible{outline:2px solid var(--acc)}
 .agr{display:grid;grid-template-columns:minmax(120px,190px) minmax(0,1fr) 100px;gap:4px 14px;align-items:center}
@@ -110,40 +112,21 @@ HUB.load(['shell', 'mining']).then(d => {
     document.head.appendChild(st);
   }
 
-  /* ---------- page-local labels (copy only; no figures) ---------- */
-  const META = {
-    'm-descriptors': ['Descriptors', 'Describe the paper', 'The paper’s own words for its domain, system, data and process.'],
-    'm-summary': ['Contribution summary', 'Describe the paper', 'What the paper contributes, how it innovates, what it builds on and where it stops.'],
-    'm-classification': ['Classification', 'Describe the paper', 'Sorts each paper into fixed categories: technique, field, data, architecture, evaluation.'],
-    'm-mapping': ['Human role and span', 'Describe the paper', 'Where a human sits in the loop and how much of the research cycle is automated.'],
-    'm-layer': ['Layer', 'Describe the paper', 'How central the paper is to the question: core, benchmark, applied, adjacent or background.'],
-    'm-release': ['Code and data release', 'Describe the paper', 'Whether code and data are released, and how freely.'],
-    'm-stages': ['Stages covered', 'Trace the process', 'Which research stages the system covers, and whether a machine or a person does each.'],
-    'm-stage-steps': ['Steps in each stage', 'Trace the process', 'The steps inside each stage, in the order the paper describes them.'],
-    'm-design-approach': ['Results by approach', 'Trace the process', 'One row per reported result: stage, approach, metric and the number as printed.'],
-    'm-lifecycle': ['Lifecycle links', 'Trace the process', 'How the stages hand work to one another across the research lifecycle.'],
-    'm-claims': ['Claims', 'Claims', 'The claims a paper makes, each tied to the sentence that makes it.'],
-  };
-  const TECHN = { 'literature-review': 'Literature review', 'ideation-hypothesis': 'Ideation and hypotheses', 'experiment-design': 'Experiment design', 'implementation-execution': 'Implementation and execution', 'data-analysis': 'Data analysis', 'paper-writing': 'Paper writing', 'review-verification': 'Review and verification', 'other': 'Other stages' };
-  for (const m of M) {
-    const t = m.name.match(/^m-tech-(.+)$/);
-    if (t) META[m.name] = [TECHN[t[1]] || t[1], 'Technique per stage', 'Which techniques the system uses in ' + (t[1] === 'other' ? 'stages outside the main seven' : 'its ' + (TECHN[t[1]] || t[1]).toLowerCase() + ' stage') + '.'];
-  }
+  /* ---------- labels: generated from the registered specs (payload `labels`) ---------- */
+  const LB = MP.labels || {}, LBM = LB.miners || {}, LBF = LB.fields || {}, LBV = LB.values || {};
   const GROUPS = ['Describe the paper', 'Trace the process', 'Technique per stage', 'Claims', 'Other miners'];
-  const meta = m => META[m.name] || [m.name, 'Other miners', (m.rationale || '').slice(0, 100)];
+  const meta = m => { const x = LBM[m.name] || {}; return [x.title || m.name, x.group || 'Other miners', x.blurb || '']; };
   const hname = m => meta(m)[0];
   const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-  const flab = f => cap(f.replace(/_/g, ' '));
-  const ARROW = { 'ideation-to-experiment': 'Ideation → experiment', 'experiment-to-analysis': 'Experiment → analysis' };
-  const FIX = { 'computer-science-ml': 'Computer science / ML', 'biology-life-sciences': 'Biology / life sciences', 'medicine-health': 'Medicine / health', 'physics-astronomy': 'Physics / astronomy', 'earth-climate-energy': 'Earth / climate / energy', 'social-behavioural': 'Social / behavioural', 'llm-judge': 'LLM judge', 'baselines-ablation': 'Baselines / ablation', 'omics-biological': 'Omics / biological', 'simulation-synthetic': 'Simulation / synthetic', 'images-signals': 'Images / signals', 'knowledge-graphs-databases': 'Knowledge graphs / databases', 'multi-domain': 'Multi-domain' };
+  const flab = f => LBF[f] || cap(f.replace(/_/g, ' '));
   function lab(v) {
     if (v == null) return 'Not recorded';
-    v = String(v); if (ARROW[v]) return ARROW[v];
+    v = String(v); if (LBV[v]) return LBV[v];
     if (H.HUMAN.some(h => h[0] === v)) return H.humanLabel(v);
     const k = v.replace(/^[a-z]+\//, '');
     if (CB[k] && CB[k].label) return CB[k].label.replace(/^(.{70}).+$/, '$1…');
     if (/^[a-z]{1,3}-\d+$/.test(k)) return k.toUpperCase();
-    return FIX[k] || H.pretty(k);
+    return LBV[k] || H.pretty(k);
   }
   function model(list) {
     if (!list || !list.length) return null;
@@ -206,7 +189,7 @@ HUB.load(['shell', 'mining']).then(d => {
     }) + `<p class=lead>${esc(lead)}</p>`
       + GROUPS.map(g => {
         const ms = M.filter(m => meta(m)[1] === g); if (!ms.length) return '';
-        const keys = Object.keys(META);
+        const keys = Object.keys(LBM);
         ms.sort((a, b) => keys.indexOf(a.name) - keys.indexOf(b.name));
         return `<section class=grp><div class=gh>${H.header({ title: g })}<span class=meta>${fmt(ms.length)} ${ms.length > 1 ? 'miners' : 'miner'}${ms.every(subset) ? ' · ran on a subset of the papers' : ''}</span></div><div class=cards>${ms.map(card).join('')}</div></section>`;
       }).join('')
@@ -225,7 +208,7 @@ HUB.load(['shell', 'mining']).then(d => {
     }
     const A = model(m.pass_a.models), B = model(m.pass_b.models), thr = pc(m.regime.field_agreement_min);
     return `<div class=anat>
-      <div class=an><div class=st>1 · READS</div><h3 class=h3>The paper</h3><div class=tags><span class="tag">Full text</span></div><p>${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers${subset(m) ? ', a subset' : ''}. Population: <span class=mono>${esc(m.population)}</span>.</p></div>
+      <div class=an><div class=st>1 · READS</div><h3 class=h3>The paper</h3><div class=tags><span class="tag">Full text</span></div><p>${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers${subset(m) ? ', a subset' : ''}. Scope: ${esc(m.scope.text)}.</p></div>
       <div class=an><div class=st>2 · RECORDS</div><h3 class=h3>${pl(nf, 'field', 'fields')}</h3><div class=tags>${grs.map(g => `<span class=tag>${esc(cap(g))} · ${fmt(m.fields.filter(f => f.group === g).length)}</span>`).join('')}</div><p>${pl(ne, 'choice', 'choices')}, ${pl(nq, 'quote', 'quotes')}. ${m.multi_row ? '<b>Several rows per paper</b>' + (m.rows_per_work ? ', ' + esc(m.rows_per_work) + ' on average.' : '.') : 'One row per paper.'}</p></div>
       <div class=an><div class=st>3 · EVIDENCE</div><h3 class=h3>A quote for every value</h3>${q ? `<div class=quote>“${esc(q[2])}”</div><p>Sets <b>${esc(flab(q[0]))}</b>${q[1] != null && q[1] !== q[2] ? ' = <b>' + esc(lab(q[1])) + '</b>' : ''}.</p>` : '<p>Every value is stored with the sentence it was based on.</p>'}</div>
       <div class=an><div class=st>4 · CHECK</div><h3 class=h3>${checked(m) ? 'Read again by ' + esc(B) : 'Not checked yet'}</h3><p>${checked(m) ? `The second reading covered <b>${fmt(m.pass_b.works)}</b> of ${fmt(m.pass_a.works)} papers. First reading: ${esc(A)}${A === B ? ' (the same model, so a weaker check)' : ''}.` : `No second reading exists.`} A field passes at ${thr}% agreement; calibration set of ${fmt(m.regime.calibration_size)} papers.</p></div>
@@ -239,13 +222,14 @@ HUB.load(['shell', 'mining']).then(d => {
       const unit = m.multi_row ? 'rows' : 'works';
       const ent = Object.entries(dist).map(([v, o]) => [v, o[unit]]).sort((a, b) => b[1] - a[1]);
       const tot = ent.reduce((s, x) => s + x[1], 0) || 1, lim = open[m.name + f.name] ? ent.length : 8;
-      body = `<div class=bars role=group aria-label="Values of ${esc(flab(f.name))}">${ent.slice(0, lim).map(([v, n]) => `<div class=bar title="${esc(lab(v))}"><span class=l>${esc(lab(v))}</span><span class=tr><i style="width:${(100 * n / tot).toFixed(1)}%"></i></span><span class=n>${fmt(n)}</span></div>`).join('')}</div>`
+      body = `<div class=bars role=group aria-label="Values of ${esc(flab(f.name))}">${ent.slice(0, lim).map(([v, n]) => `<div class=bar tabindex=0 role=button data-vals="${esc(m.name + '|' + f.name + '|' + v)}" title="${esc(lab(v))}"><span class=l>${esc(lab(v))}</span><span class=tr><i style="width:${(100 * n / tot).toFixed(1)}%"></i></span><span class=n>${fmt(n)}</span></div>`).join('')}</div>`
         + (ent.length > 8 ? `<button class=more data-more="${esc(m.name + f.name)}">${open[m.name + f.name] ? 'Show fewer' : 'Show all ' + fmt(ent.length)}</button>` : '')
-        + `<div class=meta style="margin-top:6px">${m.multi_row ? 'rows' : 'papers'}</div>`;
+        + `<div class=meta style="margin-top:6px">${m.multi_row ? 'rows' : 'papers'}. Select a value to list its papers.</div><div class=vl data-vl="${esc(m.name + '|' + f.name)}"></div>`;
     } else if (f.type === 'enum') body = `<div class=empty>No values recorded yet.</div>`;
     else body = `<div class=meta>${f.type === 'quote' ? 'Records a sentence from the paper.' : 'Records a figure as printed.'}</div>`;
     const allowed = (f.values || []).length ? infoPop(flab(f.name), `<p><span class=k>Allowed values.</span> ${f.values.map(v => esc(lab(v))).join(', ')}</p>`) : '';
-    return `<div class=fc><div class=fh><b>${esc(flab(f.name))}</b><span class=tchip>${esc(cap(f.type))}</span><span class=rq>${esc(cap(f.group))}</span>${f.required ? '<span class=rq>required</span>' : ''}${f.compared ? '' : '<span class=rq>not compared</span>'}${allowed}</div>${body}</div>`;
+    const desc = f.desc ? `<p class=meta style="margin:4px 0 8px">${esc(f.desc)}</p>` : '';
+    return `<div class=fc><div class=fh><b>${esc(flab(f.name))}</b><span class=tchip>${esc(cap(f.type))}</span><span class=rq>${esc(cap(f.group))}</span>${f.required ? '<span class=rq>required</span>' : ''}${f.compared ? '' : '<span class=rq>not compared</span>'}${allowed}</div>${desc}${body}</div>`;
   }
   function track(r, thr, alt, col) {
     const [lo, hi] = wilson(r.a, r.c), L = p => (100 * p).toFixed(2) + '%';
@@ -271,9 +255,9 @@ HUB.load(['shell', 'mining']).then(d => {
     <div class=legend2><span><span class=sw></span>Bar to clear: ${pc(thr)}%</span><span><span class=dot style="background:var(--inc)"></span>meets it</span><span><span class=dot style="background:var(--exc)"></span>below it</span><span>Thin line: 95% range at this n</span><span>Large dot: ${MNAME[dk].toLowerCase()}; small dot: the other measure</span></div>`;
   }
   function modelSection(m) {
-    const mine = PAIRS.filter(p => p.miners.includes(m.name));
+    const bm = m.agreement.by_model, mine = bm ? [bm] : [];
     return `<div class=meta style="margin-bottom:10px">First reading: ${esc(model(m.pass_a.models) || 'not recorded')}. Second reading: ${esc(model(m.pass_b.models) || 'none yet')}.</div>`
-      + (mine.length ? pairsSection(mine) + `<div class=meta style="margin-top:8px">Each rate covers every miner the pair read, not this miner alone.</div>` : `<div class=empty>${checked(m) ? 'No model pair is recorded for this miner.' : 'Appears once a second reading exists.'}</div>`);
+      + (mine.length ? pairsSection(mine) + `<div class=meta style="margin-top:8px">This rate covers this miner only: ${fmt(bm.agreed)} of ${fmt(bm.total)} field comparisons.</div>` : `<div class=empty>${checked(m) ? 'No model pair is recorded for this miner.' : 'Appears once a second reading exists.'}</div>`);
   }
   function examples(m) {
     if (!(m.examples || []).length) return `<div class=empty>No example rows yet.</div>`;
@@ -294,7 +278,7 @@ HUB.load(['shell', 'mining']).then(d => {
     const lead = checked(m)
       ? `Read ${fmt(m.pass_a.works)} papers and checked ${fmt(m.pass_b.works)}. ` + (r.length ? (meet ? `${fmt(meet)} of ${pl(r.length, 'compared field', 'compared fields')} reach the ${pc(thr)}% bar.` : `No compared field reaches the ${pc(thr)}% bar.`) + ` (${MNAME[dk].toLowerCase()})` : 'Its fields are free text, so they are not compared.')
       : `Read ${fmt(m.pass_a.works)} papers. No second reading yet.`;
-    const popLine = subset(m) ? `Ran on a subset: ${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (population <span class=mono>${esc(m.population)}</span>).` : `Population <span class=mono>${esc(m.population)}</span>: ${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers.`;
+    const popLine = subset(m) ? `Ran on a subset: ${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).` : `${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).`;
     main.innerHTML = `<div class=crumbs><a href="#">← All miners</a></div>`
       + H.header({ level: 1, kicker: esc(gname) + ' · ' + HUB.term('miner', 'miner') + ' <span class=mono>' + esc(m.name) + '</span>', title: nm, infoHtml: `<b>${esc(nm)}</b><p>${esc(m.rationale || '')}</p><p><span class=k>Regime.</span> ${fmt(m.regime.passes)} passes. A field must agree on at least ${pc(thr)}% of checked papers; recall at least ${pc(m.regime.recall_min)}%.</p>` })
       + `<p class=lead>${esc(lead)}</p><div class=actions><span class=meta>${popLine}</span><a class=btn href="data.html#miner=${encodeURIComponent(m.name)}">See the data</a></div>`
@@ -307,6 +291,16 @@ HUB.load(['shell', 'mining']).then(d => {
       + `<div class=foot>${HUB.info(esc(HUB.SETS_NOTE), 'About the paper counts')} <span>Paper counts</span></div>`;
     main.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { open[b.dataset.more] = !open[b.dataset.more]; render(); });
     main.querySelectorAll('[data-w]').forEach(b => b.onclick = () => HUB.openDrawer(b.dataset.w));
+    main.querySelectorAll('[data-vals]').forEach(el => {
+      const show = () => {
+        const [mn, fn, v] = el.dataset.vals.split('|'), mm = M.find(x => x.name === mn), box = main.querySelector(`[data-vl="${mn}|${fn}"]`);
+        const ids = (((mm.distributions || {})[fn] || {})[v] || {}).ids || [];
+        const known = ids.filter(i => H.byId.has(i));
+        box.innerHTML = `<div class=meta style="margin:8px 0 4px">${fmt(known.length)} ${known.length === 1 ? 'paper' : 'papers'} with “${esc(lab(v))}”</div>` + known.map(i => `<button class=ttl data-w="${esc(i)}">${esc(H.byId.get(i).title)}</button>`).join('');
+        box.querySelectorAll('[data-w]').forEach(b => b.onclick = () => HUB.openDrawer(b.dataset.w));
+      };
+      el.onclick = show; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); } };
+    });
     main.querySelectorAll('[data-tip]').forEach(s => { s.onmousemove = e => HUB.tip(s.dataset.tip, e); s.onmouseleave = () => HUB.tip(''); });
   }
   function render() {

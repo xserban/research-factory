@@ -15,6 +15,7 @@ Invariants:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import time
@@ -123,7 +124,10 @@ class HubContext:
         ledger is not recomputed)."""
         return self._once(
             "mining",
-            lambda: hub_mining.load_mining_data(self.project, sets=self.flow_data.sets),
+            lambda: dataclasses.replace(
+                hub_mining.load_mining_data(self.project, sets=self.flow_data.sets),
+                layers=self.layer_of,
+            ),
         )
 
     @property

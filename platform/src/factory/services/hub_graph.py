@@ -13,7 +13,7 @@ import json
 import math
 import random
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -50,12 +50,16 @@ METHODS: dict[str, str] = {
         "cited to citing work: the weight of a link is the number of source-to-sink paths through "
         "it. The main path starts at the heaviest link leaving a source and follows the heaviest "
         "outgoing link at each step. Links inside a citation cycle that point backwards in time "
-        "(by date, then id) are dropped and counted."
+        "(by date, then id) are dropped and counted. A citation inside the corpus can point to a "
+        "later-dated work (a preprint cited before its recorded publication date), so stops on "
+        "the path are not always in date order."
     ),
     "river": (
         "One arc per citation between two corpus works, from the citing to the cited work, with "
         "the lag in months between their publication dates (month precision; missing months "
-        "count as January)."
+        "count as January). A citation can point to a later-dated work (a preprint cited before "
+        "its recorded publication date); its lag is then negative, and the number of such "
+        "citations is given."
     ),
     "reference_health": (
         "For each corpus work, the reference entries of its live extraction counted by link "
@@ -495,6 +499,12 @@ class Arc:
     lag_months: int | None
 
 
+def river_stats(arcs: Sequence[Arc]) -> dict[str, int]:
+    """Citations counted, those with both dates known, and those to a later-dated work."""
+    lags = [a.lag_months for a in arcs if a.lag_months is not None]
+    return {"arcs": len(arcs), "dated": len(lags), "negative_lag": sum(1 for x in lags if x < 0)}
+
+
 def river(
     graph: CitationGraph, corpus: Iterable[str], dates: Mapping[str, str | None] | None = None
 ) -> list[Arc]:
@@ -631,6 +641,7 @@ def graph_payload(
     cluster_of = {w: s.id for s in sch for w in s.members}
     land = landscape(graph, corpus, cluster_of, labels)
     mp = main_path(graph, corpus)
+    arcs = river(graph, corpus)
     found = foundations(graph, corpus)
     health = reference_health(load_reference_rows(project), corpus)
     return {
@@ -651,7 +662,8 @@ def graph_payload(
             "spc": [{"cited": u, "citing": v, "spc": n} for (u, v), n in mp.spc.items()],
             "dropped": [list(e) for e in mp.dropped],
         },
-        "river": [asdict(a) for a in river(graph, corpus)],
+        "river": [asdict(a) for a in arcs],
+        "river_stats": river_stats(arcs),
         "reference_health": {
             "works": [
                 {"work_id": h.work_id, "has_extraction": h.has_extraction, **h.counts}

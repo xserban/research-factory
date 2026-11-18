@@ -197,8 +197,8 @@ def chains(works: Sequence[LensWork], dims: Sequence[str], top_k: int) -> Chains
     links: list[list[tuple[str, str, int, list[str]]]] = []
     for j in range(len(dims) - 1):
         lw: dict[tuple[str, str], list[str]] = defaultdict(list)
-        for w, v in zip(works, vals, strict=True):
-            lw[(maps[j][v[j]], maps[j + 1][v[j + 1]])].append(w.id)
+        for work, vs in zip(works, vals, strict=True):
+            lw[(maps[j][vs[j]], maps[j + 1][vs[j + 1]])].append(work.id)
         links.append([(a, b, len(ids), sorted(ids)) for (a, b), ids in sorted(lw.items())])
     return Chains(list(dims), columns, links, len(works))
 

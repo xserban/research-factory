@@ -348,13 +348,14 @@ svg text{user-select:none;font-family:var(--f-ui)}
   /* ================= 5. River ================= */
   build.river = () => {
     const R = G.river, lags = R.map(a => a.lag_months).filter(x => x != null), med = median(lags);
+    const NEG = (G.river_stats || {}).negative_lag || 0;
     const bins = []; const BW = 3; lags.forEach(l => { const b = Math.max(0, Math.floor(l / BW)); bins[b] = (bins[b] || 0) + 1; });
     return {
       title: 'River',
       info: infoPanel('When papers cite earlier work, and how far back they reach.',
         'Time runs left to right. Each arc leaves a paper and lands on an older paper it cites; wide arcs reach far back. Colour is the layer of the citing paper. Click an arc to open the citing paper. The bars beneath count citations by their lag in months.',
-        meth('river')),
-      lead: R.length ? `The typical citation reaches back about <b>${fmt(Math.round(med))}</b> months.` : '',
+        `${meth('river')}${NEG ? ` Here ${fmt(NEG)} of ${fmt((G.river_stats || {}).dated)} dated citations point to a later-dated paper.` : ''}`),
+      lead: R.length ? `The typical citation reaches back about <b>${fmt(Math.round(med))}</b> months.${NEG ? ` <b>${fmt(NEG)}</b> ${NEG === 1 ? 'citation points' : 'citations point'} to a later-dated paper.` : ''}` : '',
       body: R.length ? `<div class="scrollx" id="riverhost"></div><h3 class="h3" style="margin:18px 0 4px">Lag between paper and source ${H.info('How many months older the cited paper is than the citing one, in three-month steps.', 'About the lag')}</h3><div class="scrollx" id="laghost"></div>` : '<p class="empty">No citations between corpus papers.</p>',
       draw() {
         const host = document.getElementById('riverhost'), lh = document.getElementById('laghost'); if (!host) return;

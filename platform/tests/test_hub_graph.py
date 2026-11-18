@@ -187,6 +187,17 @@ def test_river_lag_in_months() -> None:
     assert hg.river(graph, ["p", "q"], {"p": "2022-01", "q": "2022-01"})[0].lag_months == 0
 
 
+def test_river_stats_count_citations_to_a_later_dated_work() -> None:
+    graph = g(
+        [("p", "q"), ("p", "late"), ("q", "undated")],
+        {"p": "2021-05", "q": "2020-11", "late": "2022-02"},
+    )
+    arcs = hg.river(graph, ["p", "q", "late", "undated"])
+    stats = hg.river_stats(arcs)
+    assert stats == {"arcs": 3, "dated": 2, "negative_lag": 1}
+    assert "later-dated" in hg.METHODS["river"] and "later-dated" in hg.METHODS["main_path"]
+
+
 def test_landscape_first_ring_and_hidden_counts() -> None:
     graph = g([("c1", "x"), ("c2", "x"), ("c1", "y"), ("c1", "c2")], {"c1": "2020-03"})
     land = hg.landscape(graph, ["c1", "c2"], {"c1": "s1"}, {"c2": "rl"})
@@ -232,6 +243,7 @@ def test_loaders_and_payload_on_a_small_project(project: Project) -> None:
     json.dumps(payload)
     assert payload["landscape"]["total_edges"] == 1
     assert payload["reference_health"]["totals"]["unconfirmed"] == 1
+    assert payload["river_stats"] == {"arcs": 0, "dated": 0, "negative_lag": 0}
     assert set(payload["methods"]) >= {"landscape", "main_path", "reference_health"}
 
 
