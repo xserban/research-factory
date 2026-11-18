@@ -71,6 +71,9 @@ HUB.load(['shell']).then(d => {
 
   /* ---------- vocabulary: an approach is what the code calls a technique ---------- */
   const NOTICE_HEAD = 'Exploratory';
+  /* the same words as the payload's notice (hub_landscape / model.technique_graph.NOTICE), for the states before it arrives */
+  const NOTICE_TEXT = 'uncalibrated miners, pass A, interpretation layer, not evidence; not found in this corpus is not absent from the field; no figure here enters a report';
+  const noticeBox = (text, more) => `<div class="xnote" role="note"><b>${esc(NOTICE_HEAD)}</b> ${esc(text)}.${more ? '<br>' + esc(more) : ''}</div>`;
   const EV_LABEL = { 'independent-test': 'Tested by others', 'own-ablation': 'Own ablation', 'own-comparison': 'Own comparison', 'asserted-only': 'Asserted only', 'reported-failure': 'Reported failure', 'not-stated': 'Not stated' };
   const evLabel = e => EV_LABEL[e] || H.pretty(e);
   const stLabel = s => H.pretty(s);
@@ -84,10 +87,12 @@ HUB.load(['shell']).then(d => {
     : `<span>${esc(title || id)}</span>`;
 
   main.innerHTML = H.header({ level: 1, kicker: esc(NOTICE_HEAD) + ' · ' + H.term('technique', 'techniques') + ' by stage', title: 'Landscape' })
+    + noticeBox(NOTICE_TEXT)
     + '<p class="status" role="status" id="ls-wait">Building the landscape. It reads every technique reading once, so the first build takes about a minute. This page fills in by itself.</p>';
 
   H.load(['landscape']).then(p => start(p.landscape)).catch(e => {
     const w = document.getElementById('ls-wait');
+    if (w) w.classList.remove('status'), w.classList.add('empty');
     if (w) w.textContent = 'The landscape is not ready: ' + String(e && e.message || e) + '. Reload in a moment.';
   });
 
@@ -134,12 +139,15 @@ HUB.load(['shell']).then(d => {
     /* ---------- hash: lens and open approach ---------- */
     function readHash() {
       const h = H.hash.get(), l = h.get('layer');
-      if (l && layerOptions.includes(l)) lens.layer = l;
+      lens.layer = l && layerOptions.includes(l) ? l : D.lens.layer;
       const e = h.get('ev'); lens.ev = e && D.evidence_levels.includes(e) ? e : '';
       const s = h.get('st'); lens.st = s && D.statuses.includes(s) ? s : '';
       const a = h.get('a'); return a && catById.has(a) ? a : null;
     }
-    function writeHash(a) { H.hash.set({ layer: lens.layer === D.lens.layer ? '' : lens.layer, ev: lens.ev, st: lens.st, a: a || '' }); }
+    const hashParams = a => ({ layer: lens.layer === D.lens.layer ? '' : lens.layer, ev: lens.ev, st: lens.st, a: a || '' });
+    /* a lens change replaces the history entry; opening or leaving an approach adds one, so Back returns */
+    function writeHash(a) { H.hash.set(hashParams(a)); }
+    function hashFor(a) { const p = new URLSearchParams(); for (const [k, v] of Object.entries(hashParams(a))) if (v) p.set(k, v); return p.toString(); }
 
     /* ---------- overview ---------- */
     function lensBar() {
@@ -151,11 +159,11 @@ HUB.load(['shell']).then(d => {
         + '</div>';
     }
     function notice() {
-      return `<div class="xnote" role="note"><b>${esc(NOTICE_HEAD)}</b> ${esc(D.notice.replace(/^exploratory:\s*/i, ''))}.<br>${esc(D.corpus)} ${esc(cap(D.cross_stage_note))}.</div>`;
+      return noticeBox(D.notice.replace(/^exploratory:\s*/i, ''), D.corpus + ' ' + cap(D.cross_stage_note) + '.');
     }
     function bindLens(redraw) {
       for (const [id, key] of [['f-layer', 'layer'], ['f-ev', 'ev'], ['f-st', 'st']]) {
-        const el = document.getElementById(id); if (el) el.onchange = () => { lens[key] = el.value; writeHash(currentA); redraw(); };
+        const el = document.getElementById(id); if (el) el.onchange = () => { lens[key] = el.value; writeHash(currentA); redraw(); const again = document.getElementById(id); if (again) again.focus(); };
       }
     }
     function bindPapers(root) {
@@ -238,7 +246,7 @@ HUB.load(['shell']).then(d => {
       main.innerHTML = H.header({ level: 1, kicker: esc(NOTICE_HEAD) + ' · ' + H.term('technique', 'techniques') + ' by stage', title: 'Landscape', infoHtml: M.page })
         + (empty ? '' : `<p class="lead">In ${lens.layer === 'all' ? 'all layers' : 'the ' + esc(layerName(lens.layer).toLowerCase()) + ' layer'}, <b>${fmt(C.all.size)}</b> papers use <b>${fmt(C.by.size)}</b> approaches across <b>${fmt(C.per.size)}</b> stages.</p>`)
         + notice() + (empty ? '<p class="empty">No technique readings are recorded yet. The landscape appears here once the technique miners have read papers.</p>' : lensBar()
-          + `<p class="nowlens" id="nowlens">Lens now: <b>${esc(lensText())}</b>. Counts are papers with a current pass-A row; the lens also drives the stage summaries.</p>
+          + `<p class="nowlens" id="nowlens">Lens now: <b>${esc(lensText())}</b>. Counts are papers with a current pass-A row. The lens drives the stage cards\u2019 approaches, papers, rows and evidence share; the set-aside count and the second-reading agreement cover every layer.</p>
           <section class="sec">${H.header({ title: 'Stages', level: 2, infoHtml: M.agreement })}${stagesView(C)}</section>
           <section class="sec">${H.header({ title: 'Approaches by stage', level: 2, infoHtml: M.matrix })}${legend()}${matrixView(C)}</section>
           <section class="sec">${H.header({ title: 'Used together', level: 2, sub: 'Core layer, the server’s default lens' })}${coUsedView()}</section>
@@ -304,16 +312,19 @@ HUB.load(['shell']).then(d => {
       const host = document.getElementById('ls-uses'); if (!host || currentA !== id) return;
       const box = (USES.approaches || {})[id];
       if (!box) { host.innerHTML = '<p class="empty">No rows recorded.</p>'; return; }
+      const cut = box.rows_shown < box.rows_total;
       const rows = box.uses.filter(u => (lens.layer === 'all' || u.layer === lens.layer) && (!lens.ev || u.evidence === lens.ev) && (!lens.st || u.status === lens.st));
       host.innerHTML = (rows.length ? `<div class="scrollx"><table class="t"><thead><tr><th>Paper</th><th>Evidence</th><th>Status</th><th>Quote and where it is</th></tr></thead><tbody>${rows.map(u => `<tr><td>${paper(u.work, (workIdx.has(u.work) ? W[workIdx.get(u.work)].title : u.work))}</td><td>${esc(evLabel(u.evidence))}</td><td>${esc(stLabel(u.status))}</td>
-          <td class="q">${u.quote ? `<blockquote class="quote">“${esc(u.quote)}”</blockquote>` : '<span class="meta">No quote recorded.</span>'}<div class="meta">${u.anchor ? esc(u.anchor) + ' · ' : ''}${esc(u.extraction)}${u.described_as ? ' · described as: ' + esc(u.described_as) : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">No row in this lens.</p>')
-        + `<p class="meta">Showing ${fmt(rows.length)} of ${fmt(box.rows_total)} rows of this approach in every layer${box.rows_shown < box.rows_total ? `; the list is cut at ${fmt(USES.max_uses)} rows, core layer first` : ''}.</p>`;
+          <td class="q">${u.quote ? `<blockquote class="quote">“${esc(u.quote)}”</blockquote>` : '<span class="meta">No quote recorded.</span>'}<div class="meta">${u.anchor ? esc(u.anchor) + ' · ' : ''}${esc(u.extraction)}${u.described_as ? ' · described as: ' + esc(u.described_as) : ''}</div></td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">' + (cut
+            ? `The matching rows are beyond the ${fmt(box.rows_shown)} loaded (${fmt(box.rows_total)} rows in total, every layer). The papers table above is complete for this lens; widen the lens to see loaded quotes.`
+            : 'No row in this lens.') + '</p>')
+        + `<p class="meta">Showing ${fmt(rows.length)} rows in this lens among the ${fmt(box.rows_shown)} loaded of ${fmt(box.rows_total)} rows of this approach in every layer${cut ? `; the load is cut at ${fmt(USES.max_uses)} rows and keeps a share of every layer` : ''}.</p>`;
       bindPapers(host);
     }
 
     /* ---------- routing and the palette ---------- */
     function render() { currentA = readHash(); if (currentA) detail(currentA); else overview(); }
-    function go(a) { currentA = a; writeHash(a); render(); window.scrollTo(0, 0); }
+    function go(a) { const h = hashFor(a); window.scrollTo(0, 0); if (location.hash.slice(1) === h) render(); else location.hash = h; }
     window.addEventListener('hashchange', render);
     H.paletteExtra = q => { const k = q.trim().toLowerCase();
       return CAT.filter(c => (c.name + ' ' + c.id).toLowerCase().includes(k)).map(c => ({ label: c.name, group: 'Approach · ' + stLabel(c.stage), go: () => { H.closePalette(); go(c.id); } })); };

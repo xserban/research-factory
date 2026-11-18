@@ -59,7 +59,8 @@ MAX_EDGES: Final = 200
 MAX_CANDIDATES: Final = 10
 MIN_WORKS: Final = 3
 MAX_USES: Final = 300
-"""Evidence rows listed per approach in `landscape_uses` (core layer first); the total is stated."""
+"""Evidence rows listed per approach in `landscape_uses` (a cut keeps a share of every layer); the
+total is stated."""
 LAYER_ORDER: Final = ("core", "benchmark", "applied", "adjacent", "background", "off-topic")
 EVIDENCE_ALL: Final = (*EVIDENCE_LEVELS, NOT_STATED)
 
@@ -76,8 +77,15 @@ EVENT_PREFIXES: Final = (
     "screening.",
     "decision.",
     "work.",  # layers and core marks
+    "document.",  # which document of a work is current: a row pinned to another one is dropped
+    "fulltext.",
+    "import.",  # imported records are works and rows' sources
 )
-"""Event type prefixes the Landscape reads. Feed, runner, page, inbox and task events are absent."""
+"""Event type prefixes the Landscape reads. The technique read drops rows pinned to a document that
+is no longer the work's current one (`stale_extractions`), so the document and full-text families
+count. `seed.` and `snowball.` events are absent on purpose: the index folds them into the seed and
+round tables, not into works, layers or rows. Feed, runner, page, inbox and task events are
+absent."""
 
 _STAMP_MODULES: Final = (
     "technique_graph",
@@ -100,7 +108,8 @@ METHODS: Final[dict[str, str]] = {
         "the paper gives. Open an approach for its papers and the sentences behind it.</p>"
         "<p><span class=k>How it's computed.</span> Counts are papers with a current first-reading "
         "(pass A) row of a technique miner in the chosen layer, evidence level and status. The "
-        "miners are not calibrated. Nothing here enters a report.</p>"
+        "miners are not calibrated. Nothing here enters a report. A row whose evidence level is "
+        "empty or not one of the five levels counts as not stated; the page names how many.</p>"
     ),
     "matrix": (
         "<b>What it shows</b> One row per approach, grouped by stage.<p><span class=k>How to read "
@@ -183,6 +192,12 @@ def load_inputs(project: Project) -> tg.Inputs:
 def _dump(model: Any) -> dict[str, Any]:
     out: dict[str, Any] = model.model_dump(by_alias=True, mode="json")
     return out
+
+
+def _evidence(row: tg.RawRow) -> str:
+    """The row's evidence level as the payload carries it: an empty or off-enum value (the miner's
+    field is free text) is `not-stated`, and `evidence_unknown` in the payload counts those rows."""
+    return row.evidence if row.evidence in EVIDENCE_ALL else NOT_STATED
 
 
 def _layer_key(layer: str | None) -> str:
@@ -285,9 +300,27 @@ def _earliest(inputs: tg.Inputs, layers: Sequence[str]) -> dict[str, Any]:
     return out
 
 
+def _spread(rows: list[tg.RawRow], inputs: tg.Inputs) -> list[tg.RawRow]:
+    """`rows` (in layer, work, extraction order) cut to `MAX_USES` so that every layer keeps a
+    share: one row from each layer in turn, then the kept rows back in the original order."""
+    per: dict[str | None, list[int]] = {}
+    for i, r in enumerate(rows):
+        per.setdefault(inputs.works[r.work_id].layer, []).append(i)
+    queues = [per[k] for k in sorted(per, key=lambda k: (k is None, k or ""))]
+    keep: list[int] = []
+    depth = 0
+    while len(keep) < MAX_USES:
+        for q in queues:
+            if depth < len(q) and len(keep) < MAX_USES:
+                keep.append(q[depth])
+        depth += 1
+    return [rows[i] for i in sorted(keep)]
+
+
 def _uses(inputs: tg.Inputs) -> dict[str, Any]:
     """`landscape_uses`: per approach, the evidence rows (verbatim quote and anchor) of every layer,
-    core first, at most `MAX_USES` each; the total is stated so a cut is never silent."""
+    at most `MAX_USES` each (a cut keeps a share of every layer, see `_spread`); the total is
+    stated so a cut is never silent."""
 
     def order(r: tg.RawRow) -> tuple[int, str, str]:
         layer = inputs.works[r.work_id].layer
@@ -300,22 +333,25 @@ def _uses(inputs: tg.Inputs) -> dict[str, Any]:
     approaches: dict[str, Any] = {}
     for a in sorted(by):
         rows = sorted(by[a], key=order)
+        total = len(rows)
+        if total > MAX_USES:
+            rows = _spread(rows, inputs)
         approaches[a] = {
-            "rows_total": len(rows),
-            "rows_shown": min(len(rows), MAX_USES),
+            "rows_total": total,
+            "rows_shown": len(rows),
             "uses": [
                 {
                     "work": r.work_id,
                     "extraction": r.extraction_id,
                     "layer": _layer_key(inputs.works[r.work_id].layer),
                     "status": r.status or NOT_STATED,
-                    "evidence": r.evidence or NOT_STATED,
+                    "evidence": _evidence(r),
                     "described_as": r.described_as,
                     "quote": r.quote,
                     "anchor": r.anchor,
                     "parameters": r.parameters,
                 }
-                for r in rows[:MAX_USES]
+                for r in rows
             ],
         }
     return {
@@ -340,9 +376,7 @@ def landscape_payloads(inputs: tg.Inputs) -> tuple[dict[str, Any], dict[str, Any
     statuses = sorted({r.status or NOT_STATED for r in inputs.rows})
     sidx = {s: i for i, s in enumerate(statuses)}
     eidx = {e: i for i, e in enumerate(EVIDENCE_ALL)}
-    ev_present = [
-        e for e in EVIDENCE_ALL if any((r.evidence or NOT_STATED) == e for r in inputs.rows)
-    ]
+    ev_present = [e for e in EVIDENCE_ALL if any(_evidence(r) == e for r in inputs.rows)]
     users_by_layer: dict[str, set[str]] = {}
     for r in inputs.rows:
         users_by_layer.setdefault(_layer_key(inputs.works[r.work_id].layer), set()).add(r.work_id)
@@ -369,6 +403,9 @@ def landscape_payloads(inputs: tg.Inputs) -> tuple[dict[str, Any], dict[str, Any
         "layer_unset": UNLAYERED,
         "evidence_levels": ev_present,
         "evidence_all": list(EVIDENCE_ALL),
+        "evidence_unknown": sum(
+            1 for r in inputs.rows if r.evidence and _evidence(r) != r.evidence
+        ),
         "statuses": statuses,
         "stage_order": stage_order,
         "sets": {
@@ -395,7 +432,7 @@ def landscape_payloads(inputs: tg.Inputs) -> tuple[dict[str, Any], dict[str, Any
             [
                 aidx[r.approach],
                 widx[r.work_id],
-                eidx[r.evidence or NOT_STATED],
+                eidx[_evidence(r)],
                 sidx[r.status or NOT_STATED],
             ]
             for r in inputs.rows

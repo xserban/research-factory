@@ -472,3 +472,101 @@ def test_the_shell_lists_the_page_in_the_rail_and_the_palette() -> None:
     assert "['landscape','Landscape','landscape.html']" in shell
     assert shell.count("landscape.html") == 2  # rail and palette
     assert "HUB.paletteExtra" in shell
+
+
+# ---------------------------------------------------------------- fix round
+
+
+def test_each_added_event_family_moves_the_key_and_the_excluded_ones_do_not() -> None:
+    base = {"extraction.recorded": (3, "e9")}
+    key = hl.event_key(base)
+    for t in (
+        "document.preferred",
+        "fulltext.adopted",
+        "fulltext.document_added",
+        "import.recorded",
+    ):
+        assert hl.event_key({**base, t: (1, "x1")}) != key, t
+    for t in (
+        "seed.added",
+        "snowball.round_started",
+        "inbox.link_added",
+        "feed.fetched",
+        "runner.started",
+        "page.recorded",
+        "task.created",
+    ):
+        assert hl.event_key({**base, t: (1, "x1")}) == key, t
+
+
+def test_an_off_enum_evidence_is_not_stated_and_counted_and_an_off_enum_status_is_kept() -> None:
+    rows = [
+        row("a", "ide-01", evidence="rather strong", status="weird-status"),
+        row("b", "ide-01", evidence=""),
+        row("c", "ide-01"),
+    ]
+    p, uses = hl.landscape_payloads(data(rows))
+    assert p["evidence_unknown"] == 1  # empty is not stated, not unknown
+    assert [p["evidence_all"][r[2]] for r in p["rows"]] == [
+        "not-stated",
+        "not-stated",
+        "own-ablation",
+    ]
+    assert "weird-status" in p["statuses"]
+    assert {u["evidence"] for u in uses["approaches"]["ide-01"]["uses"]} == {
+        "not-stated",
+        "own-ablation",
+    }
+    assert "not stated" in p["methods"]["page"]
+    json.dumps(p, allow_nan=False)
+
+
+def test_a_cut_keeps_a_share_of_every_layer_and_states_the_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hl, "MAX_USES", 4)
+    _, uses = hl.landscape_payloads(data())
+    ide = uses["approaches"]["ide-01"]
+    assert ide["rows_shown"] == 4 and ide["rows_total"] == sum(r.approach == "ide-01" for r in ROWS)
+    layers = {u["layer"] for u in ide["uses"]}
+    assert {"core", "applied", "unlayered"} <= layers  # not only the core rows
+    again = hl.landscape_payloads(data())[1]["approaches"]["ide-01"]["uses"]
+    assert again == ide["uses"]
+
+
+def test_the_cut_message_and_the_hash_and_focus_handling_are_in_the_script() -> None:
+    js = _script()
+    assert "The matching rows are beyond the" in js and "rows in total" in js
+    assert "rows_shown < box.rows_total" in js
+    assert (
+        "lens.layer = l && layerOptions.includes(l) ? l : D.lens.layer" in js
+    )  # a missing layer resets
+    assert (
+        "location.hash = h" in js and "H.hash.set" in js
+    )  # push for navigation, replace for the lens
+    assert ".focus()" in js
+    assert (
+        "NOTICE_TEXT" in js and js.count("noticeBox(") >= 2
+    )  # the building and not-ready states keep the box
+    assert "cover every layer" in js  # the note names the figures that ignore the lens
+    # lens controls, drawer and palette are wired
+    assert "onchange" in js and "H.openDrawer" in js and "H.paletteExtra = " in js
+
+
+def test_the_script_notice_text_is_the_payload_notice() -> None:
+    assert NOTICE.removeprefix("exploratory: ") in _script()
+
+
+def test_the_script_has_no_colour_literals() -> None:
+    js = _script()
+    assert not re.search(
+        r"#[0-9a-fA-F]{3,8}\b(?![-\w])", re.sub(r"href: '#a=|\$\('#\w+'\)|'#'", "", js)
+    )
+    assert not re.search(r"\b(?:rgba?|hsla?)\(", js)
+
+
+def test_the_phone_rail_has_a_token_based_scroll_cue() -> None:
+    css = resources.files("factory.hub_ui").joinpath("kit.css").read_text(encoding="utf-8")
+    block = css[css.index("scroll cue") :]
+    assert "overflow-x:auto" in css and "background-attachment:local,local,scroll,scroll" in block
+    assert "var(--line)" in block and not re.search(r"#[0-9a-fA-F]{3,6}\b", block)

@@ -184,4 +184,8 @@ table.t{width:100%;border-collapse:collapse;font-size:var(--t-s)}
 @media (max-width:760px){.sx-hint{display:block}}
 
 /* the rail scrolls sideways on a phone when it holds more pages than fit */
-@media (max-width:760px){.rail{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.rail a{flex:none;width:56px}}
+@media (max-width:760px){.rail{overflow-x:auto;justify-content:flex-start;scrollbar-width:none;background-color:var(--surface);
+  /* scroll cue: an edge shadow shows on a side that has more entries (local layers cover it at the ends) */
+  background-image:linear-gradient(to right,var(--surface) 30%,transparent),linear-gradient(to left,var(--surface) 30%,transparent),radial-gradient(farthest-side at 0 50%,var(--line),transparent),radial-gradient(farthest-side at 100% 50%,var(--line),transparent);
+  background-position:left center,right center,left center,right center;background-size:24px 100%,24px 100%,10px 100%,10px 100%;background-repeat:no-repeat;
+  background-attachment:local,local,scroll,scroll}.rail a{flex:none;width:56px}}
