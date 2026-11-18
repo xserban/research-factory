@@ -31,6 +31,7 @@ from factory.cli.queue import queue_app
 from factory.cli.resume import resume_cmd
 from factory.cli.runs import adopt_cmd
 from factory.cli.screen_check import screen_check_app
+from factory.cli.sheets import sheets_app
 from factory.cli.site import site_app
 from factory.cli.taxonomy import mine_request_cmd, taxonomy_app, work_layers_app
 from factory.cli.team import (
@@ -571,6 +572,7 @@ app.add_typer(dashboard_app)
 app.add_typer(site_app)
 app.add_typer(costs_app)
 app.add_typer(pages_app)
+app.add_typer(sheets_app)
 app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)

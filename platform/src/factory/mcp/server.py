@@ -184,6 +184,7 @@ from factory.services import search as search_service
 from factory.services import seeds as seeds_service
 from factory.services import selection as selection_service
 from factory.services import shared_mining as shared_mining_service
+from factory.services import sheets as sheets_service
 from factory.services import snowball as snowball_service
 from factory.services import tasks as tasks_service
 from factory.services import taxonomies as taxonomies_service
@@ -5965,6 +5966,155 @@ def build_server(
             return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
 
         return _reply(project, candidates, include_work_ids=False)
+
+    @server.tool()
+    def sheet_open(
+        project: str,
+        hypothesis: str,
+        proposals: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        mode: str = "explore",
+        tier1_cap: int = chat_candidates_service.TIER1_CAP,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Open an argument sheet (Spar). The proposals are checked and tiered exactly as in
+        `chat_candidates` (same fields, same located issues); the computed candidates table, its
+        digest and its counts are recorded, never typed. `mode` is explore or prepare (prepare:
+        the case for must come from a session that wrote no argument against). `supersedes`
+        names an earlier sheet this one replaces. Writes one event; invalid input writes nothing.
+        Refused to a session that has joined a pass."""
+
+        def opening() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                chat_candidates_service.CandidateInput(
+                    fields["work_id"],
+                    fields["source"],
+                    fields["stance"],
+                    fields.get("anchor") or None,
+                    fields.get("quote") or None,
+                    fields.get("note") or None,
+                )
+                for fields in _chat_items(
+                    proposals,
+                    "proposals",
+                    ("work_id", "source", "stance"),
+                    ("anchor", "quote", "note"),
+                )
+            ]
+            payload = sheets_service.open_sheet(
+                opened,
+                actor,
+                hypothesis,
+                _selection_spec(layers, include, exclude),
+                parsed,
+                mode=cast(Literal["explore", "prepare"], mode),
+                tier1_cap=tier1_cap,
+                supersedes=supersedes,
+            )
+            view = sheets_service.view_sheet(opened, payload.sheet_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, opening, include_work_ids=False)
+
+    @server.tool()
+    def sheet_argue(
+        project: str,
+        sheet_id: str,
+        arguments: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record arguments of ONE section of a sheet, all or none. Each argument is
+        `{stance, work_id, anchor, quote, claim, strength}` with `stance` against or for,
+        `strength` strong, moderate or weak (your judgement, labelled as such), and optionally
+        `claim_row_key` (the m-claims row it rests on). The quote is verified against the anchor
+        of the work's pinned conversion; an unverified quote refuses the whole call with located
+        issues (`arguments[2].quote`). Order: arguments against first; close that section with
+        `sheet_close` before arguing for; in prepare mode a session that wrote arguments against
+        may not argue for. Refused to a session that has joined a pass."""
+
+        def argue() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                sheets_service.ArgumentInput(
+                    fields["stance"],
+                    fields["work_id"],
+                    fields["anchor"],
+                    fields["quote"],
+                    fields["claim"],
+                    fields["strength"],
+                    fields.get("claim_row_key") or None,
+                )
+                for fields in _chat_items(
+                    arguments,
+                    "arguments",
+                    ("stance", "work_id", "anchor", "quote", "claim", "strength"),
+                    ("claim_row_key",),
+                )
+            ]
+            recorded = sheets_service.record_arguments(opened, actor, sheet_id, parsed)
+            data: dict[str, JsonValue] = {"recorded": [r.model_dump(mode="json") for r in recorded]}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, argue, include_work_ids=False)
+
+    @server.tool()
+    def sheet_close(
+        project: str, sheet_id: str, section: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Close the section `against` or `for` of a sheet. `for` can be closed only after
+        `against`; a closed section takes no more arguments. Refused to a session that has
+        joined a pass."""
+
+        def closing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            payload = sheets_service.close_section(opened, actor, sheet_id, section)
+            data: dict[str, JsonValue] = {"closed": payload.model_dump(mode="json")}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, closing, include_work_ids=False)
+
+    @server.tool()
+    def sheet_list(project: str) -> dict[str, JsonValue]:
+        """The argument sheets of the project with their section state and argument counts.
+        Read-only."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            data: dict[str, JsonValue] = {
+                "sheets": _plain([asdict(i) for i in sheets_service.list_sheets(opened)])
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def sheet_view(project: str, sheet_id: str) -> dict[str, JsonValue]:
+        """One sheet: its hypothesis, the arguments (verified quotes, claims, strengths, the
+        researcher's ratings) and the computed coverage (works per tier and source, works argued
+        per stance, tier-1 works without an argument, ratings). Read-only. Strengths are the
+        writer's judgement; ratings are the researcher's, made in the CLI."""
+
+        def viewing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = sheets_service.view_sheet(opened, sheet_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, viewing, include_work_ids=False)
 
     return server
 
