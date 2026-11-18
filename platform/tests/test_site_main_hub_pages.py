@@ -76,7 +76,7 @@ def test_the_project_sidebar_groups_by_what_the_reader_is_doing() -> None:
         "wiki",
         "updates",
     ]
-    assert by_group["Mining"] == ["miners", "agreement", "steps", "lifecycle", "runs"]
+    assert by_group["Mining"] == ["miners", "agreement", "steps", "lifecycle", "activity", "runs"]
     assert by_group["Findings"] == ["results", "synthesis", "taxonomy"]
     # every product is in exactly one group
     assert sorted(i for ids in by_group.values() for i in ids) == sorted(

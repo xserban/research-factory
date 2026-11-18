@@ -284,7 +284,7 @@ LAYOUT: Final[dict[str, tuple[str, ...]]] = {
     "Overview": ("dashboard", "prisma", "flow", "documents", "costs"),
     "Sources": ("search", "feed", "acquisition", "conversion", "queue"),
     "Corpus": ("explorer", "bibliography", "citations", "layers", "wiki", "updates"),
-    "Mining": ("miners", "agreement", "steps", "lifecycle", "runs"),
+    "Mining": ("miners", "agreement", "steps", "lifecycle", "activity", "runs"),
     "Findings": ("results", "synthesis", "taxonomy"),
 }
 """The project hub's sidebar, in the order the work happens: each group and its products. (The factory-wide pages, the
@@ -315,6 +315,12 @@ def _runs_stamp(project: Project) -> str:
     from factory.services.site_runs import runs_stamp
 
     return runs_stamp(project)
+
+
+def _build_activity(project: Project, out: Path) -> None:
+    from factory.services.site_activity import build_activity
+
+    build_activity(project, out)
 
 
 def products() -> list[Product]:
@@ -531,6 +537,18 @@ def products() -> list[Product]:
             inputs=("runner.%", "task.%"),
             build=_build_runs,
             stamp=_runs_stamp,
+        ),
+        Product(
+            id="activity",
+            title="Activity",
+            group="Mining",
+            description="What each agent is working on now: the tasks held (session, miner, pass, "
+            "paper, minutes, rows), the open passes with an estimated rate and time left, the "
+            "platform's long operations and the headless workers' trace files. Updates itself "
+            "when served by `factory site serve`; opened as a file it is the build-time snapshot.",
+            entry="index.html",
+            inputs=ALL_EVENTS,
+            build=_build_activity,
         ),
         Product(
             id="bibliography",
