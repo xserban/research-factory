@@ -13,7 +13,8 @@ Invariants:
 - Payloads are built on demand by one worker thread, one build at a time, all stale payloads that
   were asked for sharing one `HubContext` (the flow ledger takes about 80 s on the pilot). A request
   never waits for a build: it gets `Building` (the server answers 503 with `Retry-After`). A payload
-  that failed at a fingerprint is not tried again until the fingerprint changes or `FAILED_RETRY_SECONDS` pass.
+  that failed at a fingerprint is not tried again until the fingerprint changes or
+  `FAILED_RETRY_SECONDS` pass.
 - The disk file `<name>.json` is written first, then `<name>.fp`; a payload without a matching
   `.fp` is stale.
 - No function here calls a model or the network.
