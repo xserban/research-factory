@@ -10,3 +10,5 @@
 8. Mining: the code-release denominator differs from the demo; per-row model not tracked; the grid shows the first value plus n for multi-row miners.
 9. `python -m factory.cli.main` has no `__main__` guard (pre-existing, not ours; note only).
 10. TDD: steps 3 and 8b wrote tests after the code (reported honestly); the review adds guard mutation on those modules.
+11. Explore: the payload has no `methods` (ⓘ texts typed in the page) and no per-work similarity (JS computes R4; move it to `hub_lenses.similar` in the payload); "unlayered" is missing from the layer order.
+12. Miners: `population` says `included-ft` for core-only miners (compute the real scope name and n); the by-model rate covers all miners, not each one; fields carry no descriptions; there are no paper lists per value; platform rates are null for most miners; a local field-label map (move it to the shared LABELS).
