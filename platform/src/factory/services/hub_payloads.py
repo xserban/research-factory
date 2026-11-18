@@ -308,7 +308,14 @@ def flow_payload(project: Project, data: FlowData | None = None) -> dict[str, An
         if crit is not None:
             by_criterion[key].setdefault(crit, []).append(r.work_id)
         records.append(
-            {"id": r.work_id, "title": r.title, "year": r.year, "fate": key, "criterion": crit}
+            {
+                "id": r.work_id,
+                "title": r.title,
+                "year": r.year,
+                "fate": key,
+                "criterion": crit,
+                "source": r.source_group,
+            }
         )
     identified = sum(d.prisma.identified_databases.values()) + sum(
         d.prisma.identified_other.values()

@@ -39,7 +39,8 @@ METHODS: dict[str, str] = {
         "of days between that date and today. The publication years are those of the works the "
         "activity series cover (included works per confirmed idea, new ideas, new lineage "
         "edges, records); works published after a source's latest search are not in the "
-        "corpus."
+        "corpus. The series, and so the years, stay empty until the project holds a confirmed "
+        "idea, a lineage edge or a record group; they are not read from the corpus itself."
     ),
     "heartbeat": (
         "Events per day by family, from the index's event table, which records the type and "

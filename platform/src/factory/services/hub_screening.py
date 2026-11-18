@@ -215,6 +215,7 @@ class PairAgreement:
     agreement: float | None
     kappa: float | None
     table: dict[str, int]
+    table_works: dict[str, tuple[str, ...]]
     kappa_by_criterion: dict[str, float | None]
     both_excluded: int
     same_criterion: int
@@ -261,6 +262,14 @@ def two_screeners(
             "only_b_proceeds": sum(1 for x, y in outcomes if y and not x),
             "neither_proceeds": sum(1 for x, y in outcomes if not x and not y),
         }
+        table_works = {
+            "both_proceed": tuple(a.work_id for a, b in pairs if a.promotes and b.promotes),
+            "only_a_proceeds": tuple(a.work_id for a, b in pairs if a.promotes and not b.promotes),
+            "only_b_proceeds": tuple(a.work_id for a, b in pairs if b.promotes and not a.promotes),
+            "neither_proceeds": tuple(
+                a.work_id for a, b in pairs if not a.promotes and not b.promotes
+            ),
+        }
         disagreements = tuple(
             PairDisagreement(
                 work_id=a.work_id,
@@ -286,6 +295,7 @@ def two_screeners(
                 agreement=agree / len(pairs),
                 kappa=cohen_kappa(outcomes),
                 table=table,
+                table_works=table_works,
                 kappa_by_criterion=kappa_by_criterion(crit_pairs, sorted(cited | set(criteria))),
                 both_excluded=len(both_excluded),
                 same_criterion=sum(1 for a, b in both_excluded if a.criterion == b.criterion),
@@ -313,6 +323,7 @@ class ReasonGroup:
     label: str | None
     rule: str | None
     count: int
+    works: tuple[str, ...]
     examples: tuple[ReasonExample, ...]
 
 
@@ -346,6 +357,7 @@ def reasons_wall(
                 label=None if spec is None else spec.statement,
                 rule=None if spec is None else spec.rule,
                 count=len(items),
+                works=tuple(x.work_id for x in items),
                 examples=tuple(
                     ReasonExample(x.work_id, x.pass_label, x.rationale, x.quote)
                     for x in items[: max(k, 0)]

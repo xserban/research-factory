@@ -195,3 +195,8 @@ def test_living_payload_is_json_safe(project: Project) -> None:
 @pytest.mark.parametrize("kind", sorted(hl.METHODS))
 def test_methods_are_plain_sentences(kind: str) -> None:
     assert hl.METHODS[kind].endswith(".")
+
+
+def test_horizon_method_says_years_stay_empty_until_ideas_or_edges_exist() -> None:
+    text = hl.METHODS["horizon"]
+    assert "empty" in text and "idea" in text

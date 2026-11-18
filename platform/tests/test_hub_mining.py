@@ -599,3 +599,8 @@ def test_scope_names_the_dominant_layer_when_nearly_all_works_share_it() -> None
     sc = hm.miners(d)["miners"][0]["scope"]
     assert sc["layer"] == "core" and sc["text"] == "mostly core papers, 10"
     assert sc["by_layer"] == {"core": 9, "unlayered": 1}
+
+
+def test_platform_method_says_when_the_rates_exist() -> None:
+    text = hm.METHODS["platform"]
+    assert "second reading" in text and "no rate" in text

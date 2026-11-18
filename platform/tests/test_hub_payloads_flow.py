@@ -189,6 +189,7 @@ def test_flow_payload_on_a_full_text_project(
     assert len(ids) == len(set(ids))
     assert payload["sets"]["not_read_yet"] == included[1:]
     assert len(payload["records"]) == payload["records_total"]
+    assert all(isinstance(r["source"], str) and r["source"] for r in payload["records"])
 
 
 def test_included_count_mismatch_is_refused(
