@@ -1,9 +1,9 @@
 """The chat request MCP tools and the `factory chat` commands (plan spar-night N3)."""
 
-# ruff: noqa: F811
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -37,6 +37,7 @@ def chat_env(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
 async def _call(
     settings: Settings, clock: FixedClock, cap: UnitCap, tool: str, **args: Any
 ) -> dict[str, Any]:
+    clock.advance(timedelta(seconds=1))  # events of different sessions fold in time order
     server = build_server(settings, clock=clock, sources={}, cap=cap)
     async with Client(server) as client:
         result = await client.call_tool(tool, {"project": "demo", **args})
@@ -113,13 +114,9 @@ def test_cli_request_and_list(settings: Settings, project: Project) -> None:
         env=env,
     )  # fmt: skip
     assert spar.exit_code == 0, spar.output
-    ask = runner_.invoke(
-        app, ["chat", "request", "ask", "Does it help?"], env=env
-    )
+    ask = runner_.invoke(app, ["chat", "request", "ask", "Does it help?"], env=env)
     assert ask.exit_code == 0, ask.output
-    bad = runner_.invoke(
-        app, ["chat", "request", "ask", "q", "--mode", "prepare"], env=env
-    )
+    bad = runner_.invoke(app, ["chat", "request", "ask", "q", "--mode", "prepare"], env=env)
     assert bad.exit_code != 0
     listing = runner_.invoke(app, ["chat", "requests"], env=env)
     assert listing.exit_code == 0 and "2 request(s)" in listing.output
@@ -127,3 +124,4 @@ def test_cli_request_and_list(settings: Settings, project: Project) -> None:
     rows = cr.list_requests(project)
     assert [r.kind for r in rows] == ["spar", "ask"] and rows[0].selection["layers"] == ["core"]
     assert rows[0].note == "for the lead"
+

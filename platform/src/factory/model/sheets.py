@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 
 from factory.model.base import StrictModel
+from factory.model.chat_requests import REQUEST_ID_RE
 from factory.model.identity import ULID_RE
 
 SHEET_ID_RE = rf"^sht_{ULID_RE}$"
@@ -58,6 +59,8 @@ class SheetOpened(StrictModel):
     candidates: tuple[SheetCandidate, ...]
     tier1_cap: int = Field(ge=1)
     supersedes: str | None = Field(default=None, pattern=SHEET_ID_RE)
+    request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
+    """The chat request this sheet answers (`chat.requested`), when a headless run opened it."""
 
 
 class SheetArgumentRecorded(StrictModel):
@@ -81,6 +84,8 @@ class SheetArgumentRecorded(StrictModel):
 class SheetSectionClosed(StrictModel):
     sheet_id: str = Field(pattern=SHEET_ID_RE)
     section: Section
+    request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
+    """The chat request this closing answers: the case for of a Prepare follow-up request."""
 
 
 class SheetArgumentRated(StrictModel):

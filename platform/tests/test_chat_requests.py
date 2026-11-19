@@ -49,7 +49,9 @@ def _rows(project: Project) -> int:
 
 
 def _spar(project: Project, human: Actor, **kw: object) -> str:
-    return cr.request_chat(project, human, "spar", SPEC, hypothesis="Reflection helps", **kw).request_id  # type: ignore[arg-type]
+    return cr.request_chat(
+        project, human, "spar", SPEC, hypothesis="Reflection helps", **kw
+    ).request_id  # type: ignore[arg-type]
 
 
 def _ask(project: Project, human: Actor, **kw: object) -> str:
@@ -160,7 +162,9 @@ def test_next_refuses_a_session_that_is_not_an_open_chat_run(
     assert err.value.issues[0].field == "run"
 
 
-def test_next_with_nothing_open_serves_nothing(project: Project, agent: Actor, human: Actor) -> None:
+def test_next_with_nothing_open_serves_nothing(
+    project: Project, agent: Actor, human: Actor
+) -> None:
     _spar(project, human)
     _ask(project, human)
     run_id, launcher = _run(project, "ask")

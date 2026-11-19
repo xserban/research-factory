@@ -74,6 +74,33 @@ the selection; what each sentence says, and what the papers leave open, is your 
    counts. Tell the researcher how to rate, a sentence or the whole:
    `factory answers rate <ans_id> sound|weak|wrong [--sentence N] --note "..."`. You never rate.
 
+## Unattended run
+
+A headless run (stage `spar` or `ask`, started by the runner) has no researcher to talk to. The
+researcher ordered the work beforehand as a recorded request, and one run answers one request.
+
+1. Call `chat_request_next`. It serves the oldest open request of your kind and marks it taken.
+   If `batch` is null, say so and stop. Never ask the researcher anything and never wait for a
+   reply: the request holds what the agreeing steps would have settled: the hypothesis or the
+   question, the selection (`layers`, `include`, `exclude`), the mode and a note.
+2. Follow the Procedure (spar) or Ask with the request's own selection, hypothesis or question.
+   Skip the steps that show a list to the researcher for additions; the researcher rates the
+   result afterwards. Explore unless the request says `prepare`.
+3. In Prepare, one run writes one side. A request with no `parent` is the case against: open the
+   sheet in mode `prepare`, write the case against, close `against` and stop. A request whose
+   `parent` is a sheet with `against` closed is the case for: do not open a sheet; read it with
+   `sheet_view`, `sheet_argue` the case for into it, and close `for`, passing `request_id`. The
+   researcher orders that second request (`factory chat request spar ... --parent <sht_ id>
+   --mode prepare`); this run is a session that wrote no argument against, as the platform
+   requires.
+4. Pass the served `request_id` to `sheet_open` (or, for the case for, to `sheet_close`) and to
+   `answer_record`, so the result is linked to its request. A `parent` that is an earlier sheet or
+   answer is read first (`sheet_view`, `answer_view`) and taken into account; an Ask passes it
+   as `parent`.
+5. End with a short summary: the request id, the sheet or answer id, how many arguments or
+   sentences, the gaps and any refusal verbatim. You never rate, and you never write the balance
+   of the evidence: the researcher rates and writes the balance later.
+
 ## Tool arguments
 
 Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`, `answer_record`) take `project`, `role`, `model` (your own
@@ -81,6 +108,7 @@ model id) and `skill`, the bare name `rf-chat`; the platform computes the skill 
 
 ## Never
 
+- Never ask a question in an unattended run; take the request and decide by the skill.
 - Never invent or paraphrase a quote; an argument rests only on text you have read.
 - Never judge the balance of the evidence or give a verdict: that is not built.
 - Never assert absence beyond the computed coverage.

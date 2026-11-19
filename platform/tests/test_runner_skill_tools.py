@@ -23,6 +23,12 @@ NOT_ALLOWED: dict[str, dict[str, str]] = {
 }
 """Per skill, the tool names the skill mentions that the run does not allow, with the reason."""
 
+STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
+    "spar": {"answer_record": "an answer is written by the ask stage"},
+    "ask": {},
+}
+"""Per stage key (a skill shared by two stages), the tools that stage does not allow."""
+
 
 def _stage_specs() -> list[tuple[str, runner.StageSpec]]:
     return [*runner.STAGES.items(), (runner.MINE_PREFIX + "<id>", runner.MINE_SPEC)]
@@ -44,7 +50,7 @@ def test_every_tool_a_skill_names_is_allowed_or_excluded_with_a_reason(
 ) -> None:
     text = (SKILLS_DIR / spec.skill / "SKILL.md").read_text(encoding="utf-8")
     allowed = {t.removeprefix(PREFIX) for t in spec.tools}
-    excluded = NOT_ALLOWED.get(spec.skill, {})
+    excluded = {**NOT_ALLOWED.get(spec.skill, {}), **STAGE_NOT_ALLOWED.get(key, {})}
     found = mentioned(text)
     assert found, f"{spec.skill}: the parser found no tool name"
     missing = sorted(found - allowed - set(excluded))

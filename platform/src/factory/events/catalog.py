@@ -22,6 +22,7 @@ from factory.model.cards import (
     PropertyUnmerged,
 )
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
+from factory.model.chat_requests import ChatRequested, ChatRequestTaken
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
 from factory.model.curation import CurationDecided, CurationProposed
@@ -326,6 +327,8 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("sheet.argument_rated", SheetArgumentRated, 1))
     catalog.register(EventType("chat.answer_recorded", AnswerRecorded, 1))
     catalog.register(EventType("chat.answer_rated", AnswerRated, 1))
+    catalog.register(EventType("chat.requested", ChatRequested, 1))
+    catalog.register(EventType("chat.request_taken", ChatRequestTaken, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

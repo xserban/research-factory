@@ -328,3 +328,12 @@ def test_rf_chat_passes_the_digest_claim_key_to_sheet_argue() -> None:
     lowered = " ".join(text.split())
     assert "pass that claim's row key as `claim_row_key`" in lowered
     assert "key=" in lowered and "copy the text after" in lowered
+
+
+def test_rf_chat_has_an_unattended_run_section() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split()).lower()
+    assert "## Unattended run" in text
+    assert "`chat_request_next`" in text and "never ask the researcher anything" in lowered
+    assert "`request_id`" in text and "the researcher rates and writes the balance" in lowered
+    assert "explore unless the request says `prepare`" in lowered

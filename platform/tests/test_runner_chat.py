@@ -1,6 +1,5 @@
 """The runner stages `spar` and `ask` (plan spar-night N3). No real `claude` is started."""
 
-# ruff: noqa: F811
 from __future__ import annotations
 
 import pytest
@@ -39,13 +38,14 @@ def test_the_stages_are_declared_with_the_chat_tools_and_sonnet() -> None:
         assert all(t.startswith(PREFIX) for t in spec.tools)
     assert {f"{PREFIX}sheet_{t}" for t in ("open", "argue", "close", "view")} <= set(spar.tools)
     assert {f"{PREFIX}answer_{t}" for t in ("record", "view")} <= set(ask.tools)
-    assert not any("answer_" in t for t in spar.tools)
-    assert not any("sheet_" in t for t in ask.tools)
+    # the recording tools differ; a follow-up may read its parent, whichever it is
+    assert f"{PREFIX}answer_record" not in spar.tools
+    assert not ({f"{PREFIX}sheet_{t}" for t in ("open", "argue", "close")} & set(ask.tools))
     assert runner.is_stage_key("spar") and runner.is_stage_key("ask")
     assert "spar" in runner.stage_keys() and "ask" in runner.stage_keys()
     RunnerStarted(
-        run_id="rnr_" + "0" * 26, stage="spar", model="m", allowed_tools=("t",), prompt_blob="sha256:" + "0" * 64,
-        unit_cap=1, counts_before={"spar": 1}, command=("c",),
+        run_id="rnr_" + "0" * 26, stage="spar", model="m", allowed_tools=("t",),
+        prompt_blob="sha256:" + "0" * 64, unit_cap=1, counts_before={"spar": 1}, command=("c",),
     )  # fmt: skip
 
 
@@ -96,7 +96,7 @@ def test_the_prompt_tells_an_unattended_run_to_take_a_request(project: Project) 
         assert "chat_request_next" in prompt and "CHAT SKILL BODY" in prompt
         assert "skill `rf-chat`" in prompt and "role `" in prompt
         assert "stop after 1 units" in prompt
-        assert "no question" in prompt.lower() and "unattended" in prompt.lower()
+        assert "ask the researcher nothing" in prompt and "unattended" in prompt.lower()
         assert f"`{kind}`" in prompt
         assert "request_id" in prompt
     assert "Explore" in spar and "Prepare" in spar and "case against" in spar

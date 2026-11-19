@@ -18,6 +18,7 @@ from factory.cli import appraisal_render, evidence_render, portfolio_render, ren
 from factory.cli.activity import activity_cmd
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.answers import answers_app
+from factory.cli.chat import chat_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
@@ -595,6 +596,7 @@ app.add_typer(costs_app)
 app.add_typer(pages_app)
 app.add_typer(sheets_app)
 app.add_typer(answers_app)
+app.add_typer(chat_app)
 app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
