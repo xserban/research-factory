@@ -21,7 +21,14 @@ URL_ALLOW = (
     "https://doi.org/",
     "http://arxiv.org/abs/",
     "http://doi.org/",
+    "https://arxiv.org/pdf/",  # the paper itself
+    "https://arxiv.org/search/",  # find a paper by title
+    "https://scholar.google.com/scholar?q=",  # title search (old hub parity)
+    "https://www.semanticscholar.org/search?q=",  # title search (old hub parity)
+    "https://openalex.org/",  # the paper's record
 )
+# payloads a page loads lazily after mount, besides those its spec declares (must be builders)
+LAZY: dict[str, set[str]] = {"explore": {"corpus"}, "lenses": {"corpus"}}
 BANNED = (
     "from the brief",
     "not in prototype",
@@ -82,7 +89,7 @@ def test_scripts_reference_only_registered_payloads(page: str) -> None:
             n,
         )
     # a page may load only payloads its spec declares (grid payloads excepted)
-    declared = set(hub_ui.PAGES[page].payloads)
+    declared = set(hub_ui.PAGES[page].payloads) | LAZY.get(page, set())
     assert {n for n in names if not n.startswith("grid-")} <= declared, (page, names, declared)
 
 
@@ -188,3 +195,66 @@ def test_no_page_passes_dataset_or_attribute_text_to_an_html_sink() -> None:
     shell = (root / "shell.js").read_text(encoding="utf-8")
     m = re.search(r"function tip\(.*?\n", shell)
     assert m and "textContent" in m.group(0) and "innerHTML" not in m.group(0)
+
+
+NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+RAIL_ORDER = [
+    "protocol",
+    "overview",
+    "pipeline",
+    "flow",
+    "corpus",
+    "lenses",
+    "explore",
+    "graph",
+    "landscape",
+    "sources",
+    "method",
+    "miners",
+    "data",
+    "findings",
+    "write",
+    "living",
+    "costs",
+    "platform",
+]
+
+
+def _shell() -> str:
+    return resources.files("factory.hub_ui").joinpath("shell.js").read_text(encoding="utf-8")
+
+
+def test_the_rail_lists_the_new_pages_in_order_with_protocol_under_frame() -> None:
+    block = re.search(r"const RAIL = \[(.*?)\n\];", _shell(), flags=re.S)
+    assert block is not None
+    entries = re.findall(r"\['([a-z-]+)'(?:,'([^']*)')?", block.group(1))
+    ids = [e[0] for e in entries if e[0] not in ("-", "group")]
+    assert ids == RAIL_ORDER
+    assert entries[0] == ("group", "Frame") and entries[1][0] == "protocol"
+    for page in NEW_PAGES:
+        assert re.search(
+            rf"\b{page}:'<path|\b{page}:'<rect|\b{page}:'<circle|\b{page}:'<ellipse", _shell()
+        )
+
+
+def test_the_palette_lists_the_new_pages() -> None:
+    shell = _shell()
+    for page in NEW_PAGES:
+        assert f"'{page}.html'" in shell
+
+
+@pytest.mark.parametrize("page", NEW_PAGES)
+def test_a_ported_page_is_no_stub_and_mounts_its_own_payload(page: str) -> None:
+    text = source(page)
+    assert "This page is being ported" not in text
+    assert f"HUB.load(['shell', '{page}'])" in text
+    assert ".mount(" in text
+
+
+def test_one_acts_helper_is_documented_and_the_switcher_is_served_only() -> None:
+    shell = _shell()
+    head = shell.split("(function(){", 1)[0]
+    for name in ("HUB.act", "HUB.post", "HUB.issues", "HUB.confirm"):
+        assert name in head
+    assert "if (HUB.served) projectSwitcher" in shell
+    assert "factory-hub-token" not in shell and 'href="/">New project' in shell

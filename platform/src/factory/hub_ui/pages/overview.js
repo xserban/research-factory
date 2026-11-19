@@ -35,6 +35,12 @@ HUB.load(['shell', 'overview']).then(d => {
 .ov-step.inc .bar i{background:var(--inc)}
 .ov-step .loss{color:var(--exc);font:500 var(--t-s) var(--f-mono)}
 .ov-step .loss.none{color:var(--dim)}
+.ov-line{grid-template-columns:repeat(4,1fr);margin-top:8px}
+.ov-step.next .big{font-size:24px}
+.ov-step .unit{color:var(--dim);font:400 var(--t-s) var(--f-ui)}
+.ov-all{margin-top:10px}.ov-all summary{cursor:pointer;color:var(--acc);font:500 var(--t-s) var(--f-ui)}
+.ov-all .scroll{overflow-x:auto;margin-top:8px}.ov-all td.num,.ov-all th.num{text-align:right;white-space:nowrap}
+.ov-all td.ti{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ov-maphead{margin:36px 0 12px}.ov-maphead .sec-head{margin:0}
 svg.ov-map{display:block;width:100%;height:auto}
 svg.ov-map .pt{cursor:pointer;transition:opacity .12s}
@@ -55,7 +61,7 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
 .ov-top td:last-child{white-space:nowrap}
 .ov-foot{margin-top:40px}
 .ov-empty{color:var(--dim);font:400 var(--t-s) var(--f-ui)}
-@media (max-width:1100px){.ov-hero{grid-template-columns:1fr}.ov-panels{grid-template-columns:1fr}.ov-strip{grid-template-columns:repeat(2,1fr);row-gap:20px}.ov-step:nth-child(2n){border-right:0}}
+@media (max-width:1100px){.ov-hero{grid-template-columns:1fr}.ov-panels{grid-template-columns:1fr}.ov-strip,.ov-line{grid-template-columns:repeat(2,1fr);row-gap:20px}.ov-step:nth-child(2n){border-right:0}}
 @media (max-width:760px){.ov-hb{grid-template-columns:112px 1fr 84px}.ov-hb .v{white-space:nowrap}.ov-hero .lead{font-size:22px}}`;
     document.head.appendChild(st);
   }
@@ -101,6 +107,8 @@ ${nextHtml ? `<section class="ov-wait" aria-label="Waiting for you"><div class="
 
 ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How many records survive each screening step, and what each step removed.<p><span class=k>How to read it.</span> Each bar is the step's count as a share of the ${fmt(lead.identified)} records identified, drawn from zero. A red line is what that step removed.</p><p><span class=k>How it's computed.</span> Counts come from the screening flow; the arithmetic is checked on the <a href="flow.html">flow page</a>.</p>` })}
 <section class="ov-strip" id="ovStrip" aria-label="Where the records went"></section>
+${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHtml: `<b>What it shows</b>The production line after screening: what has been converted, read, written up and built.<p><span class=k>How to read it.</span> Each figure opens the page where that work happens.</p><p><span class=k>How it's computed.</span> ${esc((O.methods || {}).line || '')}</p>` })}
+<section class="ov-strip ov-line" id="ovLine" aria-label="Past screening"></section>` : ''}
 
 <section>
   <div class="ov-maphead">
@@ -152,12 +160,22 @@ ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How
     </a>`; }).join('');
   })();
 
+  /* ---- stations after screening ---- */
+  (function () {
+    const el = document.getElementById('ovLine'); if (!el) return;
+    const LAB = { converted: 'Converted', mined: 'Mined', synthesised: 'Synthesised', reported: 'Reported' };
+    const UNIT = { 'documents': 'full texts as text', 'miner rows': 'rows recorded', 'pages recorded': 'pages recorded', 'products built': 'pages built' };
+    el.innerHTML = O.line.map(s => `<a class="ov-step next" href="${esc(s.href)}">
+      <div class="meta">${esc(LAB[s.key] || H.pretty(s.key))}</div><div class="big">${s.n == null ? '–' : fmt(s.n)}</div>
+      <div class="unit">${s.n == null ? 'not available yet' : esc(UNIT[s.unit] || s.unit)}</div></a>`).join('');
+  })();
+
   /* ---- map ---- */
   const BANDS = ['core', 'benchmark', 'applied', 'adjacent', 'other'];
   const bandOf = l => BANDS.includes(l) ? l : 'other';
   const BLAB = { core: 'Core', benchmark: 'Benchmark', applied: 'Applied', adjacent: 'Adjacent', other: 'Other' };
   const count = f => { const o = {}; W.forEach(w => { const k = f(w); o[k] = (o[k] || 0) + 1; }); return o; };
-  const topW = (O.most_cited || []).map(m => W.find(w => w.id === m.id)).filter(Boolean);
+  const topW = (O.most_cited || []).slice(0, 8).map(m => W.find(w => w.id === m.id)).filter(Boolean);
   const hashf = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 10000) / 10000; };
   const svg = document.getElementById('ovMap');
   let L = null, LW = 0;
@@ -262,15 +280,18 @@ ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How
     const tot = lead.included || W.length;
     const row = (lab, n, tok, hol, href) => `<button class="ov-hb" data-href="${esc(href)}"><span>${esc(lab)}</span><span class="tr"><i style="width:${100 * n / mx}%;${hol ? `box-shadow:inset 0 0 0 1.5px var(${tok})` : `background:var(${tok})`}"></i></span><span class="v">${fmt(n)} · ${pct(n, tot)}%</span></button>`;
     document.getElementById('ovComp').innerHTML =
-      `<div class="ov-grp">Layer</div>` + LAYERS.filter(l => dl[l[0]]).map(([k, l, t]) => row(l, dl[k], t, k === 'unlayered', `corpus.html#layer=${k}`)).join('') +
+      `<div class="ov-grp">Layer ${H.info(`<b>What the layers are</b>${esc((O.methods || {}).composition || '')}`, 'About the layers')}</div>` + LAYERS.filter(l => dl[l[0]]).map(([k, l, t]) => row(l, dl[k], t, k === 'unlayered', `corpus.html#layer=${k}`)).join('') +
       `<div class="ov-grp" style="margin-top:12px">Human role</div>` + HORDER.filter(k => dh[k]).map(k => row(hLab(k), dh[k], hTok(k), k === 'null', `corpus.html#human=${k}`)).join('');
     document.querySelectorAll('#ovComp .ov-hb').forEach(b => b.onclick = () => { location.href = b.dataset.href; });
 
-    const mc = Math.max(1, ...(O.most_cited || []).map(m => m.cited_here));
-    document.getElementById('ovTop').innerHTML = (O.most_cited || []).length
-      ? `<table class="t ov-top"><tbody>${O.most_cited.map(m => `<tr tabindex="0" data-id="${esc(m.id)}"><td class="ti"><span class="dot" style="background:var(${lTok(m.layer)});margin-right:6px"></span>${esc(m.title.length > 74 ? m.title.slice(0, 72) + '…' : m.title)}</td><td class="r"><span class="bar" style="width:${Math.round(70 * m.cited_here / mc)}px"></span>${fmt(m.cited_here)}</td></tr>`).join('')}</tbody></table>`
+    const MC = O.most_cited || [], SHOW = 8;
+    const mc = Math.max(1, ...MC.map(m => m.cited_here));
+    const dash = v => v == null ? '<span class="meta">–</span>' : fmt(v);
+    document.getElementById('ovTop').innerHTML = MC.length
+      ? `<table class="t ov-top"><tbody>${MC.slice(0, SHOW).map(m => `<tr tabindex="0" data-id="${esc(m.id)}"><td class="ti"><span class="dot" style="background:var(${lTok(m.layer)});margin-right:6px"></span>${esc(m.title.length > 74 ? m.title.slice(0, 72) + '…' : m.title)}</td><td class="r"><span class="bar" style="width:${Math.round(70 * m.cited_here / mc)}px"></span>${fmt(m.cited_here)}</td></tr>`).join('')}</tbody></table>
+        ${MC.length > SHOW ? `<details class="ov-all"><summary>Show all ${fmt(MC.length)}</summary><div class="scroll"><table class="t"><thead><tr><th>Paper</th><th class="num">Year</th><th class="num">${H.term('cic', 'Cited here')}</th><th class="num">Of which same authors</th><th class="num">Cited elsewhere ${H.info('<b>Cited elsewhere</b>The citation count stored with the paper, read from OpenAlex when it was enriched. It counts citations from the whole literature and is a different measure from cited here; the two are never added.', 'About the stored count')}</th></tr></thead><tbody>${MC.map(m => `<tr tabindex="0" data-id="${esc(m.id)}"><td class="ti" title="${esc(m.title)}">${esc(m.title)}</td><td class="num">${m.year == null ? '–' : esc(m.year)}</td><td class="num">${fmt(m.cited_here)}</td><td class="num">${fmt(m.self_cited)}</td><td class="num">${dash(m.external)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`
       : '<div class="ov-empty">Citation counts appear once reference lists are extracted.</div>';
-    document.querySelectorAll('#ovTop tr').forEach(r => { r.onclick = () => H.openDrawer(r.dataset.id); r.onkeydown = e => { if (e.key === 'Enter') H.openDrawer(r.dataset.id); }; });
+    document.querySelectorAll('#ovTop tr[data-id]').forEach(r => { r.onclick = () => H.openDrawer(r.dataset.id); r.onkeydown = e => { if (e.key === 'Enter') H.openDrawer(r.dataset.id); }; });
 
     const g = document.getElementById('ovGrowth');
     if (!months.length) { g.innerHTML = '<div class="ov-empty">Growth appears once papers are included.</div>'; return; }

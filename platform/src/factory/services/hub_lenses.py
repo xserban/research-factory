@@ -21,6 +21,21 @@ REST = "Rest"
 DNA_DIMS = ("technique", "architecture", "span", "human")
 
 METHODS: dict[str, str] = {
+    "results": (
+        "Result rows of the design approach miner (pass A) of the included works. The grid counts "
+        "the rows that describe the paper's own system by lifecycle stage and approach; the bars "
+        "count every row by who the result is about (system role), how strong the evidence is "
+        "(evidence grade) and what kind of value it is. At most the first 30 rows of a work are "
+        "read, and the count of rows left out is given. These are readings of the papers, not "
+        "re-measured results."
+    ),
+    "citation_rate": (
+        "The number of distinct works citing a paper, among works whose reference list was "
+        "extracted, divided by the years since its publication (the publication year counts as "
+        "one, the as-of year is the current year). The count is a lower bound: a paper nobody "
+        "extracted a citer for shows none, which is not a known zero. The count stored in the "
+        "work record (OpenAlex) is shown beside it and never merged with it."
+    ),
     "design_matrix": (
         "Works are counted by the value of two fields. A work with no value for a field is counted "
         "under 'Not coded' for it (flagged). The expected count of a cell is its row total times "
@@ -525,4 +540,99 @@ def lenses_payload(
         "influence": asdict(influence(works, cites)),
         "association": [asdict(p) for p in association(works, assoc_dims)],
         "adoption": asdict(technique_adoption(adoption_records, codebook or {})),
+    }
+
+
+# ------------------------------------------------------------------ results grid, citation rate
+
+RESULT_CAP_PER_WORK = 30
+CITATION_RATE_TOP = 50
+RESULT_BARS = ("system_role", "evidence_grade", "value_kind")
+
+
+def results_grid(
+    rows_by_work: Mapping[str, Sequence[Mapping[str, str]]],
+    n_rows_by_work: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    """Heat grid and bars of the design-approach result rows (pass A) of the given works.
+
+    `rows_by_work` holds at most `RESULT_CAP_PER_WORK` rows per work; `n_rows_by_work` the real
+    row counts, so `left_out` can say how many rows the cap hides. `cells` lists, for every
+    (stage, approach) with an own-system row, the row count and the work ids; `bars` counts every
+    row by system role, evidence grade and value kind. Sorted by name; no value is typed."""
+    rows = [(w, r) for w in sorted(rows_by_work) for r in rows_by_work[w]]
+    own = [(w, r) for w, r in rows if r.get("system_role") == "own-system"]
+    cells: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for w, r in own:
+        if r.get("stage") and r.get("approach"):
+            cells[(r["stage"], r["approach"])].append(w)
+    n_real = n_rows_by_work or {}
+    left_out = sum(max(0, n_real.get(w, len(rs)) - len(rs)) for w, rs in rows_by_work.items())
+    return {
+        "works_with_rows": sum(1 for rs in rows_by_work.values() if rs),
+        "rows": len(rows),
+        "own": len(own),
+        "left_out": left_out,
+        "cap_per_work": RESULT_CAP_PER_WORK,
+        "stages": sorted({s for s, _a in cells}),
+        "approaches": sorted({a for _s, a in cells}),
+        "cells": [
+            {"stage": s, "approach": a, "n": len(ws), "works": sorted(set(ws))}
+            for (s, a), ws in sorted(cells.items())
+        ],
+        "bars": {
+            f: sorted(
+                ([v, n] for v, n in Counter(r[f] for _w, r in rows if r.get(f)).items()),
+                key=lambda x: (-x[1], x[0]),
+            )
+            for f in RESULT_BARS
+        },
+        "methods": METHODS["results"],
+    }
+
+
+def citation_rate(
+    works: Iterable[Any],
+    included: Collection[str],
+    *,
+    extractions: int,
+    entries: int,
+    resolved_links: int,
+    works_total: int,
+    as_of_year: int,
+    top: int = CITATION_RATE_TOP,
+) -> dict[str, Any]:
+    """Citation rate per year of the included works (`citations.WorkCitations`), top `top`.
+
+    `works` are the report's per-work records. A work with no rate (no reference list was
+    extracted, or no year) is counted in `unknown`, never as zero. The head counts are the
+    report's own. `as_of_year` is None when no reference list was extracted (no rate exists), so
+    the payload of such a project does not depend on the date."""
+    inc = set(included)
+    mine = [w for w in works if w.work_id in inc]
+    rated = sorted(
+        (w for w in mine if w.per_year is not None),
+        key=lambda w: (-w.per_year, w.work_id),
+    )
+    return {
+        "as_of_year": as_of_year if extractions else None,
+        "extractions": extractions,
+        "entries": entries,
+        "resolved_links": resolved_links,
+        "works_total": works_total,
+        "included": len(inc),
+        "unknown": len(mine) - len(rated),
+        "top": top,
+        "rows": [
+            {
+                "id": w.work_id,
+                "year": w.year,
+                "cited_by": w.cited_by,
+                "self_cited_by": w.self_cited_by,
+                "per_year": round(w.per_year, 3),
+                "external": w.external,
+            }
+            for w in rated[:top]
+        ],
+        "methods": METHODS["citation_rate"],
     }

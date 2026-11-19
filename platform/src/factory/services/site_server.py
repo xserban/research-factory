@@ -23,14 +23,23 @@ Invariants:
   token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
-  and writes nothing). A refusal is a structured error, nothing is
+  and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional
+  `note`; the project is the slot's, a `project` field is refused) and
+  `POST /p/<slug>/api/feed/run|refetch` (the same hub-wide feed run) with its own token; the hub
+  token is on no project page. A refusal is a structured error, nothing is
   written. `GET /api/layers` reads the latest scheme's layer ids and each work's layer. Any
   other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes
   nothing but the site folder, through `site.build`.
 - Hub v2 (plan hub-ui, `services/hub_serve.py`) is served at `<prefix>/ui/`: pages, versioned
   assets, cached payloads (`data/<name>.json`, ETag, 503 while building) and `trace`, all read-only,
   plus one act, `POST <prefix>/ui/act/snowball-add` (`work_id`: puts an outside work in the inbox as
-  the local human, `cli:inbox add`). The pages' other acts are the routes above.
+  the local human, `cli:inbox add`). The pages' other acts are the routes above. Further read-only
+  routes: `ui/data/sources-doc-<document_id>.json` (one converted document: texts, lost and added
+  runs), `ui/file/original|markdown/<document_id>` (the stored files, by registered id only),
+  `ui/ops/<path>` (a file of the project's `ops/` folder: no `..`, absolute path, symlink or
+  directory, size capped), `ui/download/wiki.zip` (the vault, built once per fingerprint),
+  `ui/status.json` (per payload: fresh, built_at, error) and `GET /api/screening`
+  (`dashboard.screening_live`). None of them writes an event.
 - `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
   runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
   deterministic steps look papers up and convert them and must not run in a request; the reply is
@@ -83,6 +92,7 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
 from factory.services import activity as activity_service
+from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
@@ -119,6 +129,8 @@ MAX_EXPORT_BODY: Final = 256 * 1024
 hundred characters), which the usual 16 KiB body limit would cut."""
 EXPORT_ROUTE: Final = "/api/export/works"
 UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
+UI_DOC_PREFIX: Final = "data/sources-doc-"
+"""The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
 """Hub v2 (plan hub-ui): `<prefix>/ui/` pages, `assets/`, `data/<payload>.json` and `trace`; the
 only write is the snowball act."""
@@ -560,6 +572,60 @@ def export_works_zip(project: Project, body: dict[str, Any]) -> tuple[int, dict[
     return 200, {"ok": True, "_zip": str(tmp / name), "_name": name}
 
 
+def inbox_add_in(found: Slot, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Capture one link or identifier in `found`'s inbox as the local human, like `factory inbox
+    add`. The project is the slot's; a `project` field of the body is never read here. A link
+    whose identifier is already in the inbox is a `duplicate` and writes nothing. Offline."""
+    value, bad = _optional_str(body, "value")
+    note, extra = _optional_str(body, "note")
+    bad += extra
+    if value is None or not value.strip():
+        bad.append(ValidationIssue("value", "required"))
+    if bad:
+        return 400, _issues(*bad)
+    assert value is not None
+    project = found.project
+    link = value.strip()
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:inbox add")
+        with found.write_lock, project.index.exclusive():
+            project.index.sync()
+            same = inbox_service.find_open_duplicate(project, link)
+            if same is not None:
+                return 200, {"ok": True, "duplicate": True, "item_id": same}
+            result = inbox_service.add_links(
+                project, actor, [inbox_service.LinkInput(link, note=note)], Channel.CLI
+            )
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    if result.rejected:
+        return 400, _issues(*result.rejected[0].issues)
+    return 200, {"ok": True, "duplicate": False, "item_id": result.written[0]}
+
+
+def project_inbox_add(slot: Slot, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """`POST /p/<slug>/api/inbox/add` {value, note}: the project is the slot's; a `project` field
+    is refused, so a page of one project cannot write into another."""
+    if "project" in body:
+        return 400, _issues(ValidationIssue("project", "not accepted; the project is the page's"))
+    return inbox_add_in(slot, body)
+
+
+def feed_run_here(_project: Project, _body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Marker route `POST /p/<slug>/api/feed/run`: `do_POST` hands it to the hub's feed runner.
+    The feed is hub-wide (one run covers every project), so a project page starting it is the
+    same act as the hub's, under the project token."""
+    raise NotImplementedError
+
+
+def feed_refetch_here(_project: Project, _body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Marker route `POST /p/<slug>/api/feed/refetch`; see `feed_run_here`."""
+    raise NotImplementedError
+
+
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
@@ -573,6 +639,9 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/layers/move": move_layer,
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
+    "/api/inbox/add": project_inbox_add,
+    "/api/feed/run": feed_run_here,
+    "/api/feed/refetch": feed_refetch_here,
 }
 
 
@@ -1116,7 +1185,7 @@ def _handler_class(
             self._deny(403, "forbidden")
             return False
 
-        def _json(self, code: int, payload: dict[str, object]) -> None:
+        def _json(self, code: int, payload: Mapping[str, object]) -> None:
             body = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1136,6 +1205,16 @@ def _handler_class(
                     shutil.copyfileobj(handle, self.wfile, 1024 * 1024)
             finally:
                 shutil.rmtree(path.parent, ignore_errors=True)
+
+        def _send_file(self, path: Path, name: str) -> None:
+            """Stream the cached file `path` as a download (it stays in the cache)."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as handle:
+                shutil.copyfileobj(handle, self.wfile, 1024 * 1024)
 
         def _html(self, text: str) -> None:
             body = text.encode()
@@ -1252,6 +1331,12 @@ def _handler_class(
                     return
                 self._json(200, found.model_dump(mode="json"))
                 return
+            if url == "/api/screening":
+                try:
+                    self._json(200, dashboard_service.screening_live(slot.project))
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("screening", str(exc))))
+                return
             if url == "/api/queue/runs":
                 runs = runner_service.run_status(slot.project, reconcile=False)
                 pipelines = pipeline_service.pipeline_status(slot.project)
@@ -1310,8 +1395,35 @@ def _handler_class(
                     "public, max-age=31536000, immutable" if found.immutable else "no-cache"
                 )
                 self._send(200, found.body, found.content_type, {})
+            elif rest.startswith(UI_DOC_PREFIX) and rest.endswith(".json"):
+                self._ui_document(slot, rest[len(UI_DOC_PREFIX) : -len(".json")], None)
             elif rest.startswith("data/") and rest.endswith(".json"):
                 self._payload(rest[len("data/") : -len(".json")], slot)
+            elif rest.startswith("file/"):
+                kind, _, doc_id = rest[len("file/") :].partition("/")
+                self._ui_document(slot, doc_id, kind)
+            elif rest.startswith("ops/"):
+                found_ops = hub_serve.ops_file(slot.project, rest[len("ops/") :])
+                if found_ops is None:
+                    self._deny(404, "not found")
+                    return
+                self._cache = "no-store"
+                self._send(
+                    200,
+                    found_ops.body,
+                    found_ops.content_type,
+                    {"X-Content-Type-Options": "nosniff"},
+                )
+            elif rest == "download/wiki.zip":
+                try:
+                    archive = hub_serve.wiki_zip(slot.project)
+                except (FactoryError, OSError) as exc:
+                    self._json(500, _issues(ValidationIssue("wiki", str(exc))))
+                    return
+                self._send_file(archive, f"{slot.slug}-wiki.zip")
+            elif rest == "status.json":
+                self._cache = "no-store"
+                self._json(200, slot.ui.status())
             elif rest == "fresh":
                 name = dict(parse_qsl(query)).get("name", "")
                 self._cache = "no-store"
@@ -1329,6 +1441,33 @@ def _handler_class(
                 self._json(200, payload)
             else:
                 self._deny(404, "not found")
+
+        def _ui_document(self, slot: Slot, document_id: str, kind: str | None) -> None:
+            """One converted document: its payload (`kind` None) or its original or Markdown
+            file. The id is looked up in the index (`hub_sources`); anything unknown is a 404."""
+            try:
+                if kind is None:
+                    detail = hub_serve.source_document(slot.project, document_id)
+                    if detail is None:
+                        self._deny(404, "not found")
+                        return
+                    self._cache = "no-cache"
+                    self._json(200, detail)
+                    return
+                found_file = hub_serve.source_file(slot.project, document_id, kind)
+            except (FactoryError, OSError):  # the stored file is gone
+                self._deny(404, "not found")
+                return
+            if found_file is None:
+                self._deny(404, "not found")
+                return
+            self._cache = "no-cache"
+            self._send(
+                200,
+                found_file[0],
+                found_file[1],
+                {"X-Content-Type-Options": "nosniff"},
+            )
 
         def _payload(self, name: str, slot: Slot) -> None:
             """A cached payload with its ETag (304 when the browser has it), or why not yet."""
@@ -1480,7 +1619,17 @@ def _handler_class(
                 return
             assert slot is not None and route is not None
             project = slot.project
-            if route in (
+            if route is project_inbox_add:
+                code, payload = project_inbox_add(slot, body)
+            elif route in (feed_run_here, feed_refetch_here):
+                feed_act = (hub_acts or {}).get(
+                    "/api/feed/run" if route is feed_run_here else "/api/feed/refetch"
+                )
+                if feed_act is None:
+                    code, payload = 503, _issues(ValidationIssue("feed", "the feed runner is off"))
+                else:
+                    code, payload = feed_act({})
+            elif route in (
                 feed_react,
                 feed_configure,
                 mine_work,
@@ -1836,42 +1985,17 @@ class MainHub:
 
     def inbox_add(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
         """The add-to-inbox act (the portal's form): capture one link or identifier in a listed
-        project's inbox as the local human, like `factory inbox add`. A link whose identifier is
-        already in the inbox is a `duplicate` and writes nothing. Offline; no lookup runs."""
+        project's inbox as the local human, like `factory inbox add`."""
         slug, bad = _optional_str(body, "project")
-        value, more = _optional_str(body, "value")
-        note, extra = _optional_str(body, "note")
-        bad += more + extra
         if not slug:
             bad.append(ValidationIssue("project", "required"))
-        if value is None or not value.strip():
-            bad.append(ValidationIssue("value", "required"))
         if bad:
             return 400, _issues(*bad)
-        assert slug is not None and value is not None
+        assert slug is not None
         found = self.slot(slug)
         if found is None:
             return 400, _issues(ValidationIssue("project", "unknown project"))
-        project = found.project
-        link = value.strip()
-        try:
-            actor = project.human_actor()
-            authorize_command(project, project.principal, "cli:inbox add")
-            with found.write_lock, project.index.exclusive():
-                project.index.sync()
-                same = inbox_service.find_open_duplicate(project, link)
-                if same is not None:
-                    return 200, {"ok": True, "duplicate": True, "item_id": same}
-                result = inbox_service.add_links(
-                    project, actor, [inbox_service.LinkInput(link, note=note)], Channel.CLI
-                )
-        except FactoryValidationError as exc:
-            return 400, _issues(*exc.issues)
-        except FactoryError as exc:
-            return 403, _issues(ValidationIssue("permission", str(exc)))
-        if result.rejected:
-            return 400, _issues(*result.rejected[0].issues)
-        return 200, {"ok": True, "duplicate": False, "item_id": result.written[0]}
+        return inbox_add_in(found, body)
 
     def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
         return {

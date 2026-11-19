@@ -28,6 +28,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from factory.errors import FactoryError
 from factory.services import site_corpus
 from factory.services.agreement import Outcome
 from factory.services.citations import _meta
@@ -35,8 +36,12 @@ from factory.services.context import Project
 from factory.services.flow_ledger import LedgerRow, flow_ledger
 from factory.services.hub_graph import CitationGraph, load_citation_graph
 from factory.services.human_queue import human_queue
-from factory.services.prisma import PrismaFlow, prisma_flow
-from factory.services.work_layers import layers_of
+from factory.services.prisma import UNSPECIFIED, PrismaFlow, prisma_flow
+from factory.services.protocol import list_deviations
+from factory.services.site import status as site_status
+from factory.services.site_flow import FIXED_GROUPS, reached, table_spec, tags
+from factory.services.site_layers import LAYER_ORDER, replay_steps
+from factory.services.work_layers import layer_moves, layers_of
 
 METHODS: dict[str, str] = {
     "sets": (
@@ -80,7 +85,42 @@ METHODS: dict[str, str] = {
     "composition": (
         "Included works grouped by layer (the researcher's move, else the layer miner's final "
         "row) and by human position. A work with no layer is 'unlayered'; one with no human "
-        "position is 'not coded'."
+        "position is 'not coded'. Layers are the project's triage into core, benchmark, applied, "
+        "adjacent, background and off-topic, set by the layer miner or moved by the researcher. "
+        "The layer pass has not been calibrated against human labels: read the layers as a "
+        "first triage, not as a finding."
+    ),
+    "by_source": (
+        "Every identified record is counted once per step it reached, by the source group that "
+        "found it (found by one database only, by both, or elsewhere). Each count is made from the "
+        "same ledger rows as the record list, so a cell and the list behind it always agree. "
+        "Under each exclusion or retrieval step the criteria and reasons present are listed, "
+        "most frequent first."
+    ),
+    "identification": (
+        "The identification figures (records per database, other sources, duplicates removed) "
+        "come from the PRISMA flow, not from the ledger rows. Absorbed duplicates are grouped by "
+        "their own provenance, so the per-source columns of the table close only in the total."
+    ),
+    "layer_replay": (
+        "The layer moves, one step per day. The start is each included work's layer as the layer "
+        "miner read it (a work with no miner row starts unlayered); each step applies the moves "
+        "the researcher made that day, the last move of a work within a day winning. After the "
+        "last step every work is on its current layer. Beyond 120 days the earliest days are "
+        "merged into the first step."
+    ),
+    "line": (
+        "The production line after screening. Converted is the number of full-text works with a "
+        "live converted document; mined is the number of live first-pass rows of the listed "
+        "miners; synthesised is the number of recorded synthesis pages; reported is the number of "
+        "hub products built. Each is read from the index or the site manifest, as in the old "
+        "control room."
+    ),
+    "most_cited": (
+        "Included works by the number of distinct included works that cite them, with the share "
+        "that is author self-citation and, apart, the citation count stored in the work record "
+        "(read from OpenAlex when the work was enriched). The two counts measure different "
+        "things and are never added."
     ),
 }
 
@@ -307,6 +347,7 @@ def flow_payload(project: Project, data: FlowData | None = None) -> dict[str, An
         groups[key].append(r.work_id)
         if crit is not None:
             by_criterion[key].setdefault(crit, []).append(r.work_id)
+        step, outcome, reason = reached(r)
         records.append(
             {
                 "id": r.work_id,
@@ -315,6 +356,12 @@ def flow_payload(project: Project, data: FlowData | None = None) -> dict[str, An
                 "fate": key,
                 "criterion": crit,
                 "source": r.source_group,
+                "sources": list(r.sources),
+                "step": step,
+                "outcome": outcome,
+                "reason": reason,
+                "duplicate_of": r.canonical_id,
+                "tags": tags(r),
             }
         )
     identified = sum(d.prisma.identified_databases.values()) + sum(
@@ -340,9 +387,76 @@ def flow_payload(project: Project, data: FlowData | None = None) -> dict[str, An
         "groups_sum": sum(len(v) for v in groups.values()),
         "reconciles": sum(len(v) for v in groups.values()) == identified,
         "records": records,
+        "by_source": by_source_table(d.rows),
+        "layer_replay": layer_replay_payload(project, d),
+        "deviations": len(list_deviations(project)),
         "sets": sets_payload(d.sets),
-        "methods": {"fates": METHODS["fates"], "sets": METHODS["sets"]},
+        "methods": {
+            "fates": METHODS["fates"],
+            "sets": METHODS["sets"],
+            "by_source": METHODS["by_source"],
+            "identification": METHODS["identification"],
+            "layer_replay": METHODS["layer_replay"],
+        },
     }
+
+
+def layer_replay_payload(project: Project, d: FlowData) -> dict[str, Any]:
+    """Replay of the researcher's layer moves over the included works (`work_layers.layer_moves`,
+    `site_layers.replay_steps`): ring order, work ids, the start layer index of each (-1 for
+    none) and the steps `{d, mv: [[work index, layer index]]}`."""
+    layers = layers_of(project)
+    names = list(LAYER_ORDER)
+    ordered = sorted(d.sets.included)
+    start: list[int] = []
+    final: list[int] = []
+    for w in ordered:
+        wl = layers.get(w) or layers.get(d.sets.miner_source(w))
+        first = None if wl is None else (wl.miner_layer if wl.source == "moved" else wl.layer)
+        last = None if wl is None else wl.layer
+        start.append(names.index(first) if first is not None and first in names else -1)
+        final.append(names.index(last) if last is not None and last in names else -1)
+    index = {w: i for i, w in enumerate(ordered)}
+    return {
+        "layers": names,
+        "works": ordered,
+        "start": start,
+        "final": final,
+        "steps": replay_steps(layer_moves(project), index, names),
+        "methods": METHODS["layer_replay"],
+    }
+
+
+def by_source_table(rows: Iterable[LedgerRow]) -> dict[str, Any]:
+    """The PRISMA steps by source group (`site_flow.table_spec` rows, counted from the ledger).
+
+    Each row names the stage tag counted (`site_flow.tags`) and, for the criterion and reason
+    sub-rows, the criterion; `counts` maps a source group, and `Total`, to the rows' count. The
+    counts come from the same rows as the record list, so a cell equals its filtered list."""
+    works: list[dict[str, Any]] = [
+        {"k": tags(r), "c": reached(r)[2], "g": r.source_group} for r in rows
+    ]
+    present = {str(w["g"]) for w in works}
+    groups = [*FIXED_GROUPS, *sorted(present - set(FIXED_GROUPS))]
+    out_rows = []
+    for spec in table_spec(works):
+        hit = [
+            w
+            for w in works
+            if spec["k"] in w["k"] and (spec["c"] is None or (w["c"] or UNSPECIFIED) == spec["c"])
+        ]
+        counts = {g: sum(1 for w in hit if w["g"] == g) for g in groups}
+        counts["Total"] = len(hit)
+        out_rows.append(
+            {
+                "label": spec["l"],
+                "depth": spec["d"],
+                "tag": spec["k"],
+                "criterion": spec["c"],
+                "counts": counts,
+            }
+        )
+    return {"groups": groups, "rows": out_rows}
 
 
 # ------------------------------------------------------------------ cited here
@@ -552,6 +666,68 @@ def pipeline_strip(d: FlowData) -> list[dict[str, Any]]:
     ]
 
 
+MOST_CITED = 50
+LINE_STATIONS = (
+    ("converted", "documents", "sources.html"),
+    ("mined", "miner rows", "miners.html"),
+    ("synthesised", "pages recorded", "write.html"),
+    ("reported", "products built", "write.html"),
+)
+
+
+def line_stations(project: Project, d: FlowData) -> list[dict[str, Any]]:
+    """The production line after PRISMA: convert, mine, synthesise, report.
+
+    The same sources as the old control room (`site_hub_page._line_numbers`): the converted full
+    texts are the PRISMA `eligible` count; mined is the live pass-A rows of `m-` schemas;
+    synthesised the `page.recorded` events; reported the hub products built (None when the site
+    manifest cannot be read). Nothing is re-derived here."""
+    with project.index.connect() as conn:
+        rows = int(
+            conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM extraction_rows WHERE superseded_by IS NULL "
+                    "AND pass_label = 'A' AND schema_ref LIKE 'm-%'"
+                )
+            ).scalar()
+            or 0
+        )
+        pages = int(
+            conn.execute(text("SELECT COUNT(*) FROM events WHERE type = 'page.recorded'")).scalar()
+            or 0
+        )
+    ft = d.prisma.full_text
+    built: int | None
+    try:
+        built = sum(1 for s in site_status(project) if s.built)
+    except (FactoryError, OSError, ValueError):
+        built = None
+    values = {
+        "converted": ft.eligible if ft.stage_run else None,
+        "mined": rows,
+        "synthesised": pages,
+        "reported": built,
+    }
+    return [
+        {"key": key, "n": values[key], "unit": unit, "href": href}
+        for key, unit, href in LINE_STATIONS
+    ]
+
+
+def _load_year_external(
+    project: Project, ids: Iterable[str]
+) -> dict[str, tuple[int | None, int | None]]:
+    """work id -> (publication year, stored OpenAlex citation count) for `ids`."""
+    wanted = set(ids)
+    out: dict[str, tuple[int | None, int | None]] = {}
+    with project.index.connect() as conn:
+        for w, data in conn.execute(text("SELECT work_id, data FROM works")):
+            if str(w) in wanted:
+                _, year, _, ext = _meta(str(data))
+                out[str(w)] = (year, ext)
+    return out
+
+
 def overview_payload(project: Project, data: FlowData | None = None) -> dict[str, Any]:
     """Lead facts, pipeline strip, papers per month, composition, most cited and next actions."""
     d = data or load_flow_data(project)
@@ -569,7 +745,8 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
 
     by_layer = Counter(layer_of(w) for w in inc)
     by_human = Counter(v or NOT_CODED for v in human_values.values())
-    top = sorted(inc, key=lambda w: (-cites[w].count, w))[:8]
+    top = sorted(inc, key=lambda w: (-cites[w].count, w))[:MOST_CITED]
+    meta = _load_year_external(project, top)
     return {
         "lead": {
             "included": len(inc),
@@ -580,6 +757,7 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
             "human": humans,
         },
         "pipeline": pipeline_strip(d),
+        "line": line_stations(project, d),
         "papers_per_month": month_counts(pub[w][1][:7] if w in pub else "" for w in inc),
         "composition": {
             "layer": dict(sorted(by_layer.items())),
@@ -592,6 +770,8 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
                 "cited_here": cites[w].count,
                 "self_cited": cites[w].self_count,
                 "layer": layer_of(w),
+                "year": meta.get(w, (None, None))[0],
+                "external": meta.get(w, (None, None))[1],
             }
             for w in top
         ],
@@ -600,6 +780,14 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
         "next_actions": [i.model_dump(mode="json") for i in human_queue(project).items],
         "methods": {
             k: METHODS[k]
-            for k in ("sets", "cited_here", "human_role", "papers_per_month", "composition")
+            for k in (
+                "sets",
+                "cited_here",
+                "human_role",
+                "papers_per_month",
+                "composition",
+                "line",
+                "most_cited",
+            )
         },
     }

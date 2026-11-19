@@ -15,10 +15,12 @@ import random
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 
+from factory.services import citations
 from factory.services.context import Project
 
 METHODS: dict[str, str] = {
@@ -32,6 +34,13 @@ METHODS: dict[str, str] = {
         "Works outside the corpus ranked by how many distinct corpus works cite them. The share "
         "is that number divided by the corpus size. Ties are ordered by work id. A corpus work "
         "never appears here."
+    ),
+    "candidates": (
+        "Reference entries of the corpus papers that no entry resolved to a work of the project, "
+        "grouped into cited items and ranked by how many distinct papers cite them (items with "
+        "neither a year nor a DOI or arXiv identifier are left out). They are not works yet, so "
+        "they differ from the foundations above, which are works the project already holds. A "
+        "count is a lower bound: it only covers papers whose reference list was extracted."
     ),
     "coupling": (
         "Two corpus works are bibliographically coupled when they cite the same works. The weight "
@@ -628,6 +637,45 @@ def outside_info(project: Project, ids: Iterable[str]) -> dict[str, dict[str, An
     return dict(sorted(out.items()))
 
 
+CANDIDATES_TOP = 50
+
+
+def outside_ids(project: Project, ids: Iterable[str]) -> dict[str, dict[str, str]]:
+    """DOI and arXiv identifier of each work in `ids` that has a stored record and carries one."""
+    wanted = set(ids)
+    out: dict[str, dict[str, str]] = {}
+    with project.index.connect() as conn:
+        for wid, data in conn.execute(text("SELECT work_id, data FROM works")):
+            if str(wid) not in wanted:
+                continue
+            ident = json.loads(str(data)).get("identifiers") or {}
+            found = {k: str(ident[k]) for k in ("doi", "arxiv") if ident.get(k)}
+            if found:
+                out[str(wid)] = found
+    return dict(sorted(out.items()))
+
+
+def candidate_items(project: Project, top: int = CANDIDATES_TOP) -> dict[str, Any]:
+    """The top `top` cited items no entry resolved to a work (`citations.citation_report`), with
+    the exact total. Ranked by citing papers, then key."""
+    report = citations.citation_report(project, as_of_year=datetime.now(UTC).year)
+    return {
+        "total": len(report.candidates),
+        "shown": min(top, len(report.candidates)),
+        "items": [
+            {
+                "key": c.key,
+                "title": c.title,
+                "year": c.year,
+                "citing_count": c.citing_count,
+                "dois": list(c.dois),
+                "arxivs": list(c.arxivs),
+            }
+            for c in report.candidates[:top]
+        ],
+    }
+
+
 def graph_payload(
     project: Project,
     corpus_ids: Iterable[str],
@@ -653,6 +701,8 @@ def graph_payload(
             project,
             {n.id for n in land.nodes if not n.in_corpus} | {f.id for f in found},
         ),
+        "outside_ids": outside_ids(project, {f.id for f in found}),
+        "candidates": candidate_items(project),
         "coupling": {
             "pairs": [asdict(p) for p in coup.pairs],
             "refs_per_work": {w: len(r) for w, r in coup.refs.items()},

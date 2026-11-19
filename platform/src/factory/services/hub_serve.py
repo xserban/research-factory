@@ -33,10 +33,13 @@ import hashlib
 import logging
 import os
 import re
+import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -46,12 +49,20 @@ from factory.events.envelope import Actor
 from factory.inbox.links import parse_link
 from factory.model.screening import Channel
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import hub_build, hub_landscape, hub_mining, hub_ui
+from factory.services import (
+    call_memo,
+    hub_build,
+    hub_costs,
+    hub_landscape,
+    hub_mining,
+    hub_sources,
+    hub_ui,
+)
 from factory.services import inbox as inbox_service
 from factory.services.context import Project
 from factory.services.hub_trace import trace_figure
 from factory.services.search import get_work, list_works
-from factory.services.site import site_dir, type_counts
+from factory.services.site import TypeCounts, site_dir, type_counts
 
 LINGER: float = 5.0
 # A build that failed at a fingerprint is served as 500 for this long; the next request after it
@@ -81,6 +92,13 @@ PREWARM_ORDER: Final = (
     "living",
     "landscape",
     "landscape_uses",
+    "protocol",
+    "pipeline",
+    "sources",
+    "method",
+    "costs",
+    "write",
+    "platform",
 )
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the
@@ -144,7 +162,11 @@ def fingerprint(project: Project, name: str | None = None) -> str:
 
     Reads the projected index (`type_counts`), not the log files: every writer projects on write,
     so the index is current whenever an event has landed."""
-    counts = type_counts(project)
+    return _fingerprint_of(type_counts(project), name)
+
+
+def _fingerprint_of(counts: TypeCounts, name: str | None) -> str:
+    """`fingerprint` from event type counts already read."""
     if name in hub_build.PAYLOAD_EVENTS:
         raw = (
             f"events:{hub_landscape.event_key(counts)}|code:{code_hash()}"
@@ -232,6 +254,37 @@ class PayloadService:
     def is_fresh(self, name: str) -> bool:
         """Whether `name` is on disk at the current fingerprint."""
         return known_name(name) and self._read(name, fingerprint(self._project)) is not None
+
+    def status(self) -> dict[str, dict[str, Any]]:
+        """Per payload: `fresh` (on disk at its current fingerprint), `built_at` (UTC time of the
+        file on disk, None when none) and `error` (the build failed at the current fingerprint).
+        Reads the index head and file times only; builds and writes nothing."""
+        counts = type_counts(self._project)
+        heads: dict[str | None, str] = {}
+
+        def head(name: str) -> str:
+            key = name if name in hub_build.PAYLOAD_EVENTS else None
+            if key not in heads:
+                heads[key] = _fingerprint_of(counts, key)
+            return heads[key]
+
+        out: dict[str, dict[str, Any]] = {}
+        names: list[str] = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
+        names += [n for n in hub_build.BUILDERS if n not in names]
+        for name in names:
+            fp = head(name)
+            row: dict[str, Any] = {"fresh": self._read(name, fp) is not None, "built_at": None}
+            try:
+                stamp = (self._dir / f"{name}.json").stat().st_mtime
+                row["built_at"] = datetime.fromtimestamp(stamp, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except OSError:
+                pass
+            with self._cond:
+                failed = self._failed.get(name)
+            if failed is not None and failed[0] == fp:
+                row["error"] = "build failed"
+            out[name] = row
+        return out
 
     def _read(self, name: str, fp: str) -> bytes | None:
         try:
@@ -376,7 +429,8 @@ class PayloadService:
                     self._write(grid, body, fp)
                 return
             if name in hub_build.BUILDERS:
-                payload = hub_build.BUILDERS[name](ctx)
+                with call_memo.entering():  # one reading of each shared derivation per payload
+                    payload = hub_build.BUILDERS[name](ctx)
             else:
                 grids = ctx.grids
                 if name not in grids:
@@ -456,3 +510,50 @@ def snowball_add(project: Project, actor: Actor, work_id: object) -> dict[str, o
     if result.rejected:
         raise FactoryValidationError(list(result.rejected[0].issues))
     return {"duplicate": False, "item_id": result.written[0], "work_id": work_id}
+
+
+# ---------------------------------------------------------------- read-only routes
+
+
+def source_document(project: Project, document_id: str) -> dict[str, Any] | None:
+    """The `sources-doc-<id>` payload (None for an id that is no converted document)."""
+    return hub_sources.document_detail(project, document_id)
+
+
+def source_file(project: Project, document_id: str, kind: str) -> tuple[bytes, str] | None:
+    """The `original` or `markdown` of a converted document, with its content type."""
+    return hub_sources.document_file(project, document_id, kind)
+
+
+def ops_file(project: Project, rel: str) -> hub_costs.OpsFile | None:
+    """A file of the project's `ops/` folder (see `hub_costs.read_ops_file`)."""
+    return hub_costs.read_ops_file(project, rel)
+
+
+_WIKI_LOCK = threading.Lock()
+
+
+def wiki_zip(project: Project) -> Path:
+    """The wiki vault (`site.build_wiki`, synthesis pages included) as a zip under
+    `site/hub-ui/`, built once per fingerprint (older ones are removed). Writes only there."""
+    from factory.services.site import _build_wiki
+
+    cache = site_dir(project) / CACHE_DIR
+    target = cache / f"wiki-{fingerprint(project)}.zip"
+    with _WIKI_LOCK:
+        if target.is_file():
+            return target
+        cache.mkdir(parents=True, exist_ok=True)
+        # beside the project, not in /tmp (a small tmpfs that is often full)
+        work = Path(tempfile.mkdtemp(prefix="wiki-", dir=cache))
+        try:
+            vault = work / "vault"
+            vault.mkdir()
+            _build_wiki(project, vault)
+            made = shutil.make_archive(str(work / "wiki"), "zip", root_dir=vault)
+            for old in cache.glob("wiki-*.zip"):
+                old.unlink(missing_ok=True)
+            Path(made).replace(target)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    return target

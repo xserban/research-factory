@@ -16,9 +16,12 @@ from typing import Any
 
 from factory.model.protocol import Criterion, ScreeningStage
 from factory.model.screening import DecisionRecorded, PassLabel, ScreeningPhase, Verdict
+from factory.services.agreement import cannot_assess_queue
 from factory.services.calibration import calibration_items, stage_population
 from factory.services.context import Project
-from factory.services.protocol import current_protocol
+from factory.services.prisma import prisma_flow
+from factory.services.project import screening_status
+from factory.services.protocol import current_protocol, list_deviations
 from factory.services.ranked_queue import (
     rank_key,
     ranked_sequence,
@@ -26,11 +29,13 @@ from factory.services.ranked_queue import (
     stop_rules_text,
     walk,
 )
+from factory.services.ranking import latest_ranking
 from factory.services.screening import (
     live_decisions,
     screening_stops,
     stale_screening_decisions,
 )
+from factory.services.screening_check import check_list, check_report
 from factory.services.screening_stats import cohen_kappa, kappa_by_criterion
 
 METHODS: dict[str, str] = {
@@ -66,6 +71,40 @@ METHODS: dict[str, str] = {
         "quotes are shown, taken from the works with the smallest work ids; pass A's decision is "
         "used when both passes excluded a work. Excluded works citing no criterion are grouped "
         "as unspecified. The label and rule are those of the current protocol, when it has them."
+    ),
+    "ranking": (
+        "The latest ranking recorded: its id, the model that scored the records, the hash of the "
+        "weights and the number of records ranked. Read from the ranking event; nothing is "
+        "recomputed."
+    ),
+    "passes": (
+        "Each screening pass's ordinary queue: records queued, records with a live decision that "
+        "is not stale, and records remaining. Calibration records are counted by the calibration "
+        "gate, not here. Stale decisions were made under an earlier protocol version."
+    ),
+    "stops": (
+        "Each declared stop rule evaluated on the events: its threshold, how many consecutive "
+        "low-scored records the run reached, whether it has stopped serving records, and how many "
+        "ranked records will not be screened because of it."
+    ),
+    "calibration": (
+        "The calibration draw: records drawn, records labelled by the researcher, whether the "
+        "protocol requires it, and whether each pass passed."
+    ),
+    "checks": (
+        "Calibration and audit draws against the researcher's labels. Per band of the pass's own "
+        "score: records drawn, labelled, compared with the pass's verdict, agreed, the agreement, "
+        "and what the labels would add. A draw is outdated when the protocol has changed since."
+    ),
+    "cannot_assess": (
+        "Full-text works where a pass could not assess the document and the researcher has not "
+        "yet resolved it. Such a work stays promoted until resolved; the list blocks nothing."
+    ),
+    "criteria": (
+        "Per exclusion criterion: the works excluded at title and abstract and at full text, with "
+        "how many of them are kept as background (an exclusion whose works are not simply "
+        "dropped). Counts come from the PRISMA flow; the statements are those of the current "
+        "protocol."
     ),
 }
 
@@ -408,6 +447,97 @@ def load_curve(project: Project, decisions: Sequence[Dec]) -> RankedCurve:
     )
 
 
+def criteria_table(project: Project) -> list[dict[str, Any]]:
+    """The exclusion criteria with their counts at each stage and those kept as background.
+
+    Rows are the protocol's exclusion criteria plus any criterion the flow counts that the
+    protocol no longer has; the counts are `prisma_flow`'s (`excluded`, `background`, and the
+    same at full text)."""
+    flow = prisma_flow(project)
+    ft = flow.full_text
+    protocol = current_protocol(project)
+    spec = {c.id: c for c in protocol.spec.criteria} if protocol is not None else {}
+    ids = sorted(
+        {c for c, x in spec.items() if x.id.startswith("EX")}
+        | set(flow.excluded)
+        | set(ft.excluded)
+    )
+    return [
+        {
+            "id": c,
+            "statement": spec[c].statement if c in spec else None,
+            "ta_excluded": flow.excluded.get(c, 0),
+            "ta_background": flow.background.get(c, 0),
+            "ft_excluded": ft.excluded.get(c, 0),
+            "ft_background": ft.background.get(c, 0),
+        }
+        for c in ids
+    ]
+
+
+def screening_panel(project: Project) -> dict[str, Any]:
+    """The Screening tab's tables, read from the services the old dashboard read: the latest
+    ranking, pass progress at both stages, stop rules, calibration, stale decisions, check draws,
+    the full-text cannot-assess works and the deviation count. Nothing is recomputed here."""
+    status = screening_status(project)
+    ranking = latest_ranking(project, top=0)
+    checks: list[dict[str, Any]] = []
+    for summary in check_list(project):
+        report = check_report(project, summary.draw_id, kind=summary.kind)
+        checks.append(
+            {
+                "draw_id": summary.draw_id,
+                "kind": summary.kind.value,
+                "name": summary.name,
+                "drawn": summary.drawn,
+                "labelled": summary.labelled,
+                "current": summary.current,
+                "agreement": None if report is None else report.agreement,
+                "agreement_note": None if report is None else report.agreement_note,
+                "bands": [] if report is None else [r.model_dump(mode="json") for r in report.rows],
+                "disagreements": 0 if report is None else len(report.disagreements),
+            }
+        )
+    protocol = current_protocol(project)
+    cannot = (
+        []
+        if protocol is None or protocol.spec.full_text_screening is None
+        else [
+            i.model_dump(mode="json")
+            for i in cannot_assess_queue(project, stage=ScreeningStage.FULL_TEXT)
+        ]
+    )
+    pass_a = status.passes.get(PassLabel.A.value)
+    return {
+        "ranking": None
+        if ranking is None
+        else {
+            "ranking_id": ranking.ranking_id,
+            "model_id": ranking.model_id,
+            "weights_hash": ranking.weights_hash,
+            "software": ranking.software,
+            "count": ranking.count,
+        },
+        "passes": {k: v.model_dump(mode="json") for k, v in status.passes.items()},
+        "full_text_passes": None
+        if status.full_text_passes is None
+        else {k: v.model_dump(mode="json") for k, v in status.full_text_passes.items()},
+        "records_left": None if pass_a is None else pass_a.remaining,
+        "stale_decisions": status.stale_decisions,
+        "stops": [s.model_dump(mode="json") for s in screening_stops(project)],
+        "calibration": {
+            "drawn": status.calibration.drawn,
+            "labelled": status.calibration.labelled,
+            "required": status.calibration.required,
+            "passed": dict(status.calibration.passed),
+        },
+        "checks": checks,
+        "cannot_assess": cannot,
+        "deviations": len(list_deviations(project)),
+        "criteria": criteria_table(project),
+    }
+
+
 def screening_payload(project: Project) -> dict[str, Any]:
     """The Screening tab's data, JSON-safe."""
     decisions = load_decisions(project)
@@ -419,4 +549,5 @@ def screening_payload(project: Project) -> dict[str, Any]:
         "ranked_curve": asdict(load_curve(project, decisions)),
         "two_screeners": [asdict(p) for p in two_screeners(decisions, exclusion_ids)],
         "reasons_wall": [asdict(g) for g in reasons_wall(decisions, criteria)],
+        "panel": screening_panel(project),
     }

@@ -1,6 +1,16 @@
 /* Research hub shared shell (ported from the round-2 demo). Served from /p/<slug>/ui/assets/shell.js.
    Page scripts call HUB.init(payload) once, then HUB.mount({page, crumb}). Nothing is read from
    globals at load time. Payload (services/hub_build.build_shell): {slug, generated, project, prisma, sets, works, cites (index pairs into works), dna_dims, glossary, labels}. */
+/* Acts (one helper for every researcher write; none runs in the static build, where HUB.served is false):
+     HUB.act(path, body)         POST JSON to `/p/<slug>/api...` (path as the route is named, e.g. '/api/queue/process')
+                                 with the project token (X-Factory-Token) and the page's origin. Resolves to the Response.
+     HUB.post(path, body)        the same, resolved to {ok, status, json, message}; `message` is the structured
+                                 issues of a refusal as text, or a network error. Never rejects.
+     HUB.issues(json)            'field message; ...' from a refusal body.
+     HUB.confirm(host, message, onYes, extra?)  inline Confirm / Cancel in `host` (no browser dialog); onYes(host) may
+                                 return a promise, a rejection is shown in host.
+     HUB.get(path)               GET under the same prefix.
+   Pattern: if (HUB.served) HUB.confirm(host, 'Do it?', () => HUB.post(path, body).then(r => { host.textContent = r.ok ? 'Done.' : 'Refused: ' + r.message; })). */
 (function(){
 let RF = null, P = {}, byId = new Map(), citesOut = new Map(), citesIn = new Map(), stats = {}, SETS_NOTE = '';
 const $ = (s, r=document) => r.querySelector(s);
@@ -80,10 +90,11 @@ function info(html, label='About this'){ const id='p'+(++popN); POPS.set(id, htm
 
 /* ---------- pages for the palette (the whole hub, grouped) ---------- */
 const PAGES = [
-  ['Overview','Overview','overview.html'],['Overview','Flow','flow.html'],
-  ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],
+  ['Frame','Protocol','protocol.html'],
+  ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
+  ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
-  ['Findings','Findings','findings.html'],['Living','Living review','living.html'],
+  ['Findings','Findings','findings.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
   ['Design','Brand kit','kit.html'],
 ];
 
@@ -100,6 +111,14 @@ const ICON = {
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
   landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
   living:'<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  protocol:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13l2 2 4-4"/>',
+  pipeline:'<circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h3M14 12h3"/>',
+  sources:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.300 8-3V6M4 12c0 1.700 3.600 3 8 3s8-1.300 8-3"/>',
+  method:'<path d="M4 20h16M6 20V9l6-5 6 5v11M10 20v-6h4v6"/>',
+  costs:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M15 9.500c-.5-1-1.500-1.500-3-1.500-1.700 0-3 .8-3 2s1.300 1.800 3 2 3 .800 3 2-1.300 2-3 2c-1.500 0-2.500-.5-3-1.500"/>',
+  write:'<path d="M5 19l1-4L17 4l3 3L9 18zM14 7l3 3"/>',
+  platform:'<rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/>',
+  projects:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   search:'<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
   theme:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
 };
@@ -111,14 +130,42 @@ function setTheme(t){ document.documentElement.dataset.theme = t; try{localStora
 try{ const t=localStorage.getItem('hub-r2-theme'); if(t) document.documentElement.dataset.theme=t; }catch(e){}
 const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.documentElement.dataset.theme=q0.get('theme');
 
+/* ---------- rail: one entry per line, in order; ['-'] is a divider, ['group', label] a small label ---------- */
+const RAIL = [
+  ['group','Frame'],
+  ['protocol','Protocol','protocol.html'],
+  ['-'],
+  ['overview','Overview','overview.html'],
+  ['pipeline','Pipeline','pipeline.html'],
+  ['flow','Flow','flow.html'],
+  ['-'],
+  ['corpus','Corpus','corpus.html'],
+  ['lenses','Lenses','lenses.html'],
+  ['explore','Explore','explore.html'],
+  ['graph','Graph','graph.html'],
+  ['landscape','Landscape','landscape.html'],
+  ['sources','Sources','sources.html'],
+  ['method','Method','method.html'],
+  ['-'],
+  ['miners','Miners','miners.html'],
+  ['data','Data','data.html'],
+  ['-'],
+  ['findings','Findings','findings.html'],
+  ['write','Write & export','write.html'],
+  ['-'],
+  ['living','Living','living.html'],
+  ['costs','Costs & runs','costs.html'],
+  ['platform','Platform','platform.html'],
+];
+
 /* ---------- mount ---------- */
 function mount(opts){
   const page = opts.page;
-  const nav = [['overview','Overview','overview.html'],['corpus','Corpus','corpus.html'],['flow','Flow','flow.html'],['lenses','Lenses','lenses.html'],['explore','Explore','explore.html'],['graph','Graph','graph.html'],['landscape','Landscape','landscape.html'],'-',['miners','Miners','miners.html'],['data','Data','data.html'],['findings','Findings','findings.html'],['living','Living','living.html']];
+  const nav = RAIL;
   document.body.innerHTML = `
   <div class="shell">
     <nav class="rail" aria-label="Hub">
-      ${nav.map(n=>n==='-'?'<span class="rail-sep" aria-hidden="true"></span>':`<a href="${n[2]}" ${n[0]===page?'aria-current="page"':''}>${svgI(n[0])}${n[1]}</a>`).join('')}
+      ${nav.map(n=>n[0]==='-'?'<span class="rail-sep" aria-hidden="true"></span>':n[0]==='group'?`<span class="rail-grp">${esc(n[1])}</span>`:`<a href="${n[2]}" ${n[0]===page?'aria-current="page"':''}>${svgI(n[0])}${esc(n[1])}</a>`).join('')}
       <a href="#" data-palette>${svgI('search')}All pages</a>
       <span class="spacer"></span>
       <a href="kit.html" ${page==='kit'?'aria-current="page"':''}>${svgI('kit')}Kit</a>
@@ -127,6 +174,7 @@ function mount(opts){
       <header class="topbar">
         <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
+        <span id="projSwitch" class="proj-sw" hidden></span>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${THEMES.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
@@ -139,6 +187,7 @@ function mount(opts){
   <div class="tip" id="tip" role="tooltip"></div>
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
+  if (HUB.served) projectSwitcher($('#projSwitch'));
   document.querySelectorAll('[data-palette]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openPalette();}));
   const tp=$('#themePick'); tp.value=document.documentElement.dataset.theme||'dark'; tp.onchange=()=>setTheme(tp.value);
   document.addEventListener('keydown', e=>{
@@ -357,11 +406,41 @@ HUB.load = function(names){
    static build has none of them, so every act stays off there. */
 const meta = n => { const m = document.querySelector('meta[name="' + n + '"]'); return m ? m.content : ''; };
 HUB.served = !!meta('factory-served');
-/* POST a researcher act to the server; resolves to the Response (the caller reads json or a zip). */
+/* POST a researcher act to the server; resolves to the Response (the caller reads json or a zip).
+   Always the project route with the project token (no hub token is on any page). The browser adds the
+   Origin header; the server refuses any origin but its own loopback address. */
 HUB.act = (path, body) => fetch(meta('factory-api') + path, {method: 'POST', body: JSON.stringify(body),
   headers: {'Content-Type': 'application/json', 'X-Factory-Token': meta('factory-token')}});
 HUB.get = path => fetch(meta('factory-api') + path);
-HUB.issues = j => ((j && j.issues) || []).map(i => i.field + ' ' + i.message).join('; ') || 'refused';
+/* The server's refusals are {issues: [{field, message|reason}]}; both spellings are read. */
+HUB.issues = j => ((j && j.issues) || []).map(i => i.field + ' ' + (i.message || i.reason || '')).join('; ') || 'refused';
+/* HUB.act resolved to {ok, status, json, message}; never rejects. */
+HUB.post = (path, body) => HUB.act(path, body)
+  .then(r => r.json().catch(() => null).then(json => ({ok: r.ok && !(json && json.ok === false), status: r.status, json,
+    message: r.ok ? '' : HUB.issues(json) === 'refused' && r.status === 403 ? 'not allowed (open the hub from this machine)' : HUB.issues(json)})))
+  .catch(e => ({ok: false, status: 0, json: null, message: 'request failed: ' + (e && e.message || e)}));
+
+/* ---------- project switcher (served only): the projects of /api/projects, and a "New project" link to the portal ---------- */
+function projectSwitcher(host){
+  host.hidden = false;
+  host.innerHTML = '<button type="button" class="btn" aria-haspopup="true" aria-expanded="false">' + svgI('projects').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"') + ' Projects</button><div class="proj-panel" hidden></div>';
+  const btn = host.querySelector('button'), panel = host.querySelector('.proj-panel');
+  const close = () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const here = (RF && RF.slug) || '';
+  const render = rows => {
+    panel.innerHTML = '<ul>' + rows.map(p => `<li><a href="/p/${encodeURIComponent(p.slug)}/ui/" ${p.slug===here?'aria-current="true"':''}>${esc(p.title||p.slug)}<span class="meta"> ${esc(p.slug)}</span></a></li>`).join('') + '</ul>' +
+      '<div class="proj-new"><a class="btn" href="/">New project</a></div>';
+  };
+  btn.onclick = () => {
+    if (!panel.hidden) return close();
+    panel.hidden = false; btn.setAttribute('aria-expanded', 'true');
+    panel.textContent = 'Loading…';
+    fetch('/api/projects').then(r => r.json()).then(j => render(j.projects || []))
+      .catch(() => { panel.textContent = 'The project list is not available.'; });
+  };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  document.addEventListener('click', e => { if (!host.contains(e.target)) close(); });
+}
 /* An inline confirmation inside `host` (no browser dialog): the message, then Confirm and Cancel. */
 HUB.confirm = (host, message, onYes, extra) => {
   host.innerHTML = '';
