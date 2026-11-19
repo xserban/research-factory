@@ -12,7 +12,7 @@ paragraph, and the papers no source proposed are swept. The platform sequences t
 the state; you are one role of one run. Nobody answers questions during the run: ask nothing, wait
 for nothing.
 
-Every run starts the same way: call `spar_role_next`. It serves your assignment from the run itself:
+Every run starts the same way: call `spar_role_next`. It serves your assignment, under `batch`, from the run itself:
 the request's `hypothesis`, `mode` and `selection` (`layers`, `include`, `exclude`), your `role`, the
 paper to read (`work_id`, readers only), the `sheet_id` once the searcher has opened it, the tier-1
 papers and the session budget. Pass no request id to any tool; the platform derives it. The writing

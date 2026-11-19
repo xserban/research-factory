@@ -489,6 +489,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:sheets balance": Permission.HUMAN_CONFIRM,
     "cli:chat request spar": Permission.HUMAN_CONFIRM,
     "cli:chat request ask": Permission.HUMAN_CONFIRM,
+    "cli:chat advance": Permission.WORK_RUN,
     "cli:interpretations supersede": Permission.HUMAN_CONFIRM,
     "cli:concepts define": Permission.HUMAN_CONFIRM,
     "cli:concepts source": Permission.HUMAN_CONFIRM,

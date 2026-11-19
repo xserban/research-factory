@@ -112,9 +112,11 @@ def _proposals(world: list[str]) -> list[C]:
     ]
 
 
-def _search(project: Project, world: list[str], request: str, run_id: str, n: int = 1) -> str:
+def _search(
+    project: Project, world: list[str], request: str, run_id: str, n: int = 1, mode: str = "prepare"
+) -> str:
     return sh.open_sheet(
-        project, _agent(n), "Reflection helps", SPEC, _proposals(world), mode="prepare",
+        project, _agent(n), "Reflection helps", SPEC, _proposals(world), mode=mode,  # type: ignore[arg-type]
         request_id=request, run_id=run_id,
     ).sheet_id  # fmt: skip
 
@@ -305,14 +307,15 @@ def test_the_writers_are_different_sessions_and_the_lead_guard_still_needs_a_bal
     assert problem is not None and "balance" in problem  # N4 guard: the researcher writes it
 
 
+@pytest.mark.parametrize("mode", ["prepare", "explore"])
 def test_the_for_writer_cannot_be_the_against_writer_session(
-    project: Project, v2_env: FakeLauncher, world: list[str]
+    project: Project, v2_env: FakeLauncher, world: list[str], mode: str
 ) -> None:
-    request = _request(project)
+    request = _request(project, mode=mode)
     w = sorted(world)
     run = sv.advance(project, request, launcher=v2_env)
     assert run is not None
-    sheet = _search(project, world, request, run)
+    sheet = _search(project, world, request, run, mode=mode)
     _end(v2_env, run)
     for i, work in enumerate((w[0], w[1])):
         run = _open_run(project)

@@ -402,7 +402,14 @@ def record_arguments(
             )
         )
         try:
-            check_sheet_run(project, run_id, row["request_id"], (stance,))
+            v2 = check_sheet_run(project, run_id, row["request_id"], (stance,))
+            if v2 and stance == "for" and _wrote_against(project, sheet_id, actor.session):
+                # a v2 case for is another session's whatever the mode: not only in prepare
+                issues.append(
+                    ValidationIssue(
+                        "session", "the case for is written by a session that wrote none against"
+                    )
+                )
         except FactoryValidationError as err:
             issues.extend(err.issues)
     selection = resolve_selection_cached(project, _spec_of(_loads(row["selection"])))

@@ -6487,14 +6487,14 @@ def build_server(
 
     @server.tool()
     def spar_role_next(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
-        """Serve the assignment of this headless role run of the agentic spar (v2): the request's
-        `hypothesis`, `mode` and `selection`, your `role` (search, read, against, for, critic or
-        cover), the paper to read (`work_id`, readers only), the `sheet_id` once the searcher has
-        opened it, the tier-1 papers (`tier1`), the papers no source proposed (`unproposed`, cover
-        only) and the session budget. The platform derives the request from the run: pass no
-        request id to any tool. One unit per run: a second call is refused with `cap-reached`.
-        Refused (field `run`) to a session that is not an open role run. Refused to a session that
-        has joined a pass."""
+        """Serve the assignment of this headless role run of the agentic spar (v2), under
+        `batch`: the request's `hypothesis`, `mode` and `selection`, your `role` (search,
+        read, against, for, critic or cover), the paper to read (`work_id`, readers only),
+        the `sheet_id` once the searcher has opened it, the tier-1 papers (`tier1`), the
+        papers no source proposed (`unproposed`, cover only) and the session budget. The
+        platform derives the request from the run: pass no request id to any tool. One unit
+        per run: a second call is refused with `cap-reached`. Refused (field `run`) to a
+        session that is not an open role run. Refused to a session that has joined a pass."""
 
         def serve() -> JsonValue:
             with unit_cap.serving() as done:
@@ -6502,7 +6502,7 @@ def build_server(
                 _refuse_pass_session(opened)
                 actor = make_agent_actor(settings, session, role, model, skill)
                 task = spar_v2_service.serve_task(opened, actor, unit_cap.run_id)
-                served: dict[str, JsonValue] = {"task": _plain(asdict(task))}
+                served: dict[str, JsonValue] = {"batch": _plain(asdict(task))}
                 done(served)
             return _withheld(opened, served, include_work_ids=False)
 

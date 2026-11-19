@@ -211,10 +211,11 @@ def _bound(
 
 def check_sheet_run(
     project: Project, run_id: str | None, request_id: str | None, roles: tuple[str, ...]
-) -> None:
+) -> bool:
     """Refuse (field `run`) a sheet write that does not match the run. A sheet of a v2 request is
     written only by the open run of one of `roles` bound to that request; any other sheet is not
-    written by a v2 role run. The caller has synced the index."""
+    written by a v2 role run. Returns whether the sheet is a v2 request's. The caller has synced
+    the index."""
     v2 = False
     if request_id is not None:
         with project.index.connect() as conn:
@@ -230,6 +231,7 @@ def check_sheet_run(
             )
     elif bound is not None:
         raise _issue("run", "a v2 role session writes only the sheet of its own request")
+    return v2
 
 
 def role_started_event(project: Project, request_id: str, run_id: str, slot: Slot) -> Any:
