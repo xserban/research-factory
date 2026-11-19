@@ -480,7 +480,31 @@ function tabReplay(p) {
   p.querySelectorAll('#lg [data-f]').forEach(b => b.onclick = () => { hl = hl === +b.dataset.f ? -1 : +b.dataset.f; p.querySelectorAll('#lg [data-f]').forEach(x => x.setAttribute('aria-pressed', +x.dataset.f === hl)); draw(); });
   size(); draw(); setPlay(false);
   const rs = () => { size(); draw(); }; addEventListener('resize', rs);
-  cleanup = () => { playing = false; cancelAnimationFrame(raf); removeEventListener('resize', rs); };
+  const stopLayers = layerReplay(p.querySelector('.fpane'), reduce);
+  cleanup = () => { playing = false; cancelAnimationFrame(raf); removeEventListener('resize', rs); stopLayers(); };
+}
+/* The researcher's layer moves, one step per day, as bars per layer. Returns a stop function. */
+function layerReplay(root, reduce) {
+  const LR = d.flow.layer_replay; if (!LR) return () => {};
+  const names = [...LR.layers, 'unlayered'], steps = LR.steps || [], nS = steps.length;
+  const sec = document.createElement('section');
+  sec.innerHTML = `${H.header({ title: 'Layer moves', sub: 'How the researcher’s moves changed the layers, day by day.', infoHtml: infoPanel('How the researcher’s moves changed which layer each paper sits in.', 'The first position is every paper on the layer the layer miner gave it. Each later step is one day of moves; the bars show how many papers sit on each layer after it.', esc(LR.methods)) })}
+   ${nS ? `<div class="card" style="padding:14px;margin-top:12px"><div class="lyb" id="lyb"></div>
+   <div class="ctl"><button class="btn primary" id="lyPlay" ${reduce ? 'disabled title="Animation is off because your system prefers reduced motion"' : ''}>Play</button><span class="when" id="lyWhen"></span><span class="meta" id="lyMv"></span></div>
+   <input type="range" id="lySl" min="0" max="${nS}" step="1" value="${nS}" aria-label="Day of layer moves" style="width:100%;accent-color:var(--acc)"></div>` : '<div class="empty">No layer moves have been recorded; every paper is on the layer the layer miner gave it.</div>'}`;
+  root.appendChild(sec); if (!nS) return () => {};
+  const state = k => { const a = LR.start.slice(); for (let i = 0; i < k; i++) steps[i].mv.forEach(([w, l]) => { a[w] = l; }); return a; };
+  const tok = n => (H.LAYERS.find(l => l[0] === n) || [, , '--l-unlayered'])[2];
+  let k = nS, tm = 0;
+  const draw = () => { const a = state(k), c = names.map(() => 0); a.forEach(l => { c[l < 0 ? names.length - 1 : l]++; }); const mx = Math.max(1, ...c);
+    sec.querySelector('#lyb').innerHTML = names.map((n, i) => `<span>${esc(H.layerLabel(n))}</span><span class="tr"><i style="width:${100 * c[i] / mx}%;background:var(${tok(n)})"></i></span><span class="v">${fmt(c[i])}</span>`).join('');
+    sec.querySelector('#lyWhen').textContent = k === 0 ? 'Layer miner’s reading' : steps[k - 1].d;
+    sec.querySelector('#lyMv').textContent = k === 0 ? '' : `${fmt(steps[k - 1].mv.length)} papers moved that day`; sec.querySelector('#lySl').value = k; sec.querySelector('#lyPlay').textContent = tm ? 'Pause' : 'Play'; };
+  const stop = () => { clearInterval(tm); tm = 0; };
+  sec.querySelector('#lySl').oninput = e => { stop(); k = +e.target.value; draw(); };
+  sec.querySelector('#lyPlay').onclick = () => { if (tm) { stop(); draw(); return; } if (k >= nS) k = 0; tm = setInterval(() => { k++; if (k >= nS) stop(); draw(); }, 600); draw(); };
+  draw();
+  return stop;
 }
 
 /* ================= tab 4: paths (swimlanes) ================= */
@@ -506,6 +530,12 @@ function diverge(lanes) {
     have.forEach(l => { if (l.outs[s] !== top[0] && l.div == null) l.div = s; }); }
 }
 const outTok = o => /exclu|not |fail|merged|pending/i.test(o || '') ? '--exc' : /includ|kept|read|retriev|convert|found/i.test(o || '') ? '--inc' : '--mut';
+function recMeta(id) {
+  const r = RI.get(id); if (!r) return '';
+  const abs = R.filter(x => x.duplicate_of === id).map(x => x.id);
+  const part = (k, v) => v ? `<span class="meta">${k} ${v}</span>` : '';
+  return `<div class="rm">${part('Year', esc(r.year || ''))}${part('Source group', esc(r.source))}${part('Sources', esc((r.sources || []).join(', ')))}${part('Step reached', esc(r.step + ', ' + r.outcome + (r.reason ? ' (' + r.reason + ')' : '')))}${r.duplicate_of ? part('Duplicate of', recLink(r.duplicate_of)) : ''}</div>${idList(abs, 'Duplicates merged into it')}`;
+}
 function tabPaths(p) {
   const RP = d.journeys.replay, ids = S.lanes.slice(0, 20), lanes = ids.map(laneOf), real = lanes.filter(l => !l.none); diverge(real);
   p.innerHTML = `<div class="fpane"><section>${H.header({ title: ids.length === 1 && real[0] ? 'Path of one paper' : 'Paths', sub: 'One lane per paper on a shared time axis.', infoHtml: infoPanel('The route each chosen paper took through the review, and where the routes parted.', 'Time runs left to right on one axis for every paper. Each dot is a stop: hover or focus it for the stage, who acted, the outcome and the evidence. A ring marks where a path first differs from what most of the papers did at that stage. Open the list under a lane for every stop with the time spent between them.', esc(d.journeys.methods.swimlanes)) })}
@@ -529,7 +559,7 @@ function tabPaths(p) {
   const rowY = si => 14 + rows.indexOf(si) * RH, Hl = rows.length * RH + 22, rowName = si => si === FINAL ? 'Final outcome' : stgL(RP.stages[si]);
   const axis = `<svg viewBox="0 0 ${Wd} 24" aria-hidden="true">${ticks.map(t => `<text class="axis" x="${X(t)}" y="16" text-anchor="middle">${dayFmt(t)}</text>`).join('')}</svg>`;
   $('#lanes').innerHTML = axis + lanes.map((l, li) => {
-    if (l.none) return `<div class="lane"><div class="lh"><b>${esc(titleOf(l.id))}</b></div><div class="empty">This paper’s path is available in the live hub; this copy carries paths for the records of the review only.</div></div>`;
+    if (l.none) return `<div class="lane"><div class="lh"><b>${esc(titleOf(l.id))}</b></div>${recMeta(l.id)}<div class="empty">This paper’s path is available in the live hub; this copy carries paths for the records of the review only.</div></div>`;
     const pts = [...l.stops, l.fin];
     const svg = `<svg viewBox="0 0 ${Wd} ${Hl}" role="img" aria-label="Path of ${esc(l.title)}">${ticks.map(t => `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="0" y2="${Hl}"/>`).join('')}
      ${rows.map(si => `<line class="rl" x1="${gx}" x2="${Wd - 24}" y1="${rowY(si)}" y2="${rowY(si)}"/><text class="rowl" x="0" y="${rowY(si) + 3}">${esc(rowName(si))}</text>`).join('')}
@@ -539,7 +569,7 @@ function tabPaths(p) {
        return `${s.si === l.div ? `<circle class="ring" cx="${x}" cy="${y}" r="9"/>` : ''}${s.final ? `<rect class="pt" tabindex="0" data-l="${li}" data-k="${k}" x="${x - 5}" y="${y - 5}" width="10" height="10" rx="2" fill="var(${tok})"/>` : `<circle class="pt" tabindex="0" data-l="${li}" data-k="${k}" cx="${x}" cy="${y}" r="5" fill="var(${tok})"/>`}`; }).join('')}</svg>`;
     const dur = (s, k) => k ? durFmt(Math.max(0, s.t - pts[k - 1].t)) : '';
     const tbl = `<table class="t"><thead><tr><th>When</th><th>Stage</th><th>Who</th><th>Outcome</th><th>Criterion</th><th class="r">After</th><th>Reason</th><th>Quote</th></tr></thead><tbody>${pts.map((s, k) => `<tr><td>${esc(stampFmt(s.t))}</td><td>${esc(rowName(s.si))}</td><td>${s.kind ? esc(s.kind) + (s.model ? ' · ' + esc(s.model) : '') : '<span class="meta">—</span>'}</td><td>${esc(s.outcome === 'reached' ? '' : s.outcome)}</td><td>${esc(s.criterion || '')}</td><td class="r">${dur(s, k)}</td><td>${esc(s.text || '')}</td><td>${esc(s.quote || '')}</td></tr>`).join('')}</tbody></table>`;
-    return `<div class="lane"><div class="lh">${H.byId.has(l.id) ? `<a href="#" data-open="${esc(l.id)}">${esc(l.title)}</a>` : `<b>${esc(l.title)}</b>`}<span class="meta">${esc(FATE[l.fate] || l.fate)}${l.crit ? ' · ' + esc(l.crit) : ''}${l.div != null ? ` · parts from the others at ${esc(rowName(l.div).toLowerCase())}` : ''}</span></div>${svg}
+    return `<div class="lane"><div class="lh">${H.byId.has(l.id) ? `<a href="#" data-open="${esc(l.id)}">${esc(l.title)}</a>` : `<b>${esc(l.title)}</b>`}<span class="meta">${esc(FATE[l.fate] || l.fate)}${l.crit ? ' · ' + esc(l.crit) : ''}${l.div != null ? ` · parts from the others at ${esc(rowName(l.div).toLowerCase())}` : ''}</span></div>${recMeta(l.id)}${svg}
       <details ${real.length === 1 ? 'open' : ''}><summary>All stops</summary>${l.detail ? '' : '<p class="meta">Here the stops carry stage and time. Who acted, the outcome and the quote are in the live hub.</p>'}<div class="scroll">${tbl}</div></details></div>`; }).join('');
   const root = $('#lanes'); wireOpen(root);
   root.querySelectorAll('.pt').forEach(el => { const l = lanes[+el.dataset.l], s = [...l.stops, l.fin][+el.dataset.k];
