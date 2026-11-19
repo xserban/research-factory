@@ -97,6 +97,7 @@ from factory.modules.contract import Autonomy, PolicyKind
 from factory.regions.rules import MemberType, RuleSet
 from factory.services import agent_view as agent_view_service
 from factory.services import agreement as agreement_service
+from factory.services import answers as answers_service
 from factory.services import appraisal_judgements as appraisal_service
 from factory.services import appraisal_passes as appraisal_passes_service
 from factory.services import audit as audit_service
@@ -6331,6 +6332,89 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             view = sheets_service.view_sheet(opened, sheet_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, viewing, include_work_ids=False)
+
+    @server.tool()
+    def answer_record(
+        project: str,
+        question: str,
+        selection_digest: str,
+        sentences: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        unanswered: str | None = None,
+        parent: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record an answer (Ask), all or none. `selection_digest` is the digest of the selection
+        you worked on (`selection_resolve`); a selection that changed since refuses the call.
+        Each sentence is `{text, work_id, anchor, quote}` (text at most 600 characters); every
+        sentence needs a quote the work's pinned conversion contains in that anchor; an unverified
+        quote or a work outside the selection refuses the whole call with located issues
+        (`sentences[2].quote`). There is no unsupported sentence: say what the papers do not
+        answer in `unanswered`. `parent` names an earlier answer or sheet this follows up. The
+        reply shows each sentence with its full paragraph. The rating is the researcher's, made in
+        the CLI. Writes one event; invalid input writes nothing. Refused to a session that has
+        joined a pass."""
+
+        def recording() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                answers_service.SentenceInput(
+                    fields["text"], fields["work_id"], fields["anchor"], fields["quote"]
+                )
+                for fields in _chat_items(
+                    sentences, "sentences", ("text", "work_id", "anchor", "quote"), ()
+                )
+            ]
+            payload = answers_service.record_answer(
+                opened,
+                actor,
+                question,
+                _selection_spec(layers, include, exclude),
+                selection_digest,
+                parsed,
+                unanswered=unanswered,
+                parent=parent,
+            )
+            view = answers_service.view_answer(opened, payload.answer_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, recording, include_work_ids=False)
+
+    @server.tool()
+    def answer_list(project: str) -> dict[str, JsonValue]:
+        """The answers of the project with their question, parent and sentence count. Read-only.
+        Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            data: dict[str, JsonValue] = {
+                "answers": _plain([asdict(i) for i in answers_service.list_answers(opened)])
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def answer_view(project: str, answer_id: str) -> dict[str, JsonValue]:
+        """One answer: the question, each sentence with its verified quote and the full paragraph
+        it rests on, what is unanswered, the researcher's ratings and the computed counts.
+        Read-only. Ratings are the researcher's, made in the CLI. Refused to a session that has
+        joined a pass."""
+
+        def viewing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = answers_service.view_answer(opened, answer_id)
             return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
 
         return _reply(project, viewing, include_work_ids=False)

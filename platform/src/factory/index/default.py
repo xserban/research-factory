@@ -1,6 +1,7 @@
 from sqlalchemy import MetaData
 
 from factory.events.blobs import BlobStore
+from factory.index.answers import answer_handlers, answer_tables
 from factory.index.appraisal import appraisal_handlers, appraisal_tables
 from factory.index.briefings import briefing_handlers, briefing_tables
 from factory.index.budgets import (
@@ -71,7 +72,7 @@ from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "88"
+PROJECTION_VERSION = "89"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -142,6 +143,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     ledger = ledger_tables(metadata)
     budgets = budget_tables(metadata)
     sheets = sheet_tables(metadata)
+    answers = answer_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
@@ -200,6 +202,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **ledger_handlers(ledger, members),
         **budget_handlers(budgets, members),
         **sheet_handlers(sheets),
+        **answer_handlers(answers),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)
