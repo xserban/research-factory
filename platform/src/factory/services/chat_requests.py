@@ -10,10 +10,15 @@ Invariants:
   takes, and only a session that is an open run of stage `spar` or `ask` (`FACTORY_RUN_ID`), a
   request of the run's own kind; a session with no such run is refused and serves nothing. A
   refusal writes nothing.
-- State is derived, never stored: `done` when a result names the request (a sheet that opened with
-  it, an answer that recorded it, or, for a follow-up, a sheet whose case for closed with it);
-  else `open` when no run took it; else `taken` while that run is open, and `failed` once it has
-  ended with no result. A failed request is not served again; the researcher asks again.
+- A result names a request only when the request is taken by the result's own session and the
+  taking run is still open (`check_result_request`); a sheet opens only for a request of its mode
+  with no parent (a follow-up writes into its parent sheet). One run takes one request.
+- State is derived, never stored: `done` when a complete result names the request (an Explore sheet
+  whose case for is closed, a Prepare sheet whose case against is closed, an answer that recorded
+  it, or, for a follow-up, a sheet whose case for closed with it); else `open` when no run took
+  it; else `taken` while that run is open, and `failed` once it has ended without a complete
+  result (`result` still lists a sheet left incomplete). A failed request is not served again;
+  the researcher asks again.
 - `chat_request_next` serves the oldest open request of the run's kind, once: the taking is one
   event written under the index lock, so two runs never take the same request.
 - Prepare, two sessions: a Prepare spar run writes only the case against of a new sheet and
@@ -27,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, get_args
 
 from sqlalchemy import text
@@ -67,6 +72,14 @@ SELECT r.*,
     (SELECT a.answer_id FROM answers a WHERE a.request_id = r.request_id
        ORDER BY a.event_id LIMIT 1)
   ) AS result,
+  (
+    EXISTS (SELECT 1 FROM sheets s
+              WHERE s.for_request_id = r.request_id
+                 OR (s.request_id = r.request_id
+                     AND ((s.mode = 'explore' AND s.for_closed)
+                          OR (s.mode = 'prepare' AND s.against_closed))))
+    OR EXISTS (SELECT 1 FROM answers a WHERE a.request_id = r.request_id)
+  ) AS complete,
   (SELECT x.outcome FROM runner_runs x WHERE x.run_id = r.taken_run) AS run_outcome
 FROM chat_requests r
 """
@@ -84,7 +97,8 @@ class ChatRequestInfo:
     state: str
     """`open`, `taken`, `done` or `failed` (derived)."""
     result: str | None
-    """The sheet or answer id that answers the request, when done."""
+    """The first sheet or answer id that names the request. The request is `done` only when that
+    result is complete for it (see the module docstring); a sheet still open is listed here."""
     taken_run: str | None
     actor: str
     ts: str
@@ -96,7 +110,7 @@ def _issue(field_name: str, message: str) -> FactoryValidationError:
 
 
 def _info(row: Any) -> ChatRequestInfo:
-    if row["result"] is not None:
+    if row["complete"]:
         state = "done"
     elif row["taken_run"] is None:
         state = "open"
@@ -130,6 +144,37 @@ def _parent_exists(project: Project, parent: str) -> bool:
             conn.execute(text(f"SELECT 1 FROM {table} WHERE {column} = :p"), {"p": parent}).first()
             is not None
         )
+
+
+def _parent_issues(
+    project: Project, kind: str, mode: str | None, parent: str
+) -> list[ValidationIssue]:
+    """Why `parent` is no parent for a new request (empty when it is one). A Prepare spar with a
+    sheet parent is the case for: the parent is a Prepare sheet with against closed and for not
+    closed, and no other follow-up of it is open or taken."""
+    if re.fullmatch(PARENT_RE, parent) is None or not _parent_exists(project, parent):
+        return [ValidationIssue("parent", f"{parent}: no such answer or sheet")]
+    if kind != "spar" or mode != "prepare" or not parent.startswith("sht_"):
+        return []
+    with project.index.connect() as conn:
+        sheet = conn.execute(
+            text("SELECT mode, against_closed, for_closed FROM sheets WHERE sheet_id = :s"),
+            {"s": parent},
+        ).first()
+    if sheet is None or sheet[0] != "prepare" or not sheet[1] or sheet[2]:
+        return [
+            ValidationIssue(
+                "parent", f"{parent}: the case for follows a Prepare sheet with against closed"
+            )
+        ]
+    pending = [
+        r.request_id
+        for r in _select(project, "WHERE r.parent = :p", {"p": parent})
+        if r.state in ("open", "taken")
+    ]
+    if pending:
+        return [ValidationIssue("parent", f"{parent}: already has the open request {pending[0]}")]
+    return []
 
 
 def request_chat(
@@ -180,10 +225,8 @@ def request_chat(
     if note is not None and len(note) > NOTE_MAX:
         issues.append(ValidationIssue("note", f"a note has at most {NOTE_MAX} characters"))
     project.index.sync()
-    if parent is not None and (
-        re.fullmatch(PARENT_RE, parent) is None or not _parent_exists(project, parent)
-    ):
-        issues.append(ValidationIssue("parent", f"{parent}: no such answer or sheet"))
+    if parent is not None:
+        issues.extend(_parent_issues(project, kind, mode, parent))
     if issues:
         raise FactoryValidationError(issues)
     payload = ChatRequested(
@@ -198,8 +241,10 @@ def request_chat(
     )
     with project.index.exclusive():
         project.index.sync()
-        if parent is not None and not _parent_exists(project, parent):
-            raise _issue("parent", f"{parent}: no such answer or sheet")
+        if parent is not None:
+            found = _parent_issues(project, kind, mode, parent)
+            if found:
+                raise FactoryValidationError(found)
         project.record(
             [project.events.make("chat.requested", payload, actor, refs=(payload.request_id,))]
         )
@@ -207,26 +252,52 @@ def request_chat(
 
 
 def check_result_request(
-    project: Project, request_id: str | None, kind: ChatKind, *, parent: str | None = None
+    project: Project,
+    actor: Actor,
+    request_id: str | None,
+    kind: ChatKind,
+    *,
+    parent: str | None = None,
+    opens_mode: str | None = None,
 ) -> None:
     """Refuse (field `request_id`) a result that names no request of the project, a request of
-    another kind or, when `parent` is given, a request whose parent is not that. None passes.
-    Read-only; the caller has synced the index."""
+    another kind, a request that this session did not take or whose taking run is no longer open,
+    and, when `parent` is given, a request whose parent is not that. `opens_mode` is set when the
+    result is a new sheet: the request's mode must be it and the request must have no parent (a
+    follow-up writes into its parent sheet). None passes. Read-only; the caller has synced the
+    index."""
     if request_id is None:
         return
     if re.fullmatch(REQUEST_ID_RE, request_id) is None:
         raise _issue("request_id", f"{request_id}: not a chat request id")
     with project.index.connect() as conn:
         row = conn.execute(
-            text("SELECT kind, parent FROM chat_requests WHERE request_id = :r"),
+            text(
+                "SELECT r.kind, r.parent, r.mode, r.taken_run, r.taken_session, x.outcome,"
+                " x.run_id FROM chat_requests r"
+                " LEFT JOIN runner_runs x ON x.run_id = r.taken_run WHERE r.request_id = :r"
+            ),
             {"r": request_id},
         ).first()
     if row is None:
         raise _issue("request_id", f"{request_id}: no such chat request")
     if str(row[0]) != kind:
         raise _issue("request_id", f"{request_id}: is a request to {row[0]}, not to {kind}")
+    if row[3] is None:
+        raise _issue("request_id", f"{request_id}: not taken; take it with chat_request_next")
+    if row[4] != actor.session:
+        raise _issue("request_id", f"{request_id}: taken by another session")
+    if row[6] is None or row[5] is not None:
+        raise _issue("request_id", f"{request_id}: the run that took it is no longer open")
     if parent is not None and row[1] != parent:
         raise _issue("request_id", f"{request_id}: does not follow up {parent}")
+    if opens_mode is not None:
+        if row[1] is not None:
+            raise _issue(
+                "request_id", f"{request_id}: a follow-up writes into its parent sheet {row[1]}"
+            )
+        if row[2] != opens_mode:
+            raise _issue("request_id", f"{request_id}: asks for mode {row[2]}, not {opens_mode}")
 
 
 def _select(project: Project, where: str, params: dict[str, Any]) -> list[ChatRequestInfo]:
@@ -281,6 +352,12 @@ def take_next(project: Project, actor: Actor, run_id: str | None) -> ChatRequest
                 "this session is not one",
             )
         kind = str(row[0])
+        with project.index.connect() as conn:
+            already = conn.execute(
+                text("SELECT request_id FROM chat_requests WHERE taken_run = :r"), {"r": run_id}
+            ).first()
+        if already is not None:
+            raise _issue("run", f"this run took {already[0]} already: one run, one request")
         open_requests = [r for r in list_requests(project, kind=kind, state="open")]
         if not open_requests:
             return None
@@ -299,4 +376,4 @@ def take_next(project: Project, actor: Actor, run_id: str | None) -> ChatRequest
                 )
             ]
         )
-    return view_request(project, chosen.request_id)
+    return replace(chosen, state="taken", taken_run=str(run_id))

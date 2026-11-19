@@ -147,8 +147,10 @@ def test_next_serves_oldest_of_the_runs_kind_and_marks_it_taken(
     assert cr.view_request(project, first).taken_run == run_id
     assert cr.view_request(project, spar).state == "open"
     assert cr.open_count(project, "ask") == 1  # `second` waits; `first` is taken
-    again = cr.take_next(project, agent, run_id)
-    assert again is not None and again.request_id == second  # the cap, not this module, stops a run
+    with pytest.raises(FactoryValidationError) as err:  # one run, one request, here and not only
+        cr.take_next(project, agent, run_id)  # in the in-process unit cap
+    assert err.value.issues[0].field == "run"
+    assert cr.view_request(project, second).state == "open"
     _release(launcher, run_id)
 
 
@@ -174,10 +176,14 @@ def test_next_refuses_a_session_that_is_not_an_open_chat_run(
 def test_next_with_nothing_open_serves_nothing(
     project: Project, agent: Actor, human: Actor
 ) -> None:
-    _spar(project, human)
-    _ask(project, human)
-    run_id, launcher = _run(project, "ask")
-    assert cr.take_next(project, agent, run_id) is not None
+    second = _ask(project, human)
+    old_run, old_launcher = _run(project, "ask")
+    _release(old_launcher, old_run)  # it took nothing
+    run_id, launcher = _run(project, "ask")  # one ask is open, so the run starts
+    blob = project.blobs.put_json({"hand": True})
+    taken = ChatRequestTaken(request_id=second, run_id=old_run)  # taken meanwhile, elsewhere
+    with project.index.exclusive():
+        project.record([project.events.make("chat.request_taken", taken, agent, input_blob=blob)])
     assert cr.take_next(project, agent, run_id) is None
     _release(launcher, run_id)
 
@@ -236,6 +242,9 @@ def test_sheet_opened_with_request_id_marks_it_done(
         project, agent, "Reflection helps", SPEC, [C(work, "claims", "against", ANCHOR, QUOTE)],
         request_id=request,
     )  # fmt: skip
+    assert cr.view_request(project, request).state == "taken"  # opened, not complete
+    sh.close_section(project, agent, sheet.sheet_id, "against")
+    sh.close_section(project, agent, sheet.sheet_id, "for")
     _release(launcher, run_id)
     view = cr.view_request(project, request)
     assert view.state == "done" and view.result == sheet.sheet_id
@@ -296,6 +305,8 @@ def test_a_request_is_done_once_the_first_result_links(
     project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:
     request = _ask(project, human)
+    run_id, launcher = _run(project, "ask")
+    cr.take_next(project, agent, run_id)
     work = sorted(world)[0]
     digest = resolve_selection_cached(project, SPEC).digest
     first = an.record_answer(
@@ -307,6 +318,7 @@ def test_a_request_is_done_once_the_first_result_links(
         request_id=request,
     )  # fmt: skip
     assert cr.view_request(project, request).result == first.answer_id
+    _release(launcher, run_id)
 
 
 def test_old_events_without_request_id_stay_valid(project: Project, agent: Actor) -> None:
@@ -339,3 +351,124 @@ def test_taken_events_by_a_human_or_for_a_taken_request_fold_nothing(
 def test_state_is_never_stored_in_a_file(project: Project, human: Actor, tmp_path: Path) -> None:
     _ask(project, human)
     assert not list(project.paths.dir.glob("**/chat_requests*"))
+
+
+S3 = "01HZZZZZZZZZZZZZZZZZZZZZZZ"
+
+
+def _prop(world: list[str]) -> list[C]:
+    return [C(sorted(world)[0], "claims", "against", ANCHOR, QUOTE)]
+
+
+def test_result_needs_a_taken_request_of_this_session_and_an_open_run(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, world: list[str]
+) -> None:
+    request = _spar(project, human)
+    with pytest.raises(FactoryValidationError) as err:  # never taken
+        sh.open_sheet(project, agent, "h", SPEC, _prop(world), request_id=request)
+    assert err.value.issues[0].field == "request_id"
+    run_id, launcher = _run(project, "spar")
+    cr.take_next(project, agent, run_id)
+    with pytest.raises(FactoryValidationError) as err:  # taken by another session
+        sh.open_sheet(project, agent_other, "h", SPEC, _prop(world), request_id=request)
+    assert err.value.issues[0].field == "request_id"
+    assert _events(project, "sheet.opened") == 0
+    sh.open_sheet(project, agent, "h", SPEC, _prop(world), request_id=request)
+    _release(launcher, run_id)
+    ask = _ask(project, human)
+    digest = resolve_selection_cached(project, SPEC).digest
+    sentences = [an.SentenceInput("t", sorted(world)[0], ANCHOR, QUOTE)]
+    with pytest.raises(FactoryValidationError) as err:
+        an.record_answer(project, agent, "q", SPEC, digest, sentences, request_id=ask)
+    assert err.value.issues[0].field == "request_id"
+    run2, launcher2 = _run(project, "ask")
+    cr.take_next(project, agent, run2)
+    _release(launcher2, run2)  # the run has ended
+    with pytest.raises(FactoryValidationError) as err:
+        an.record_answer(project, agent, "q", SPEC, digest, sentences, request_id=ask)
+    assert err.value.issues[0].field == "request_id"
+
+
+def test_a_sheet_that_is_not_complete_is_not_the_result(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    request = _spar(project, human)
+    run_id, launcher = _run(project, "spar")
+    cr.take_next(project, agent, run_id)
+    sheet = sh.open_sheet(project, agent, "h", SPEC, _prop(world), request_id=request).sheet_id
+    info = cr.view_request(project, request)
+    assert info.state == "taken" and info.result == sheet
+    for p in launcher.processes:
+        p.code = 1
+    launcher.code = 1
+    _release(launcher, run_id)
+    info = cr.view_request(project, request)
+    assert info.state == "failed" and info.result == sheet
+
+
+def test_prepare_against_is_complete_when_against_is_closed(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    request = _spar(project, human, mode="prepare")
+    run_id, launcher = _run(project, "spar")
+    cr.take_next(project, agent, run_id)
+    sheet = sh.open_sheet(
+        project, agent, "h", SPEC, _prop(world), mode="prepare", request_id=request
+    ).sheet_id
+    assert cr.view_request(project, request).state == "taken"
+    sh.close_section(project, agent, sheet, "against")
+    assert cr.view_request(project, request).state == "done"
+    _release(launcher, run_id)
+
+
+def test_sheet_mode_must_match_and_a_follow_up_opens_no_sheet(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, world: list[str]
+) -> None:
+    request = _spar(project, human, mode="prepare")
+    run_id, launcher = _run(project, "spar")
+    cr.take_next(project, agent, run_id)
+    with pytest.raises(FactoryValidationError) as err:
+        sh.open_sheet(project, agent, "h", SPEC, _prop(world), mode="explore", request_id=request)
+    assert err.value.issues[0].field == "request_id"
+    sheet = sh.open_sheet(
+        project, agent, "h", SPEC, _prop(world), mode="prepare", request_id=request
+    ).sheet_id
+    sh.close_section(project, agent, sheet, "against")
+    _release(launcher, run_id)
+    follow = _spar(project, human, mode="prepare", parent=sheet)
+    run2, launcher2 = _run(project, "spar")
+    cr.take_next(project, agent_other, run2)
+    with pytest.raises(FactoryValidationError) as err:
+        sh.open_sheet(
+            project, agent_other, "h", SPEC, _prop(world), mode="prepare", request_id=follow
+        )
+    assert err.value.issues[0].field == "request_id"
+    _release(launcher2, run2)
+
+
+def test_prepare_follow_up_needs_a_prepare_parent_with_against_closed_for_open(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    explore = sh.open_sheet(project, agent, "h", SPEC, _prop(world)).sheet_id
+    prep = sh.open_sheet(project, agent, "h", SPEC, _prop(world), mode="prepare").sheet_id
+    before = _events(project)
+    for parent in (explore, prep):  # explore sheet; prepare sheet with against still open
+        with pytest.raises(FactoryValidationError) as err:
+            _spar(project, human, mode="prepare", parent=parent)
+        assert err.value.issues[0].field == "parent"
+    sh.close_section(project, agent, prep, "against")
+    first = _spar(project, human, mode="prepare", parent=prep)
+    with pytest.raises(FactoryValidationError) as err:  # a second follow-up for the same parent
+        _spar(project, human, mode="prepare", parent=prep)
+    assert err.value.issues[0].field == "parent"
+    assert cr.view_request(project, first).state == "open"
+    assert _events(project) == before + 1 + 1  # the closing and the one request
+
+
+def test_a_chat_run_is_not_resumed(project: Project, human: Actor) -> None:
+    _spar(project, human)
+    run_id, launcher = _run(project, "spar")
+    _release(launcher, run_id)
+    with pytest.raises(Exception) as err:
+        runner.start_run(project, "spar", launcher=FakeLauncher(), resumes=run_id)
+    assert "order it again" in str(err.value)

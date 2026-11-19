@@ -254,7 +254,7 @@ def open_sheet(
     if supersedes is not None and _sheet_row(project, supersedes) is None:
         issues.append(ValidationIssue("supersedes", f"{supersedes}: no such sheet"))
     try:
-        check_result_request(project, request_id, "spar")
+        check_result_request(project, actor, request_id, "spar", opens_mode=mode)
     except FactoryValidationError as err:
         issues.extend(err.issues)
     if issues:
@@ -569,7 +569,7 @@ def close_section(
     if request_id is not None and section != "for":
         raise _issue("request_id", "only the section for answers a follow-up request")
     project.index.sync()
-    check_result_request(project, request_id, "spar", parent=sheet_id)
+    check_result_request(project, actor, request_id, "spar", parent=sheet_id)
     payload = SheetSectionClosed(sheet_id=sheet_id, section=section, request_id=request_id)
     with project.index.exclusive():
         project.index.sync()

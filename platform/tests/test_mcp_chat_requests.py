@@ -82,16 +82,17 @@ async def test_next_without_a_run_is_refused_and_serves_nothing(
 
 
 @pytest.mark.anyio
-async def test_next_with_nothing_open_says_so(
+async def test_a_second_take_by_the_same_run_is_refused_and_nothing_open_says_so(
     settings: Settings, project: Project, clock: FixedClock
 ) -> None:
     cr.request_chat(project, project.human_actor(), "ask", SelectionSpec(), question="Q")
     launcher = FakeLauncher()
     run_id = runner.start_run(project, "ask", launcher=launcher)
     cap = UnitCap(5, run_id)
-    await _call(settings, clock, cap, "chat_request_next", **ACT)
+    first = await _call(settings, clock, cap, "chat_request_next", **ACT)
+    assert first["ok"] is True and first["data"]["batch"] is not None
     out = await _call(settings, clock, cap, "chat_request_next", **ACT)
-    assert out["ok"] is True and out["data"]["batch"] is None
+    assert out["ok"] is False  # one run, one request, even with a cap of 5
     for process in launcher.processes:
         process.release()
     assert runner.wait(run_id, 10)

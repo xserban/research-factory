@@ -93,6 +93,9 @@ researcher ordered the work beforehand as a recorded request, and one run answer
    researcher orders that second request (`factory chat request spar ... --parent <sht_ id>
    --mode prepare`); this run is a session that wrote no argument against, as the platform
    requires.
+   One run answers one request: a second `chat_request_next` is refused, and a chat run is not
+   resumed (the researcher orders it again). A result links to the request only from the session
+   that took it, while the run is open; a Prepare follow-up never opens a sheet.
 4. Pass the served `request_id` to `sheet_open` (or, for the case for, to `sheet_close`) and to
    `answer_record`, so the result is linked to its request. A `parent` that is an earlier sheet or
    answer is read first (`sheet_view`, `answer_view`) and taken into account; an Ask passes it

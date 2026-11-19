@@ -1001,6 +1001,8 @@ def start_run(
             raise _refuse("resumes", f"{resumes} is not a run of this project")
         if earlier.stage != stage:
             raise _refuse("resumes", f"{resumes} ran stage {earlier.stage!r}, not {stage!r}")
+        if spec.fixed_cap is not None:
+            raise _refuse("resumes", "a chat request is not resumed; order it again")
         if earlier.outcome == "complete":
             from factory.services.usage_limit import limit_stop
 

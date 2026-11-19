@@ -106,12 +106,12 @@ def test_the_prompt_tells_an_unattended_run_to_take_a_request(project: Project) 
     assert "Prepare" not in ask
 
 
-def test_a_resumed_chat_run_keeps_its_recorded_prompt(project: Project) -> None:
+def test_a_chat_run_is_not_resumed(project: Project) -> None:
     cr.request_chat(project, project.human_actor(), "ask", SPEC, question="q")
     launcher = FakeLauncher(1)
     run_id = runner.start_run(project, "ask", launcher=launcher)
     for process in launcher.processes:
         process.release()
     assert runner.wait(run_id, 10)
-    again = runner.start_run(project, "ask", launcher=FakeLauncher(), resumes=run_id)
-    assert again != run_id
+    with pytest.raises(FactoryValidationError, match="order it again"):
+        runner.start_run(project, "ask", launcher=FakeLauncher(), resumes=run_id)

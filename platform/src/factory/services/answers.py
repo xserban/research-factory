@@ -187,7 +187,7 @@ def record_answer(
     ):
         issues.append(ValidationIssue("parent", f"{parent}: no such answer or sheet"))
     try:
-        check_result_request(project, request_id, "ask")
+        check_result_request(project, actor, request_id, "ask")
     except FactoryValidationError as err:
         issues.extend(err.issues)
     selection = resolve_selection_cached(project, spec)
