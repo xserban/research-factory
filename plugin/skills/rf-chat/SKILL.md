@@ -20,9 +20,13 @@ argument are yours. Before each step, tell the researcher what you are about to 
    `claims_digest` and read `markdown` whole, never skimmed (about 54k tokens for the core layer).
    Name the `gaps` (papers with no m-claims rows): the digest cannot speak for them.
 3. From the digest, list candidates against and for, each with the claim quoted (source `claims`).
-   Then call `corpus_search` with 2 to 4 phrasings of the hypothesis and of its negation, to add
-   passages the digest misses (source `keyword`). In the matching test, reading the whole digest
-   found the contradicting paper 11 times in 12, keyword search 8 in 12: use both. Show the
+   Then call `corpus_search` with `method: "hybrid"` (keyword and meaning-based search fused) and
+   2 to 4 phrasings of the hypothesis and of its negation, written as sentences, to add passages
+   the digest misses (source `keyword`, also for hybrid hits). If the reply carries a `note`
+   (vectors missing or the local model unavailable), the search ran by keyword only: tell the
+   researcher what it says (`factory passages embed` fills the vectors). In the matching test,
+   reading the whole digest found the contradicting paper 11 times in 12, keyword search 8 in 12:
+   use both. Show the
    researcher the list and let them add or drop papers (source `researcher`). Call `chat_candidates`
    and show the tiers and the coverage. Fix any located issue it returns.
 4. Read the relevant sections of every tier-1 paper (`chat_sections`, then `document_read`) and

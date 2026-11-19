@@ -971,6 +971,13 @@ Status: built, light review (diff read by the coordinator), merged into main 202
 **Rigour notes:** never silent: every tolerated work is listed in the event and the plan render; the tolerance is a hashed protocol section, so it is amended and versioned like any other rule.
 **Open questions:** whether the size should be the full-text promoted set rather than all ordinary works at full-text stages; whether tolerated works should appear in the PRISMA flow as "not completed".
 
+### IDEA-102 — Meaning-based (embedding) passage search beside keyword search
+Status: built, not reviewed (targeted tests only; decision 140 proposed; branch `embeddings-search`, not merged; no real-weights run yet) · Added: 2026-11-19 (researcher: "implement embeddings search along keyword search, on the core papers") · Slice: — · Depends on: decision 116 (ranker model), IDEA-88 (corpus search)
+**What:** passage vectors (SPECTER2, local) in the passage sidecar, exact cosine search, and `corpus_search(method=keyword|vector|hybrid)` with reciprocal rank fusion; `factory passages embed|status`; the `rf-chat` skill uses `hybrid`.
+**Why:** keyword search found the contradicting paper in 8 of 12 matching tests; a search by meaning should find passages that use other words (design note corpus search, section 5.5).
+**Rigour notes:** ranks and never drops a work; the model and weights hash are part of the vector key; the platform calls no remote model; every hit records both ranks.
+**Open questions:** quality of SPECTER2 for passages (it was trained on titles and abstracts); a passage-trained model; whether `vector` alone is ever better than `hybrid`.
+
 ### IDEA-101 — Papers chat v2: a more agentic spar process
 Status: proposed (researcher, 2026-11-18, after the first spar; v1 accepted as is) · B
 **What:** replace the single-session spar of the `rf-chat` skill (read the claims digest, propose candidates, read the cited sections, write against then for) with a more agentic orchestration. For example, separate agents for searching, reading whole papers, arguing against and arguing for, a critic that checks each argument against its full paragraph, and a pass over papers no source proposed.
