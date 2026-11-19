@@ -367,6 +367,7 @@ function tabScreening(p) {
    <div class="card" style="margin-top:12px;padding:14px">${curveSvg(rc)}</div>
    <div class="shares" style="margin-top:12px">${Object.keys(rc.shares).map(k => `<div><b>${sh(k)}%</b>of inclusions in the first ${k}% of records</div>`).join('')}<div><b>${fmt(rc.included_total)}</b>included in ${fmt(rc.screened)} records screened</div>
    <div>${rc.stop_at != null ? `Screening stopped after ${fmt(rc.stop_at)} records.` : `No stop point yet: ${H.term('stoprule', 'the stop rule')} has not fired.`}</div></div></section>
+  ${panelSections(SC.panel, SC.methods)}
   <section id="two">${H.header({ title: 'Two screeners', infoHtml: infoPanel('How closely two independent readers agree on which records to keep.', `Each record was read by screener A and screener B. ${H.term('kappa', 'κ')} corrects the agreement for chance. Disagreements are listed with both readings side by side.`, esc(SC.methods.two_screeners)) })}
    <div class="bar" style="margin:10px 0"><div class="seg" role="group" aria-label="Stage and phase">${two.map(t => `<button data-s="${t.stage}|${t.phase}" aria-pressed="${t === cur}">${lbl(t.stage)} · ${t.phase}</button>`).join('')}</div></div>
    <div id="twoBody"></div></section>
@@ -374,7 +375,8 @@ function tabScreening(p) {
    ${wallStages.map(sg => `<h3 class="h3" style="margin:18px 0 10px">${lbl(sg)}</h3><div class="wall">${SC.reasons_wall.filter(w => w.stage === sg).map(w => `<article class="wc"><div class="hd">${H.term(w.criterion, w.criterion)}<b>${esc(w.label || '')}</b><span class="cn">${fmt(w.count)}</span></div>
      <p class="rule">${esc(w.rule || '')}</p>${w.examples.map(e => `<div class="ex"><span class="meta">${recLink(e.work_id)} · screener ${esc(e.pass_label)}</span>${esc(e.rationale)}${e.quote ? `<blockquote class="quote">“${esc(e.quote)}”</blockquote>` : ''}</div>`).join('')}
      ${idList(w.works, 'All records excluded under this criterion')}
-     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section></div>`;
+     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section>
+  ${criteriaSection(SC.panel, SC.methods)}</div>`;
   const cv = $('#curve'), hv = $('#cvh');
   hv.onmousemove = e => { const b = cv.getBoundingClientRect(), f = Math.min(1, Math.max(0, ((e.clientX - b.left) / b.width * 920 - 62) / (920 - 62 - 20))), i = Math.max(1, Math.round(f * N));
     H.tipHtml(`After <b>${fmt(i)}</b> records: <b>${fmt(rc.points[i - 1])}</b> included (${Math.round(100 * rc.points[i - 1] / rc.included_total)}% of all inclusions)`, e); };
@@ -382,6 +384,39 @@ function tabScreening(p) {
   p.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { S.stage = b.dataset.s; S.dmore = 20; saveHash({ stage: S.stage }); showTab('screening', true); });
   p.querySelectorAll('[data-node]').forEach(a => a.onclick = e => { e.preventDefault(); S.node = a.dataset.node; S.facet = {}; showTab('where'); });
   wireOpen(p); twoBody(cur);
+}
+const dash = v => v == null ? '<span class="meta">–</span>' : fmt(v);
+const kv = rows => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+const passTable = (o, label) => `<table class="t"><thead><tr><th>${label}</th><th class="r">Queued</th><th class="r">Decided</th><th class="r">Remaining</th></tr></thead><tbody>${Object.entries(o).sort().map(([k, v]) => `<tr><td>Screener ${esc(k)}</td><td class="r">${dash(v.queued)}</td><td class="r">${dash(v.decided)}</td><td class="r">${dash(v.remaining)}</td></tr>`).join('')}</tbody></table>`;
+const viewTxt = v => v ? `${esc(H.pretty(v.verdict))}${v.criterion ? ' · ' + esc(v.criterion) : ''}${v.quote ? `<blockquote class="quote">“${esc(clip(v.quote, 220))}”</blockquote>` : ''}${v.anchor ? `<div class="meta">Anchor ${esc(v.anchor)}</div>` : ''}` : '<span class="meta">not decided</span>';
+function panelSections(P, M) {
+  if (!P) return '';
+  const ruleTxt = s => `${fmt(s.n)} in a row ${s.below_score != null ? `scored below ${fmt(s.below_score)}` : 'excluded'}`;
+  const rank = P.ranking ? kv([['Ranking', `<span class="mono">${esc(P.ranking.ranking_id)}</span>`], ['Model', esc(P.ranking.model_id)], ['Weights', `<span class="mono">${esc(P.ranking.weights_hash)}</span>`], ['Records ranked', fmt(P.ranking.count)]]) : '<div class="empty">No ranking has been recorded.</div>';
+  const cal = P.calibration || {};
+  const checks = (P.checks || []).map(c => `<article class="ck"><div class="hd"><b>${esc(c.name || c.draw_id)}</b><span class="tag">${esc(H.pretty(c.kind))}</span><span class="tag">${c.current ? 'Current' : 'Outdated'}</span><span class="meta">${fmt(c.labelled)} of ${fmt(c.drawn)} labelled${c.agreement != null ? ` · ${Math.round(100 * c.agreement)}% agreement` : ''} · ${fmt(c.disagreements)} disagreements</span></div>
+    ${c.agreement_note ? `<p class="meta" style="margin:6px 0 0">${esc(c.agreement_note)}</p>` : ''}
+    ${c.bands.length ? `<details class="idl"><summary>Bands</summary><div class="scroll"><table class="t"><thead><tr><th>Band</th><th class="r">Drawn</th><th class="r">Labelled</th><th class="r">Compared</th><th class="r">Agreed</th><th class="r">Agreement</th><th class="r">Would add includes</th><th class="r">Would add excludes</th><th class="r">Undecided</th></tr></thead><tbody>${c.bands.map(b => `<tr><td>${esc(b.band)}</td><td class="r">${fmt(b.drawn)}</td><td class="r">${fmt(b.labelled)}</td><td class="r">${fmt(b.compared)}</td><td class="r">${fmt(b.agreed)}</td><td class="r">${b.agreement == null ? '–' : Math.round(100 * b.agreement) + '%'}</td><td class="r">${fmt(b.would_add_includes)}</td><td class="r">${fmt(b.would_add_excludes)}</td><td class="r">${fmt(b.undecided)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}</article>`).join('');
+  const ca = P.cannot_assess || [];
+  return `<section>${H.header({ title: 'Screening status', infoHtml: infoPanel('Where each screening pass stands, how the ranking was made and what the stop rules did.', 'Queued is what the pass was given, decided what it has finished, remaining what is left. A stale decision was made under an earlier protocol version.', esc(M.ranking) + '<p>' + esc(M.passes) + '</p><p>' + esc(M.stops) + '</p>') })}
+   <div class="sc2" style="margin-top:12px"><div><h3 class="h3">Ranking</h3>${rank}</div>
+   <div><h3 class="h3">Title and abstract</h3>${passTable(P.passes || {}, 'Pass')}<p class="meta" style="margin:8px 0 0">${P.records_left != null ? `${fmt(P.records_left)} records left for screener A · ` : ''}${fmt(P.stale_decisions)} stale decisions</p></div>
+   ${P.full_text_passes ? `<div><h3 class="h3">Full text</h3>${passTable(P.full_text_passes, 'Pass')}</div>` : ''}</div>
+   <h3 class="h3" style="margin:20px 0 8px">Stop rules</h3>
+   ${(P.stops || []).length ? `<table class="t"><thead><tr><th>Rule</th><th class="r">Run so far</th><th>State</th><th class="r">Not screened</th></tr></thead><tbody>${P.stops.map(x => `<tr><td>Stop after ${esc(ruleTxt(x))}</td><td class="r">${fmt(x.run)} of ${fmt(x.n)}</td><td>${x.stopped ? 'Stopped' : 'Running'}</td><td class="r">${fmt(x.not_screened)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No stop rule is declared.</div>'}
+   <p class="meta" style="margin:8px 0 0">Screening at title and abstract stops by a declared rule, and records not screened because of it are reported. ${fmt(P.deviations)} ${H.term('protocol', 'protocol')} deviations recorded.</p></section>
+  <section>${H.header({ title: 'Calibration and checks', infoHtml: infoPanel('Whether the screeners were tested against the researcher’s own labels.', 'A draw is a sample of records the researcher labels; agreement compares those labels with the screener’s verdicts, band by band.', esc(M.calibration) + '<p>' + esc(M.checks) + '</p>') })}
+   <div style="margin-top:12px">${kv([['Records drawn', dash(cal.drawn)], ['Labelled', dash(cal.labelled)], ['Required', cal.required ? 'Yes' : 'No'], ['Passed', Object.entries(cal.passed || {}).map(([k, v]) => `screener ${esc(k)}: ${v ? 'yes' : 'no'}`).join(', ') || '–']])}</div>
+   ${checks || '<p class="meta" style="margin:10px 0 0">No calibration or audit draws yet.</p>'}</section>
+  ${ca.length ? `<section>${H.header({ title: 'Full text to resolve', sub: `<span class="meta">${fmt(ca.length)} papers</span>`, infoHtml: infoPanel('Papers a screener could not assess from the full text and nobody has settled yet.', 'They stay promoted until resolved; the list blocks nothing.', esc(M.cannot_assess)) })}
+   <div class="scroll"><table class="t" style="margin-top:12px"><thead><tr><th>Paper</th><th>Screener A</th><th>Screener B</th><th>Read</th></tr></thead><tbody>${ca.map(x => `<tr><td class="ti">${recLink(x.work_id)}</td><td style="white-space:normal">${viewTxt(x.passes.A)}</td><td style="white-space:normal">${viewTxt(x.passes.B)}</td><td>${x.read_command ? `<code class="mono">${esc(x.read_command)}</code>` : ''}</td></tr>`).join('')}</tbody></table></div>
+   <p class="meta" style="margin:8px 0 0">To settle one: <code class="mono">${esc(ca[0].resolve_command)}</code></p></section>` : ''}`;
+}
+function criteriaSection(P, M) {
+  const C = P && P.criteria || []; if (!C.length) return '';
+  const bg = (n, b) => `${fmt(n)}${b ? ` <span class="meta">(${fmt(b)} kept as background)</span>` : ''}`;
+  return `<section>${H.header({ title: 'Criteria', infoHtml: infoPanel('Each exclusion criterion, what it excludes, and how many records it removed at each stage.', 'Background means the excluded works are kept for context, not simply dropped.', esc(M.criteria)) })}
+   <div class="scroll"><table class="t" style="margin-top:12px"><thead><tr><th>Criterion</th><th>What it excludes</th><th class="r">Title and abstract</th><th class="r">Full text</th></tr></thead><tbody>${C.map(c => `<tr><td>${H.term(c.id, c.id)}</td><td style="white-space:normal">${esc(c.statement || '')}</td><td class="r">${bg(c.ta_excluded, c.ta_background)}</td><td class="r">${bg(c.ft_excluded, c.ft_background)}</td></tr>`).join('')}</tbody></table></div></section>`;
 }
 const proceeds = v => v === 'include' || v === 'cannot-assess';
 function twoBody(t) {
