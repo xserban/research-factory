@@ -1298,6 +1298,14 @@ def _handler_class(
                     return
                 text = _with_meta(text, auth.page_credential(site_auth.Scope(slot.slug)), prefix)
                 text = text.replace("<head>", "<head><meta name='factory-served' content='1'>", 1)
+                # the shell's project switcher creates projects: a hub-level act with the hub token
+                text = text.replace(
+                    "<head>",
+                    "<head><meta name='factory-hub-token' content='"
+                    + auth.page_credential(site_auth.Scope(None))
+                    + "'>",
+                    1,
+                )
                 self._cache = "no-cache"
                 self._html(text)
             elif rest.startswith("assets/"):

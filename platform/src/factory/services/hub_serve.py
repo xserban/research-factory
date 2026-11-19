@@ -81,6 +81,13 @@ PREWARM_ORDER: Final = (
     "living",
     "landscape",
     "landscape_uses",
+    "protocol",
+    "pipeline",
+    "sources",
+    "method",
+    "costs",
+    "write",
+    "platform",
 )
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the

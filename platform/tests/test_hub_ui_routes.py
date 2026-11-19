@@ -606,3 +606,33 @@ def test_the_page_scripts_call_those_routes_only_when_served() -> None:
     assert "/ui/act/snowball-add" in graph and "HUB.served" in graph
     shell = hub_ui.asset_bytes("shell.js").decode()
     assert "Retry-After" in shell and "Updating" in shell
+
+
+NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+
+
+def test_the_seven_new_pages_and_payloads_are_served(served: tuple[int, Project]) -> None:
+    port, _ = served
+    for name in NEW_PAGES:
+        status, _, body = _req(port, "GET", f"{UI}/{name}.html")
+        assert status == 200 and f"assets/pages/{name}.js" in body.decode()
+        status, _, data = _payload(port, name)
+        assert status == 200 and json.loads(data)["name"] == name
+        status, _, _ = _req(port, "GET", f"{UI}/assets/pages/{name}.js")
+        assert status == 200
+
+
+def test_the_switcher_and_the_hub_token_exist_only_when_served(served: tuple[int, Project]) -> None:
+    port, _ = served
+    page = _req(port, "GET", f"{UI}/protocol.html")[2].decode()
+    assert "name='factory-served'" in page and "name='factory-hub-token'" in page
+    shell = _req(port, "GET", f"{UI}/assets/shell.js")[2].decode()
+    assert "if (HUB.served) projectSwitcher" in shell
+    assert "/api/projects" in shell
+
+
+def test_the_static_build_page_carries_no_served_marker_so_no_switcher() -> None:
+    html = hub_ui.page_html(
+        "protocol", "Protocol", ["pages/protocol.js"], ("shell", "protocol"), "v"
+    )
+    assert "factory-served" not in html and "factory-hub-token" not in html

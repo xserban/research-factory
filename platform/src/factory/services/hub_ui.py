@@ -176,6 +176,13 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/findings.js": ("hub_ui/pages/findings.js", "text/javascript; charset=utf-8"),
     "pages/living.js": ("hub_ui/pages/living.js", "text/javascript; charset=utf-8"),
     "pages/kit.js": ("hub_ui/pages/kit.js", "text/javascript; charset=utf-8"),
+    "pages/protocol.js": ("hub_ui/pages/protocol.js", "text/javascript; charset=utf-8"),
+    "pages/pipeline.js": ("hub_ui/pages/pipeline.js", "text/javascript; charset=utf-8"),
+    "pages/sources.js": ("hub_ui/pages/sources.js", "text/javascript; charset=utf-8"),
+    "pages/method.js": ("hub_ui/pages/method.js", "text/javascript; charset=utf-8"),
+    "pages/costs.js": ("hub_ui/pages/costs.js", "text/javascript; charset=utf-8"),
+    "pages/write.js": ("hub_ui/pages/write.js", "text/javascript; charset=utf-8"),
+    "pages/platform.js": ("hub_ui/pages/platform.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -361,7 +368,9 @@ class PageSpec:
 
 
 PAGES: Final[dict[str, PageSpec]] = {
+    "protocol": PageSpec("protocol", "Protocol", "pages/protocol.js", ("shell", "protocol")),
     "overview": PageSpec("overview", "Overview", "pages/overview.js", ("shell", "overview")),
+    "pipeline": PageSpec("pipeline", "Pipeline", "pages/pipeline.js", ("shell", "pipeline")),
     "corpus": PageSpec("corpus", "Corpus", "pages/corpus.js", ("shell", "corpus")),
     "flow": PageSpec("flow", "Flow", "pages/flow.js", ("shell", "flow", "screening", "journeys")),
     "lenses": PageSpec("lenses", "Lenses", "pages/lenses.js", ("shell", "lenses")),
@@ -373,10 +382,15 @@ PAGES: Final[dict[str, PageSpec]] = {
         "pages/landscape.js",
         ("shell", "landscape", "landscape_uses"),
     ),
+    "sources": PageSpec("sources", "Sources", "pages/sources.js", ("shell", "sources")),
+    "method": PageSpec("method", "Method", "pages/method.js", ("shell", "method")),
     "miners": PageSpec("miners", "Miners", "pages/miners.js", ("shell", "mining")),
     "data": PageSpec("data", "Extracted data", "pages/data.js", ("shell", "mining")),
     "findings": PageSpec("findings", "Findings", "pages/findings.js", ("shell", "findings")),
+    "write": PageSpec("write", "Write & export", "pages/write.js", ("shell", "write")),
     "living": PageSpec("living", "Living review", "pages/living.js", ("shell", "living")),
+    "costs": PageSpec("costs", "Costs & runs", "pages/costs.js", ("shell", "costs")),
+    "platform": PageSpec("platform", "Platform", "pages/platform.js", ("shell", "platform")),
     "kit": PageSpec("kit", "Brand kit", "pages/kit.js", ("shell",)),
 }
 

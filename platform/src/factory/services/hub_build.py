@@ -27,14 +27,21 @@ from typing import Any, TypeVar
 from sqlalchemy import text as sql_text
 
 from factory.services import (
+    hub_costs,
     hub_findings,
     hub_graph,
     hub_landscape,
     hub_lenses,
     hub_living,
+    hub_method,
     hub_mining,
+    hub_pipeline,
+    hub_platform,
+    hub_protocol,
     hub_screening,
+    hub_sources,
     hub_ui,
+    hub_write,
     protocol,
     question,
     site_corpus,
@@ -602,6 +609,14 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "journeys": build_journeys,
     hub_landscape.LANDSCAPE: build_landscape,
     hub_landscape.USES: build_landscape_uses,
+    # stubs of the seven ported pages (step 0); each module's `build` replaces its stub later
+    "protocol": hub_protocol.build,
+    "pipeline": hub_pipeline.build,
+    "sources": hub_sources.build,
+    "method": hub_method.build,
+    "costs": hub_costs.build,
+    "write": hub_write.build,
+    "platform": hub_platform.build,
 }
 
 # Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes

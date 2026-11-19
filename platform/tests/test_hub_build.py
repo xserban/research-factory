@@ -22,6 +22,7 @@ from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
 from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
+NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
 CORE = {
     "shell",
     "overview",
@@ -36,6 +37,7 @@ CORE = {
     "corpus",
     "landscape",
     "landscape_uses",
+    *NEW_PAGES,
 }
 OPTIONAL = {"journeys"}  # delivered by hub_journeys; may be absent
 
@@ -188,17 +190,24 @@ def test_cli_hub_build_smoke(world: Project, settings: Settings, tmp_path: Path)
 
 def test_every_page_has_a_script_and_only_registered_payloads() -> None:
     assert list(hub_ui.PAGES) == [
+        "protocol",
         "overview",
-        "corpus",
+        "pipeline",
         "flow",
+        "corpus",
         "lenses",
         "explore",
         "graph",
         "landscape",
+        "sources",
+        "method",
         "miners",
         "data",
         "findings",
+        "write",
         "living",
+        "costs",
+        "platform",
         "kit",
     ]
     for spec in hub_ui.PAGES.values():
@@ -537,3 +546,11 @@ def test_a_failed_payload_deletes_its_stale_files_and_the_pages_that_need_it(
         again.removed
     )
     assert all(f"removed stale {r}" in hb.format_report(again) for r in again.removed)
+
+
+def test_the_seven_ported_pages_have_registered_stub_builders(world: Project) -> None:
+    for name in NEW_PAGES:
+        assert name in hb.BUILDERS
+        assert name in hub_ui.PAGES and hub_ui.PAGES[name].payloads == ("shell", name)
+        assert hb.BUILDERS[name].__module__ == f"factory.services.hub_{name}"
+        assert hb.BUILDERS[name](hb.HubContext(world)) == {"methods": {}, "ready": False}
