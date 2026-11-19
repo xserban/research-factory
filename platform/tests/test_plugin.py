@@ -19,6 +19,7 @@ SKILLS = (
     "rf-experiment",
     "rf-extract",
     "rf-frame",
+    "rf-hypothesis-engine",
     "rf-ideate",
     "rf-intuition",
     "rf-lineage",
@@ -319,5 +320,34 @@ def test_technique_bounce_names_its_tools_and_the_labelling_rule() -> None:
         "document_read",
         "exploratory, pass A of m-tech-",
         "Never call a `derives-from`",
+    ):
+        assert needed in text, needed
+
+
+def test_hypothesis_engine_names_its_tools_and_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-hypothesis-engine" / "SKILL.md").read_text(
+        "utf-8"
+    )
+    for needed in (
+        "technique_gaps",
+        "technique_combinations",
+        "technique_challenges",
+        "technique_neighbors",
+        "claims_digest",
+        "corpus_search",
+        "selection_resolve",
+        "chat_verify",
+        "document_read",
+        "lead_record",
+        "lead_list",
+        "lead_decide",
+        "hypothesis_draft",
+        "hypothesis_review_next",
+        "hypothesis_review",
+        "hypothesis_register",
+        "HUMAN DECISION POINT",
+        "## Runtime knobs",
+        "When lead_candidates, lead_queue and lead_stats exist",
+        "found / not found in this corpus",
     ):
         assert needed in text, needed
