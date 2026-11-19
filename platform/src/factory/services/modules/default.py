@@ -13,6 +13,7 @@ from factory.events.catalog import default_catalog
 from factory.index.default import default_projection
 from factory.modules.registry import ModuleRegistry
 from factory.services.modules import (
+    answers,
     appraisal,
     benchmark_ledger,
     briefing,
@@ -72,7 +73,8 @@ def default_modules() -> ModuleRegistry:
         contributions, appraisal, cards, evidence, references, imports, inbox, grey, living,
         snapshots, ranking, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
-        portfolio, regions, mining, hypotheses, labels, views, experiments, pages, sheets, files,
+        portfolio, regions, mining, hypotheses, labels, views, experiments, pages, sheets, answers,
+        files,
         evaluation, benchmark_ledger, directions, curation, decisions, develop, writing, briefing,
         manuscripts,
     ]  # fmt: skip

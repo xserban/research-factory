@@ -879,6 +879,7 @@ Status: merged into main 2026-11-19 (v1: passages and corpus search, claims dige
 **Why:** NotebookLM-like use without losing traceability; search only proposes candidates, Claude reads and decides (search ranks, never judges).
 **Rigour notes:** embedding model chosen by evaluation, not by name. Free test set from the technique miners (2026-11-16 run): each category definition is a query, the anchored quotes mined for it are the paragraphs a good search finds. Candidates: EmbeddingGemma (300M, 2k tokens, Gemma licence) or EmbeddingGemma 2 (Apache 2.0, 8k tokens; details to verify on the model card), SPECTER2 (already in decision 116, but trained on title and abstract, likely weak for paragraphs), keyword only as baseline.
 **Open questions:** is FTS5 plus Claude's own synonyms enough to start; recorded chats or not; interface (hub page with Claude, or MCP only); how answers enter the idea graph.
+**Ask mode (2026-11-19):** Ask mode built on branch spar-n2-ask, not reviewed (`chat.answer_recorded`, `chat.answer_rated`, MCP `answer_record|view|list`, CLI `factory answers`, `rf-chat` Ask section; decision N-2 proposed).
 **Design note:** `docs/design-note-corpus-search-2026-11-17.md` (2026-11-17, researcher rulings): a candidate funnel (miners, graph, keyword search, claims) with reading tiers instead of retrieval alone; Spar argument sheets (against first), Explore and Prepare modes, Ask as the light form; evaluation on a researcher test set.
 
 ### IDEA-89 — Reference lookup without OpenAlex

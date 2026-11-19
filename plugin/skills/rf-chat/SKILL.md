@@ -1,6 +1,6 @@
 ---
 name: rf-chat
-description: Use when the researcher wants to talk to a selection of papers about a hypothesis (a spar): find the papers that argue against and for it, read them, and record a checked argument sheet. Explore is the default; Prepare is for a result that may feed a lead.
+description: Use when the researcher wants to talk to a selection of papers about a hypothesis (a spar): find the papers that argue against and for it, read them, and record a checked argument sheet. Explore is the default; Prepare is for a result that may feed a lead. Also use when the researcher asks a question of a selection of papers (Ask): answer it sentence by sentence, each sentence resting on a verified quote.
 stage: [develop]
 ---
 
@@ -46,9 +46,37 @@ argument are yours. Before each step, tell the researcher what you are about to 
    (tier-1 papers without an argument, gaps, unavailable sources). Tell the researcher how to rate:
    `factory sheets rate <arg_id> sound|weak|wrong --note "..."`. You never rate.
 
+## Ask
+
+Use this mode when the researcher asks a question of the papers rather than testing a hypothesis. The
+answer is a proposal: the researcher rates it, you never do. The platform checks every quote and
+the selection; what each sentence says, and what the papers leave open, is your reading.
+
+1. Agree the question wording and the selection (`layers`, `include`, `exclude`), and wait for the
+   answer. If the researcher is following up an earlier answer or sheet, note its id for `parent`.
+2. Call `selection_resolve`; report the works, the exclusions and `est_tokens`, and keep its
+   `digest`. Call `claims_digest` and read `markdown` whole, never skimmed. Name the `gaps`.
+3. Call `corpus_search` twice with 2 to 4 phrasings of the question written as sentences, each with
+   `limit: 20`: once with `method: "keyword"` and once with `method: "vector"`. Keep the two lists
+   side by side; do not use `hybrid`. If `vector` refuses, say so and continue with keyword.
+4. Read the relevant paragraphs in full (`chat_sections`, then `document_read`) before writing a
+   sentence about them. Do not rely on the digest or a search snippet alone.
+5. Write the answer sentence by sentence (at most 600 characters each). Each sentence names one
+   work, one anchor and a quote copied exactly from that paragraph; run `chat_verify` on every
+   quote first. A sentence you cannot support with a quote is not written. Answer only from the
+   papers of the selection, never from what you know otherwise.
+6. Say plainly what the papers do not answer: put it in `unanswered`, not in a sentence, and do not
+   assert absence beyond the computed coverage (the gaps of the digest, unread tiers).
+7. Call `answer_record` with the question, the selection spec, the `selection_digest` from step 2,
+   the sentences, `unanswered` and `parent` when following up. A refusal is located
+   (`sentences[2].quote`): fix it and call again; a stale selection means resolve and ask again.
+8. Show the answer from the reply, each sentence with its quote and its full paragraph, then the
+   counts. Tell the researcher how to rate, a sentence or the whole:
+   `factory answers rate <ans_id> sound|weak|wrong [--sentence N] --note "..."`. You never rate.
+
 ## Tool arguments
 
-Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`) take `project`, `role`, `model` (your own
+Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`, `answer_record`) take `project`, `role`, `model` (your own
 model id) and `skill`, the bare name `rf-chat`; the platform computes the skill hash.
 
 ## Never
@@ -57,9 +85,11 @@ model id) and `skill`, the bare name `rf-chat`; the platform computes the skill 
 - Never judge the balance of the evidence or give a verdict: that is not built.
 - Never assert absence beyond the computed coverage.
 - Never name a work as held-out; held-out works are read as corpus (decision 37.9).
-- Never rate your own arguments; strengths are your judgement and are labelled so.
+- Never rate your own arguments or answers; strengths are your judgement and are labelled so.
+- Never answer from outside the papers; an answer sentence without a verified quote is not written.
 
 ## Done when
 
 The sheet is shown with its coverage and the researcher knows how to rate it, or, in Prepare, the
-case against is closed and the hand-over to a separate session is stated.
+case against is closed and the hand-over to a separate session is stated. In Ask, the answer is
+shown with paragraphs and the researcher knows how to rate it.
