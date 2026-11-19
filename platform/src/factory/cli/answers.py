@@ -8,11 +8,14 @@ imported inside the commands, because that module imports this one.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from factory.cli.sheets import write_brief
 from factory.services import answers as answers_service
+from factory.services import sheet_export as export_service
 
 answers_app = typer.Typer(
     name="answers",
@@ -87,3 +90,27 @@ def answers_rate_cmd(
         )
     where = "" if sentence is None else f" sentence {sentence}"
     typer.echo(f"{answer}{where} rated {rating}")
+
+
+@answers_app.command("export")
+def answers_export_cmd(
+    ctx: typer.Context,
+    answer: Annotated[str, typer.Argument(help="An ans_ id.")],
+    out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite an existing --out file.")
+    ] = False,
+) -> None:
+    """The answer as a Markdown brief: sentences with quotes, paragraphs and ratings, then the
+    references. Read-only."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        brief = export_service.export_answer(project, answer)
+    if out is None:
+        typer.echo(brief, nl=False)
+    else:
+        write_brief(out, brief, force)
+        typer.echo(f"{answer} exported to {out}")
