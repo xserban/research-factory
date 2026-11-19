@@ -9,10 +9,12 @@ MCP tools; here the researcher reads a sheet and rates its arguments (`rate` wri
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from factory.services import sheet_export as export_service
 from factory.services import sheets as sheets_service
 
 sheets_app = typer.Typer(
@@ -114,3 +116,24 @@ def sheets_balance_cmd(
         project = _resolve_project(state)
         sheets_service.record_balance(project, project.human_actor(), sheet, text, lean, note)
     typer.echo(f"{sheet} balance recorded")
+
+
+@sheets_app.command("export")
+def sheets_export_cmd(
+    ctx: typer.Context,
+    sheet: Annotated[str, typer.Argument(help="A sht_ id.")],
+    out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
+) -> None:
+    """The sheet as a Markdown brief: the researcher's balance first, then the arguments with
+    quotes, paragraphs and ratings, then the references. Read-only."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        brief = export_service.export_sheet(project, sheet)
+    if out is None:
+        typer.echo(brief, nl=False)
+    else:
+        out.write_text(brief, encoding="utf-8")
+        typer.echo(f"{sheet} exported to {out}")
