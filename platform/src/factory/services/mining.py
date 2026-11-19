@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, ActorKind
+from factory.events.reader import cached_reads
 from factory.mining.compile import compile_miner, miner_digest
 from factory.mining.kinds import close_checks, kind_checks
 from factory.mining.select import select_with_fallback
@@ -679,6 +680,21 @@ def mine_next(
 
     Refused, with nothing written, on field `miners` until the protocol lists that registered
     version, and as `next_unit` refuses otherwise."""
+
+    with cached_reads(), entering():
+        return _mine_next(project, actor, name, version, label, calibration=calibration)
+
+
+def _mine_next(
+    project: Project,
+    actor: Actor,
+    name: str,
+    version: int,
+    label: PassLabel,
+    *,
+    calibration: bool = False,
+) -> ExtractNext:
+    """The body of `mine_next`, run inside its read and memo scopes."""
     _, use, spec = require_listed(project, name, version)
     require_not_retired(project, name, version)
     calibration_id: str | None = None
@@ -766,6 +782,24 @@ def mine_record(
     compiled pack's verification, the miner's kind checks and its closing rule. Refused on `task_id`
     for a task that is not a miner task and on `miners` when the protocol no longer lists the
     miner version the task was served for. Claims are always empty."""
+
+    with cached_reads(), entering():
+        return _mine_record(
+            project, actor, task_id, rows, finish=finish, reason=reason, supersedes=supersedes
+        )
+
+
+def _mine_record(
+    project: Project,
+    actor: Actor,
+    task_id: str,
+    rows: Sequence[ExtractedRowInput],
+    *,
+    finish: bool = False,
+    reason: str | None = None,
+    supersedes: Mapping[int, str] | None = None,
+) -> ExtractResult:
+    """The body of `mine_record`, run inside its read and memo scopes."""
     task = get_task(project, task_id)
     content = None if task is None else task_content(project, task)
     miner = content.get("miner") if isinstance(content, dict) else None

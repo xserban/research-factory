@@ -43,6 +43,7 @@ from factory.model.lab import (
     UserReactivated,
     UserRegistered,
 )
+from factory.services.call_memo import invalidate
 from factory.services.context import future_dated
 
 _M = TypeVar("_M", bound=StrictModel)
@@ -91,8 +92,10 @@ class Lab:
 
     def record(self, events: Sequence[Event]) -> None:
         with self.writing():
+            self.index.appended()  # before the write: a failed write leaves it unknown too
             self.writer.append(events)
             self.index.sync()
+            invalidate()  # a call-scoped memo must not outlive this write
 
     def human_actor(self) -> Actor:
         return Actor(

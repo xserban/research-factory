@@ -331,6 +331,7 @@ class Index:
         projection: Projection,
         *,
         on_exclusive: Callable[[str | None], None] | None = None,
+        on_write_lock: Callable[[], None] | None = None,
         hold_window: timedelta = DEFAULT_HOLD_WINDOW,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -351,7 +352,9 @@ class Index:
         self._threads = threading.Lock()  # one thread of this process holds the file lock
         self._owner: int | None = None  # that thread's ident while it holds it
         self._snapshot = False  # set and read only by the owner
+        self._clean = False  # owner only: the index holds the whole log, for this hold
         self._on_exclusive = on_exclusive
+        self._on_write_lock = on_write_lock
 
     def sync(self) -> SyncResult:
         """Apply new events incrementally, or rebuild when the index can't be trusted.
@@ -362,7 +365,17 @@ class Index:
         if self._in_snapshot():
             return SyncResult(applied=0, rebuilt=False)
         with self._locked():
-            return self._sync()
+            if self._clean:
+                return SyncResult(applied=0, rebuilt=False)
+            result = self._sync()
+            self._clean = True
+            return result
+
+    def appended(self) -> None:
+        """Tell the index its own process just appended to the log, so the next `sync()` reads it.
+        While a hold lasts, a `sync()` after one that found the log fully applied reads nothing
+        (no other writer can append under the write lock); every append inside a hold calls this."""
+        self._clean = False
 
     @contextmanager
     def snapshot(self) -> Iterator[None]:
@@ -389,21 +402,27 @@ class Index:
 
         Re-entrant: the sync and reads made inside the block do not wait on the lock they hold.
         With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id
-        (the ID floor of a hosted project, slice 5 ruling 3).
+        (the ID floor of a hosted project, slice 5 ruling 3). `on_write_lock` then runs, once per
+        outermost hold, after the lock is won (`build_project` wires it to `call_memo.invalidate`).
         """
         if self._in_snapshot():
             raise RuntimeError("exclusive() inside a read-only snapshot")
         outermost = not self._holding
         with self._locked():
-            if outermost and self._on_exclusive is not None:
-                self._sync()
-                self._on_exclusive(self.last_event_id())
+            if outermost:
+                if self._on_exclusive is not None:
+                    self._sync()
+                    self._on_exclusive(self.last_event_id())
+                if self._on_write_lock is not None:
+                    # After a possible wait: values derived before the lock may be stale.
+                    self._on_write_lock()
             yield
 
     def rebuild(self) -> str:
         """Rebuild the projection from the event log and return its state hash."""
         with self._locked():
             self._build()
+            self._clean = False
             return self._state_hash()
 
     @property
@@ -433,11 +452,13 @@ class Index:
         with self._threads, (self._db_path.parent / "lock").open("a") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             self._owner = threading.get_ident()
+            self._clean = False
             try:
                 self._refresh_engine()
                 yield
             finally:
                 self._owner = None
+                self._clean = False
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def reopen(self) -> None:

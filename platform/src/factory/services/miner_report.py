@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from factory.events.reader import read_all
+from factory.events.reader import read_typed
 from factory.mining.calibration import SAMPLE_FLOOR, thresholds
 from factory.mining.compile import compile_miner
 from factory.mining.score import CalibrationScore, score
@@ -58,7 +58,9 @@ def _submitted(project: Project, tasks: frozenset[str]) -> tuple[int, int]:
     call's input)."""
     verified = 0
     blobs: set[str] = set()
-    for event in read_all(project.paths.events_dir, project.catalog):
+    for event in read_typed(
+        project.paths.events_dir, project.catalog, ("extraction.recorded", "extraction.rejected")
+    ):
         if event.payload.get("task_id") not in tasks:
             continue
         if event.type == "extraction.recorded":
