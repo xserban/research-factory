@@ -9,7 +9,8 @@ citation, built from the canonical work records `export_bibliography` reads.
 
 Invariants:
 - Every piece of free text is escaped (`escape`) so a quote with `*`, `_`, `#` or `|` cannot
-  break the document; the output is deterministic for a given log, selection and clock.
+  break the document; the output is deterministic for a given log and selection under a fixed
+  clock (the footer prints the export time).
 - Unknown ids are refused (`FactoryValidationError`) before any text is produced.
 - No PDF: the platform has no Markdown-to-PDF path without a new dependency.
 """
@@ -37,17 +38,32 @@ PROPOSED = "proposed by agent"
 UNRATED = "Not rated by the researcher."
 NO_BALANCE = "No balance written by the researcher yet."
 _SPECIAL = re.compile(r"([\\`*_{}\[\]<>#|])")
+_LEAD = re.compile(r"^([-+=]|\d+[.)]|~{3,}|:)")
 
 
 def escape(value: str) -> str:
     """`value` on one line with Markdown punctuation backslash-escaped."""
-    return _SPECIAL.sub(r"\\\1", " ".join(value.split()))
+    flat = _SPECIAL.sub(r"\\\1", " ".join(value.split()))
+    return _LEAD.sub(r"\\\1", flat)  # a leading list, rule or setext marker is not structure
 
 
 def _quote_block(value: str) -> list[str]:
     """A blockquote of `value`, one line per source line, each escaped."""
     lines = [ln for ln in value.splitlines() if ln.strip()] or [""]
     return [f"> {escape(ln)}" for ln in lines]
+
+
+def _text_block(value: str) -> list[str]:
+    """A blockquote of `value` that keeps its paragraph breaks; every line is escaped."""
+    out: list[str] = []
+    for ln in value.splitlines():
+        if ln.strip():
+            out.append(f"> {escape(ln)}")
+        elif out and out[-1] != ">":
+            out.append(">")
+    while out and out[-1] == ">":
+        out.pop()
+    return out or ["> "]
 
 
 def _paragraph(project: Project, cache: dict[str, object], conversion_id: str, anchor: str) -> str:
@@ -99,30 +115,40 @@ def _references(project: Project, work_ids: Iterable[str]) -> tuple[dict[str, in
     return numbers, lines
 
 
-def _agent_events(project: Project, ref: str) -> list[tuple[str, str]]:
-    """The distinct (model, skill) pairs of the agent events that refer to `ref`."""
+def _agent_events(project: Project, ref: str) -> list[tuple[str, str, int]]:
+    """The distinct (model, skill) pairs of the agent events that refer to `ref`, with the number
+    of events of each pair."""
     with project.index.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT DISTINCT e.model, e.skill FROM events e "
+                "SELECT e.model, e.skill, COUNT(DISTINCT e.id) FROM events e "
                 "JOIN event_refs r ON r.event_id = e.id "
-                "WHERE r.ref = :r AND e.actor_kind = 'agent' ORDER BY e.model, e.skill"
+                "WHERE r.ref = :r AND e.actor_kind = 'agent' "
+                "GROUP BY e.model, e.skill ORDER BY e.model, e.skill"
             ),
             {"r": ref},
         ).all()
-    return [(m or "unknown model", s or "unknown skill") for m, s in rows]
+    return [(m or "unknown model", s or "unknown skill", int(n)) for m, s, n in rows]
 
 
 def _footer(
-    project: Project, ident: str, digest: str, stale: bool, selection: dict[str, object]
+    project: Project, ident: str, digest: str, stale: bool | None, selection: dict[str, object]
 ) -> list[str]:
     out = ["## Provenance", "", f"- Identifier: `{ident}`"]
     pairs = _agent_events(project, ident)
-    agents = "; ".join(f"{escape(m)}, skill {escape(s)}" for m, s in pairs) or "none recorded"
+    agents = (
+        "; ".join(
+            f"{escape(m)}, skill {escape(s)} ({n} event{'' if n == 1 else 's'})"
+            for m, s, n in pairs
+        )
+        or "none recorded"
+    )
     out.append(f"- Agent events (model, skill version): {agents}")
     out.append(f"- Selection digest: {digest}")
     out.append(f"- Exported: {format_ts(project.clock.now())}")
-    if stale:
+    if stale is None:
+        out.append("- Stale: the selection can no longer be resolved.")
+    elif stale:
         out.append(
             "- Stale: the selection has changed since this was written; "
             "the corpus now differs from the one the arguments were drawn from."
@@ -130,8 +156,13 @@ def _footer(
     return out
 
 
-def _is_stale(project: Project, selection: dict[str, object], digest: str) -> bool:
-    return resolve_selection_cached(project, sheets_service._spec_of(selection)).digest != digest
+def _is_stale(project: Project, selection: dict[str, object], digest: str) -> bool | None:
+    """Whether the selection now resolves to another digest; None if it cannot be resolved."""
+    try:
+        spec = sheets_service._spec_of(selection)
+        return resolve_selection_cached(project, spec).digest != digest
+    except FactoryValidationError:
+        return None
 
 
 def _rating_lines(rating: str | None, note: str | None) -> list[str]:
@@ -146,7 +177,8 @@ def export_sheet(project: Project, sheet_id: str) -> str:
     the references and the provenance footer."""
     view = sheets_service.view_sheet(project, sheet_id)
     info, cov = view.info, view.coverage
-    numbers, refs = _references(project, (a.work_id for a in view.arguments))
+    ordered = [a for st in ("against", "for") for a in view.arguments if a.stance == st]
+    numbers, refs = _references(project, (a.work_id for a in ordered))
     cache: dict[str, object] = {}
     out = [
         f"# {escape(info.hypothesis)}",
@@ -165,9 +197,11 @@ def export_sheet(project: Project, sheet_id: str) -> str:
     else:
         b = view.balance
         lean = f" Lean: {escape(b.lean)}." if b.lean else ""
-        out += [escape(b.text), "", f"By {escape(b.actor)}, {escape(b.ts)}.{lean}"]
+        out += [*_text_block(b.text), "", f"By {escape(b.actor)}, {escape(b.ts)}.{lean}"]
         if b.note:
-            out.append(f"Further evidence needed: {escape(b.note)}")
+            out += ["", "Further evidence needed:", "", *_text_block(b.note)]
+        if view.balance_history > 1:
+            out += ["", f"Superseded balances: {view.balance_history - 1}"]
     for stance, heading in (("against", "Case against"), ("for", "Case for")):
         out += ["", f"## {heading}", ""]
         mine = [a for a in view.arguments if a.stance == stance]
@@ -247,8 +281,11 @@ def export_answer(project: Project, answer_id: str) -> str:
             *(_quote_block(s.paragraph) if s.paragraph else ["> (not available)"]),
             "",
         ]
+    out += ["## Not answered by the papers", ""]
     if view.unanswered:
-        out += ["## Not answered by the papers", "", f"{escape(view.unanswered)} ({PROPOSED})", ""]
+        out += [*_text_block(view.unanswered), "", f"({PROPOSED})", ""]
+    else:
+        out += ["No gaps declared by the agent.", ""]
     out += ["## References", "", *refs, ""]
     stale = _is_stale(project, view.selection, info.selection_digest)
     out += _footer(project, info.answer_id, info.selection_digest, stale, view.selection)

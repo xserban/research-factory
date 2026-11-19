@@ -13,6 +13,7 @@ from typing import Annotated
 
 import typer
 
+from factory.cli.sheets import write_brief
 from factory.services import answers as answers_service
 from factory.services import sheet_export as export_service
 
@@ -96,6 +97,9 @@ def answers_export_cmd(
     ctx: typer.Context,
     answer: Annotated[str, typer.Argument(help="An ans_ id.")],
     out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite an existing --out file.")
+    ] = False,
 ) -> None:
     """The answer as a Markdown brief: sentences with quotes, paragraphs and ratings, then the
     references. Read-only."""
@@ -108,5 +112,5 @@ def answers_export_cmd(
     if out is None:
         typer.echo(brief, nl=False)
     else:
-        out.write_text(brief, encoding="utf-8")
+        write_brief(out, brief, force)
         typer.echo(f"{answer} exported to {out}")

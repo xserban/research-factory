@@ -118,11 +118,34 @@ def sheets_balance_cmd(
     typer.echo(f"{sheet} balance recorded")
 
 
+def write_brief(out: Path, brief: str, force: bool) -> None:
+    """Write `brief` to `out`; refuses an existing file without `force`, and reports a missing
+    directory or any OS error as a structured message (exit 1), never a traceback."""
+    from factory.cli.main import _reporting_errors
+    from factory.errors import FactoryValidationError, ValidationIssue
+
+    with _reporting_errors():
+        if out.exists() and not force:
+            raise FactoryValidationError(
+                [ValidationIssue("out", f"{out} exists; pass --force to overwrite it")]
+            )
+        try:
+            out.write_text(brief, encoding="utf-8")
+        except OSError as exc:
+            raise FactoryValidationError(
+                [ValidationIssue("out", f"cannot write {out}: {exc.strerror or exc}")]
+            ) from exc
+
+
+_FORCE = Annotated[bool, typer.Option("--force", help="Overwrite an existing --out file.")]
+
+
 @sheets_app.command("export")
 def sheets_export_cmd(
     ctx: typer.Context,
     sheet: Annotated[str, typer.Argument(help="A sht_ id.")],
     out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
+    force: _FORCE = False,
 ) -> None:
     """The sheet as a Markdown brief: the researcher's balance first, then the arguments with
     quotes, paragraphs and ratings, then the references. Read-only."""
@@ -135,5 +158,5 @@ def sheets_export_cmd(
     if out is None:
         typer.echo(brief, nl=False)
     else:
-        out.write_text(brief, encoding="utf-8")
+        write_brief(out, brief, force)
         typer.echo(f"{sheet} exported to {out}")

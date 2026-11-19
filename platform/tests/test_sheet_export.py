@@ -1,6 +1,8 @@
 """Markdown export of a sheet and of an answer (spar night N8, ruling 8)."""
 
 # ruff: noqa: F811
+import re
+
 import pytest
 from sqlalchemy import text
 from typer.testing import CliRunner
@@ -171,3 +173,150 @@ def test_cli_export_to_stdout_and_file(
     ans = _answer(project, agent, world)
     res = runner.invoke(cli_main.app, ["answers", "export", ans])
     assert res.exit_code == 0 and "Does reflection help?" in res.output
+
+
+# ---- review fixes -----------------------------------------------------------------------------
+
+NASTY = "first *line* here\nsecond <script>alert(1)</script>\nthird [x](javascript:alert(1))"
+
+
+def _after_label(md: str, label: str = "Source paragraph:") -> list[str]:
+    block = md.split(label)[1].split("\n\n")[1]
+    return block.splitlines()
+
+
+def test_real_paragraph_full_text_quoted_line_by_line(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    view = sh.view_sheet(project, sheet)
+    a = view.arguments[0]
+    para = ex._paragraph(project, {}, a.conversion_id, a.anchor)
+    assert para and QUOTE in para
+    md = ex.export_sheet(project, sheet)
+    lines = _after_label(md)
+    assert all(ln.startswith("> ") for ln in lines)
+    assert [ln[2:] for ln in lines] == [ex.escape(x) for x in para.splitlines() if x.strip()]
+
+
+def test_nasty_paragraph_is_escaped(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str], monkeypatch
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    monkeypatch.setattr(ex, "_paragraph", lambda *a: NASTY)
+    md = ex.export_sheet(project, sheet)
+    lines = _after_label(md)
+    assert len(lines) == 3 and all(ln.startswith("> ") for ln in lines)
+    assert "\\*line\\*" in md and "\\<script\\>" in md
+    assert "[x](" not in md and "\\[x\\]" in md
+
+
+def test_missing_anchor_or_conversion_says_not_available(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str], monkeypatch
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+
+    class Empty:
+        def get(self, anchor: str) -> None:
+            return None
+
+    monkeypatch.setattr(ex, "conversion_manifest", lambda p, c: Empty())
+    md = ex.export_sheet(project, sheet)
+    assert md.count("> (not available)") == 3
+
+    def boom(p: Project, c: str) -> None:
+        raise FactoryValidationError([])
+
+    monkeypatch.setattr(ex, "conversion_manifest", boom)
+    assert ex.export_sheet(project, sheet).count("> (not available)") == 3
+
+
+def test_balance_keeps_paragraphs_and_neutralises_markers(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, world: list[str]
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    text_ = "Para one.\n\n- not a list\n+ nor this\n1. nor this\n---\n=\n\nPara three."
+    sh.record_balance(project, human, sheet, text_, lean="for", note="- note item\n\nsecond")
+    sh.record_balance(project, human, sheet, text_, lean="for", note="- note item\n\nsecond")
+    md = ex.export_sheet(project, sheet)
+    sec = md.split("## The researcher's balance")[1].split("## Case against")[0]
+    assert "> Para one.\n>\n> \\- not a list" in sec and "\n>\n> Para three." in sec
+    for raw in ("- not a list", "+ nor this", "1. nor this", "---", "="):
+        bare = [ln.removeprefix("> ").strip() for ln in sec.splitlines()]
+        assert not any(ln == raw or ln.startswith(raw + " ") for ln in bare), raw
+    assert "- note item" not in sec.replace("\\- note item", "")
+    assert "superseded balances: 1" in sec.lower()
+
+
+def test_unresolvable_selection_prints_stale_not_failure(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    with project.index.exclusive(), project.index.connect() as conn:
+        conn.execute(text("UPDATE sheets SET selection = :s"), {"s": '{"layers": ["nope"]}'})
+        conn.commit()
+    md = ex.export_sheet(project, sheet)
+    assert "Stale: the selection can no longer be resolved" in md
+
+
+def test_answer_unanswered_empty_and_stale(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works = sorted(world)
+    spec = SelectionSpec()
+    ans = an.record_answer(
+        project,
+        agent,
+        "Q?",
+        spec,
+        resolve_selection_cached(project, spec).digest,
+        [an.SentenceInput("It helps.", works[0], ANCHOR, QUOTE)],
+        unanswered="",
+    ).answer_id
+    md = ex.export_answer(project, ans)
+    assert "No gaps declared by the agent." in md and "Stale:" not in md
+    with project.index.exclusive(), project.index.connect() as conn:
+        conn.execute(text("UPDATE answers SET selection_digest = 'changed'"))
+        conn.commit()
+    assert "Stale: the selection has changed" in ex.export_answer(project, ans)
+
+
+def test_references_numbered_in_print_order(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    md = ex.export_sheet(project, sheet)
+    nums = [int(n) for n in re.findall(r"Source: \[(\d+)\]", md)]
+    firsts = list(dict.fromkeys(nums))
+    assert firsts == sorted(firsts) == list(range(1, len(firsts) + 1))
+
+
+def test_footer_counts_events_per_pair(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str]
+) -> None:
+    sheet = _sheet(project, agent, agent_other, world)
+    md = ex.export_sheet(project, sheet)
+    line = next(ln for ln in md.splitlines() if ln.startswith("- Agent events"))
+    assert re.search(r"skill rf-screen@1a2b3c4d \(\d+ events?\)", line)
+
+
+def test_cli_out_refuses_overwrite_and_reports_missing_dir(
+    project: Project, agent: Actor, agent_other: Actor, world: list[str], tmp_path, monkeypatch
+) -> None:
+    from factory.cli import main as cli_main
+
+    sheet = _sheet(project, agent, agent_other, world)
+    monkeypatch.setattr(cli_main, "_resolve_project", lambda state: project)
+    runner = CliRunner()
+    for cmd, ident in (("sheets", sheet), ("answers", _answer(project, agent, world))):
+        out = tmp_path / f"{cmd}.md"
+        out.write_text("KEEP")
+        res = runner.invoke(cli_main.app, [cmd, "export", ident, "--out", str(out)])
+        assert res.exit_code == 1 and out.read_text() == "KEEP"
+        assert "--force" in res.output
+        res = runner.invoke(cli_main.app, [cmd, "export", ident, "--out", str(out), "--force"])
+        assert res.exit_code == 0 and out.read_text() != "KEEP"
+        res = runner.invoke(
+            cli_main.app, [cmd, "export", ident, "--out", str(tmp_path / "no" / "x.md")]
+        )
+        assert res.exit_code == 1 and "Traceback" not in res.output and "no" in res.output
