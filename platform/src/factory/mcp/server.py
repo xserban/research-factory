@@ -6139,11 +6139,12 @@ def build_server(
         tier1_cap: int = chat_candidates_service.TIER1_CAP,
     ) -> dict[str, JsonValue]:
         """Check the candidates you propose after reading the claims digest, and compute tiers.
-        Each proposal is `{work_id, source, stance}` with `source` one of claims, keyword, miner,
-        graph, researcher and `stance` against or for; optional `anchor` and `quote` (required for
-        claims and keyword, checked against the pinned conversion) and `note`. Every work must be
-        in the selection (spec as in `selection_resolve`). Invalid input writes nothing and
-        returns located issues (`proposals[3].quote`). Returns every work of the selection once
+        Each proposal is `{work_id, source, stance}` with `source` one of claims, keyword, vector,
+        miner, graph, researcher and `stance` against or for; optional `anchor` and `quote`
+        (required for claims, keyword and vector, checked against the pinned conversion) and
+        `note`. Every work must be in the selection (spec as in `selection_resolve`). Invalid
+        input writes nothing and returns located issues (`proposals[3].quote`). Returns every
+        work of the selection once
         (`candidates`: sources, stances, tier, over_cap, quotes, notes), with computed counts per
         tier (1: two or more sources or a researcher pick; 2: one source; 3: not proposed) and
         stance, `over_cap` and `total`. In `explore` mode tier 1 is capped at `tier1_cap`
