@@ -63,7 +63,8 @@ HUB.load(['shell', 'contradictions']).then(d => {
       `<div class="ct-sides">${sideCard('A', p.a)}${sideCard('B', p.b)}</div>` +
       (p.state === 'proposed' ? `<div class="ct-cmd">To decide: <code>${esc(p.decide.confirm)}</code> or <code>${esc(p.decide.reject)}</code></div>` : '') +
       `<details class="ct-cmd"><summary>Start a spar from this pair</summary>` +
-      `<div>Hypothesis: ${esc(p.seed.hypothesis)}</div><div>Papers: <span class="mono">${esc(p.seed.selection.include.join(', '))}</span> · layer ${esc(p.seed.selection.layers.join(', '))}</div></details></article>`;
+      `<div>Hypothesis: ${esc(p.seed.hypothesis)}</div><div>Papers: <span class="mono">${esc(p.seed.selection.include.join(', '))}</span></div>` +
+      `<div><a class="btn" href="${esc(HUB.chatHref({include: p.seed.selection.include, only: true, hyp: p.seed.hypothesis, kind: 'spar', mode: 'prepare'}))}">Spar this pair</a> <span class="meta">opens the Chat page with these two papers; nothing is recorded until you order it there.</span></div></details></article>`;
   }
 
   function render() {

@@ -214,6 +214,7 @@ RAIL_ORDER = [
     "data",
     "findings",
     "contradictions",
+    "chat",
     "write",
     "living",
     "costs",
