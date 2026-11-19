@@ -35,8 +35,11 @@ argument are yours. Before each step, tell the researcher what you are about to 
    confirm each argument in the full text. Copy quotes exactly. Run `chat_verify` on every quote
    before recording it.
 5. Call `sheet_open` with the hypothesis, the proposals and the mode. Then `sheet_argue` the case
-   against, strongest first, each argument with the claim it rests on (`claim_row_key`) and a
-   strength; then `sheet_close` section `against`. Then the case for: in Prepare, stop here and tell
+   against, strongest first, each argument with its `claim` and a
+   strength. When an argument rests on a digest claim, pass that claim's row key as
+   `claim_row_key`: copy the text after `key=` in its digest line (`[P07.c3 key=rk_...]`)
+   exactly; leave it out only for an argument found by search or reading that no digest claim
+   states; then `sheet_close` section `against`. Then the case for: in Prepare, stop here and tell
    the researcher to start a separate session for it; in Explore, `sheet_argue` for and
    `sheet_close` `for`.
 6. Call `sheet_view` and present it briefly: each argument with paper, quote and why; the coverage
