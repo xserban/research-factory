@@ -22,6 +22,7 @@ from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
 from factory.model.lab import LAB_SLUG
 from factory.model.screening import Channel
+from factory.services.call_memo import invalidate
 
 MAX_SLUG_LENGTH = 64
 FUTURE_MARGIN = timedelta(minutes=1)
@@ -115,8 +116,10 @@ class Project:
                 if not ordered and min(event.id for event in events) <= str(last):
                     raise OrderingError(f"event minted outside writing(): not after {last}")
                 events = sorted(events, key=lambda event: event.id)
+            self.index.appended()  # before the write: a failed write leaves it unknown too
             self.writer.append(events)
             self.index.sync()
+            invalidate()  # a call-scoped memo must not outlive this write
 
     def human_actor(self) -> Actor:
         return Actor(

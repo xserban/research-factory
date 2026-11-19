@@ -67,7 +67,7 @@ from factory.document.anchors import Manifest
 from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.reader import read_typed
 from factory.extraction.verify import ANCHOR_UNKNOWN, QUOTE_NOT_IN_ANCHOR
 from factory.model.base import StrictModel
 from factory.model.extraction import (
@@ -1941,7 +1941,9 @@ class _Ledger:
         none, once per ledger and only when a row cites a replaced extraction."""
         if not self.created:
             wanted = {t.task_id for unit in self.tasks.values() for t in unit}
-            for event in read_all(self.project.paths.events_dir, self.project.catalog):
+            for event in read_typed(
+                self.project.paths.events_dir, self.project.catalog, ("task.created",)
+            ):
                 if event.type == "task.created" and event.payload.get("task_id") in wanted:
                     self.created[str(event.payload["task_id"])] = event.id
         return self.created[task_id]
@@ -2143,7 +2145,9 @@ def _completion_positions(project: Project, task_ids: set[str]) -> dict[str, str
         return {}
     completed: dict[str, str] = {}
     created: dict[str, str] = {}
-    for event in read_all(project.paths.events_dir, project.catalog):
+    for event in read_typed(
+        project.paths.events_dir, project.catalog, ("task.completed", "task.created")
+    ):
         task_id = event.payload.get("task_id")
         if task_id not in task_ids:
             continue

@@ -4,7 +4,9 @@ Invariants: a memo exists only between `entering` and its exit, so nothing is ev
 calls (the index may change between them); outside a scope a `memoised` function runs normally.
 Each hit hands back a copy of the container (lists, dicts, sets shallowly; models deeply), so a
 caller that mutates its result cannot corrupt another caller's. The scope assumes the project does
-not change while it is open, which holds for read-only checks.
+not change while it is open, which holds for read-only checks; a call that does write (a service
+under `exclusive()`) is safe too, because `Project.record` calls `invalidate`, which drops every
+entry: a read after the write recomputes.
 """
 
 from __future__ import annotations
@@ -36,6 +38,13 @@ def entering() -> Iterator[None]:
         yield
     finally:
         _active.reset(token)
+
+
+def invalidate() -> None:
+    """Drop every entry of the open scope (none: nothing). Called after events are appended."""
+    memo = _active.get()
+    if memo is not None:
+        memo.clear()
 
 
 def _fresh(value: Any) -> Any:

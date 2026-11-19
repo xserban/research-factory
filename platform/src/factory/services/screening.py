@@ -56,7 +56,7 @@ from sqlalchemy import text
 from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
-from factory.events.reader import read_all
+from factory.events.reader import read_typed
 from factory.index.chase import considered_works, extended_works
 from factory.index.screening import join_refusal
 from factory.model.base import StrictModel
@@ -1578,7 +1578,16 @@ def relayed_extraction_label(project: Project, session: str) -> bool:
     """Whether `session` relayed an extraction resolution, audit label or miner gold label over
     MCP, or drew an extraction audit sample (decision 51). Read from the log, as the projection
     keeps no session for these events."""
-    for event in read_all(project.paths.events_dir, project.catalog):
+    for event in read_typed(
+        project.paths.events_dir,
+        project.catalog,
+        (
+            "extraction.audit_sampled",
+            "extraction.resolved",
+            "extraction.audit_labelled",
+            "miner.calibration_labelled",
+        ),
+    ):
         if event.actor.session != session:
             continue
         if event.type == "extraction.audit_sampled":

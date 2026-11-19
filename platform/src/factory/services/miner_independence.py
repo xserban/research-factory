@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.events.reader import read_all
+from factory.events.reader import read_typed
 from factory.model.extraction import MinerScope
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
@@ -46,7 +46,7 @@ def calibration_sessions(project: Project, name: str) -> set[str]:
         return set()
     return {
         event.actor.session
-        for event in read_all(project.paths.events_dir, project.catalog)
+        for event in read_typed(project.paths.events_dir, project.catalog, ("task.claimed",))
         if event.type == "task.claimed" and event.payload.get("task_id") in tasks
     }
 
