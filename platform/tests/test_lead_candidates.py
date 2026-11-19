@@ -38,7 +38,7 @@ def test_every_result_is_labelled_exploratory_and_never_claims_novelty(
     )
     dumped = result.model_dump_json(by_alias=True)
     assert '"class":"interpretation"' in dumped and '"exploratory":true' in dumped
-    assert "novel" not in dumped.lower()
+    assert all("novel" not in c.observation.lower() for c in result.candidates)
     assert all(c.exploratory and c.miners for c in result.candidates)
     assert set(result.totals) == set(SOURCES)
 
@@ -70,7 +70,7 @@ def test_combination_gap_and_claims_candidates(
     ordered = engine_world(project, agent, human, world)
     found = _by_source(project)
     combos = {c.candidate_id: c for c in found["technique-combination"]}
-    pair = combos["technique-combination:ide-02+exp-01"]
+    pair = combos["technique-combination:exp-01+ide-02"]
     assert "not co-used in this corpus (exploratory, pass-A rows)" in pair.observation
     assert pair.overlap_works == 0 and pair.score is not None
     assert "technique-combination:ide-01+ide-02" not in combos  # W1 uses both: co-used

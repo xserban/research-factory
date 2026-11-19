@@ -91,7 +91,7 @@ def test_measures_of_the_candidates_of_a_world(
     claim = next(i for i in queue.items if i.source == "claims-limitation")
     assert claim.measures.support == 1 and claim.measures.supportive_share is None
     assert claim.measures.verification.share == 1.0 and "no-score" in claim.flags
-    combo = by_id["technique-combination:ide-02+exp-01"]
+    combo = by_id["technique-combination:exp-01+ide-02"]
     assert (
         combo.measures.overlap == 0 and combo.measures.score > 0 and "no-score" not in combo.flags
     )

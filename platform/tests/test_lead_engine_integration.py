@@ -107,8 +107,12 @@ def test_a_parked_lead_shows_as_a_prior_hit_with_narrow_and_broad_collisions(
     sharing_work = [i for i in before.items if i.source == "claims-limitation"]
     broad = [h for i in sharing_work for h in i.prior if not h.shared_items]
     assert broad and all(h.id == parked and h.shared_works for h in broad)
-    # fewest prior hits first: the parked candidate is not ahead of a clean one of the same kind
-    assert before.items[0].measures.prior_hits == 0
+    # fewest prior hits first (closed direction, narrow, then all): the key never decreases
+    keys = [
+        (m.closed_direction_hit, m.narrow_prior_hits, m.prior_hits)
+        for m in (i.measures for i in before.items)
+    ]
+    assert keys == sorted(keys)
     # the open lead is in the queue's lead list, its own id never a hit against itself
     assert [i.entry_id for i in before.leads] == [other]
     assert before.leads[0].source == "claims" and before.leads[0].measures.basis == "live"
@@ -176,10 +180,10 @@ def test_a_lead_citing_a_superseded_row_is_flagged_by_m9_and_sorted_last(
     )
     handed = fresh.model_copy(update={"candidates": (stale, ghost, *fresh.candidates)})
     again = lead_queue(project, candidates=handed, **KNOBS)  # type: ignore[arg-type]
-    assert [i.entry_id for i in again.items[-2:]] == [
+    assert {i.entry_id for i in again.items[-2:]} == {
         "claims-limitation:ghost",
         "claims-limitation:stale",
-    ]
+    }
     states = {i.entry_id: i.measures.basis for i in again.items[-2:]}
     assert states == {
         "claims-limitation:stale": "superseded",

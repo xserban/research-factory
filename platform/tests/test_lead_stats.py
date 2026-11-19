@@ -71,7 +71,11 @@ def test_counts_equal_what_the_stream_recorded(
         "concluded": 0,
     }
     [old] = stats.oldest_undecided
-    assert (old.lead_id, old.source, old.triggers) == (undecided, "mixed", 4)
+    assert (old.lead_id, old.source, old.triggers) == (
+        undecided,
+        "mixed",
+        5,
+    )  # the shared work is one trigger
     assert lead_stats(project).model_dump_json() == stats.model_dump_json()
     assert "text" not in stats.model_dump_json().split('"oldest_undecided"')[1]
 

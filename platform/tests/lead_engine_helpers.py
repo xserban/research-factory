@@ -198,7 +198,14 @@ def mine_claims_superseding(project: Project, agent: Actor, ordered: list[str]) 
         index = ordered.index(batch.records[0]["work_id"])
         rows = [claim_row(t, q) for t, q in CLAIM_ROWS.get(index, ())]
         if index != 0:
-            mine_record(project, actor, batch.task_id, rows, finish=True)
+            mine_record(
+                project,
+                actor,
+                batch.task_id,
+                rows,
+                finish=True,
+                reason=None if rows else "no result",
+            )
             continue
         old = mine_record(project, actor, batch.task_id, rows, finish=False).rows.written[0]
         fixed = [claim_row("limitation", QUOTES[2])]

@@ -175,12 +175,31 @@ def _scope_key(name: str) -> ScopeKey:
     return Scope(name) if name in {s.value for s in Scope} else MinerScope(name)
 
 
+_STALE: dict[tuple[str, str], tuple[str | None, frozenset[str]]] = {}
+_STALE_MAX = 64
+"""Stale rows per project and scope, keyed by the last folded event: the ledger is the slowest
+read of a call (seconds per scope on the pilot)."""
+
+
+def _stale(project: Project, scope: str) -> frozenset[str]:
+    key = (str(project.paths.dir), scope)
+    head = project.index.last_event_id()
+    with _GUARD:
+        hit = _STALE.get(key)
+        if hit is not None and hit[0] == head:
+            return hit[1]
+    found = frozenset(stale_extractions(project, scope=_scope_key(scope)))
+    with _GUARD:
+        if len(_STALE) >= _STALE_MAX:
+            _STALE.clear()
+        _STALE[key] = (head, found)
+    return found
+
+
 def _basis(project: Project, items: dict[str, _Item]) -> dict[str, str]:
     """`ext id -> live | stale | superseded` for the known rows, from the tables and the stale
-    ledger of each scope involved (one ledger per scope)."""
-    stale: dict[str, set[str]] = {}
-    for scope in sorted({i.scope for i in items.values()}):
-        stale[scope] = stale_extractions(project, scope=_scope_key(scope))
+    ledger of each scope involved (one ledger per scope, memoised per last folded event)."""
+    stale = {scope: _stale(project, scope) for scope in sorted({i.scope for i in items.values()})}
     return {
         ext: "superseded" if i.superseded else "stale" if ext in stale[i.scope] else "live"
         for ext, i in items.items()
