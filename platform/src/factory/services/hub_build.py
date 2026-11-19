@@ -557,7 +557,7 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
     mapped to included ids, self-links and repeats dropped. An included work no miner has read is
     listed from its record, marked `not_read_yet`, so every included work appears. `sets` lists the
     differences."""
-    raw = site_corpus.corpus_payload(ctx.project)
+    raw = ctx.corpus_raw
     by_id = {w["id"]: w for w in raw["works"]}
     source_of = ctx.source_of
     layer_of = ctx.layer_of
