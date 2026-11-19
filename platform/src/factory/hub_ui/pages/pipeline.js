@@ -142,7 +142,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
 
   function beatSec() {
     if (!HEART.length) return card('Activity', 'heartbeat', empty('No events recorded yet.'));
-    const W = 720, Hh = 120, B = 98, T = 10, mx = Math.max(...HEART.map(x => x[1])), bw = W / HEART.length;
+    const W = 1300, Hh = 130, B = 106, T = 10, mx = Math.max(...HEART.map(x => x[1])), bw = W / HEART.length;
     const bars = HEART.map(([day, c], i) => {
       const h = Math.max(2, (B - T) * c / mx);
       return `<rect x="${(i * bw + 2).toFixed(1)}" y="${(B - h).toFixed(1)}" width="${Math.max(2, bw - 4).toFixed(1)}" height="${h.toFixed(1)}" rx="2"><title>${esc(day)}: ${plural(c, 'event', 'events')}</title></rect>` +
