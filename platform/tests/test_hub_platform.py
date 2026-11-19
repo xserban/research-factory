@@ -12,6 +12,7 @@ from factory.services import hub_platform as hpl
 from factory.services import site_backlog as sb
 from factory.services.context import Project
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 @pytest.fixture

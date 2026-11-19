@@ -14,6 +14,7 @@ from factory.services import resume as resume_service
 from factory.services import work_queue as work_queue_service
 from factory.services.context import Project
 from tests.test_hub_build import mined_world, world  # noqa: F401  (fixtures)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 SECTIONS = (
     "status",

@@ -10,6 +10,7 @@ from factory.services.context import Project
 from factory.services.fulltext_status import fulltext_status
 from factory.services.protocol import list_deviations
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 def test_payload_is_json_with_every_section_and_a_method_per_view(world: Project) -> None:  # noqa: F811

@@ -15,6 +15,7 @@ from factory.services.protocol import (
     record_deviation,
 )
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 def _payload(project: Project) -> dict[str, Any]:

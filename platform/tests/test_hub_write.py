@@ -13,6 +13,7 @@ from factory.services import hub_write as hw
 from factory.services.context import Project
 from factory.services.site_corpus import corpus_payload
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 def test_blocks_cut_headings_paragraphs_lists_bold_and_citations() -> None:

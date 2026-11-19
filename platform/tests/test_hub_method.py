@@ -12,6 +12,7 @@ from factory.services import hub_method as hm
 from factory.services.context import Project
 from factory.services.site_lifecycle import STAGES
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 def entry(order: int, name: str, loops: str = "", actor: str = "automated") -> dict[str, str]:

@@ -9,6 +9,7 @@ from factory.services import hub_costs as hc
 from factory.services.context import Project
 from factory.services.run_costs import RunCost
 from tests.test_hub_build import world  # noqa: F401  (fixture)
+from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
 
 def run(run_id: str, stage: str, model: str, started: str, cost: float | None) -> RunCost:
