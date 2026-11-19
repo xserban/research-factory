@@ -744,3 +744,28 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+### Write & export (`hub_write.py`, `write.js`)
+
+- SY-1 — done (Synthesis, header note and ⓘ)
+- SY-2 — done (Synthesis, page cards with model-written, state and flag badges)
+- SY-3 — done (Synthesis, reading view; citations open the drawer)
+- SY-4 — done (Synthesis, Scopes table; links to Corpus filter)
+- SY-5 — done (Synthesis, rf-synthesize note under Scopes)
+- SY-6 — done (Synthesis, empty state)
+- BB-1 — done (Bibliography, header and ⓘ)
+- BB-2 — done (Bibliography, table plus a BibTeX toggle on one tab, same entries)
+- BB-3 — done (Bibliography, sortable and filterable table, "n of N papers", year histogram)
+- BB-4 — done (Bibliography, Copy BibTeX, Download .bib as a Blob, Show BibTeX)
+- BB-5 — done (one export call feeds table and text)
+- PR-3 — done (PRISMA diagram, inline SVG and Download prisma.svg as a Blob)
+- PR-1, PR-2, PR-4 to PR-7 — not mine (existing:Flow)
+- WK-1 — done (Wiki vault, path and copy button; the vault is built by the classic product)
+- WK-2 — open (needs the zip route under Requested shared changes; link to the classic wiki meanwhile)
+- WK-3 to WK-6 — open (vault contents are built by `site_wiki.build_wiki`; described in the ⓘ, not browsable here)
+- WK-7 — open (banner lives in the classic vault build; the Synthesis reading view labels pages model-written)
+- WK-8 — open (symlinks; decide with the zip route)
+- WK-9 — done (Wiki vault, paper count from the corpus payload)
+- RS-1 to RS-13 — no row targets Write; none taken
