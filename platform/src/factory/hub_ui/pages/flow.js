@@ -56,19 +56,22 @@ const EQ = {
 
 /* ---------- state and hash ---------- */
 const TABS = [['where', 'Where the records went'], ['screening', 'Screening'], ['replay', 'Replay'], ['paths', 'Paths']];
-const S = { tab: 'where', view: 'flow', node: 'included', facet: {}, sk: 'title', sd: 1, q: '', more: 100, stage: null, dfilter: 'all', dmore: 20, lanes: [] };
+const S = { tab: 'where', view: 'flow', node: 'included', facet: {}, sk: 'title', sd: 1, q: '', more: 100, stage: null, dfilter: 'all', dmore: 20, lanes: [], cell: null };
+const FACET_KEYS = ['layer', 'human', 'year', 'outcome', 'source', 'step'];
 function loadHash() {
   const h = H.hash.get(); S.lanes = (h.get('lanes') || '').split(',').filter(Boolean).slice(0, 20);
   S.tab = TABS.some(t => t[0] === h.get('tab')) ? h.get('tab') : S.lanes.length ? 'paths' : 'where';
   S.view = h.get('view') === 'waffle' ? 'waffle' : 'flow'; S.node = h.get('node') || 'included';
-  S.facet = {}; ['layer', 'human', 'year', 'outcome'].forEach(k => { if (h.get(k)) S.facet[k] = new Set(h.get(k).split('|')); });
+  S.facet = {}; FACET_KEYS.forEach(k => { if (h.get(k)) S.facet[k] = new Set(h.get(k).split('|')); });
+  S.cell = h.get('cell') ? h.get('cell').split('~') : null;
   if (h.get('sort')) { const [a, b] = h.get('sort').split(':'); S.sk = a; S.sd = +b || 1; }
   S.stage = h.get('stage'); S.dfilter = h.get('dis') || 'all';
 }
 function saveHash(extra = {}) {
   const o = { tab: S.tab === 'where' ? null : S.tab, view: S.tab === 'where' && S.view !== 'flow' ? S.view : null, node: S.tab === 'where' && S.node !== 'included' ? S.node : null,
     sort: S.tab === 'where' && !(S.sk === 'title' && S.sd === 1) ? S.sk + ':' + S.sd : null, lanes: S.lanes.join(',') || null, ...extra };
-  ['layer', 'human', 'year', 'outcome'].forEach(k => o[k] = S.tab === 'where' && S.facet[k] && S.facet[k].size ? [...S.facet[k]].join('|') : null);
+  FACET_KEYS.forEach(k => o[k] = S.tab === 'where' && S.facet[k] && S.facet[k].size ? [...S.facet[k]].join('|') : null);
+  o.cell = S.tab === 'where' && S.cell ? S.cell.join('~') : null;
   H.hash.set(o);
 }
 loadHash();
@@ -100,6 +103,13 @@ svg.sk{display:block;min-width:820px;width:100%;height:auto}
 .split{display:grid;grid-template-columns:240px minmax(0,1fr);gap:28px;align-items:start}
 .fg{margin-bottom:16px}.fg .fl{font:600 var(--t-xs) var(--f-ui);color:var(--mut);display:block;margin-bottom:6px}.fg .chips,.actives{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.actives{margin-bottom:10px}
 .t th button{all:unset;cursor:pointer;color:inherit}.t th button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}.t td.ti{width:100%;min-width:240px}.t td:not(.ti){white-space:nowrap}
+.bs{font-size:var(--t-s)}.bs td.r,.bs th.r{text-align:right}.bs .cellb{all:unset;cursor:pointer;color:var(--acc);font-family:var(--f-mono)}.bs .cellb:hover,.bs .cellb:focus-visible{text-decoration:underline}
+.bs td.sel{background:var(--acc-soft)}.bs tr.d0 td:first-child{font-weight:600}.bs .zero{color:var(--dim);font-family:var(--f-mono)}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 18px;font-size:var(--t-s);margin:0}.kv dt{color:var(--mut)}.kv dd{margin:0;overflow-wrap:anywhere}
+.sc2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px 32px;align-items:start}.sc2 h3.h3{margin:0 0 8px}
+.ck{background:var(--surface);border-radius:var(--r);padding:14px 16px;margin-top:10px}.ck .hd{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}
+.rm{margin:4px 0 0;display:flex;flex-wrap:wrap;gap:2px 16px}
+.lyb{display:grid;grid-template-columns:130px minmax(0,1fr) 56px;gap:6px 10px;align-items:center;font-size:var(--t-s)}.lyb .tr{height:10px;background:var(--raised);border-radius:2px;overflow:hidden}.lyb .tr i{display:block;height:100%;transition:width .25s}.lyb .v{font-family:var(--f-mono);text-align:right;color:var(--mut)}
 .fpane{display:grid;gap:22px;margin-top:6px}.fpane h3.h3{margin:0 0 8px}
 .stats{display:flex;flex-wrap:wrap;gap:8px 34px;align-items:baseline}.stats .big{font:500 var(--t-xl)/1 var(--f-ui);font-variant-numeric:tabular-nums}
 .curve{display:block;width:100%;height:auto;max-height:420px}.curve .ln{fill:none;stroke:var(--acc);stroke-width:2}.curve .ref{stroke:var(--dim);stroke-dasharray:4 4;fill:none}
@@ -140,6 +150,7 @@ $('#main').innerHTML = `
 <section class="fhead">
   ${H.header({ kicker: `${H.term('prisma', 'PRISMA flow')} · ${protoTerm} <span class="mono">${esc(F.protocol_id || '')}</span>`, title: 'Flow', level: 1 })}
   <p class="lead">${fmt(st.identified)} records came in and ${fmt(st.inc)} papers made it through. The biggest loss: ${topLoss ? `${H.term(topLoss[0], topLoss[0])} (${esc(critLabel(topLoss[0]).toLowerCase())}), ${fmt(topLoss[1])} records` : 'none'}.${H.info(`<b>What it shows</b>How the records the searches found became the papers the review is about.<p><span class=k>How it's computed.</span> ${fmt(st.inc)} of ${fmt(st.identified)} is ${(100 * st.inc / st.identified).toFixed(1)}%. The biggest loss is the exclusion criterion with the most records at title and abstract. ${esc(d.flow.methods.fates)}</p><p>${fmt(st.identified - R.length)} of the ${fmt(st.identified)} records were merged into another before getting a ledger row of their own; they count in the totals but have no row in the record lists (this count is computed as identified minus listed).</p>`, 'How these figures are computed')}</p>
+${d.flow.reconciles ? `<p class="meta" role="status">The ledger reconciles with the flow: the ${fmt(d.flow.groups_sum)} records in the end groups equal the ${fmt(st.identified)} identified.</p>` : `<p class="meta" role="alert" style="color:var(--exc)">The ledger does not reconcile with the flow: the end groups hold ${fmt(d.flow.groups_sum)} records, ${fmt(st.identified)} were identified.</p>`}
 </section>
 <div class="bar"><div class="seg" role="group" aria-label="Flow views" id="tabs">${TABS.map(t => `<button data-t="${t[0]}">${t[1]}</button>`).join('')}</div></div>
 <div id="pane"></div>
@@ -183,6 +194,7 @@ function nodeInfo(id) {
   if (n.crit) { t.title = n.crit + ' · ' + critLabel(n.crit); t.den = n.ft ? st.ass : st.screened; t.denL = n.ft ? 'assessed' : 'screened';
     t.text = `Excluded at ${n.ft ? 'full text' : 'title and abstract'} under criterion ${n.crit}.`; t.eq = n.ft ? EQ.included : EQ['ta-included']; return t; }
   const m = NODETXT[id]; if (m) { t.den = st[m[0]]; t.denL = m[1]; t.text = m[2]; } else { t.den = st.identified; t.denL = 'identified'; t.text = 'Records found by this source, before de-duplication.'; t.eq = EQ.identified; }
+  if (id === 'identified' || id === 'duplicates' || id.startsWith('src-')) t.more = d.flow.methods.identification;
   if (id === 'duplicates') t.eq = EQ.screened; if (id === 'not-sought') t.eq = EQ.sought; if (id === 'not-retrieved' || id === 'pending') t.eq = EQ.assessed;
   if (id === 'not-retrieved' && FT.not_retrieved_reasons) t.text += ' Routes tried: ' + Object.entries(FT.not_retrieved_reasons).map(([k, v]) => `${k} (${v})`).join(', ') + '.';
   return t;
@@ -241,41 +253,60 @@ function drawWaffle() {
   return infoPanel(`What happened to each of the ${fmt(st.screened)} records that were screened.`, 'One dot is one record. Filled means decided; a ring means no decision yet (not retrieved, pending).',
     `${fmt(t1)} + ${fmt(t2)} = ${fmt(t1 + t2)} ${t1 + t2 === st.screened ? '✓' : '✗'} screened records. Dots fill column by column, ${ROWS} to a column, so a block is as wide as its count. The ${fmt(st.dup)} duplicates were removed before screening and are not shown.`);
 }
-function selectNode(id) { S.node = id; S.more = 100; saveHash(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'nearest' }); }
+function selectNode(id) { S.node = id; S.cell = null; S.more = 100; saveHash(); drawBySource(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'nearest' }); }
 function markSel() { document.querySelectorAll('#sk .nd').forEach(n => n.classList.toggle('sel', n.dataset.n === S.node)); document.querySelectorAll('#wf .g').forEach(b => b.setAttribute('aria-pressed', b.dataset.n === S.node)); }
 const FACETS = [['outcome', 'Outcome', r => outcomeOf(r), v => v, null], ['layer', 'Layer', r => (H.byId.get(r.id) || {}).layer, H.layerLabel, v => H.LAYERS.find(l => l[0] === v)?.[2]],
   ['human', 'Human role', r => { const w = H.byId.get(r.id); return w ? (H.val(w, 'human') || 'null') : null; }, v => H.humanLabel(v === 'null' ? null : v), v => (H.HUMAN.find(h => h[0] === v) || [, , '--h-null'])[2]],
-  ['year', 'Year', r => String(r.year), v => v, null]];
+  ['year', 'Year', r => String(r.year), v => v, null],
+  ['source', 'Source group', r => r.source, v => v, null], ['step', 'Step reached', r => r.step, v => v, null]];
+function cellModel(c) {
+  const [tag, crit, g] = c, row = d.flow.by_source.rows.find(r => r.tag === tag && (r.criterion || '') === crit);
+  if (!row) return null;
+  const pred = r => r.tags.includes(tag) && (crit === '' || (r.reason || 'unspecified') === crit) && (g === '' || r.source === g);
+  const total = d.flow.by_source.rows[0].counts[g === '' ? 'Total' : g];
+  return { pred, info: { title: row.label + (g ? ' · ' + g : ''), n: row.counts[g === '' ? 'Total' : g], den: total, denL: g ? 'records from this source' : 'records identified', sign: '',
+    text: 'The records that reached this step' + (g ? ' and were found by this source group.' : '.'), eq: '' } };
+}
+function downloadCsv(rows) {
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const cols = ['work_id', 'title', 'year', 'source_group', 'sources', 'step', 'outcome', 'criterion_or_reason', 'duplicate_of'];
+  const body = rows.map(r => [r.id, r.title, r.year, r.source, (r.sources || []).join('; '), r.step, r.outcome, r.reason, r.duplicate_of].map(q).join(','));
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([[cols.join(','), ...body].join('\n')], { type: 'text/csv' }));
+  a.download = 'flow-records.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function drawPanel() {
-  const pn = $('#panel'), i = nodeInfo(S.node);
+  const pn = $('#panel'), cm = S.cell && cellModel(S.cell), i = cm ? cm.info : nodeInfo(S.node);
   if (!i) { pn.innerHTML = `<div class="empty">Unknown stream “${esc(S.node)}”.</div>`; return; }
-  const head = `<div class="pn-head"><span class="pn-n" style="color:${i.sign === '−' ? 'var(--exc)' : i.sign === '+' ? 'var(--inc)' : 'var(--fg)'}">${i.sign ? i.sign + ' ' : ''}${fmt(i.n)}</span><h2 class="h2">${esc(i.title)} ${H.info(`<b>${esc(i.title)}</b>${esc(i.text)}<p><span class=k>How it's computed.</span> The arithmetic below is recomputed from the counts.</p><div class="eqs">${i.eq}</div>`, 'About ' + i.title)}</h2></div><p class="meta" style="margin:0">${pctTxt(i)}</p>`;
-  const pred = PRED[S.node];
+  const head = `<div class="pn-head"><span class="pn-n" style="color:${i.sign === '−' ? 'var(--exc)' : i.sign === '+' ? 'var(--inc)' : 'var(--fg)'}">${i.sign ? i.sign + ' ' : ''}${fmt(i.n)}</span><h2 class="h2">${esc(i.title)} ${H.info(`<b>${esc(i.title)}</b>${esc(i.text)}${i.more ? `<p>${esc(i.more)}</p>` : ''}<p><span class=k>How it's computed.</span> ${cm ? esc(d.flow.methods.by_source) : 'The arithmetic below is recomputed from the counts.'}</p><div class="eqs">${i.eq}</div>`, 'About ' + i.title)}</h2></div><p class="meta" style="margin:0">${pctTxt(i)}</p>`;
+  const pred = cm ? cm.pred : PRED[S.node];
   if (!pred) { pn.innerHTML = head + '<div class="empty">The record list is not split by source, so there is no list behind this count.</div>'; return; }
   const base = R.filter(pred); let note = '';
-  if (S.node === 'identified') note = `The list holds the ${fmt(base.length)} records that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
-  if (S.node.startsWith('src-')) note = `The list holds the ${fmt(base.length)} records of this source that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
-  if (S.node === 'duplicates') note = `${fmt(base.length)} duplicates kept a record of their own and are listed; the other ${fmt(i.n - base.length)} were merged away before getting one.`;
+  if (cm) note = 'Showing one cell of the table of steps by source.';
+  if (!cm && S.node === 'identified') note = `The list holds the ${fmt(base.length)} records that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
+  if (!cm && S.node.startsWith('src-')) note = `The list holds the ${fmt(base.length)} records of this source that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
+  if (!cm && S.node === 'duplicates') note = `${fmt(base.length)} duplicates kept a record of their own and are listed; the other ${fmt(i.n - base.length)} were merged away before getting one.`;
   const isW = base.filter(r => H.byId.has(r.id)).length * 2 > base.length;
   const fdefs = FACETS.filter(f => (isW || (f[0] !== 'layer' && f[0] !== 'human'))).map(f => { const m = new Map(); base.forEach(r => { const v = f[2](r); if (v != null) m.set(v, (m.get(v) || 0) + 1); }); return { f, m }; }).filter(x => x.m.size > 1);
   const act = fdefs.flatMap(x => [...(S.facet[x.f[0]] || [])].filter(v => x.m.has(v)).map(v => [x.f[0], v, x.f[3](v)]));
   const keep = r => fdefs.every(x => { const s = S.facet[x.f[0]]; return !s || !s.size || s.has(x.f[2](r)); }) && (!S.q || titleOf(r.id).toLowerCase().includes(S.q.toLowerCase()));
-  const val = r => S.sk === 'year' ? r.year : S.sk === 'cic' ? (H.byId.get(r.id) || {}).cic || 0 : titleOf(r.id).toLowerCase();
+  const val = r => S.sk === 'source' ? r.source : S.sk === 'step' ? r.step : S.sk === 'year' ? r.year : S.sk === 'cic' ? (H.byId.get(r.id) || {}).cic || 0 : titleOf(r.id).toLowerCase();
   const rows = base.filter(keep).sort((a, b) => { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : 0) * S.sd; });
   const th = (k, l, c = '') => `<th class="${c}" aria-sort="${S.sk === k ? (S.sd > 0 ? 'ascending' : 'descending') : 'none'}"><button data-sort="${k}">${l}${S.sk === k ? (S.sd > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
   const chip = (x, v, n) => { const tok = x.f[4] && x.f[4](v), hol = v === 'unlayered' || v === 'null';
     return `<button class="chip" aria-pressed="${!!(S.facet[x.f[0]] && S.facet[x.f[0]].has(v))}" data-f="${x.f[0]}" data-v="${esc(v)}">${tok ? `<span class="dot" style="${hol ? `border:1.5px solid var(${tok})` : `background:var(${tok})`}"></span>` : ''}${esc(x.f[3](v))} <span class="n">${n}</span></button>`; };
   const order = (x, a, b) => x.f[0] === 'year' ? a[0].localeCompare(b[0]) : b[1] - a[1];
-  pn.innerHTML = head + (note ? `<p class="meta" style="margin:0">${esc(note)}</p>` : '') + `<div class="split" style="margin-top:8px"><div>
+  pn.innerHTML = head + (note ? `<p class="meta" style="margin:0">${esc(note)}${cm ? ' <button class="chip" data-nocell="1">Back to the flow</button>' : ''}</p>` : '') + `<div class="split" style="margin-top:8px"><div>
     ${fdefs.map(x => `<div class="fg"><span class="fl">${x.f[1]}</span><div class="chips">${[...x.m].sort((a, b) => order(x, a, b)).map(([v, n]) => chip(x, v, n)).join('')}</div></div>`).join('')}</div>
    <div><div class="actives"><b class="num" style="margin-right:6px">${fmt(rows.length)}</b><span class="meta">of ${fmt(base.length)} records${act.length ? ', filtered by' : ''}</span>${act.map(([k, v, l]) => `<span class="chip" aria-pressed="true">${esc(l)} <button data-rm="${k}" data-v="${esc(v)}" aria-label="Remove filter ${esc(l)}" style="all:unset;cursor:pointer">×</button></span>`).join('')}${act.length ? '<button class="chip" data-clear="1">Clear</button>' : ''}
-     <input type="search" id="rq" placeholder="Search titles" aria-label="Search titles" value="${esc(S.q)}" style="margin-left:auto;min-width:180px"></div>
-   ${rows.length ? `<p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
-      return `<tr tabindex="0" data-id="${esc(r.id)}"><td class="ti">${esc(clip(r.title, 160))}</td><td>${esc(outcomeOf(r))}</td>${isW ? `<td>${w ? `<span class="dot" style="background:${H.layerColor(w.layer)};margin-right:6px"></span>${esc(H.layerLabel(w.layer))}` : ''}</td>` : ''}<td class="r">${esc(r.year)}</td>${isW ? `<td class="r">${w ? w.cic : ''}</td>` : ''}<td><a href="#lanes=${encodeURIComponent(r.id)}" data-lane="${esc(r.id)}">See path</a></td></tr>`; }).join('')}</tbody></table></div>
+     <button class="btn" data-csv="1" style="margin-left:auto" ${rows.length ? '' : 'disabled'}>Download CSV</button><input type="search" id="rq" placeholder="Search titles" aria-label="Search titles" value="${esc(S.q)}" style="min-width:180px"></div>
+   ${rows.length ? `<p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}${th('source', 'Source group')}<th>Sources</th>${th('step', 'Step reached')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
+      return `<tr tabindex="0" data-id="${esc(r.id)}"><td class="ti">${esc(clip(r.title, 160))}</td><td>${esc(r.source)}</td><td>${esc((r.sources || []).join(', '))}</td><td>${esc(r.step)}</td><td>${esc(outcomeOf(r))}</td>${isW ? `<td>${w ? `<span class="dot" style="background:${H.layerColor(w.layer)};margin-right:6px"></span>${esc(H.layerLabel(w.layer))}` : ''}</td>` : ''}<td class="r">${esc(r.year)}</td>${isW ? `<td class="r">${w ? w.cic : ''}</td>` : ''}<td><a href="#lanes=${encodeURIComponent(r.id)}" data-lane="${esc(r.id)}">See path</a></td></tr>`; }).join('')}</tbody></table></div>
      ${rows.length > S.more ? `<p><button class="btn" data-more="1">Show ${Math.min(100, rows.length - S.more)} more</button> <span class="meta">${fmt(S.more)} of ${fmt(rows.length)} shown</span></p>` : ''}`
      : `<div class="empty"><b>No records match these filters.</b> <button class="chip" data-clear="1">Show all</button></div>`}</div></div>`;
   pn.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { const s = S.facet[b.dataset.f] || (S.facet[b.dataset.f] = new Set()); s.has(b.dataset.v) ? s.delete(b.dataset.v) : s.add(b.dataset.v); S.more = 100; saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { S.facet[b.dataset.rm].delete(b.dataset.v); saveHash(); drawPanel(); });
+  pn.querySelectorAll('[data-nocell]').forEach(b => b.onclick = () => { S.cell = null; saveHash(); tabWhereRefresh(); });
+  pn.querySelectorAll('[data-csv]').forEach(b => b.onclick = () => downloadCsv(rows));
   pn.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { S.facet = {}; S.q = ''; saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { if (S.sk === b.dataset.sort) S.sd *= -1; else { S.sk = b.dataset.sort; S.sd = S.sk === 'cic' ? -1 : 1; } saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { S.more += 100; drawPanel(); });
@@ -283,9 +314,20 @@ function drawPanel() {
   pn.querySelectorAll('[data-lane]').forEach(a => a.onclick = e => { e.preventDefault(); e.stopPropagation(); S.lanes = [a.dataset.lane]; showTab('paths'); });
   pn.querySelectorAll('tbody tr').forEach(r => { const go = () => H.byId.has(r.dataset.id) && H.openDrawer(r.dataset.id); r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter') go(); }; });
 }
+function drawBySource() {
+  const BS = d.flow.by_source, el = $('#bysrc'); if (!el || !BS || !BS.rows.length) return;
+  const sel = (r, g) => S.cell && S.cell[0] === r.tag && S.cell[1] === (r.criterion || '') && S.cell[2] === g;
+  const cell = (r, g, key) => { const n = r.counts[key]; return `<td class="r ${sel(r, g) ? 'sel' : ''}">${n ? `<button class="cellb" data-cell="${esc([r.tag, r.criterion || '', g].join('~'))}" aria-label="${esc(r.label)}: ${n}">${fmt(n)}</button>` : '<span class="zero">0</span>'}</td>`; };
+  el.innerHTML = `<div style="margin-top:26px">${H.header({ title: 'Steps by source', infoHtml: infoPanel('How many records reached each step, by the source that found them.', 'Rows are steps, columns are source groups. Click a number to list those records below.', esc(d.flow.methods.by_source) + '<p>' + esc(d.flow.methods.identification) + '</p>') })}</div>
+   <p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll card" style="padding:8px 12px"><table class="t bs"><thead><tr><th>Step</th>${BS.groups.map(g => `<th class="r">${esc(g)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+   ${BS.rows.map(r => `<tr class="d${Math.min(r.depth, 1)}"><td style="padding-left:${10 + 16 * r.depth}px">${esc(r.label)}</td>${BS.groups.map(g => cell(r, g, g)).join('')}${cell(r, '', 'Total')}</tr>`).join('')}</tbody></table></div>`;
+  el.querySelectorAll('[data-cell]').forEach(b => b.onclick = () => { S.cell = b.dataset.cell.split('~'); S.more = 100; S.facet = {}; saveHash(); drawBySource(); drawPanel(); $('#panel').scrollIntoView({ behavior: 'auto', block: 'nearest' }); });
+}
+const tabWhereRefresh = () => { drawBySource(); drawPanel(); };
 function tabWhere(p) {
   p.innerHTML = `<div class="bar" style="margin-top:6px"><div class="seg" role="group" aria-label="Lens"><button data-v="flow">Flow</button><button data-v="waffle">Every record</button></div><span class="grow" id="lensq"></span></div>
-    <div id="lens"></div><section class="panel" id="panel" aria-live="polite"></section>`;
+    <div id="lens"></div><section id="bysrc"></section><section class="panel" id="panel" aria-live="polite"></section>`;
+  drawBySource();
   const lens = () => { document.querySelectorAll('.seg [data-v]').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.view)); const L = $('#lens');
     if (S.view === 'flow') {
       $('#lensq').innerHTML = H.header({ title: 'Records at each step', infoHtml: infoPanel('How many records survive each stage, and why the rest leave.', 'Band width is proportional to the record count, on one scale for every column. Click a band or box to list its records below.', `Every band is drawn at ${(st.identified ? 470 / st.identified * 1000 : 0).toFixed(0)} px per 1,000 records; bands under 2 px are drawn at 2 px. The checks under the figure are recomputed from the counts.`) });
@@ -326,6 +368,7 @@ function tabScreening(p) {
    <div class="card" style="margin-top:12px;padding:14px">${curveSvg(rc)}</div>
    <div class="shares" style="margin-top:12px">${Object.keys(rc.shares).map(k => `<div><b>${sh(k)}%</b>of inclusions in the first ${k}% of records</div>`).join('')}<div><b>${fmt(rc.included_total)}</b>included in ${fmt(rc.screened)} records screened</div>
    <div>${rc.stop_at != null ? `Screening stopped after ${fmt(rc.stop_at)} records.` : `No stop point yet: ${H.term('stoprule', 'the stop rule')} has not fired.`}</div></div></section>
+  ${panelSections(SC.panel, SC.methods)}
   <section id="two">${H.header({ title: 'Two screeners', infoHtml: infoPanel('How closely two independent readers agree on which records to keep.', `Each record was read by screener A and screener B. ${H.term('kappa', 'κ')} corrects the agreement for chance. Disagreements are listed with both readings side by side.`, esc(SC.methods.two_screeners)) })}
    <div class="bar" style="margin:10px 0"><div class="seg" role="group" aria-label="Stage and phase">${two.map(t => `<button data-s="${t.stage}|${t.phase}" aria-pressed="${t === cur}">${lbl(t.stage)} · ${t.phase}</button>`).join('')}</div></div>
    <div id="twoBody"></div></section>
@@ -333,7 +376,8 @@ function tabScreening(p) {
    ${wallStages.map(sg => `<h3 class="h3" style="margin:18px 0 10px">${lbl(sg)}</h3><div class="wall">${SC.reasons_wall.filter(w => w.stage === sg).map(w => `<article class="wc"><div class="hd">${H.term(w.criterion, w.criterion)}<b>${esc(w.label || '')}</b><span class="cn">${fmt(w.count)}</span></div>
      <p class="rule">${esc(w.rule || '')}</p>${w.examples.map(e => `<div class="ex"><span class="meta">${recLink(e.work_id)} · screener ${esc(e.pass_label)}</span>${esc(e.rationale)}${e.quote ? `<blockquote class="quote">“${esc(e.quote)}”</blockquote>` : ''}</div>`).join('')}
      ${idList(w.works, 'All records excluded under this criterion')}
-     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section></div>`;
+     ${sg === 'title-abstract' && PRED['ta-' + w.criterion] ? `<p style="margin:10px 0 0"><a href="#" data-node="ta-${esc(w.criterion)}">See the ${fmt(F.excluded[w.criterion])} excluded in the flow</a></p>` : ''}</article>`).join('')}</div>`).join('')}</section>
+  ${criteriaSection(SC.panel, SC.methods)}</div>`;
   const cv = $('#curve'), hv = $('#cvh');
   hv.onmousemove = e => { const b = cv.getBoundingClientRect(), f = Math.min(1, Math.max(0, ((e.clientX - b.left) / b.width * 920 - 62) / (920 - 62 - 20))), i = Math.max(1, Math.round(f * N));
     H.tipHtml(`After <b>${fmt(i)}</b> records: <b>${fmt(rc.points[i - 1])}</b> included (${Math.round(100 * rc.points[i - 1] / rc.included_total)}% of all inclusions)`, e); };
@@ -341,6 +385,39 @@ function tabScreening(p) {
   p.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { S.stage = b.dataset.s; S.dmore = 20; saveHash({ stage: S.stage }); showTab('screening', true); });
   p.querySelectorAll('[data-node]').forEach(a => a.onclick = e => { e.preventDefault(); S.node = a.dataset.node; S.facet = {}; showTab('where'); });
   wireOpen(p); twoBody(cur);
+}
+const dash = v => v == null ? '<span class="meta">–</span>' : fmt(v);
+const kv = rows => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+const passTable = (o, label) => `<table class="t"><thead><tr><th>${label}</th><th class="r">Queued</th><th class="r">Decided</th><th class="r">Remaining</th></tr></thead><tbody>${Object.entries(o).sort().map(([k, v]) => `<tr><td>Screener ${esc(k)}</td><td class="r">${dash(v.queued)}</td><td class="r">${dash(v.decided)}</td><td class="r">${dash(v.remaining)}</td></tr>`).join('')}</tbody></table>`;
+const viewTxt = v => v ? `${esc(H.pretty(v.verdict))}${v.criterion ? ' · ' + esc(v.criterion) : ''}${v.quote ? `<blockquote class="quote">“${esc(clip(v.quote, 220))}”</blockquote>` : ''}${v.anchor ? `<div class="meta">Anchor ${esc(v.anchor)}</div>` : ''}` : '<span class="meta">not decided</span>';
+function panelSections(P, M) {
+  if (!P) return '';
+  const ruleTxt = s => `${fmt(s.n)} in a row ${s.below_score != null ? `scored below ${fmt(s.below_score)}` : 'excluded'}`;
+  const rank = P.ranking ? kv([['Ranking', `<span class="mono">${esc(P.ranking.ranking_id)}</span>`], ['Model', esc(P.ranking.model_id)], ['Weights', `<span class="mono">${esc(P.ranking.weights_hash)}</span>`], ['Records ranked', fmt(P.ranking.count)]]) : '<div class="empty">No ranking has been recorded.</div>';
+  const cal = P.calibration || {};
+  const checks = (P.checks || []).map(c => `<article class="ck"><div class="hd"><b>${esc(c.name || c.draw_id)}</b><span class="tag">${esc(H.pretty(c.kind))}</span><span class="tag">${c.current ? 'Current' : 'Outdated'}</span><span class="meta">${fmt(c.labelled)} of ${fmt(c.drawn)} labelled${c.agreement != null ? ` · ${Math.round(100 * c.agreement)}% agreement` : ''} · ${fmt(c.disagreements)} disagreements</span></div>
+    ${c.agreement_note ? `<p class="meta" style="margin:6px 0 0">${esc(c.agreement_note)}</p>` : ''}
+    ${c.bands.length ? `<details class="idl"><summary>Bands</summary><div class="scroll"><table class="t"><thead><tr><th>Band</th><th class="r">Drawn</th><th class="r">Labelled</th><th class="r">Compared</th><th class="r">Agreed</th><th class="r">Agreement</th><th class="r">Would add includes</th><th class="r">Would add excludes</th><th class="r">Undecided</th></tr></thead><tbody>${c.bands.map(b => `<tr><td>${esc(b.band)}</td><td class="r">${fmt(b.drawn)}</td><td class="r">${fmt(b.labelled)}</td><td class="r">${fmt(b.compared)}</td><td class="r">${fmt(b.agreed)}</td><td class="r">${b.agreement == null ? '–' : Math.round(100 * b.agreement) + '%'}</td><td class="r">${fmt(b.would_add_includes)}</td><td class="r">${fmt(b.would_add_excludes)}</td><td class="r">${fmt(b.undecided)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}</article>`).join('');
+  const ca = P.cannot_assess || [];
+  return `<section>${H.header({ title: 'Screening status', infoHtml: infoPanel('Where each screening pass stands, how the ranking was made and what the stop rules did.', 'Queued is what the pass was given, decided what it has finished, remaining what is left. A stale decision was made under an earlier protocol version.', esc(M.ranking) + '<p>' + esc(M.passes) + '</p><p>' + esc(M.stops) + '</p>') })}
+   <div class="sc2" style="margin-top:12px"><div><h3 class="h3">Ranking</h3>${rank}</div>
+   <div><h3 class="h3">Title and abstract</h3>${passTable(P.passes || {}, 'Pass')}<p class="meta" style="margin:8px 0 0">${P.records_left != null ? `${fmt(P.records_left)} records left for screener A · ` : ''}${fmt(P.stale_decisions)} stale decisions</p></div>
+   ${P.full_text_passes ? `<div><h3 class="h3">Full text</h3>${passTable(P.full_text_passes, 'Pass')}</div>` : ''}</div>
+   <h3 class="h3" style="margin:20px 0 8px">Stop rules</h3>
+   ${(P.stops || []).length ? `<table class="t"><thead><tr><th>Rule</th><th class="r">Run so far</th><th>State</th><th class="r">Not screened</th></tr></thead><tbody>${P.stops.map(x => `<tr><td>Stop after ${esc(ruleTxt(x))}</td><td class="r">${fmt(x.run)} of ${fmt(x.n)}</td><td>${x.stopped ? 'Stopped' : 'Running'}</td><td class="r">${fmt(x.not_screened)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No stop rule is declared.</div>'}
+   <p class="meta" style="margin:8px 0 0">Screening at title and abstract stops by a declared rule, and records not screened because of it are reported. ${fmt(P.deviations)} ${H.term('protocol', 'protocol')} deviations recorded.</p></section>
+  <section>${H.header({ title: 'Calibration and checks', infoHtml: infoPanel('Whether the screeners were tested against the researcher’s own labels.', 'A draw is a sample of records the researcher labels; agreement compares those labels with the screener’s verdicts, band by band.', esc(M.calibration) + '<p>' + esc(M.checks) + '</p>') })}
+   <div style="margin-top:12px">${kv([['Records drawn', dash(cal.drawn)], ['Labelled', dash(cal.labelled)], ['Required', cal.required ? 'Yes' : 'No'], ['Passed', Object.entries(cal.passed || {}).map(([k, v]) => `screener ${esc(k)}: ${v ? 'yes' : 'no'}`).join(', ') || '–']])}</div>
+   ${checks || '<p class="meta" style="margin:10px 0 0">No calibration or audit draws yet.</p>'}</section>
+  ${ca.length ? `<section>${H.header({ title: 'Full text to resolve', sub: `<span class="meta">${fmt(ca.length)} papers</span>`, infoHtml: infoPanel('Papers a screener could not assess from the full text and nobody has settled yet.', 'They stay promoted until resolved; the list blocks nothing.', esc(M.cannot_assess)) })}
+   <div class="scroll"><table class="t" style="margin-top:12px"><thead><tr><th>Paper</th><th>Screener A</th><th>Screener B</th><th>Read</th></tr></thead><tbody>${ca.map(x => `<tr><td class="ti">${recLink(x.work_id)}<div class="meta"><a href="sources.html#tab=conversion&amp;conv=${encodeURIComponent(x.work_id)}">Conversion inspector</a></div></td><td style="white-space:normal">${viewTxt(x.passes.A)}</td><td style="white-space:normal">${viewTxt(x.passes.B)}</td><td>${x.read_command ? `<code class="mono">${esc(x.read_command)}</code>` : ''}</td></tr>`).join('')}</tbody></table></div>
+   <p class="meta" style="margin:8px 0 0">To settle one: <code class="mono">${esc(ca[0].resolve_command)}</code></p></section>` : ''}`;
+}
+function criteriaSection(P, M) {
+  const C = P && P.criteria || []; if (!C.length) return '';
+  const bg = (n, b) => `${fmt(n)}${b ? ` <span class="meta">(${fmt(b)} kept as background)</span>` : ''}`;
+  return `<section>${H.header({ title: 'Criteria', infoHtml: infoPanel('Each exclusion criterion, what it excludes, and how many records it removed at each stage.', 'Background means the excluded works are kept for context, not simply dropped.', esc(M.criteria)) })}
+   <div class="scroll"><table class="t" style="margin-top:12px"><thead><tr><th>Criterion</th><th>What it excludes</th><th class="r">Title and abstract</th><th class="r">Full text</th></tr></thead><tbody>${C.map(c => `<tr><td>${H.term(c.id, c.id)}</td><td style="white-space:normal">${esc(c.statement || '')}</td><td class="r">${bg(c.ta_excluded, c.ta_background)}</td><td class="r">${bg(c.ft_excluded, c.ft_background)}</td></tr>`).join('')}</tbody></table></div></section>`;
 }
 const proceeds = v => v === 'include' || v === 'cannot-assess';
 function twoBody(t) {
@@ -404,7 +481,31 @@ function tabReplay(p) {
   p.querySelectorAll('#lg [data-f]').forEach(b => b.onclick = () => { hl = hl === +b.dataset.f ? -1 : +b.dataset.f; p.querySelectorAll('#lg [data-f]').forEach(x => x.setAttribute('aria-pressed', +x.dataset.f === hl)); draw(); });
   size(); draw(); setPlay(false);
   const rs = () => { size(); draw(); }; addEventListener('resize', rs);
-  cleanup = () => { playing = false; cancelAnimationFrame(raf); removeEventListener('resize', rs); };
+  const stopLayers = layerReplay(p.querySelector('.fpane'), reduce);
+  cleanup = () => { playing = false; cancelAnimationFrame(raf); removeEventListener('resize', rs); stopLayers(); };
+}
+/* The researcher's layer moves, one step per day, as bars per layer. Returns a stop function. */
+function layerReplay(root, reduce) {
+  const LR = d.flow.layer_replay; if (!LR) return () => {};
+  const names = [...LR.layers, 'unlayered'], steps = LR.steps || [], nS = steps.length;
+  const sec = document.createElement('section');
+  sec.innerHTML = `${H.header({ title: 'Layer moves', sub: 'How the researcher’s moves changed the layers, day by day.', infoHtml: infoPanel('How the researcher’s moves changed which layer each paper sits in.', 'The first position is every paper on the layer the layer miner gave it. Each later step is one day of moves; the bars show how many papers sit on each layer after it.', esc(LR.methods)) })}
+   ${nS ? `<div class="card" style="padding:14px;margin-top:12px"><div class="lyb" id="lyb"></div>
+   <div class="ctl"><button class="btn primary" id="lyPlay" ${reduce ? 'disabled title="Animation is off because your system prefers reduced motion"' : ''}>Play</button><span class="when" id="lyWhen"></span><span class="meta" id="lyMv"></span></div>
+   <input type="range" id="lySl" min="0" max="${nS}" step="1" value="${nS}" aria-label="Day of layer moves" style="width:100%;accent-color:var(--acc)"></div>` : '<div class="empty">No layer moves have been recorded; every paper is on the layer the layer miner gave it.</div>'}`;
+  root.appendChild(sec); if (!nS) return () => {};
+  const state = k => { const a = LR.start.slice(); for (let i = 0; i < k; i++) steps[i].mv.forEach(([w, l]) => { a[w] = l; }); return a; };
+  const tok = n => (H.LAYERS.find(l => l[0] === n) || [, , '--l-unlayered'])[2];
+  let k = nS, tm = 0;
+  const draw = () => { const a = state(k), c = names.map(() => 0); a.forEach(l => { c[l < 0 ? names.length - 1 : l]++; }); const mx = Math.max(1, ...c);
+    sec.querySelector('#lyb').innerHTML = names.map((n, i) => `<span>${esc(H.layerLabel(n))}</span><span class="tr"><i style="width:${100 * c[i] / mx}%;background:var(${tok(n)})"></i></span><span class="v">${fmt(c[i])}</span>`).join('');
+    sec.querySelector('#lyWhen').textContent = k === 0 ? 'Layer miner’s reading' : steps[k - 1].d;
+    sec.querySelector('#lyMv').textContent = k === 0 ? '' : `${fmt(steps[k - 1].mv.length)} papers moved that day`; sec.querySelector('#lySl').value = k; sec.querySelector('#lyPlay').textContent = tm ? 'Pause' : 'Play'; };
+  const stop = () => { clearInterval(tm); tm = 0; };
+  sec.querySelector('#lySl').oninput = e => { stop(); k = +e.target.value; draw(); };
+  sec.querySelector('#lyPlay').onclick = () => { if (tm) { stop(); draw(); return; } if (k >= nS) k = 0; tm = setInterval(() => { k++; if (k >= nS) stop(); draw(); }, 600); draw(); };
+  draw();
+  return stop;
 }
 
 /* ================= tab 4: paths (swimlanes) ================= */
@@ -430,6 +531,12 @@ function diverge(lanes) {
     have.forEach(l => { if (l.outs[s] !== top[0] && l.div == null) l.div = s; }); }
 }
 const outTok = o => /exclu|not |fail|merged|pending/i.test(o || '') ? '--exc' : /includ|kept|read|retriev|convert|found/i.test(o || '') ? '--inc' : '--mut';
+function recMeta(id) {
+  const r = RI.get(id); if (!r) return '';
+  const abs = R.filter(x => x.duplicate_of === id).map(x => x.id);
+  const part = (k, v) => v ? `<span class="meta">${k} ${v}</span>` : '';
+  return `<div class="rm">${part('Year', esc(r.year || ''))}${part('Source group', esc(r.source))}${part('Sources', esc((r.sources || []).join(', ')))}${part('Step reached', esc(r.step + ', ' + r.outcome + (r.reason ? ' (' + r.reason + ')' : '')))}${r.duplicate_of ? part('Duplicate of', recLink(r.duplicate_of)) : ''}</div>${idList(abs, 'Duplicates merged into it')}`;
+}
 function tabPaths(p) {
   const RP = d.journeys.replay, ids = S.lanes.slice(0, 20), lanes = ids.map(laneOf), real = lanes.filter(l => !l.none); diverge(real);
   p.innerHTML = `<div class="fpane"><section>${H.header({ title: ids.length === 1 && real[0] ? 'Path of one paper' : 'Paths', sub: 'One lane per paper on a shared time axis.', infoHtml: infoPanel('The route each chosen paper took through the review, and where the routes parted.', 'Time runs left to right on one axis for every paper. Each dot is a stop: hover or focus it for the stage, who acted, the outcome and the evidence. A ring marks where a path first differs from what most of the papers did at that stage. Open the list under a lane for every stop with the time spent between them.', esc(d.journeys.methods.swimlanes)) })}
@@ -453,7 +560,7 @@ function tabPaths(p) {
   const rowY = si => 14 + rows.indexOf(si) * RH, Hl = rows.length * RH + 22, rowName = si => si === FINAL ? 'Final outcome' : stgL(RP.stages[si]);
   const axis = `<svg viewBox="0 0 ${Wd} 24" aria-hidden="true">${ticks.map(t => `<text class="axis" x="${X(t)}" y="16" text-anchor="middle">${dayFmt(t)}</text>`).join('')}</svg>`;
   $('#lanes').innerHTML = axis + lanes.map((l, li) => {
-    if (l.none) return `<div class="lane"><div class="lh"><b>${esc(titleOf(l.id))}</b></div><div class="empty">This paper’s path is available in the live hub; this copy carries paths for the records of the review only.</div></div>`;
+    if (l.none) return `<div class="lane"><div class="lh"><b>${esc(titleOf(l.id))}</b></div>${recMeta(l.id)}<div class="empty">This paper’s path is available in the live hub; this copy carries paths for the records of the review only.</div></div>`;
     const pts = [...l.stops, l.fin];
     const svg = `<svg viewBox="0 0 ${Wd} ${Hl}" role="img" aria-label="Path of ${esc(l.title)}">${ticks.map(t => `<line class="gl" x1="${X(t)}" x2="${X(t)}" y1="0" y2="${Hl}"/>`).join('')}
      ${rows.map(si => `<line class="rl" x1="${gx}" x2="${Wd - 24}" y1="${rowY(si)}" y2="${rowY(si)}"/><text class="rowl" x="0" y="${rowY(si) + 3}">${esc(rowName(si))}</text>`).join('')}
@@ -463,7 +570,7 @@ function tabPaths(p) {
        return `${s.si === l.div ? `<circle class="ring" cx="${x}" cy="${y}" r="9"/>` : ''}${s.final ? `<rect class="pt" tabindex="0" data-l="${li}" data-k="${k}" x="${x - 5}" y="${y - 5}" width="10" height="10" rx="2" fill="var(${tok})"/>` : `<circle class="pt" tabindex="0" data-l="${li}" data-k="${k}" cx="${x}" cy="${y}" r="5" fill="var(${tok})"/>`}`; }).join('')}</svg>`;
     const dur = (s, k) => k ? durFmt(Math.max(0, s.t - pts[k - 1].t)) : '';
     const tbl = `<table class="t"><thead><tr><th>When</th><th>Stage</th><th>Who</th><th>Outcome</th><th>Criterion</th><th class="r">After</th><th>Reason</th><th>Quote</th></tr></thead><tbody>${pts.map((s, k) => `<tr><td>${esc(stampFmt(s.t))}</td><td>${esc(rowName(s.si))}</td><td>${s.kind ? esc(s.kind) + (s.model ? ' · ' + esc(s.model) : '') : '<span class="meta">—</span>'}</td><td>${esc(s.outcome === 'reached' ? '' : s.outcome)}</td><td>${esc(s.criterion || '')}</td><td class="r">${dur(s, k)}</td><td>${esc(s.text || '')}</td><td>${esc(s.quote || '')}</td></tr>`).join('')}</tbody></table>`;
-    return `<div class="lane"><div class="lh">${H.byId.has(l.id) ? `<a href="#" data-open="${esc(l.id)}">${esc(l.title)}</a>` : `<b>${esc(l.title)}</b>`}<span class="meta">${esc(FATE[l.fate] || l.fate)}${l.crit ? ' · ' + esc(l.crit) : ''}${l.div != null ? ` · parts from the others at ${esc(rowName(l.div).toLowerCase())}` : ''}</span></div>${svg}
+    return `<div class="lane"><div class="lh">${H.byId.has(l.id) ? `<a href="#" data-open="${esc(l.id)}">${esc(l.title)}</a>` : `<b>${esc(l.title)}</b>`}<span class="meta">${esc(FATE[l.fate] || l.fate)}${l.crit ? ' · ' + esc(l.crit) : ''}${l.div != null ? ` · parts from the others at ${esc(rowName(l.div).toLowerCase())}` : ''}</span></div>${recMeta(l.id)}${svg}
       <details ${real.length === 1 ? 'open' : ''}><summary>All stops</summary>${l.detail ? '' : '<p class="meta">Here the stops carry stage and time. Who acted, the outcome and the quote are in the live hub.</p>'}<div class="scroll">${tbl}</div></details></div>`; }).join('');
   const root = $('#lanes'); wireOpen(root);
   root.querySelectorAll('.pt').forEach(el => { const l = lanes[+el.dataset.l], s = [...l.stops, l.fin][+el.dataset.k];

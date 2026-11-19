@@ -257,6 +257,14 @@ svg text{user-select:none;font-family:var(--f-ui)}
 
   /* ================= 2. Foundations ================= */
   const openWork = id => { if (BY.has(id)) H.openDrawer(id); };
+  const yr = id => { const o = (G.outside_info || {})[id]; return o && o.year ? o.year : ''; };
+  const idLinks = o => !o ? '' : [o.doi ? ` · <a href="https://doi.org/${esc(o.doi)}" target="_blank" rel="noopener">DOI</a>` : '', o.arxiv ? ` · <a href="https://arxiv.org/abs/${esc(o.arxiv)}" target="_blank" rel="noopener">arXiv</a>` : ''].join('');
+  function candidatesBlock() {
+    const C = G.candidates; if (!C || !C.total) return '';
+    return `<section style="margin-top:26px">${H.header({ title: 'Cited by the corpus, not in the project', infoHtml: infoPanel('Cited items that are not works of the project yet: snowball candidates.', 'Each row is one cited item, with how many corpus papers cite it. The identifier opens the DOI or arXiv page.', meth('candidates')) })}
+      <p class="meta">${fmt(C.shown)} of ${fmt(C.total)} items, most cited first. These are not works yet, so they cannot be added to the inbox from here.</p>
+      <div class="scrollx"><table class="t"><thead><tr><th>Cited item</th><th class="r">Year</th><th class="r">Citing papers</th><th>Identifier</th></tr></thead><tbody>${C.items.map(c => `<tr><td>${esc(c.title || c.key)}</td><td class="r">${esc(c.year ?? '–')}</td><td class="r">${fmt(c.citing_count)}</td><td>${[...c.dois.map(d => `<a href="https://doi.org/${esc(d)}" target="_blank" rel="noopener">${esc(d)}</a>`), ...c.arxivs.map(a => `<a href="https://arxiv.org/abs/${esc(a)}" target="_blank" rel="noopener">arXiv:${esc(a)}</a>`)].join('<br>') || '<span class="meta">none</span>'}</td></tr>`).join('')}</tbody></table></div></section>`;
+  }
   build.foundations = () => {
     const F = G.foundations, top = F[0];
     return {
@@ -265,10 +273,10 @@ svg text{user-select:none;font-family:var(--f-ui)}
         'The bar is the share of corpus papers that cite the work. Open the citing papers to see who builds on it.',
         `${meth('foundations')} The list keeps the top ${fmt(F.length)}.`),
       lead: top ? `The most leaned-on outside work, “${esc(short(nm(top.id), 70))}”, is cited by <b>${fmt(top.count)}</b> corpus papers, <b>${pcs(top.count, corpusN)}%</b> of the corpus.` : '',
-      body: F.length ? F.map((f, i) => `<div class="frow"><span class="rk">${i + 1}</span><div class="nm">${esc(nm(f.id))}<span class="meta">Outside the corpus</span></div>
+      body: (F.length ? F.map((f, i) => `<div class="frow"><span class="rk">${i + 1}</span><div class="nm">${esc(nm(f.id))}<span class="meta">Outside the corpus${yr(f.id) ? ' · ' + esc(yr(f.id)) : ''} · <span class="mono">${esc(f.id)}</span>${idLinks((G.outside_ids || {})[f.id])}</span></div>
         <div class="fb"><div class="fbar" role="img" aria-label="${pcs(f.count, corpusN)}% of the corpus"><i style="width:${(f.share * 100).toFixed(1)}%"></i></div><div class="meta">${pcs(f.count, corpusN)}% of the corpus</div></div>
         ${HUB.served ? `<span class="snow"><button type="button" class="btn" data-snow="${esc(f.id)}">Add to snowball</button><span class="snowmsg" aria-live="polite"></span></span>` : '<button class="btn" disabled title="Available in the live hub">Add to snowball</button>'}
-        <details class="cit"><summary>Citing papers (${fmt(f.citing.length)})</summary><ul>${f.citing.map(c => BY.has(c) ? `<li><button type="button" class="lnk" data-open="${esc(c)}">${esc(short(nm(c), 90))}</button></li>` : '').join('')}</ul></details></div>`).join('') : '<p class="empty">No outside works are cited yet.</p>',
+        <details class="cit"><summary>Citing papers (${fmt(f.citing.length)})</summary><ul>${f.citing.map(c => BY.has(c) ? `<li><button type="button" class="lnk" data-open="${esc(c)}">${esc(short(nm(c), 90))}</button></li>` : '').join('')}</ul></details></div>`).join('') : '<p class="empty">No outside works are cited yet.</p>') + candidatesBlock(),
       draw() {
         /* Served only: the one write of this page. It puts the work in the inbox as your own link (nothing is fetched yet). */
         main.querySelectorAll('[data-snow]').forEach(b => b.onclick = () => {

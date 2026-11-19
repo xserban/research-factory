@@ -21,20 +21,30 @@ import re
 import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
 from sqlalchemy import text as sql_text
 
 from factory.services import (
+    call_memo,
+    citations,
+    hub_costs,
     hub_findings,
     hub_graph,
     hub_landscape,
     hub_lenses,
     hub_living,
+    hub_method,
     hub_mining,
+    hub_pipeline,
+    hub_platform,
+    hub_protocol,
     hub_screening,
+    hub_sources,
     hub_ui,
+    hub_write,
     protocol,
     question,
     site_corpus,
@@ -168,6 +178,12 @@ class HubContext:
             "landscape",
             lambda: hub_landscape.landscape_payloads(hub_landscape.load_inputs(self.project)),
         )
+
+    @property
+    def corpus_raw(self) -> dict[str, Any]:
+        """`site_corpus.corpus_payload` for the whole project, read once and shared (the method,
+        write and corpus payloads each used to read it again). Callers must not mutate it."""
+        return self._once("corpus_payload", lambda: site_corpus.corpus_payload(self.project))
 
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
         date = self.publication.get(work_id, ("", ""))[1]
@@ -520,6 +536,18 @@ def _unread_entry(ctx: HubContext, work_id: str, meta: dict[str, Any]) -> dict[s
     }
 
 
+def _doc_link(doc: Mapping[str, str] | None, slug: str) -> dict[str, str] | None:
+    """The stored original of a work as the page may show it: its kind and name and the path of the
+    conversion inspector page. The absolute library path is dropped (the payload is published)."""
+    if not doc:
+        return None
+    return {
+        "kind": doc["kind"],
+        "name": doc["name"],
+        "inspector": f"../conversion/doc/{slug}.html",
+    }
+
+
 def build_corpus(ctx: HubContext) -> dict[str, Any]:
     """`site_corpus.corpus_payload` restricted to the included set (plan 4.1).
 
@@ -529,7 +557,7 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
     mapped to included ids, self-links and repeats dropped. An included work no miner has read is
     listed from its record, marked `not_read_yet`, so every included work appears. `sets` lists the
     differences."""
-    raw = site_corpus.corpus_payload(ctx.project)
+    raw = ctx.corpus_raw
     by_id = {w["id"]: w for w in raw["works"]}
     source_of = ctx.source_of
     layer_of = ctx.layer_of
@@ -547,6 +575,7 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         item["id"] = w
         item["slug"] = site_corpus.slug_of(w)
         item["layer"] = layer_of[w]
+        item["doc"] = _doc_link(entry.get("doc"), item["slug"])
         if source_of[w] != w:
             item["mapped_from"] = source_of[w]
         works.append(item)
@@ -557,6 +586,13 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         ia, ib = to_included.get(slug_to_id[a]), to_included.get(slug_to_id[b])
         if ia and ib and ia != ib:
             pairs.add((slug_of_included[ia], slug_of_included[ib]))
+    report = citations.citation_report(ctx.project, as_of_year=datetime.now(UTC).year)
+    design = {
+        w["id"]: [{k: str(r.get(k) or "") for k in site_corpus.DESIGN_FIELDS} for r in w["design"]]
+        for w in works
+        if w.get("design")
+    }
+    n_design = {w["id"]: int(w.get("n_design") or 0) for w in works if w.get("design")}
     return {
         "dims": raw["dims"],
         "works": works,
@@ -564,6 +600,16 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         "cites": sorted([a, b] for a, b in pairs),
         "refs_done": raw["refs_done"],
         "sets": hp.sets_payload(ctx.flow_data.sets),
+        "citation": hub_lenses.citation_rate(
+            report.works,
+            ctx.included,
+            extractions=report.extractions,
+            entries=report.entries,
+            resolved_links=report.resolved_links,
+            works_total=report.works_total,
+            as_of_year=report.as_of_year,
+        ),
+        "results": hub_lenses.results_grid(design, n_design),
     }
 
 
@@ -602,6 +648,14 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "journeys": build_journeys,
     hub_landscape.LANDSCAPE: build_landscape,
     hub_landscape.USES: build_landscape_uses,
+    # stubs of the seven ported pages (step 0); each module's `build` replaces its stub later
+    "protocol": hub_protocol.build,
+    "pipeline": hub_pipeline.build,
+    "sources": hub_sources.build,
+    "method": hub_method.build,
+    "costs": hub_costs.build,
+    "write": hub_write.build,
+    "platform": hub_platform.build,
 }
 
 # Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes
@@ -682,7 +736,8 @@ def build_static(
     for name in names:
         started = time.perf_counter()
         try:
-            text = dumps(builders[name](ctx))
+            with call_memo.entering():  # one reading of each shared derivation per payload
+                text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
             for stale in (data_dir / f"{name}.json", data_dir / f"{name}.js"):

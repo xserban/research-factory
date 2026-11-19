@@ -190,6 +190,22 @@ def test_flow_payload_on_a_full_text_project(
     assert payload["sets"]["not_read_yet"] == included[1:]
     assert len(payload["records"]) == payload["records_total"]
     assert all(isinstance(r["source"], str) and r["source"] for r in payload["records"])
+    # ledger columns, the by-source matrix and the layer replay (parity FL-3 to FL-6, LY-3)
+    assert all(
+        {"sources", "step", "outcome", "reason", "duplicate_of", "tags"} <= set(r)
+        for r in payload["records"]
+    )
+    matrix = payload["by_source"]
+    first = matrix["rows"][0]
+    assert first["tag"] == "id" and first["counts"]["Total"] == payload["records_total"]
+    assert sum(first["counts"][g] for g in matrix["groups"]) == first["counts"]["Total"]
+    inc_row = next(r for r in matrix["rows"] if r["tag"] == "ft-inc")
+    assert inc_row["counts"]["Total"] == len(included)
+    assert inc_row["counts"]["Total"] == sum(1 for r in payload["records"] if "ft-inc" in r["tags"])
+    assert isinstance(payload["deviations"], int)
+    lr = payload["layer_replay"]
+    assert lr["works"] == sorted(included) and len(lr["start"]) == len(lr["final"]) == len(included)
+    assert "by_source" in payload["methods"] and "identification" in payload["methods"]
 
 
 def test_included_count_mismatch_is_refused(
@@ -203,3 +219,25 @@ def test_included_count_mismatch_is_refused(
     monkeypatch.setattr(hp, "included_ids", lambda rows, stage_run: [])
     with pytest.raises(ValueError, match="ledger includes"):
         hp.load_flow_data(project)
+
+
+def test_by_source_table_counts_each_step_by_group_and_lists_criteria() -> None:
+    rows = [
+        row("a", source_group="arxiv-only", ta_outcome="excluded", ta_criterion="EX01"),
+        row("b", source_group="both", ta_outcome="excluded", ta_criterion="EX01"),
+        row("c", source_group="both", ta_outcome="excluded"),
+        row("d", source_group="other", canonical_id="a", merge_rule="doi"),
+    ]
+    out = hp.by_source_table(rows)
+    assert out["groups"][:4] == ["arxiv-only", "both", "openalex-only", "other"]
+    by = {(r["tag"], r["criterion"]): r["counts"] for r in out["rows"]}
+    assert by[("id", None)]["Total"] == 4 and by[("dup", None)]["other"] == 1
+    assert by[("ta-exc", None)]["Total"] == 3
+    assert by[("ta-exc", "EX01")] == {
+        "arxiv-only": 1,
+        "both": 1,
+        "openalex-only": 0,
+        "other": 0,
+        "Total": 2,
+    }
+    assert by[("ta-exc", "unspecified")]["both"] == 1

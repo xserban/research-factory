@@ -604,3 +604,79 @@ def test_scope_names_the_dominant_layer_when_nearly_all_works_share_it() -> None
 def test_platform_method_says_when_the_rates_exist() -> None:
     text = hm.METHODS["platform"]
     assert "second reading" in text and "no rate" in text
+
+
+# ------------------------------------------------ parity: status, use, disagreements
+
+
+def test_miner_entry_carries_status_use_versions_how_it_reads_and_commands() -> None:
+    data = dataclasses.replace(
+        two_pass_data(),
+        detail={
+            "m-test": {
+                "status": {"digest": "abc123", "units": 5, "closed": 3, "open": 2, "rows": 5},
+                "use": {"dual_extract_sample": 0.1, "audit_fraction": 0.02},
+                "versions": [
+                    {"version": 1, "digest": "abc123", "listed": True, "proposer": "agent"}
+                ],
+            }
+        },
+    )
+    m = hm.miners(data)["miners"][0]
+    assert m["digest"] == "abc123"
+    assert (m["status"]["units"], m["status"]["closed"], m["status"]["open"]) == (5, 3, 2)
+    assert m["use"]["dual_extract_sample"] == 0.1
+    assert m["versions"][0]["proposer"] == "agent"
+    how = m["how_reads"]
+    assert how["procedure"] == m["how_reads"]["procedure"] and "elements" in how
+    assert how["min_quotes_per_record"] >= 0 and isinstance(how["heading_patterns"], list)
+    assert m["commands"] == ["mine status", "mine agreement m-test", "mine resolve --help"]
+    json.dumps(m)
+
+
+def test_a_miner_without_detail_still_has_empty_status_and_no_use() -> None:
+    m = hm.miners(two_pass_data())["miners"][0]
+    assert m["digest"] == "" and m["status"] == {} and m["use"] is None and m["versions"] == []
+
+
+def test_fairer_block_counts_rows_matches_and_disagreements_per_field() -> None:
+    f = hm.miners(two_pass_data())["miners"][0]["agreement"]["fairer"]
+    assert f["works_both"] == 2 and f["matched"] == f["rows_a"] == f["rows_b"] == 2
+    assert f["by_field"]["stance"]["disagreements"] == 1  # w2: con against pro
+    assert f["disagreements"] == sum(v["disagreements"] for v in f["by_field"].values())
+    assert f["primary"]["total"] <= f["overall"]["total"]
+    assert isinstance(f["one_sided"], int)
+
+
+def test_grid_payload_lists_disagreement_pairs_with_both_readings() -> None:
+    data = two_pass_data()
+    grid = hm.grid_payloads(data)["grid-m-test"]
+    d = grid["disagreements"]
+    assert d["count"] >= 1 and d["works_both"] == 2 and d["per_field_cap"] == hm.DISAGREE_PER_FIELD
+    stance = next(f for f in d["fields"] if f["field"] == "stance")
+    assert stance["count"] == 1 and stance["shown"] == 1 and stance["total"] == 2
+    item = stance["items"][0]
+    assert (item["work"], item["a"], item["b"]) == ("w2", "con", "pro")
+    assert item["why"] == "different values"
+    counts = [f["count"] for f in d["fields"]]
+    assert counts == sorted(counts, reverse=True)
+    json.dumps(grid)
+
+
+def test_disagreement_pairs_are_capped_per_field_with_the_exact_count() -> None:
+    n = hm.DISAGREE_PER_FIELD + 5
+    works = [f"w{i}" for i in range(n)]
+    sets = mk_sets(works, works, {})
+    rows = [mk_row(f"a{i}", w, "A", stance="pro") for i, w in enumerate(works)] + [
+        mk_row(f"b{i}", w, "B", stance="con") for i, w in enumerate(works)
+    ]
+    data = mk_data(rows, sets)
+    d = hm.grid_payloads(data)["grid-m-test"]["disagreements"]
+    f = d["fields"][0]
+    assert f["count"] == n and f["shown"] == hm.DISAGREE_PER_FIELD
+    assert len(f["items"]) == hm.DISAGREE_PER_FIELD
+
+
+def test_miners_payload_has_the_column_glossary() -> None:
+    cols = hm.miners(two_pass_data())["columns"]
+    assert {"Units", "Closed", "Open", "Stale"} <= {c["name"] for c in cols}

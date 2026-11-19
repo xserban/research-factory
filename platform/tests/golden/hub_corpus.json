@@ -1,4 +1,16 @@
 {
+ "citation": {
+  "as_of_year": null,
+  "entries": 0,
+  "extractions": 0,
+  "included": 6,
+  "methods": "The number of distinct works citing a paper, among works whose reference list was extracted, divided by the years since its publication (the publication year counts as one, the as-of year is the current year). The count is a lower bound: a paper nobody extracted a citer for shows none, which is not a known zero. The count stored in the work record (OpenAlex) is shown beside it and never merged with it.",
+  "resolved_links": 0,
+  "rows": [],
+  "top": 50,
+  "unknown": 6,
+  "works_total": 15
+ },
  "cites": [],
  "dims": [
   {
@@ -71,6 +83,22 @@
   "off-topic"
  ],
  "refs_done": 0,
+ "results": {
+  "approaches": [],
+  "bars": {
+   "evidence_grade": [],
+   "system_role": [],
+   "value_kind": []
+  },
+  "cap_per_work": 30,
+  "cells": [],
+  "left_out": 0,
+  "methods": "Result rows of the design approach miner (pass A) of the included works. The grid counts the rows that describe the paper's own system by lifecycle stage and approach; the bars count every row by who the result is about (system role), how strong the evidence is (evidence grade) and what kind of value it is. At most the first 30 rows of a work are read, and the count of rows left out is given. These are readings of the papers, not re-measured results.",
+  "own": 0,
+  "rows": 0,
+  "stages": [],
+  "works_with_rows": 0
+ },
  "sets": {
   "duplicate_mapped": [],
   "duplicate_of_excluded": [],

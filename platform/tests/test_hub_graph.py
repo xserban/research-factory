@@ -265,3 +265,21 @@ def test_outside_nodes_carry_title_author_and_year(project: Project) -> None:
     info = payload["outside_info"]
     assert info[CITED] == {"title": "Kernels revisited", "author": "Smith, A.", "year": 2019}
     assert WORK not in info
+
+
+def test_payload_carries_outside_identifiers_and_cited_candidates(project: Project) -> None:
+    _extract(project)
+    _resolve(project, [resolution(1, confidence="identifier"), FUZZY])
+    project.index.sync()
+    data = {"title": "Kernels revisited", "identifiers": {"doi": "10.1/k", "arxiv": "2001.00001"}}
+    with project.index._engine.begin() as conn:  # fixture: a stored record for the cited work
+        conn.execute(
+            text("INSERT INTO works (work_id, data, first_event_id) VALUES (:w, :d, 'e')"),
+            {"w": CITED, "d": json.dumps(data)},
+        )
+    payload = hg.graph_payload(project, [WORK], {WORK: "rl"})
+    assert payload["outside_ids"].get(CITED) == {"doi": "10.1/k", "arxiv": "2001.00001"}
+    cand = payload["candidates"]
+    assert cand["shown"] == len(cand["items"]) <= cand["total"]
+    assert "candidates" in payload["methods"]
+    json.dumps(payload)
