@@ -201,14 +201,15 @@ HUB.load(['shell', 'costs']).then(d => {
     const shown = OPS.groups.filter(g => (st.folder === 'all' || g.folder === st.folder) && (st.link === 'all' || (st.link === 'linked') === g.linked));
     const rows = shown.map(g => {
       const link = g.linked ? `<span class="co-st-link">linked</span> ` + g.ids.slice(0, 3).map(i => g.run_ids.includes(i) ? `<a href="#" data-run="${esc(i)}" class="mono">${esc(i)}</a>` : `<span class="mono">${esc(i)}</span>`).join(', ') : '<span class="co-st-unlinked">unlinked</span>';
-      const list = g.listed.map(f => `<li>${esc(f.path)} <span class="meta">${esc(f.day)}, ${size(f.size)}</span></li>`).join('');
+      const fileLink = f => HUB.served ? `<a href="ops/${f.path.split('/').map(encodeURIComponent).join('/')}" target="_blank" rel="noopener">${esc(f.path)}</a>` : esc(f.path);
+      const list = g.listed.map(f => `<li>${fileLink(f)} <span class="meta">${esc(f.day)}, ${size(f.size)}</span></li>`).join('');
       const more = g.files > g.listed.length ? `<li class="meta">and ${fmt(g.files - g.listed.length)} more</li>` : '';
       return `<tr><td>${esc(g.folder)}</td><td>${esc(g.prefix)}</td><td class="r">${fmt(g.files)}</td><td>${esc(g.first === g.last ? g.first : g.first + ' to ' + g.last)}</td><td class="r">${size(g.size)}</td><td>${link}</td><td><details><summary>Files</summary><ul class="co-files">${list}${more}</ul></details></td></tr>`;
     }).join('');
     return `<div class="co-kpis">${kpi(fmt(OPS.files), 'files', panel('The files under the ops/ folder, which are not events.', '', M.runs))}${kpi(fmt(OPS.groups.length), 'groups')}${kpi(fmt(OPS.unlinked), 'unlinked groups', panel('Groups with no run or task id in a file name that an event names.', '', M.runs))}</div>` +
       `<div class="co-sel"><span class="meta">Folder</span>${chip('folder', 'all', 'All')}${folders.map(f => chip('folder', f, f)).join('')}<span class="meta" style="margin-left:12px">Status</span>${chip('link', 'all', 'All')}${chip('link', 'unlinked', 'Unlinked')}${chip('link', 'linked', 'Linked')}</div>` +
       `<section class="card co-card"><div class="co-tbl"><table class="t"><thead><tr><th>Folder</th><th>Batch</th><th class="r">Files</th><th>Modified</th><th class="r">Size</th><th>Linked to a run</th><th>Files</th></tr></thead><tbody>${rows}</tbody></table></div>` +
-      `<p class="meta">Files cannot be opened from here yet ${H.info('Opening an ops/ file needs a read-only route on the hub server, restricted to the project folder; it is not available yet. The folder is also not part of the published project, so this page is not meant to be copied or published as is.')}</p></section>`;
+      `<p class="meta">${HUB.served ? 'A file opens as plain text.' : 'Files open only when the hub is served.'} ${H.info('Files open through a read-only route restricted to the ops/ folder of the project (no links out of it, size capped). The folder is not part of the published project, so this page is not meant to be copied or published as is.')}</p></section>`;
   }
 
   /* ---------- render ---------- */

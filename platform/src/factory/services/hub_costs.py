@@ -15,11 +15,13 @@ Invariants:
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from factory.services import budgets as budgets_service
 from factory.services import ledger as ledger_service
+from factory.services.context import Project
 from factory.services.run_costs import (
     CostReport,
     RunCost,
@@ -238,3 +240,41 @@ def build(ctx: HubContext) -> dict[str, Any]:
         "events_per_model": _events_per_model(ctx),
         "ops": _files(run_groups(ctx.project), {r.run_id for r in rows}),
     }
+
+
+# ---------------------------------------------------------------- one ops file (read-only route)
+
+OPS_FILE_CAP = 2_000_000
+"""Largest ops file the route serves, in bytes."""
+_OPS_TYPES: dict[str, str] = {".json": "application/json", ".jsonl": "application/x-ndjson"}
+
+
+@dataclass(frozen=True)
+class OpsFile:
+    body: bytes
+    content_type: str
+
+
+def read_ops_file(project: Project, rel: str) -> OpsFile | None:
+    """The file `rel` of the project's `ops/` folder, or None.
+
+    Refused (None): an empty, absolute or `..` path, a path through or to a symlink (the resolved
+    path must equal the lexical one, so containment holds), a directory, a missing file, a file
+    over `OPS_FILE_CAP`. Pages are never served as pages: everything not JSON is `text/plain`."""
+    parts = rel.split("/")
+    if not rel or rel.startswith("/") or "\\" in rel or "\0" in rel:
+        return None
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    ops = (project.paths.dir / "ops").resolve()
+    target = ops.joinpath(*parts)
+    try:
+        if target.resolve() != target or not target.is_file():
+            return None
+        if target.stat().st_size > OPS_FILE_CAP:
+            return None
+        body = target.read_bytes()
+    except OSError:
+        return None
+    kind = _OPS_TYPES.get(target.suffix.lower(), "text/plain")
+    return OpsFile(body, kind + "; charset=utf-8")

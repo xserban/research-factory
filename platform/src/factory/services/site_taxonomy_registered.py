@@ -57,13 +57,17 @@ def category_counts(rows: Iterable[tuple[str, str]]) -> dict[str, int]:
     return {value: len(works) for value, works in seen.items()}
 
 
-def derived_counts(project: Project, miner: str, version: int | None = None) -> dict[str, int]:
+def derived_counts(
+    project: Project, miner: str, version: int | None = None, *, listed: set[str] | None = None
+) -> dict[str, int]:
     """Category counts from the live, non-stale pass-A rows of `miner` (calibration rows apart).
     When the miner is listed in the protocol, only works in its current population count, so rows
     of works no longer in it are left out."""
     stale = stale_extractions(project, scope=MinerScope(miner))
     keep: set[str] | None = None
-    if version is not None and miner in mining_service.listed_miner_names(project):
+    if listed is None:
+        listed = mining_service.listed_miner_names(project) if version is not None else set()
+    if version is not None and miner in listed:
         keep = set(mining_service.miner_population(project, miner))
     pairs = [
         (row.work_id, str(row.fields[CATEGORY_FIELD].value))
@@ -89,29 +93,51 @@ def _registration_order(project: Project, event_ids: list[str]) -> dict[str, tup
     return {str(i): (str(t), str(i)) for i, t in found}
 
 
-def derived_miner(project: Project, name: str, version: int) -> DerivedMiner | None:
-    """The latest registered non-retired miner version whose spec references taxonomy
-    `(name, version)`: latest by registration event order, not by name."""
-    candidates: list[tuple[MinerSpec, str]] = []
+def taxonomy_miner_specs(project: Project) -> list[tuple[MinerSpec, str]]:
+    """`(spec, registration event id)` of every registered non-retired miner version that
+    references a taxonomy. One pass over the miners; `derived_miner` takes it to avoid reading
+    them again for each taxonomy version."""
+    found: list[tuple[MinerSpec, str]] = []
     for row in mining_service.registered_miners(project):
         if row.retired:
             continue
         spec = mining_service.registered_miner(project, row.name, row.version)
         if spec is None or spec.taxonomy is None:
             continue
-        if (spec.taxonomy.name, spec.taxonomy.version) != (name, version):
-            continue
-        candidates.append((spec, row.event_id))
+        found.append((spec, row.event_id))
+    return found
+
+
+def derived_miner(
+    project: Project,
+    name: str,
+    version: int,
+    *,
+    specs: list[tuple[MinerSpec, str]] | None = None,
+    listed: set[str] | None = None,
+) -> DerivedMiner | None:
+    """The latest registered non-retired miner version whose spec references taxonomy
+    `(name, version)`: latest by registration event order, not by name. `specs` (from
+    `taxonomy_miner_specs`) and `listed` (the protocol's listed miner names) may be passed when
+    the caller asks for many taxonomies; the answer is the same."""
+    if specs is None:
+        specs = taxonomy_miner_specs(project)
+    candidates: list[tuple[MinerSpec, str]] = []
+    for spec, event_id in specs:
+        assert spec.taxonomy is not None
+        if (spec.taxonomy.name, spec.taxonomy.version) == (name, version):
+            candidates.append((spec, event_id))
     if not candidates:
         return None
     order = _registration_order(project, [e for _, e in candidates])
     best = max(candidates, key=lambda c: order.get(c[1], ("", c[1])))[0]
     assert best.taxonomy is not None
-    listed = mining_service.listed_miner_names(project)
+    if listed is None:
+        listed = mining_service.listed_miner_names(project)
     return DerivedMiner(
         best.name,
         best.version,
-        derived_counts(project, best.name, best.version),
+        derived_counts(project, best.name, best.version, listed=listed),
         best.name in listed,
         tuple(best.taxonomy.dimensions),
     )

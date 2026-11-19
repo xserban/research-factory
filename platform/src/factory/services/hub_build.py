@@ -28,6 +28,7 @@ from typing import Any, TypeVar
 from sqlalchemy import text as sql_text
 
 from factory.services import (
+    call_memo,
     citations,
     hub_costs,
     hub_findings,
@@ -177,6 +178,12 @@ class HubContext:
             "landscape",
             lambda: hub_landscape.landscape_payloads(hub_landscape.load_inputs(self.project)),
         )
+
+    @property
+    def corpus_raw(self) -> dict[str, Any]:
+        """`site_corpus.corpus_payload` for the whole project, read once and shared (the method,
+        write and corpus payloads each used to read it again). Callers must not mutate it."""
+        return self._once("corpus_payload", lambda: site_corpus.corpus_payload(self.project))
 
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
         date = self.publication.get(work_id, ("", ""))[1]
@@ -729,7 +736,8 @@ def build_static(
     for name in names:
         started = time.perf_counter()
         try:
-            text = dumps(builders[name](ctx))
+            with call_memo.entering():  # one reading of each shared derivation per payload
+                text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
             for stale in (data_dir / f"{name}.json", data_dir / f"{name}.js"):

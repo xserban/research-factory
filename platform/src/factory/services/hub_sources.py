@@ -15,13 +15,17 @@ Invariants:
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from collections import Counter
 from typing import TYPE_CHECKING, Any, cast
 
 from factory.document.optional import converter_infos
+from factory.model.fulltext import DOCUMENT_ID_RE
+from factory.model.work_ids import WORK_ID_RE
 from factory.services import conversion_coverage as cov
-from factory.services import dashboard, site_search
+from factory.services import dashboard, site_inspector, site_search
 from factory.services.context import Project
 from factory.services.flow_skipped import skipped_records
 from factory.services.fulltext_status import fulltext_status
@@ -250,6 +254,7 @@ def _conversion(project: Project) -> dict[str, Any]:
         "summary": panel.get("summary", {}),
         "not_measured": panel.get("not_measured", {}),
         "documents": rows,
+        "document_of_work": {r["work_id"]: r["id"] for r in reversed(rows)},
         "distribution": {
             "bins": BINS,
             "by_converter": {c: _histogram(v) for c, v in sorted(by_converter.items())},
@@ -332,3 +337,91 @@ def build(ctx: HubContext) -> dict[str, Any]:
     }
     json.dumps(payload)  # the payload must serialise as it stands
     return payload
+
+
+# ---------------------------------------------------------------- one document (lazy routes)
+
+DOC_TEXT_CAP = 400_000
+"""Characters of the original's text and of the Markdown kept in a document payload."""
+FILE_TYPES: dict[str, str] = {
+    "application/pdf": "application/pdf",
+    "text/html": "text/plain; charset=utf-8",  # never served as a page of this origin
+    "application/x-eprint-tar": "application/x-tar",
+}
+
+
+def _find_document(project: Project, document_id: str) -> site_inspector.Doc | None:
+    """The live converted document `document_id` (None for an unknown or malformed id): the id is
+    matched against the index, so no value of the URL reaches the filesystem."""
+    by_work = bool(re.match(WORK_ID_RE, document_id))
+    if not by_work and not re.match(DOCUMENT_ID_RE, document_id):
+        return None
+    report = cov.cached(project) or cov.CoverageReport(computed_at="", rows=[], not_measured={})
+    for doc in inspector_documents(project, report):  # ordered by work id; first live one wins
+        if doc.document_id == document_id or (by_work and doc.work_id == document_id):
+            return doc
+    return None
+
+
+_DETAILS: dict[tuple[str, str, str], dict[str, Any]] = {}
+"""Content-addressed cache of built document payloads (keyed by the hashes of both texts)."""
+
+
+def document_detail(project: Project, document_id: str) -> dict[str, Any] | None:
+    """The `sources-doc-<id>` payload: the original's text (or a tar listing), the Markdown, the
+    runs lost and added (`site_inspector.gaps`, six words or more) and the file routes. None when
+    the id is not a converted document of the project. Reads only; cached by content hash."""
+    doc = _find_document(project, document_id)
+    if doc is None:
+        return None
+    key = (doc.document_id, doc.raw_hash, doc.markdown_hash)
+    if key in _DETAILS:
+        return _DETAILS[key]
+    markdown = project.library.get(doc.markdown_hash).decode("utf-8", errors="replace")
+    source: str | None = None
+    listing = ""
+    if doc.ext == "tar":
+        listing = html.unescape(
+            re.sub(r"<[^>]+>", " ", site_inspector._tar_listing(project.library.get(doc.raw_hash)))
+        )
+    else:
+        source = cov._source_text(doc.media_type, project.library.get(doc.raw_hash))
+    lost, added, n_src, n_md = site_inspector.gaps(doc, markdown, source)
+    detail: dict[str, Any] = {
+        "document_id": doc.document_id,
+        "work_id": doc.work_id,
+        "converter": doc.converter,
+        "media": doc.media_type,
+        "original_text": None if source is None else source[:DOC_TEXT_CAP],
+        "tar_listing": " ".join(listing.split()),
+        "markdown": markdown[:DOC_TEXT_CAP],
+        "truncated": len(markdown) > DOC_TEXT_CAP or len(source or "") > DOC_TEXT_CAP,
+        "lost": [[pos, run] for pos, run in lost[: site_inspector.MAX_RUNS * 8]],
+        "added": [[pos, run] for pos, run in added[: site_inspector.MAX_RUNS * 8]],
+        "source_tokens": n_src,
+        "markdown_tokens": n_md,
+        "files": {
+            "original": f"file/original/{doc.document_id}",
+            "markdown": f"file/markdown/{doc.document_id}",
+        },
+    }
+    json.dumps(detail)
+    if len(_DETAILS) >= 16:
+        _DETAILS.pop(next(iter(_DETAILS)))
+    _DETAILS[key] = detail
+    return detail
+
+
+def document_file(project: Project, document_id: str, kind: str) -> tuple[bytes, str] | None:
+    """(bytes, content type) of a converted document's `original` or `markdown`; None when the
+    kind or the id is unknown. HTML originals are served as text, never as a page."""
+    if kind not in ("original", "markdown"):
+        return None
+    doc = _find_document(project, document_id)
+    if doc is None:
+        return None
+    if kind == "markdown":
+        return project.library.get(doc.markdown_hash), "text/markdown; charset=utf-8"
+    return project.library.get(doc.raw_hash), FILE_TYPES.get(
+        doc.media_type, "application/octet-stream"
+    )

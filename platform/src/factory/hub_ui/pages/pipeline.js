@@ -17,7 +17,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
   const CAP = D.unit_cap || { default: 25, max: 200 };
   const Q = ok(D.queue) ? D.queue : { items: [], pending: {}, columns: [], progress: {}, stage_counts: {}, by_stage: {} };
   const live = { runs: ok(D.runs) ? D.runs : { runs: [], pipelines: [] }, intr: ok(D.interrupted) ? D.interrupted : null,
-    act: ok(D.activity) ? D.activity : null, actAt: null, actErr: false, resume: null, busy: false };
+    act: ok(D.activity) ? D.activity : null, scr: null, status: null, actAt: null, actErr: false, resume: null, busy: false };
   live.busy = !!(live.runs.run_open || live.runs.pipeline_open);
 
   if (!document.getElementById('pl-style')) {
@@ -161,7 +161,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
 
   function pagesSec() {
     const cards = (D.pages || []).map(p => `<a href="${esc(p.id)}.html"><div class="card"><div class="nm">${esc(p.title)}</div><div class="bl">${esc(p.blurb)}</div></div></a>`).join('');
-    return card('Pages', 'status', `<div class="pl-pages">${cards}</div>`, 'Where each product lives.');
+    return card('Pages', 'status', `<p class="pl-note" id="pl-fresh" role="status">${esc(freshText())}</p><div class="pl-pages">${cards}</div>`, 'Where each product lives.');
   }
 
   /* ================= Work queue ================= */
@@ -350,13 +350,22 @@ HUB.load(['shell', 'pipeline']).then(d => {
       card('Tasks held now', 'held', held) + card('Long operations', 'operations', ops) + card('Worker traces', 'traces', traces) + screeningSec();
   }
   function screeningSec() {
-    const s = D.screening_live;
+    const s = live.scr || D.screening_live;
     if (!ok(s) || !s || !(s.recent || s.totals)) return card('Screening live', 'screening', empty('No screening decisions yet.'));
     const tot = Object.entries(s.totals || {}).map(([pass, v]) => `<div class="pl-tile"><div class="k">Pass ${esc(pass)}</div><div class="v">${fmt(Object.values(v).reduce((a, b) => a + b, 0))}</div><div class="k">${Object.entries(v).map(([k, n]) => esc(k) + ' ' + fmt(n)).join(' · ')}</div></div>`).join('');
     const sess = (s.sessions || []).map(x => `<span class="chip" title="${esc(x.actor)}"><span class="dot" style="background:${x.active ? 'var(--inc)' : 'var(--dim)'}"></span>${esc(x.session)} <span class="n">${fmt(x.decisions)} decisions · ${fmt(x.includes)} included${x.rate_per_minute != null ? ' · ' + x.rate_per_minute + '/min' : ''}</span></span>`).join(' ');
     const stops = (s.stops || []).map(x => `<div class="pl-bar"><span>Stop rule${x.below_score ? ' (score below ' + x.below_score + ')' : ''}</span><div class="tr"><i class="${x.stopped ? 's-stopped' : 's-done'}" style="width:${Math.min(100, 100 * x.run / x.n)}%"></i></div><span class="meta">${fmt(x.run)} of ${fmt(x.n)}${x.stopped ? ' · stopped' : ''}</span></div>`).join('');
     const rec = (s.recent || []).length ? `<table class="t" style="margin-top:12px"><thead><tr><th>Time</th><th>Pass</th><th>Paper</th><th>Verdict</th><th class="r">Score</th><th>Criterion</th></tr></thead><tbody>${s.recent.map(r => `<tr><td class="meta">${esc(clock(r.ts))}</td><td>${esc(r.pass)}</td><td title="${esc(r.rationale || '')}">${esc(r.title || '')}</td><td>${esc(r.verdict)}</td><td class="r">${r.score == null ? '' : esc(r.score)}</td><td class="meta">${esc(r.criterion || '')}</td></tr>`).join('')}</tbody></table>` : '';
     return card('Screening live', 'screening', `<div class="card"><div class="pl-tiles">${tot}</div><div>${sess}</div><div class="pl-bars" style="margin-top:10px">${stops}</div>${rec}</div>`, 'As of the time this page was built.');
+  }
+  /* Per-payload freshness (GET ui/status.json): which hub payloads are current, building or failed. */
+  function freshText() {
+    const S = live.status;
+    if (!served) return '';
+    if (!S) return 'Checking whether the hub data is current.';
+    const names = Object.keys(S), stale = names.filter(n => !S[n].fresh), bad = names.filter(n => S[n].error);
+    if (bad.length) return 'Some hub data failed to build: ' + bad.join(', ') + '.';
+    return stale.length ? `Hub data updating: ${stale.length} of ${names.length} payloads are being rebuilt (${stale.slice(0, 6).join(', ')}${stale.length > 6 ? ', ...' : ''}).` : `All ${names.length} hub payloads are current.`;
   }
   function liveLine() {
     const a = A();
@@ -455,6 +464,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
   function pollActivity() {
     return fetchJson('/api/activity').then(j => { live.act = j; live.actAt = j.now || new Date().toISOString(); live.actErr = false; })
       .catch(() => { live.actErr = true; })
+      .then(() => fetchJson('/api/screening').then(j => { live.scr = j; }).catch(() => {}))
       .then(() => {
         if (st.tab !== 'activity') return;
         const ab = main.querySelector('#pl-act-body'), ll = main.querySelector('#pl-liveline');
@@ -462,6 +472,11 @@ HUB.load(['shell', 'pipeline']).then(d => {
         if (ll) ll.textContent = liveLine();
         const ld = main.querySelector('#pl-lead'); if (ld) ld.textContent = activity().lead;
       });
+  }
+  function pollStatus() {
+    return fetchJson('/ui/status.json').then(j => { live.status = j; })
+      .catch(() => { live.status = null; })
+      .then(() => main.querySelectorAll('#pl-fresh').forEach(e => { e.textContent = freshText(); }));
   }
   function pollRuns() {
     return fetchJson('/api/queue/runs').then(j => {
@@ -487,6 +502,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
   function schedule() {
     Object.values(timers).forEach(clearTimeout);
     if (!served) return;
+    loop('status', pollStatus, 30000);
     if (st.tab === 'activity') loop('activity', pollActivity, POLL.activity);
     if (st.tab === 'queue') {
       loop('runs', pollRuns, () => live.busy ? POLL.runsBusy : POLL.runsIdle);

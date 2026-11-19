@@ -20,7 +20,7 @@ from factory.services.agreement import cannot_assess_queue
 from factory.services.calibration import calibration_items, stage_population
 from factory.services.context import Project
 from factory.services.prisma import prisma_flow
-from factory.services.project import project_status
+from factory.services.project import screening_status
 from factory.services.protocol import current_protocol, list_deviations
 from factory.services.ranked_queue import (
     rank_key,
@@ -479,7 +479,7 @@ def screening_panel(project: Project) -> dict[str, Any]:
     """The Screening tab's tables, read from the services the old dashboard read: the latest
     ranking, pass progress at both stages, stop rules, calibration, stale decisions, check draws,
     the full-text cannot-assess works and the deviation count. Nothing is recomputed here."""
-    status = project_status(project).screening
+    status = screening_status(project)
     ranking = latest_ranking(project, top=0)
     checks: list[dict[str, Any]] = []
     for summary in check_list(project):
