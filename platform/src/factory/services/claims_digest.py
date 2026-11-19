@@ -27,6 +27,11 @@ Invariants:
   version newer than the listed one (not shown); `no-rows` when the work has no row of the miner,
   and `absence-only` when every one of its rows is `no-limitation-stated`; those rows are still
   listed. Otherwise `gap` is None.
+- `gold-empty` is not a gap of the unknown kind: the researcher's gold label of the listed version
+  for the work is empty ("this paper has none of these claims"). The paper gets no rows (not the
+  calibration session's) and no older-version fallback; production rows (final, pass A) still win
+  over it. It is rendered "no claims (researcher)", counted by `gold_empty`, listed in `gaps`
+  never, and counted separately in the header.
 - Held-out scrub: the title and every value and quote pass `withhold` of the held-out tokens
   (`held_out_tokens(include_work_ids=False)`); work ids are not scrubbed.
 - `size` is computed from the rendered text: characters, and estimated tokens at four characters
@@ -45,7 +50,7 @@ from factory.services.paper_profile import (
     PROFILE_CHARS_PER_TOKEN,
     RawMinerRow,
     listed_miner_versions,
-    load_miner_work_report,
+    load_miner_work_state,
 )
 from factory.services.search import get_work
 from factory.services.selection import Selection, SelectionSpec, resolve_selection_cached
@@ -93,6 +98,9 @@ class ClaimRow:
     conditions_anchor: str | None
 
 
+GOLD_EMPTY = "gold-empty"
+
+
 @dataclass(frozen=True)
 class DigestPaper:
     """One paper of the selection: its code, work id, title, rows and `gap` (see the module
@@ -132,8 +140,13 @@ class ClaimsDigest:
 
     @property
     def gaps(self) -> tuple[tuple[str, str], ...]:
-        """`(code, gap)` of every paper with a gap, in paper order."""
-        return tuple((p.code, p.gap) for p in self.papers if p.gap)
+        """`(code, gap)` of every paper with a gap, in paper order; `gold-empty` is no gap."""
+        return tuple((p.code, p.gap) for p in self.papers if p.gap and p.gap != GOLD_EMPTY)
+
+    @property
+    def gold_empty(self) -> int:
+        """The papers the researcher recorded as having no claims (empty gold label)."""
+        return sum(1 for p in self.papers if p.gap == GOLD_EMPTY)
 
     @property
     def older_served(self) -> int:
@@ -205,7 +218,8 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
             [ValidationIssue("miner", f"{miner}: not listed in the protocol")]
         )
     work_ids = [w.work_id for w in selection.works]
-    raw, emptied, newer = load_miner_work_report(project, miner, version, work_ids)
+    state = load_miner_work_state(project, miner, version, work_ids)
+    raw, emptied, newer, gold_empty = state.rows, state.emptied, state.newer, state.gold_empty
     tokens = held_out_tokens(project, include_work_ids=False)
     width = max(2, len(str(len(work_ids))))
     papers: list[DigestPaper] = []
@@ -216,6 +230,8 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
         gap = (
             "reviewed-empty"
             if work_id in emptied
+            else "gold-empty"
+            if work_id in gold_empty
             else "newer-version-only"
             if work_id in newer
             else "no-rows"
@@ -253,6 +269,8 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
     summary = f"{head}, selection {digest.selection_digest[:12]}"
     if digest.older_served:
         summary += f", served from an older version: {digest.older_served}"
+    if digest.gold_empty:
+        summary += f", no claims (researcher): {digest.gold_empty}"
     blocks = [summary]
     for paper in digest.papers:
         tag = (
@@ -267,6 +285,8 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
                 f"GAP: pass B reviewed this paper and left no final {digest.miner} row; "
                 "its pass A rows are not shown"
             )
+        elif paper.gap == GOLD_EMPTY:
+            lines.append("no claims (researcher)")
         elif paper.gap == "newer-version-only":
             lines.append(
                 f"GAP: only rows of a newer version than {digest.miner} v{digest.version} exist "

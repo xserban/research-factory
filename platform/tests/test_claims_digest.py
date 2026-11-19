@@ -188,12 +188,17 @@ def test_calibration_works_use_gold_else_calibration_rows(
     digest = claims_digest(project, SelectionSpec())
     by_work = {p.work_id: p for p in digest.papers}
     assert [(r.claim_type, r.status) for r in by_work[works[0]].rows] == [("limitation", "gold")]
-    for work in works[1:]:
-        assert [(r.claim_type, r.status) for r in by_work[work].rows] == [
-            ("finding", "calibration")
-        ]
-        assert by_work[work].gap is None
-    assert "(gold)" in render_claims_digest(digest)
+    for work in works[1:]:  # an empty gold label: the researcher's "no claims", not a gap
+        assert by_work[work].rows == () and by_work[work].gap == "gold-empty"
+    assert digest.gold_empty == len(works) - 1
+    assert not {c for c, _ in digest.gaps} & {by_work[w].code for w in works}
+    text = render_claims_digest(digest)
+    assert "(gold)" in text
+    assert "no claims (researcher)" in text
+    assert f"no claims (researcher): {len(works) - 1}" in text.splitlines()[0]
+    for block in text.split("\n\n")[1:]:
+        if any(w in block for w in works[1:]):
+            assert block.rstrip().endswith("no claims (researcher)") and "GAP" not in block
 
 
 def test_pass_b_reviewed_to_empty_is_a_gap_not_pass_a_only(
