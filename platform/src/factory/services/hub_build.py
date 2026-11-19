@@ -27,6 +27,7 @@ from typing import Any, TypeVar
 from sqlalchemy import text as sql_text
 
 from factory.services import (
+    call_memo,
     hub_costs,
     hub_findings,
     hub_graph,
@@ -703,7 +704,8 @@ def build_static(
     for name in names:
         started = time.perf_counter()
         try:
-            text = dumps(builders[name](ctx))
+            with call_memo.entering():  # one reading of each shared derivation per payload
+                text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
             for stale in (data_dir / f"{name}.json", data_dir / f"{name}.js"):

@@ -237,6 +237,12 @@ def _inbox_counts(project: Project) -> InboxCounts:
     return InboxCounts.model_validate({str(status): int(n) for status, n in rows})
 
 
+def screening_status(project: Project) -> ScreeningStatus:
+    """The screening part of `project_status` alone (calibration, passes, agreement, audit, stale
+    decisions, cannot-assess counts), without the stage, queue and snowball reads it also makes."""
+    return _screening_status(project)
+
+
 def _screening_status(project: Project) -> ScreeningStatus:
     agreement = _agreement_or_none(project)
     report = audit_report(project)

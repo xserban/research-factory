@@ -345,7 +345,7 @@ def test_screening_panel_reads_the_services_and_is_json_safe(
         stale_decisions=2,
         calibration=SimpleNamespace(drawn=10, labelled=9, required=True, passed={"A": True}),
     )
-    monkeypatch.setattr(hs, "project_status", lambda _p: SimpleNamespace(screening=status))
+    monkeypatch.setattr(hs, "screening_status", lambda _p: status)
     monkeypatch.setattr(
         hs,
         "latest_ranking",

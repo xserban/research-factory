@@ -49,7 +49,15 @@ from factory.events.envelope import Actor
 from factory.inbox.links import parse_link
 from factory.model.screening import Channel
 from factory.model.work_ids import WORK_ID_RE
-from factory.services import hub_build, hub_costs, hub_landscape, hub_mining, hub_sources, hub_ui
+from factory.services import (
+    call_memo,
+    hub_build,
+    hub_costs,
+    hub_landscape,
+    hub_mining,
+    hub_sources,
+    hub_ui,
+)
 from factory.services import inbox as inbox_service
 from factory.services.context import Project
 from factory.services.hub_trace import trace_figure
@@ -421,7 +429,8 @@ class PayloadService:
                     self._write(grid, body, fp)
                 return
             if name in hub_build.BUILDERS:
-                payload = hub_build.BUILDERS[name](ctx)
+                with call_memo.entering():  # one reading of each shared derivation per payload
+                    payload = hub_build.BUILDERS[name](ctx)
             else:
                 grids = ctx.grids
                 if name not in grids:

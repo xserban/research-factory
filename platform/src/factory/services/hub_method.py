@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from factory.mining.taxonomy import Category, Dimension, TaxonomyDiff, TaxonomySpec, diff, full_id
+from factory.services import mining as mining_service
 from factory.services import taxonomies as tax_service
 from factory.services.site_lifecycle import (
     LAYER_ORDER,
@@ -38,7 +39,12 @@ from factory.services.site_lifecycle import (
     own_stage_sequences,
 )
 from factory.services.site_steps import ACTORS, MINER, OPTIONAL, step_rows, steps_view
-from factory.services.site_taxonomy_registered import DerivedMiner, _dates, derived_miner
+from factory.services.site_taxonomy_registered import (
+    DerivedMiner,
+    _dates,
+    derived_miner,
+    taxonomy_miner_specs,
+)
 
 if TYPE_CHECKING:  # hub_build imports this module to register its builder
     from factory.services.context import Project
@@ -536,6 +542,8 @@ def registered_payload(project: Project) -> list[dict[str, Any]]:
     version the dimensions, categories with counts, derived miner and the diff from the previous
     version. Names sorted; counts from `derived_counts` through `derived_miner`."""
     rows = tax_service.list_taxonomies(project)
+    specs_of_miners = taxonomy_miner_specs(project)  # read once, not per taxonomy version
+    listed = mining_service.listed_miner_names(project)
     dates = _dates(project, [r.event_id for r in rows])
     by_name: dict[str, list[Any]] = defaultdict(list)
     for r in rows:
@@ -556,7 +564,7 @@ def registered_payload(project: Project) -> list[dict[str, Any]]:
                 _version(
                     spec,
                     previous,
-                    derived_miner(project, name, r.version),
+                    derived_miner(project, name, r.version, specs=specs_of_miners, listed=listed),
                     r.digest,
                     dates.get(r.event_id, ""),
                 )
