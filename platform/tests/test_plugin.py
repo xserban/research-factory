@@ -328,3 +328,16 @@ def test_rf_chat_passes_the_digest_claim_key_to_sheet_argue() -> None:
     lowered = " ".join(text.split())
     assert "pass that claim's row key as `claim_row_key`" in lowered
     assert "key=" in lowered and "copy the text after" in lowered
+
+
+def test_rf_chat_has_a_contradictions_mode() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split())
+    assert "## Contradictions" in text
+    for needed in (
+        "contradiction_propose",
+        "different papers",
+        "row:<work_id>#<row_key>",
+        "never decide",
+    ):
+        assert needed in lowered, needed
