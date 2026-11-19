@@ -48,14 +48,23 @@ def _rows(project: Project) -> int:
         return int(conn.execute(text("SELECT COUNT(*) FROM chat_requests")).scalar_one())
 
 
-def _spar(project: Project, human: Actor, **kw: object) -> str:
-    return cr.request_chat(
-        project, human, "spar", SPEC, hypothesis="Reflection helps", **kw
-    ).request_id  # type: ignore[arg-type]
+def _spar(
+    project: Project,
+    human: Actor,
+    *,
+    mode: str | None = None,
+    parent: str | None = None,
+    note: str | None = None,
+) -> str:
+    payload = cr.request_chat(
+        project, human, "spar", SPEC, hypothesis="Reflection helps", mode=mode, parent=parent,
+        note=note,
+    )  # fmt: skip
+    return payload.request_id
 
 
-def _ask(project: Project, human: Actor, **kw: object) -> str:
-    return cr.request_chat(project, human, "ask", SPEC, question="Does it help?", **kw).request_id  # type: ignore[arg-type]
+def _ask(project: Project, human: Actor) -> str:
+    return cr.request_chat(project, human, "ask", SPEC, question="Does it help?").request_id
 
 
 def _run(project: Project, kind: str) -> tuple[str, FakeLauncher]:
@@ -89,7 +98,7 @@ def test_request_is_a_human_act_service_and_nothing_written_otherwise(
         ({"kind": "ask", "question": "q", "parent": "sht_" + "0" * 26}, "parent"),
     ):
         with pytest.raises(FactoryValidationError) as err:
-            cr.request_chat(project, human, spec=SPEC, **kwargs)  # type: ignore[arg-type]
+            cr.request_chat(project, human, spec=SPEC, **kwargs)
         assert field in {i.field for i in err.value.issues}, kwargs
     assert _events(project) == before and _rows(project) == 0
 

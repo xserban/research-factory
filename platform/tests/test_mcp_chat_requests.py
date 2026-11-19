@@ -124,4 +124,3 @@ def test_cli_request_and_list(settings: Settings, project: Project) -> None:
     rows = cr.list_requests(project)
     assert [r.kind for r in rows] == ["spar", "ask"] and rows[0].selection["layers"] == ["core"]
     assert rows[0].note == "for the lead"
-
