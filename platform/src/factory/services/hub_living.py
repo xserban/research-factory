@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from factory.model.views import HorizonView
 from factory.services.context import Project
+from factory.services.dashboard import _feed_activity
 from factory.services.feed_categories import primary_category, propose_categories
 from factory.services.feed_read import feed_list
 from factory.services.horizon import horizon_view
@@ -508,8 +509,17 @@ def reaction_stats(
     }
 
 
-def _card(item: Any, record: Mapping[str, Any] | None, *, beyond: bool) -> dict[str, Any]:
+def _card(
+    item: Any,
+    record: Mapping[str, Any] | None,
+    *,
+    beyond: bool,
+    activity: tuple[Mapping[str, int], Mapping[str, int]] = ({}, {}),
+) -> dict[str, Any]:
+    """One feed card; `activity` is (reactions, adds) per entry over the last seven days."""
     return {
+        "reactions_7d": activity[0].get(item.entry_id, 0),
+        "adds_7d": activity[1].get(item.entry_id, 0),
         "entry_id": item.entry_id,
         "title": item.title or item.entry_id,
         "rank": item.rank,
@@ -595,16 +605,22 @@ def feed_view(project: Project) -> dict[str, Any]:
     records = view.records or {}
     out["reactions"] = reaction_stats(project, records)
     listing = view.listing
+    activity = _feed_activity(project, project.clock.now())
     if listing is not None and listing.ranking_id is not None:
         out["ranking_id"] = listing.ranking_id
         out["total_shown"] = len(listing.items)
-        out["cards"] = [_card(i, records.get(i.entry_id), beyond=False) for i in listing.items]
+        out["cards"] = [
+            _card(i, records.get(i.entry_id), beyond=False, activity=activity)
+            for i in listing.items
+        ]
     page = view.ranked
     if page is not None and page.ranking_id is not None:
         out["total_ranked"] = page.total_ranked
         out["cap"] = page.cap
         out["cut"] = page.cut
-        out["further"] = [_card(i, records.get(i.entry_id), beyond=True) for i in page.further]
+        out["further"] = [
+            _card(i, records.get(i.entry_id), beyond=True, activity=activity) for i in page.further
+        ]
     return out
 
 

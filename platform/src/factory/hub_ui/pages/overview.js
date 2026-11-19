@@ -304,7 +304,7 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
       `<text class="axis" x="0" y="${H2 + 16}">${ym(months[0])}</text><text class="axis" x="${W2}" y="${H2 + 16}" text-anchor="end">${ym(months[months.length - 1])}</text><text class="lbl" x="${(iM * bw + bw / 2).toFixed(1)}" y="${(H2 - H2 * vm / vm - 4).toFixed(1)}" text-anchor="middle">${fmt(vm)}</text></svg>`;
     g.querySelectorAll('.gb').forEach(r => {
       r.addEventListener('mousemove', e => H.tipHtml(`<b>${ym(r.dataset.m)}</b><br>${fmt(+r.dataset.n)} papers`, e)); r.addEventListener('mouseleave', () => H.tipHtml(null));
-      r.style.cursor = 'pointer'; r.onclick = () => { location.href = 'corpus.html#year=' + r.dataset.m.slice(0, 4); };
+      r.style.cursor = 'pointer'; r.onclick = () => { location.href = 'corpus.html#month=' + r.dataset.m.slice(0, 7); };
     });
   })();
 }).catch(e => {

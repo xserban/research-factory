@@ -365,7 +365,8 @@ HUB.load(['shell', 'pipeline']).then(d => {
     if (!S) return 'Checking whether the hub data is current.';
     const names = Object.keys(S), stale = names.filter(n => !S[n].fresh), bad = names.filter(n => S[n].error);
     if (bad.length) return 'Some hub data failed to build: ' + bad.join(', ') + '.';
-    return stale.length ? `Hub data updating: ${stale.length} of ${names.length} payloads are being rebuilt (${stale.slice(0, 6).join(', ')}${stale.length > 6 ? ', ...' : ''}).` : `All ${names.length} hub payloads are current.`;
+    const built = names.map(n => S[n].built_at).filter(Boolean).sort().pop(), at = built ? ` Newest build ${when(built)}.` : '';
+    return stale.length ? `Hub data updating: ${stale.length} of ${names.length} payloads are being rebuilt (${stale.slice(0, 6).join(', ')}${stale.length > 6 ? ', ...' : ''}).${at}` : `All ${names.length} hub payloads are current.${at}`;
   }
   function liveLine() {
     const a = A();

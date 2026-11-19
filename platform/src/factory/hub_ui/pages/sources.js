@@ -331,7 +331,8 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
 
   /* Per-document panel: scores and commands from the payload; gaps and text from the lazy route when it exists. */
   async function openDoc(id, quiet) {
-    const x = (CV.documents || []).find(r => r.id === id), host = $('#cdet'); if (!x || !host) return;
+    const x = (CV.documents || []).find(r => r.id === id) || (CV.documents || []).find(r => r.work_id === id), host = $('#cdet'); if (!x || !host) return;
+    id = x.id;
     H.hash.set({ conv: id });
     body.querySelectorAll('tr[data-d]').forEach(tr => tr.setAttribute('aria-selected', String(tr.dataset.d === id)));
     const others = (CV.converters || []).filter(c => c.accepts.includes(x.media) && c.name !== x.converter && c.available);

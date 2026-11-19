@@ -216,6 +216,8 @@ HUB.load(['shell', 'mining']).then(d => {
       <div class=an><div class=st>4 · CHECK</div><h3 class=h3>${checked(m) ? 'Read again by ' + esc(B) : 'Not checked yet'}</h3><p>${checked(m) ? `The second reading covered <b>${fmt(m.pass_b.works)}</b> of ${fmt(m.pass_a.works)} papers. First reading: ${esc(A)}${A === B ? ' (the same model, so a weaker check)' : ''}.` : `No second reading exists.`} A field passes at ${thr}% agreement; calibration set of ${fmt(m.regime.calibration_size)} papers.</p></div>
     </div>`;
   }
+  /* Kind legend (MN-8): what each field type means. */
+  const KINDS = [['enum', 'one value from a fixed list, with a supporting quote'], ['quote', 'a sentence copied verbatim from the paper'], ['number', 'a number as printed, with its unit'], ['integer', 'a whole number'], ['citation', 'a citation marker found in the quote'], ['anchor', 'a paragraph anchor'], ['work_ref', 'a reference to another work']];
   let open = {};
   function fieldCard(m, f) {
     const dist = m.distributions && m.distributions[f.name];
@@ -289,6 +291,7 @@ HUB.load(['shell', 'mining']).then(d => {
       + `<section class=dsec>${H.header({ title: 'How it reads', infoHtml: `<b>What it shows</b>The works, paragraphs and sections the miner is given, and the skill that reads them. Recorded in the registered spec.` })}${readsSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Anatomy', infoHtml: `<b>What it shows</b>What the miner looks at, what it writes down, how each value is backed, and how it is checked.<p><span class=k>How it's computed.</span> ${esc(MX.anatomy || '')}</p>` })}${anatomy(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'What it records', infoHtml: `<b>What it shows</b>The ${fmt(m.fields.length)} fields, grouped as the miner defines them.<p><span class=k>How to read it.</span> Each bar is the number of ${m.multi_row ? 'rows' : 'papers'} with that value in the first reading.</p><p><span class=k>How it's computed.</span> ${esc(MX.miners || '')}</p>` })}`
+      + `<p class=meta>${KINDS.map(([k, t]) => `<b>${k}</b>: ${t}`).join(' · ')}</p>`
       + `<div class=fgrid>${m.fields.map(f => fieldCard(m, f)).join('')}</div></section>`
       + `<section class=dsec>${H.header({ title: 'Two readings', infoHtml: `<b>What it shows</b>For each compared field, how often the second reading recorded the same value as the first, under each named measure.<p><span class=k>How to read it.</span> The dot is the share that match, the thin line is the 95% range given the papers checked, the dashed line is the bar the regime sets.</p><p><b>Fairer match.</b> ${esc(MX.fairer || '')}</p><p><b>Exact match.</b> ${esc(MX.exact || '')}</p><p><b>Platform rate.</b> ${esc(MX.platform || '')}</p>` })}${agreementSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Quality and use', infoHtml: `<b>What it shows</b>How the protocol uses this miner and the quality checks that apply to it.` })}${useSection(m)}</section>`
