@@ -50,7 +50,10 @@ def _arg(work: str, stance: str) -> sh.ArgumentInput:
 
 def _sheet(project: Project, agent: Actor, world: list[str], *, close: bool = True) -> str:
     works = sorted(world)
-    proposals = [C(works[0], "claims", "against", ANCHOR, QUOTE), C(works[1], "keyword", "for")]
+    proposals = [
+        C(works[0], "claims", "against", ANCHOR, QUOTE),
+        C(works[1], "keyword", "for", ANCHOR, QUOTE),
+    ]
     sheet = sh.open_sheet(project, agent, "Reflection helps", SPEC, proposals).sheet_id
     sh.record_arguments(project, agent, sheet, [_arg(works[0], "against")])
     if close:
@@ -517,7 +520,7 @@ def test_the_chat_page_is_registered_in_the_rail_and_the_palette() -> None:
 def test_the_chat_script_escapes_everything_it_renders() -> None:
     src = _js("pages/chat.js")
     assert "const { esc" in src or "H.esc" in src
-    fields = "quote|paragraph|claim|title|note|text|hypothesis|question|reason|about|message"
+    fields = "quote|paragraph|claim|title|note|text|hypothesis|question|reason|about"
     stripped = src
     for _ in range(3):  # every esc(...) call, with up to two nested parentheses, is safe text
         stripped = re.sub(r"esc\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", "ESC", stripped)

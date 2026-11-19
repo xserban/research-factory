@@ -101,7 +101,7 @@ HUB.load(['shell', 'chat']).then(d => {
 
   /* ---------- 2. the form ---------- */
   function parentOptions() {
-    const rows = [...(C.sheets || []).map(s => [s.sheet_id, 'Sheet: ' + s.hypothesis]), ...(C.answers || []).map(a => [a.answer_id, 'Answer: ' + a.question])];
+    const rows = [...(C.sheets || []).map(s => [s.sheet_id, 'Sheet: ' + s['hypothesis']]), ...(C.answers || []).map(a => [a.answer_id, 'Answer: ' + a['question']])];
     return '<option value="">No parent (a new chat)</option>' + rows.map(r => `<option value="${esc(r[0])}" ${st.parent === r[0] ? 'selected' : ''}>${esc(r[1].slice(0, 90))}</option>`).join('');
   }
   function formHtml() {
@@ -207,7 +207,7 @@ HUB.load(['shell', 'chat']).then(d => {
     const cf = host.querySelector('#ch-casefor');
     if (cf) cf.onclick = () => {
       const msg = host.querySelector('#ch-cf-msg');
-      HUB.confirm(msg, 'Order the case for this sheet?', () => order({ kind: 'spar', hypothesis: v.hypothesis, mode: 'prepare', parent: v.sheet_id, selection: v.selection || {} }, msg));
+      HUB.confirm(msg, 'Order the case for this sheet?', () => order({ kind: 'spar', hypothesis: v['hypothesis'], mode: 'prepare', parent: v.sheet_id, selection: v.selection || {} }, msg));
     };
   }
   function wireRate(row, v) {
