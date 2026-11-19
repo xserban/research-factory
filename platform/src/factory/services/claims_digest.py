@@ -29,6 +29,8 @@ Invariants:
   listed. Otherwise `gap` is None.
 - Held-out scrub: the title and every value and quote pass `withhold` of the held-out tokens
   (`held_out_tokens(include_work_ids=False)`); work ids are not scrubbed.
+- Every claim row carries its `row_key` (the key `sheets` validates `claim_row_key` against) and
+  its `version`; the rendered line shows the key as `[Pxx.cN key=...]`.
 - `size` is computed from the rendered text: characters, and estimated tokens at four characters
   per token (rounded up); counts of papers, claims and gaps are computed, never typed.
 - `render_claims_digest` is deterministic and pure.
@@ -229,10 +231,11 @@ def _claims_digest(project: Project, selection: Selection, miner: str) -> Claims
     return ClaimsDigest(miner, version, selection.digest, tuple(papers))
 
 
-def _line(row: ClaimRow) -> str:
+def _line(row: ClaimRow, code: str, number: int) -> str:
     anchor = f" [{row.claim_anchor}]" if row.claim_anchor else ""
     line = (
-        f"- {row.claim_type} | {row.about} | {row.direction} | {row.evidence_type} | "
+        f"- [{code}.c{number} key={row.row_key}] {row.claim_type} | {row.about} | "
+        f"{row.direction} | {row.evidence_type} | "
         f'{row.strength}: "{row.claim_quote}"{anchor}'
     )
     if row.conditions:
@@ -246,8 +249,10 @@ def _line(row: ClaimRow) -> str:
 def render_claims_digest(digest: ClaimsDigest) -> str:
     """The digest as Markdown: a heading `## Pxx work_id` (with `(miner vN)` for a paper served
     from an older version, counted in the first line), the title, then one line per claim
-    `- type | about | direction | evidence | strength: "quote" [anchor] [conditions: "..."]`
-    (`(pass-a-only)` appended for a row without final status), and a stated gap line for a paper
+    `- [Pxx.cN key=row_key] type | about | direction | evidence | strength: "quote" [anchor]
+    [conditions: "..."]`
+    (`(pass-a-only)` appended for a row without final status; `row_key` is the key `sheet_argue`
+    takes as `claim_row_key`, copied exactly), and a stated gap line for a paper
     with `gap`. Pure and deterministic."""
     head = f"# Claims digest: {digest.miner} v{digest.version}"
     summary = f"{head}, selection {digest.selection_digest[:12]}"
@@ -259,7 +264,7 @@ def render_claims_digest(digest: ClaimsDigest) -> str:
             f" ({digest.miner} v{paper.served_version})" if paper.served_version is not None else ""
         )
         lines = [f"## {paper.code} {paper.work_id}{tag}", paper.title]
-        lines.extend(_line(r) for r in paper.rows)
+        lines.extend(_line(r, paper.code, n) for n, r in enumerate(paper.rows, start=1))
         if paper.gap == "no-rows":
             lines.append(f"GAP: no {digest.miner} rows for this paper")
         elif paper.gap == "reviewed-empty":

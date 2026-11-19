@@ -54,6 +54,9 @@ def sheets_show_cmd(
             f"\n{a.argument_id} {a.stance} · {a.work_id} · {a.strength} (judgement){rated}\n"
             f'  claim: {a.claim}\n  [{a.anchor}] "{a.quote}"'
         )
+        if a.linked_claim:
+            k = a.linked_claim
+            typer.echo(f'  rests on {a.claim_row_key}: {k.claim_type} | {k.about}: "{k.quote}"')
     c = view.coverage
     typer.echo(
         f"\ncoverage: {c.total} works; tier 1/2/3 = "

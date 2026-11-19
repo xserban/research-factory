@@ -64,7 +64,11 @@ from factory.services.chat_candidates import (
 )
 from factory.services.chat_read import VerifyItem, chat_verify
 from factory.services.context import Project
-from factory.services.paper_profile import listed_miner_versions, load_miner_work_rows
+from factory.services.paper_profile import (
+    RawMinerRow,
+    listed_miner_versions,
+    load_miner_work_rows,
+)
 from factory.services.selection import SelectionSpec, resolve_selection_cached
 from factory.services.work_ref import resolve_work_id
 
@@ -72,6 +76,7 @@ __all__ = [
     "BALANCE_LABEL",
     "ArgumentInput",
     "ArgumentView",
+    "LinkedClaim",
     "SheetCoverage",
     "SheetInfo",
     "SheetView",
@@ -121,6 +126,17 @@ class SheetInfo:
 
 
 @dataclass(frozen=True)
+class LinkedClaim:
+    """The m-claims row an argument rests on, as served now: type, about, quote and the version
+    it is served from."""
+
+    claim_type: str
+    about: str
+    quote: str
+    version: int
+
+
+@dataclass(frozen=True)
 class ArgumentView:
     argument_id: str
     stance: str
@@ -137,6 +153,8 @@ class ArgumentView:
     model: str | None
     rating: str | None
     rating_note: str | None
+    linked_claim: LinkedClaim | None = None
+    """None without a `claim_row_key`, or when the row is no longer served."""
 
 
 @dataclass(frozen=True)
@@ -506,6 +524,31 @@ def _claim_keys(project: Project, work_id: str) -> dict[str, int]:
     return {r.row_key: r.version for r in rows.get(work_id, [])}
 
 
+def _linked_claims(project: Project, work_id: str) -> dict[str, LinkedClaim]:
+    """The m-claims rows served for the work, by row key (same source as `_claim_keys`)."""
+    version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
+    if version is None:
+        return {}
+    rows, _ = load_miner_work_rows(project, CLAIMS_MINER, version, [work_id])
+
+    def shown(row: RawMinerRow, name: str, *, quoted: bool = False) -> str:
+        entry = row.fields.get(name)
+        if entry is None:
+            return ""
+        value, _unit, _anchor, quote = entry
+        return " ".join(str(quote if quoted and quote else value).split())
+
+    return {
+        r.row_key: LinkedClaim(
+            shown(r, "claim_type"),
+            shown(r, "about"),
+            shown(r, "claim_quote", quoted=True),
+            r.version,
+        )
+        for r in rows.get(work_id, [])
+    }
+
+
 def close_section(
     project: Project, actor: Actor, sheet_id: str, section: str
 ) -> SheetSectionClosed:
@@ -633,6 +676,10 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             .mappings()
             .all()
         )
+    linked: dict[str, dict[str, LinkedClaim]] = {}
+    for a in found:
+        if a["claim_row_key"] and a["work_id"] not in linked:
+            linked[a["work_id"]] = _linked_claims(project, a["work_id"])
     arguments = tuple(
         ArgumentView(
             argument_id=a["argument_id"],
@@ -650,6 +697,9 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             model=a["model"],
             rating=a["rating"],
             rating_note=a["rating_note"],
+            linked_claim=(
+                linked.get(a["work_id"], {}).get(a["claim_row_key"]) if a["claim_row_key"] else None
+            ),
         )
         for a in found
     )

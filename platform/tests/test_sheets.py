@@ -368,3 +368,30 @@ def test_prepare_mode_without_a_session_is_not_split_safe(
     assert err.value.issues[0].field == "session"
     # (an event with no session does not even parse, so the fold's None guard is defensive only)
     assert _count(project, "sheet_arguments") == 1 and real.sheet_id == sheet
+
+
+def test_digest_key_copied_into_argue_shows_the_linked_claim_in_the_view(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    import re
+
+    from factory.model.screening import PassLabel
+    from factory.services.claims_digest import claims_digest, render_claims_digest
+
+    list_miner(project, agent, claims_spec())
+    mina = miner_actor("01JZ9Q3K5M7N8P0R2S4T6V8W1E", "claude-opus-5-5")
+    mine_pass(
+        project, mina, PassLabel.A, lambda w: [claim_row("finding", QUOTES[0])], name="m-claims"
+    )
+    sheet = _open(project, agent, world)
+    work = sorted(world)[0]
+    rendered = render_claims_digest(claims_digest(project, SPEC))
+    block = rendered.split(f"## P01 {work}")[1].split("\n\n")[0]
+    key = re.search(r"\[P01\.c1 key=(\S+)\]", block).group(1)  # type: ignore[union-attr]
+    sh.record_arguments(project, agent, sheet, [_arg(work, claim_row_key=key)])
+    sh.record_arguments(project, agent, sheet, [_arg(sorted(world)[1])])
+    linked, unlinked = sh.view_sheet(project, sheet).arguments
+    assert linked.linked_claim is not None
+    assert linked.linked_claim.claim_type == "finding" and linked.linked_claim.version == 1
+    assert linked.linked_claim.quote and linked.linked_claim.about
+    assert unlinked.linked_claim is None
