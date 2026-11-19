@@ -9,6 +9,9 @@ Invariants:
 - `prior` is computed at write time from the lead's keys and stored in the event: every parked or
   discarded lead, every hypothesis in any state and every provider's rows that share a key, sorted,
   capped at `PRIOR_CAP` with the total count beside it.
+- A lead may cite a sheet (`sheet` trigger) only if the sheet was run in `prepare` mode, both its
+  sections are closed and the researcher has recorded its balance (decision N-4); the projection
+  folds no lead that cites a sheet failing this.
 - A lead is immutable; a decision supersedes the earlier one and nothing is deleted. Who may decide
   is the gate `hypotheses.lead_decide` (`hypothesis_gates.may_pass`); the lead's author never
   decides under an `agent` policy.
@@ -24,6 +27,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.sheets import sheet_lead_problem
 from factory.model.base import StrictModel
 from factory.model.hypotheses import (
     BUILDER_KINDS,
@@ -200,6 +204,11 @@ def trigger_issues(project: Project, triggers: Sequence[Trigger]) -> list[Valida
             table, column = _TABLE_KINDS[trigger.kind]
             if not _exists(project, table, column, trigger.ref):
                 issues.append(ValidationIssue(field, "unknown"))
+        elif trigger.kind is TriggerKind.SHEET:
+            with project.index.connect() as conn:
+                problem = sheet_lead_problem(conn, trigger.ref)
+            if problem is not None:
+                issues.append(ValidationIssue(field, problem))
         elif trigger.kind in BUILDER_KINDS:
             if not _builder_row_current(project, trigger):
                 issues.append(ValidationIssue(field, "trigger-stale"))

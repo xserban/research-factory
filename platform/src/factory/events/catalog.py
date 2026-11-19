@@ -216,6 +216,7 @@ from factory.model.seed import (
 from factory.model.sheets import (
     SheetArgumentRated,
     SheetArgumentRecorded,
+    SheetBalanceRecorded,
     SheetOpened,
     SheetSectionClosed,
 )
@@ -323,6 +324,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("sheet.argument_recorded", SheetArgumentRecorded, 1))
     catalog.register(EventType("sheet.section_closed", SheetSectionClosed, 1))
     catalog.register(EventType("sheet.argument_rated", SheetArgumentRated, 1))
+    catalog.register(EventType("sheet.balance_recorded", SheetBalanceRecorded, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

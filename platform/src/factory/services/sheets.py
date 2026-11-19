@@ -23,6 +23,9 @@ Invariants:
 - Coverage is computed from the folded rows (`view_sheet`): works per tier and per source, works
   with arguments per stance, tier-1 works without any argument, ratings. Strength is labelled as
   the writer's judgement; nothing here states a balance.
+- The balance (`record_balance`) is the researcher's: refused for any other actor and until both
+  sections are closed; the latest stands, earlier ones are history. Nothing here computes,
+  suggests or judges it, and no MCP tool writes it.
 - Held-out handling is that of the tools that call this module (scrub of every reply).
 """
 
@@ -42,15 +45,19 @@ from factory.events.envelope import Actor
 from factory.mining.spec import Population
 from factory.model.sheets import (
     ARGUMENT_ID_RE,
+    BALANCE_MAX,
+    BALANCE_NOTE_MAX,
     CLAIM_MAX,
     HYPOTHESIS_MAX,
     NOTE_MAX,
     SHEET_ID_RE,
+    Lean,
     Mode,
     Rating,
     Section,
     SheetArgumentRated,
     SheetArgumentRecorded,
+    SheetBalanceRecorded,
     SheetCandidate,
     SheetOpened,
     SheetSectionClosed,
@@ -72,6 +79,7 @@ __all__ = [
     "BALANCE_LABEL",
     "ArgumentInput",
     "ArgumentView",
+    "BalanceView",
     "SheetCoverage",
     "SheetInfo",
     "SheetView",
@@ -80,6 +88,7 @@ __all__ = [
     "open_sheet",
     "rate_argument",
     "record_arguments",
+    "record_balance",
     "view_sheet",
 ]
 
@@ -157,12 +166,26 @@ class SheetCoverage:
 
 
 @dataclass(frozen=True)
+class BalanceView:
+    """The researcher's current balance of a sheet (the latest recorded)."""
+
+    text: str
+    lean: str | None
+    note: str | None
+    actor: str
+    ts: str
+
+
+@dataclass(frozen=True)
 class SheetView:
     info: SheetInfo
     arguments: tuple[ArgumentView, ...]
     coverage: SheetCoverage
     balance_label: str = BALANCE_LABEL
     selection: dict[str, Any] = field(default_factory=dict)
+    balance: BalanceView | None = None
+    balance_history: int = 0
+    """How many balances the researcher has recorded for the sheet (the latest is `balance`)."""
 
 
 def _issue(field_name: str, message: str) -> FactoryValidationError:
@@ -570,6 +593,48 @@ def rate_argument(
     return payload
 
 
+def record_balance(
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    body: str,
+    lean: str | None = None,
+    note: str | None = None,
+) -> SheetBalanceRecorded:
+    """The researcher's balance of a sheet whose two sections are closed; the latest stands.
+    Refused (nothing written) for anyone but a human, an unknown sheet, a sheet with a section
+    still open, an empty or over-long text or note, or an unknown lean."""
+    if actor.kind != "human":
+        raise _issue("actor", "the balance is the researcher's act")
+    issues: list[ValidationIssue] = []
+    body = body.strip()
+    if not body or len(body) > BALANCE_MAX:
+        issues.append(ValidationIssue("text", f"a balance has 1 to {BALANCE_MAX} characters"))
+    if lean is not None and lean not in get_args(Lean):
+        issues.append(ValidationIssue("lean", f"{lean}: must be against, mixed, for or undecided"))
+    if note is not None and len(note) > BALANCE_NOTE_MAX:
+        issues.append(ValidationIssue("note", f"a note has at most {BALANCE_NOTE_MAX} characters"))
+    if issues:
+        raise FactoryValidationError(issues)
+    with project.index.exclusive():
+        project.index.sync()
+        row = _sheet_row(project, sheet_id)
+        if row is None:
+            raise _issue("sheet_id", f"{sheet_id}: no such sheet")
+        if not (row["against_closed"] and row["for_closed"]):
+            raise _issue("sheet_id", "close both sections of the sheet before the balance")
+        payload = SheetBalanceRecorded(
+            sheet_id=sheet_id,
+            text=body,
+            lean=lean,
+            note=note.strip() if note and note.strip() else None,
+        )
+        project.record(
+            [project.events.make("sheet.balance_recorded", payload, actor, refs=(sheet_id,))]
+        )
+    return payload
+
+
 def list_sheets(project: Project) -> list[SheetInfo]:
     """Every sheet, oldest first."""
     project.index.sync()
@@ -676,8 +741,31 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             1 for c in cands if "claims" not in str(c["sources"]).split(",")
         ),
     )
+    with project.index.connect() as conn:
+        balances = (
+            conn.execute(
+                text("SELECT * FROM sheet_balances WHERE sheet_id = :s ORDER BY event_id"),
+                {"s": sheet_id},
+            )
+            .mappings()
+            .all()
+        )
+    latest = balances[-1] if balances else None
     return SheetView(
-        _info(row, len(arguments)), arguments, coverage, selection=_loads(row["selection"])
+        _info(row, len(arguments)),
+        arguments,
+        coverage,
+        selection=_loads(row["selection"]),
+        balance=None
+        if latest is None
+        else BalanceView(
+            text=latest["text"],
+            lean=latest["lean"],
+            note=latest["note"],
+            actor=latest["actor"],
+            ts=latest["ts"],
+        ),
+        balance_history=len(balances),
     )
 
 

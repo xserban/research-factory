@@ -94,6 +94,57 @@ async def test_sheet_tools_and_human_rating(
     assert "against closed" in runner.invoke(app, ["sheets", "list"], env=env).stdout
 
 
+@pytest.mark.anyio
+async def test_balance_is_cli_only_and_the_view_shows_it_first(
+    settings: Settings, project: Project, clock: FixedClock, world: list[str]
+) -> None:
+    work = sorted(world)[0]
+    opened = await _call(
+        settings, clock, "sheet_open", hypothesis="Reflection helps",
+        proposals=[{"work_id": work, "source": "claims", "stance": "against", **PROP}], **ACT,
+    )  # fmt: skip
+    sheet = opened["data"]["info"]["sheet_id"]
+    claim = {"work_id": work, "claim": "c", "strength": "weak", **PROP}
+    for stance in ("against", "for"):
+        done = await _call(
+            settings, clock, "sheet_argue", sheet_id=sheet,
+            arguments=[{"stance": stance, **claim}], **ACT,
+        )  # fmt: skip
+        assert done["ok"] is True, done
+        closed = await _call(settings, clock, "sheet_close", sheet_id=sheet, section=stance, **ACT)
+        assert closed["ok"] is True, closed
+    runner = CliRunner()
+    env = _env(settings.root)
+    early = await _call(settings, clock, "sheet_view", sheet_id=sheet)
+    assert early["data"]["balance"] is None and early["data"]["balance_history"] == 0
+    wrote = runner.invoke(
+        app,
+        [
+            "sheets",
+            "balance",
+            sheet,
+            "--text",
+            "Mixed.",
+            "--lean",
+            "mixed",
+            "--note",
+            "a replication",
+        ],
+        env=env,
+    )
+    assert wrote.exit_code == 0, wrote.stdout
+    bad = runner.invoke(app, ["sheets", "balance", sheet, "--text", "x", "--lean", "yes"], env=env)
+    assert bad.exit_code != 0
+    view = await _call(settings, clock, "sheet_view", sheet_id=sheet)
+    data = view["data"]
+    assert list(data)[:2] == ["balance", "balance_history"]
+    assert data["balance"]["text"] == "Mixed." and data["balance"]["lean"] == "mixed"
+    assert data["balance_history"] == 1
+    shown = runner.invoke(app, ["sheets", "show", sheet], env=env)
+    assert shown.stdout.index("balance (researcher's") < shown.stdout.index("claim:")
+    # no MCP tool writes the balance: test_mcp_server pins the exact tool list
+
+
 _ARGUE = [{"stance": "against", "work_id": "w", "claim": "c", "strength": "weak", **PROP}]
 
 

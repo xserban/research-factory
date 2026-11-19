@@ -3875,8 +3875,10 @@ def build_server(
         """Record a research-idea lead (at most 600 characters) with at least one trigger: a
         work (`rf:`), an evidence `row` key, a `claim`, a contribution `item`, an `idea`, an
         `interpretation`, a `concept`, a method or problem `card`, a `contradiction`, an earlier
-        `lead` or `hypothesis`, or a builder row (`match`, `conflict`, `gap`) given with the key
-        and the row exactly as the builder returned it. Each trigger is `{kind, ref}` (builder
+        `lead` or `hypothesis`, a `sheet` (only a Prepare-mode sheet with both sections closed
+        and the researcher's balance recorded), or a builder row (`match`, `conflict`, `gap`)
+        given with the key and the row exactly as the builder returned it. Each trigger is
+        `{kind, ref}` (builder
         kinds also `row`). The answer lists `prior`: the parked and discarded leads and the
         hypotheses that share a trigger, card, idea or property; read it and say how this lead
         differs. Name the ideation `framework` you used. Refused to a session that has joined a
@@ -6325,13 +6327,18 @@ def build_server(
         """One sheet: its hypothesis, the arguments (verified quotes, claims, strengths, the
         researcher's ratings) and the computed coverage (works per tier and source, works argued
         per stance, tier-1 works without an argument, ratings). Read-only. Strengths are the
-        writer's judgement; ratings are the researcher's, made in the CLI."""
+        writer's judgement; ratings and the balance are the researcher's, made in the CLI. The
+        current balance, when the researcher has written one, comes first, with the number
+        recorded; no tool writes it, and you never state or suggest a balance."""
 
         def viewing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             view = sheets_service.view_sheet(opened, sheet_id)
-            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+            data = _plain(asdict(view))
+            assert isinstance(data, dict)
+            first = {k: data.pop(k) for k in ("balance", "balance_history")}
+            return _withheld(opened, {**first, **data}, include_work_ids=False)
 
         return _reply(project, viewing, include_work_ids=False)
 
