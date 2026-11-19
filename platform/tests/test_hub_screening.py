@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -311,3 +312,61 @@ def test_load_curve_and_stop_walk_both_leave_out_stale_decisions(
     # the stale include of b is in neither: the curve has one record, the walk stops after it
     assert curve.screened == 1 and curve.included_total == 0
     assert curve.stop_at == 1 and curve.total_records == 3
+
+
+def test_criteria_table_joins_protocol_statements_with_flow_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = SimpleNamespace(
+        excluded={"EX01": 5},
+        background={"EX01": 2},
+        full_text=SimpleNamespace(excluded={"EX02": 3}, background={}),
+    )
+    crit = {c: SimpleNamespace(id=c, statement=f"s {c}") for c in ("EX01", "EX02", "EX03", "IN01")}
+    protocol = SimpleNamespace(spec=SimpleNamespace(criteria=list(crit.values())))
+    monkeypatch.setattr(hs, "prisma_flow", lambda _p: flow)
+    monkeypatch.setattr(hs, "current_protocol", lambda _p: protocol)
+    got = {r["id"]: r for r in hs.criteria_table(cast(Project, None))}
+    assert list(got) == ["EX01", "EX02", "EX03"]  # inclusion criteria are not listed
+    assert (got["EX01"]["ta_excluded"], got["EX01"]["ta_background"]) == (5, 2)
+    assert (got["EX02"]["ft_excluded"], got["EX02"]["ta_excluded"]) == (3, 0)
+    assert got["EX03"]["statement"] == "s EX03" and got["EX03"]["ft_background"] == 0
+
+
+def test_screening_panel_reads_the_services_and_is_json_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    progress = SimpleNamespace(
+        model_dump=lambda mode="json": {"queued": 4, "decided": 3, "remaining": 1}
+    )
+    status = SimpleNamespace(
+        passes={"A": progress},
+        full_text_passes=None,
+        stale_decisions=2,
+        calibration=SimpleNamespace(drawn=10, labelled=9, required=True, passed={"A": True}),
+    )
+    monkeypatch.setattr(hs, "project_status", lambda _p: SimpleNamespace(screening=status))
+    monkeypatch.setattr(
+        hs,
+        "latest_ranking",
+        lambda _p, top: SimpleNamespace(
+            ranking_id="r1", model_id="m", weights_hash="h", software="s", count=7
+        ),
+    )
+    monkeypatch.setattr(hs, "check_list", lambda _p: [])
+    monkeypatch.setattr(hs, "current_protocol", lambda _p: None)
+    monkeypatch.setattr(hs, "screening_stops", lambda _p: [])
+    monkeypatch.setattr(hs, "list_deviations", lambda _p: [1, 2, 3])
+    monkeypatch.setattr(hs, "criteria_table", lambda _p: [])
+    out = hs.screening_panel(cast(Project, None))
+    assert out["ranking"]["weights_hash"] == "h" and out["records_left"] == 1
+    assert out["passes"]["A"]["decided"] == 3 and out["full_text_passes"] is None
+    assert out["calibration"] == {
+        "drawn": 10,
+        "labelled": 9,
+        "required": True,
+        "passed": {"A": True},
+    }
+    assert out["stale_decisions"] == 2 and out["deviations"] == 3
+    assert out["cannot_assess"] == [] and out["checks"] == []
+    assert {"ranking", "passes", "stops", "checks", "cannot_assess", "criteria"} <= set(hs.METHODS)

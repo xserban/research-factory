@@ -221,6 +221,14 @@ def test_overview_facts_equal_their_sources(
     assert out["sets"]["not_read_yet"] == [w for w in inc if w not in {inc[0], inc[1]}]
     assert out["sets"]["mined_but_excluded"][0]["work_id"] == ex
     assert isinstance(out["next_actions"], list)
+    # the line past PRISMA (parity HM-4) and the top-50 columns (CT-3)
+    line = {s["key"]: s for s in out["line"]}
+    assert list(line) == ["converted", "mined", "synthesised", "reported"]
+    assert line["converted"]["n"] == flow.full_text.eligible
+    assert line["mined"]["n"] == 3 and line["synthesised"]["n"] == 0
+    assert top["year"] is None or isinstance(top["year"], int)
+    assert {"external", "self_cited"} <= set(top) and len(out["most_cited"]) <= hp.MOST_CITED
+    assert "line" in out["methods"] and "most_cited" in out["methods"]
     json.dumps(out)  # JSON-safe
 
 
