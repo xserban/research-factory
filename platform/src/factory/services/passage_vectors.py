@@ -8,11 +8,15 @@ includes, excludes or drops one. The platform downloads nothing and calls no rem
 Invariants:
 - `model_key` is `<model id>@<first 16 chars of the weights hash>/chunker<CHUNKER_VERSION>`. A
   vector is used only under the key it was made with; another key (other weights, other chunker)
-  forces a re-embed, and vectors of other keys are removed by `ensure_embedded`.
+  forces a re-embed. `ensure_embedded` keeps vectors of other keys (a second process may still use
+  them); only `prune_other_keys`, behind the explicit CLI flag `--prune`, removes them.
 - `ensure_embedded` embeds only the indexed passages of the pinned conversions of the selection
   that lack a vector for the current key; it is incremental and commits after every batch of
-  `BATCH` passages, so an interrupted run resumes where it stopped. It removes the vectors of
-  conversions that are no longer pinned, of passages that are no longer indexed, and of other keys.
+  `BATCH` passages, so an interrupted run resumes where it stopped. It ends its transaction before
+  loading the model, so the sidecar is not write-locked while embedding. It removes the vectors of
+  passages that are no longer in the index (this covers conversions that are no longer pinned, as
+  their passages leave the index); vectors of passages that are indexed but outside the selection
+  stay.
 - A passage longer than one embedding window (`embedding_windows`) is stored as the normalised
   mean of the normalised vectors of its windows. Every stored vector is a unit vector (float32).
 - The table has its own schema version (`passage_vectors_meta`); another version drops and
@@ -25,13 +29,16 @@ Invariants:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from array import array
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from factory.document.passages import embedding_windows
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.passage_index import CHUNKER_VERSION, ensure_indexed, open_index
 from factory.services.ranking_model import Embedder, Specter2Embedder, ranker_unavailable
@@ -41,11 +48,13 @@ __all__ = [
     "BATCH",
     "VECTORS_SCHEMA_VERSION",
     "EmbedReport",
+    "NoVectors",
     "count_missing",
     "count_passages",
     "default_embedder",
     "ensure_embedded",
     "model_key",
+    "prune_other_keys",
     "vector_ranking",
 ]
 
@@ -77,8 +86,30 @@ class EmbedReport:
     model_key: str
 
 
+class NoVectors(FactoryValidationError):
+    """No vector exists under the key for the selection's passages (field `vectors`)."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__([ValidationIssue("vectors", f"no vectors under key {key}")])
+
+
+_EMBEDDERS: dict[tuple[str, int], Embedder] = {}
+
+
 def default_embedder() -> Embedder:
-    """SPECTER2 from FACTORY_RANKER_MODEL; refuses (`ranker_unavailable`) when not supplied."""
+    """SPECTER2 from FACTORY_RANKER_MODEL; refuses (`ranker_unavailable`) when not supplied. One
+    instance is kept per weights directory and modification time, so the weights hash is computed
+    once per process."""
+    configured = os.environ.get("FACTORY_RANKER_MODEL")
+    if configured:
+        try:
+            token = (configured, Path(configured).stat().st_mtime_ns)
+        except OSError:
+            return Specter2Embedder()  # refuses with the usual remedy
+        cached = _EMBEDDERS.get(token)
+        if cached is None:
+            cached = _EMBEDDERS[token] = Specter2Embedder()
+        return cached
     return Specter2Embedder()
 
 
@@ -171,10 +202,9 @@ def ensure_embedded(
         conn.executemany("INSERT INTO vpinned VALUES (?)", [(c,) for c in pinned])
         before = conn.total_changes
         conn.execute(
-            "DELETE FROM passage_vectors WHERE model_key <> ? "
-            "OR NOT EXISTS (SELECT 1 FROM passages p WHERE p.conversion_id = "
-            "passage_vectors.conversion_id AND p.passage_id = passage_vectors.passage_id)",
-            (key,),
+            "DELETE FROM passage_vectors WHERE NOT EXISTS (SELECT 1 FROM passages p WHERE "
+            "p.conversion_id = passage_vectors.conversion_id "
+            "AND p.passage_id = passage_vectors.passage_id)"
         )
         removed = conn.total_changes - before
         conn.commit()
@@ -185,6 +215,7 @@ def ensure_embedded(
             "AND conversion_id IN (SELECT conversion_id FROM vpinned)",
             (key,),
         ).fetchone()[0]
+        conn.commit()  # end the implicit transaction: no write lock while the model loads
         if limit is not None:
             todo = todo[:limit]
         for start in range(0, len(todo), BATCH):
@@ -206,6 +237,16 @@ def ensure_embedded(
     return EmbedReport(embedded, reused, removed, total - embedded, key)
 
 
+def prune_other_keys(project: Project, key: str) -> int:
+    """Remove the vectors made under any key other than `key`; returns how many. Only the explicit
+    CLI flag `factory passages embed --prune` calls this."""
+    with open_index(project) as conn:
+        _prepare(conn)
+        before = conn.total_changes
+        conn.execute("DELETE FROM passage_vectors WHERE model_key <> ?", (key,))
+        return conn.total_changes - before
+
+
 def _numpy() -> Any:
     try:
         import numpy
@@ -225,7 +266,8 @@ def vector_ranking(
 ) -> list[tuple[str, str]]:
     """The `k` best (conversion_id, passage_id) pairs of the selection for `query`, best first, by
     exact cosine; ties break by conversion id then passage id. Only passages holding a vector under
-    the embedder's key take part (see `count_missing`)."""
+    the embedder's key take part (see `count_missing`). Raises `NoVectors` when passages of the
+    selection are indexed but none holds a vector under the key."""
     np = _numpy()
     key = model_key(embedder)
     with open_index(project) as conn:
@@ -241,6 +283,13 @@ def vector_ranking(
             "ORDER BY v.conversion_id, v.passage_id",
             (key,),
         ).fetchall()
+        if not rows:
+            marks = ",".join("?" * len(works))
+            indexed = conn.execute(
+                f"SELECT 1 FROM passages WHERE conversion_id IN ({marks}) LIMIT 1", _pinned(works)
+            ).fetchone()
+            if indexed is not None:
+                raise NoVectors(key)
     wanted = None if kinds is None else {str(x) for x in kinds}
     rows = [r for r in rows if wanted is None or r[4] in wanted]
     if not rows:

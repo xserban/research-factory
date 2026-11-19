@@ -45,6 +45,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services.context import Project
 from factory.services.passage_index import IndexReport, ensure_indexed, open_index
 from factory.services.passage_vectors import (
+    NoVectors,
     count_missing,
     default_embedder,
     ensure_embedded,
@@ -94,6 +95,8 @@ class Hit:
     section_kind: SectionKind
     keyword_rank: int | None = None
     vector_rank: int | None = None
+    vector_ranks_per_query: tuple[int | None, ...] = ()
+    """Hybrid only: the 1-based vector rank per query (`ranks_per_query` stays the keyword one)."""
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,12 @@ def _match(query: str) -> str | None:
         if any(ch.isalnum() for ch in part):
             terms.append('"' + part.replace('"', "") + '"')
     return " OR ".join(terms) if terms else None
+
+
+def _query_text(query: str) -> str:
+    """The query as the keyword search reads it: its words and phrases, without quote characters."""
+    parts = [(p or w).replace('"', "") for p, w in _PART.findall(query)]
+    return " ".join(x for x in parts if any(ch.isalnum() for ch in x))
 
 
 def _validate(queries: Sequence[str]) -> list[str]:
@@ -188,10 +197,12 @@ def _fuse(ranked: Sequence[dict[_Key, int]], work_of: dict[_Key, str]) -> dict[_
 
 def _fetch_rows(
     project: Project, keys: Collection[_Key], rows: dict[_Key, _Row]
-) -> dict[_Key, _Row]:
+) -> tuple[dict[_Key, _Row], int]:
+    """`rows` completed for `keys`, and how many keys no longer name an indexed passage."""
     missing = [k for k in keys if k not in rows]
+    dropped = 0
     if not missing:
-        return rows
+        return rows, 0
     with open_index(project) as conn:
         for conv, pid in missing:
             r = conn.execute(
@@ -201,7 +212,9 @@ def _fetch_rows(
             ).fetchone()
             if r is not None:
                 rows[(conv, pid)] = (r[0], r[1], r[2], r[3], conv, r[4])
-    return rows
+            else:
+                dropped += 1
+    return rows, dropped
 
 
 def _embed_command(spec: SelectionSpec) -> str:
@@ -239,11 +252,12 @@ def corpus_search(
     used: Method = method
     note: str | None = None
     emb: Embedder | None = None
+    vector_ranked: list[dict[_Key, int]] = []
     if method != "keyword":
+        command = _embed_command(spec)
         try:
             emb = embedder if embedder is not None else default_embedder()
             missing = count_missing(project, selection.works, model_key(emb))
-            command = _embed_command(spec)
             if missing > ON_DEMAND_MAX:
                 if method == "vector":
                     raise FactoryValidationError(
@@ -256,8 +270,32 @@ def corpus_search(
                     )
                 note = f"vectors missing for {missing} passages; run `{command}`"
                 emb = None
-            elif missing:
-                ensure_embedded(project, selection.works, emb)
+            else:
+                if missing:
+                    ensure_embedded(project, selection.works, emb)
+                vector_ranked = [
+                    {
+                        k: i
+                        for i, k in enumerate(
+                            vector_ranking(
+                                project,
+                                selection.works,
+                                _query_text(q),
+                                emb,
+                                kinds=kind_values,
+                                k=CANDIDATES,
+                            ),
+                            start=1,
+                        )
+                    }
+                    for q in queries
+                ]
+        except NoVectors as exc:
+            reason = f"{exc.issues[0].reason}; run `{command}`"
+            if method == "vector":
+                raise FactoryValidationError([ValidationIssue("vectors", reason)]) from exc
+            note = reason
+            emb = None
         except FactoryValidationError as exc:
             if method == "vector" or exc.issues[0].field != "ranker":
                 raise
@@ -265,26 +303,17 @@ def corpus_search(
             emb = None
         if emb is None:
             used = "keyword"
+            vector_ranked = []
     keyword_ranked: list[dict[_Key, int]] = []
     rows: dict[_Key, _Row] = {}
     if used in ("keyword", "hybrid"):
         keyword_ranked, rows = _keyword_ranks(project, matches, pinned, kind_values)
-    vector_ranked: list[dict[_Key, int]] = []
-    if used in ("vector", "hybrid") and emb is not None:
-        vector_ranked = [
-            {
-                k: i
-                for i, k in enumerate(
-                    vector_ranking(
-                        project, selection.works, q, emb, kinds=kind_values, k=CANDIDATES
-                    ),
-                    start=1,
-                )
-            }
-            for q in queries
-        ]
-        rows = _fetch_rows(project, {k for r in vector_ranked for k in r}, rows)
+    if vector_ranked:
+        rows, dropped = _fetch_rows(project, {k for r in vector_ranked for k in r}, rows)
         vector_ranked = [{k: v for k, v in r.items() if k in rows} for r in vector_ranked]
+        if dropped:
+            extra = f"{dropped} vector hits left out: passage no longer indexed"
+            note = extra if note is None else f"{note}; {extra}"
     work_of = {k: v[0] for k, v in rows.items()}
     if used == "keyword":
         per_query = keyword_ranked
@@ -327,6 +356,9 @@ def corpus_search(
                 section_kind=SectionKind(kind),
                 keyword_rank=kw_rank.get(key),
                 vector_rank=vec_rank.get(key),
+                vector_ranks_per_query=(
+                    tuple(r.get(key) for r in vector_ranked) if used == "hybrid" else ()
+                ),
             )
         )
         if len(hits) >= limit:

@@ -1762,10 +1762,15 @@ def passages_embed_cmd(
     layers: _LAYERS = None,
     include: _INCLUDE = None,
     exclude: _EXCLUDE = None,
+    prune: Annotated[
+        bool,
+        typer.Option("--prune", help="Also remove vectors made under any other model key."),
+    ] = False,
 ) -> None:
     """Embed the passages of a selection that lack a vector (SPECTER2, local, resumable).
 
-    Needs the `ranker` extra and FACTORY_RANKER_MODEL. Writes only the passage sidecar."""
+    Needs the `ranker` extra and FACTORY_RANKER_MODEL. Writes only the passage sidecar. Vectors of
+    other model keys are kept unless --prune is given."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
@@ -1779,10 +1784,13 @@ def passages_embed_cmd(
             embedder,
             progress=lambda done, total: typer.echo(f"embedded {done}/{total}"),
         )
+        pruned = passage_vectors_service.prune_other_keys(project, report.model_key) if prune else 0
     typer.echo(
         f"embedded {report.embedded}, already held {report.reused}, removed {report.removed}, "
         f"missing {report.missing}; key {report.model_key}"
     )
+    if prune:
+        typer.echo(f"pruned {pruned} vectors of other keys")
 
 
 @passages_app.command("status")

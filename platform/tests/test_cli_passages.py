@@ -45,3 +45,18 @@ def test_embed_without_model_refuses(
     result = runner.invoke(app, ["passages", "embed"], env=_env(settings.root))
     assert result.exit_code == 1
     assert "ranker:" in result.stderr
+
+
+def test_embed_prune_flag(
+    settings: Settings, project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert(project)
+    current = {"emb": FakeEmbedder("w1")}
+    monkeypatch.setattr(pv, "default_embedder", lambda: current["emb"])
+    runner.invoke(app, ["passages", "embed"], env=_env(settings.root))
+    current["emb"] = FakeEmbedder("w2")
+    plain = runner.invoke(app, ["passages", "embed"], env=_env(settings.root))
+    assert plain.exit_code == 0 and "removed 0" in plain.stdout.splitlines()[-1]
+    pruned = runner.invoke(app, ["passages", "embed", "--prune"], env=_env(settings.root))
+    assert pruned.exit_code == 0, pruned.stderr
+    assert "pruned" in pruned.stdout and "removed 0" in pruned.stdout.splitlines()[-2]

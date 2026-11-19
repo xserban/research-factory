@@ -140,7 +140,10 @@ def test_key_change_forces_re_embed_and_drops_old(project: Project, screened: li
     pv.ensure_embedded(project, works, FakeEmbedder("w1"))
     other = FakeEmbedder("w2")
     report = pv.ensure_embedded(project, works, other)
-    assert report.embedded == 3 * len(screened) and report.removed == 3 * len(screened)
+    assert report.embedded == 3 * len(screened) and report.removed == 0
+    assert _count(project, pv.model_key(other)) == 3 * len(screened)
+    assert _count(project) == 6 * len(screened)  # the old key's vectors stay
+    assert pv.prune_other_keys(project, pv.model_key(other)) == 3 * len(screened)
     assert _count(project, pv.model_key(other)) == _count(project)
 
 
@@ -278,3 +281,122 @@ def test_unknown_method_refused(project: Project, screened: list[str]) -> None:
     with pytest.raises(FactoryValidationError) as err:
         corpus_search(project, ["attention"], SelectionSpec(), method="nonsense")  # type: ignore[arg-type]
     assert err.value.issues[0].field == "method"
+
+
+class BrokenQuery(FakeEmbedder):
+    """Same key as FakeEmbedder; embedding the query (a single short text) is unavailable."""
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if len(texts) == 1 and not texts[0].startswith("The ") and len(texts[0]) < 40:
+            raise ranker_unavailable("model files cannot be loaded")
+        return super().embed(texts)
+
+
+def test_hybrid_falls_back_when_query_embedding_unavailable(
+    project: Project, screened: list[str]
+) -> None:
+    _convert(project)
+    pv.ensure_embedded(project, _works(project), FakeEmbedder())  # all vectors present
+    broken = BrokenQuery()
+    with pytest.raises(FactoryValidationError) as err:
+        corpus_search(project, ["attention"], SelectionSpec(), method="vector", embedder=broken)
+    assert err.value.issues[0].field == "ranker"
+    result = corpus_search(
+        project, ["attention"], SelectionSpec(), method="hybrid", embedder=broken
+    )
+    assert result.method == "keyword" and result.hits
+    assert result.note is not None and "keyword only" in result.note
+
+
+def test_hybrid_falls_back_when_numpy_missing(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert(project)
+    emb = FakeEmbedder()
+    pv.ensure_embedded(project, _works(project), emb)
+
+    def no_numpy() -> None:
+        raise ranker_unavailable("numpy is not installed")
+
+    monkeypatch.setattr(pv, "_numpy", no_numpy)
+    with pytest.raises(FactoryValidationError) as err:
+        corpus_search(project, ["attention"], SelectionSpec(), method="vector", embedder=emb)
+    assert err.value.issues[0].field == "ranker"
+    result = corpus_search(project, ["attention"], SelectionSpec(), method="hybrid", embedder=emb)
+    assert result.method == "keyword" and result.hits
+    assert result.note is not None and "keyword only" in result.note
+
+
+def test_no_vectors_under_key_vector_refuses_hybrid_notes(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _convert(project)
+    emb = FakeEmbedder()
+    monkeypatch.setattr(cs, "count_missing", lambda *a, **k: 0)  # claims all present; none are
+    with pytest.raises(FactoryValidationError) as err:
+        corpus_search(project, ["attention"], SelectionSpec(), method="vector", embedder=emb)
+    issue = err.value.issues[0]
+    assert issue.field == "vectors"
+    assert "no vectors under key" in issue.reason and "factory passages embed" in issue.reason
+    result = corpus_search(project, ["attention"], SelectionSpec(), method="hybrid", embedder=emb)
+    assert result.method == "keyword" and result.hits
+    assert result.note is not None and "no vectors under key" in result.note
+
+
+def test_embedding_does_not_hold_the_sidecar_write_lock(
+    project: Project, screened: list[str]
+) -> None:
+    _convert(project)
+    outcome: list[str] = []
+
+    class Probing(FakeEmbedder):
+        def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            if not outcome:
+                other = sqlite3.connect(index_path(project), timeout=0.2)
+                try:
+                    other.execute("CREATE TABLE IF NOT EXISTS probe(x)")
+                    other.execute("INSERT INTO probe VALUES (1)")
+                    other.commit()
+                    outcome.append("written")
+                except sqlite3.OperationalError as exc:
+                    outcome.append(f"locked: {exc}")
+                finally:
+                    other.close()
+            return super().embed(texts)
+
+    pv.ensure_embedded(project, _works(project), Probing())
+    assert outcome == ["written"]
+
+
+def test_query_embedded_is_the_parsed_text(project: Project, screened: list[str]) -> None:
+    _convert(project)
+    seen: list[str] = []
+
+    class Spy(FakeEmbedder):
+        def embed(self, texts: Sequence[str]) -> list[list[float]]:
+            if len(texts) == 1:
+                seen.append(texts[0])
+            return super().embed(texts)
+
+    emb = Spy()
+    pv.ensure_embedded(project, _works(project), emb)
+    seen.clear()
+    corpus_search(
+        project, ['"retrieval recall" attention !!'], SelectionSpec(), method="vector", embedder=emb
+    )
+    assert seen == ["retrieval recall attention"]
+
+
+def test_hybrid_exposes_vector_ranks_per_query(project: Project, screened: list[str]) -> None:
+    _convert(project)
+    result = corpus_search(
+        project,
+        ["attention", "gradient"],
+        SelectionSpec(),
+        method="hybrid",
+        embedder=FakeEmbedder(),
+        per_work_limit=10,
+        limit=100,
+    )
+    assert all(len(h.vector_ranks_per_query) == 2 for h in result.hits)
+    assert any(r is not None for h in result.hits for r in h.vector_ranks_per_query)
