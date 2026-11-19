@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -147,6 +148,24 @@ def test_only_is_honoured_and_unknown_names_refused(world: Project, tmp_path: Pa
     assert not (tmp_path / "ui/overview.html").exists()
     with pytest.raises(ValueError, match="nope"):
         hb.build_static(world, tmp_path / "x", only={"nope"})
+
+
+def test_payloads_only_writes_json_and_its_gzip_in_the_given_order(
+    world: Project, tmp_path: Path
+) -> None:
+    out = tmp_path / "child"
+    report = hb.build_static(world, out, only=["living", "overview"], payloads_only=True)
+    assert list(report.payloads) == ["living", "overview"]  # the requested one first
+    assert sorted(p.name for p in (out / "data").iterdir()) == [
+        "living.json",
+        "living.json.gz",
+        "overview.json",
+        "overview.json.gz",
+    ]
+    assert not (out / "assets").exists() and not list(out.glob("*.html"))
+    for name in ("living", "overview"):
+        raw = (out / "data" / f"{name}.json").read_bytes()
+        assert gzip.decompress((out / "data" / f"{name}.json.gz").read_bytes()) == raw
 
 
 def test_pages_use_registered_assets_and_no_external_url(world: Project, tmp_path: Path) -> None:

@@ -1394,7 +1394,15 @@ def _handler_class(
                 self._cache = (
                     "public, max-age=31536000, immutable" if found.immutable else "no-cache"
                 )
-                self._send(200, found.body, found.content_type, {})
+                if found.gz and hub_serve.accepts_gzip(self.headers.get("Accept-Encoding")):
+                    self._send(
+                        200,
+                        found.gz,
+                        found.content_type,
+                        {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"},
+                    )
+                else:
+                    self._send(200, found.body, found.content_type, {"Vary": "Accept-Encoding"})
             elif rest.startswith(UI_DOC_PREFIX) and rest.endswith(".json"):
                 self._ui_document(slot, rest[len(UI_DOC_PREFIX) : -len(".json")], None)
             elif rest.startswith("data/") and rest.endswith(".json"):
@@ -1470,8 +1478,10 @@ def _handler_class(
             )
 
         def _payload(self, name: str, slot: Slot) -> None:
-            """A cached payload with its ETag (304 when the browser has it), or why not yet."""
-            answer = slot.ui.get(name)
+            """A cached payload with its ETag (304 when the browser has it, stale or fresh), gzipped
+            when the client accepts it, or why not yet."""
+            want_gz = hub_serve.accepts_gzip(self.headers.get("Accept-Encoding"))
+            answer = slot.ui.get(name, gzip=want_gz)
             if isinstance(answer, hub_serve.Unknown):
                 self._deny(404, "not found")
             elif isinstance(answer, hub_serve.Building):
@@ -1485,28 +1495,24 @@ def _handler_class(
                 )
             elif isinstance(answer, hub_serve.Failed):
                 self._json(500, {"error": "build failed", "payload": answer.name})
-            elif isinstance(answer, hub_serve.Stale):
-                self._cache = "no-store"
-                self._send(
-                    200,
-                    answer.body,
-                    "application/json; charset=utf-8",
-                    {"X-Hub-Stale": "1"},
-                )
             else:
-                self._cache = "private, max-age=0, must-revalidate"
+                self._cache = "private, no-cache"  # keep it, revalidate each time
+                headers = {"ETag": answer.etag, "Vary": "Accept-Encoding"}
+                if isinstance(answer, hub_serve.Stale):
+                    headers["X-Hub-Stale"] = "1"
                 seen = {
                     t.strip().removeprefix("W/")
                     for t in (self.headers.get("If-None-Match") or "").split(",")
                 }
                 if answer.etag in seen or "*" in seen:
                     self.send_response(304)
-                    self.send_header("ETag", answer.etag)
+                    for key, value in headers.items():
+                        self.send_header(key, value)
                     self.end_headers()
                     return
-                self._send(
-                    200, answer.body, "application/json; charset=utf-8", {"ETag": answer.etag}
-                )
+                if answer.gzip:
+                    headers["Content-Encoding"] = "gzip"
+                self._send(200, answer.body, "application/json; charset=utf-8", headers)
 
         def _lazy_item(self, url: str, slot: Slot) -> bool:
             """Serve an item page of a lazily built product, rendering it on its first request
