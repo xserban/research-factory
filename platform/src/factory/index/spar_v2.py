@@ -11,7 +11,8 @@ is stored. Roles run in order: search, one read per planned paper, against, for,
 Folded only if (a hand-written event failing a guard changes nothing on rebuild):
 - `spar.role_started`: system actor; a v2 request; the stage of a known run is `spar2-<role>`; the
   role is the next undone one of the plan, no role run is open, and the request's session budget
-  is not spent.
+  is not spent (readers: a reader session left; a fixed role: its first session or a retry of the
+  separate allowance, `FIXED_RETRIES`).
 - `spar.reading_recorded`, `sheet.argument_checked`, `spar.coverage_recorded`: an agent actor and a
   role row of that run (and request) for the matching role; a reading of a planned work, once; a
   check of a folded argument of the request's sheet; a sweep over papers no source proposed, once.
@@ -46,6 +47,10 @@ DEFAULT_MAX_SESSIONS = 15
 FIXED_ROLES = 5
 """Search, against, for, critic and cover: one session each; the readers share the rest."""
 MIN_MAX_SESSIONS = FIXED_ROLES
+FIXED_RETRIES = 2
+"""Retries of the fixed roles a request may start, over all five together, beyond the cap: the
+readers' sessions (retries included) are bounded by `max_sessions - 5` and a reader's retry never
+takes a fixed role's session; a fixed role that fails is retried within this separate allowance."""
 
 
 def stage_of(role: str) -> str:
@@ -74,6 +79,22 @@ class Plan:
     """Index in `slots` of the first slot not done; None when every slot is done."""
     failed: bool
     """The next slot has a run that has ended without finishing the slot."""
+    reader_sessions: int = 0
+    """Reader runs started, retries included; at most `max_sessions - 5`."""
+    fixed_retries: int = 0
+    """Retries started of the fixed roles (runs beyond the first of a role); at most
+    `FIXED_RETRIES`."""
+    role_sessions: tuple[tuple[str, int], ...] = ()
+    """Runs started per fixed role."""
+
+    def can_start(self, slot: Slot) -> bool:
+        """Whether the budget allows a run (the first or a retry) of `slot`: a reader needs a
+        reader session left, a fixed role its first session or a retry of the allowance."""
+        if slot.role == "read":
+            return self.reader_sessions < max(self.max_sessions - FIXED_ROLES, 0)
+        if dict(self.role_sessions).get(slot.role, 0) == 0:
+            return True
+        return self.fixed_retries < FIXED_RETRIES
 
     @property
     def next(self) -> Slot | None:
@@ -211,16 +232,31 @@ def plan(conn: Connection, request_id: str) -> Plan | None:
             )
         ]
         allowed = max(cap - FIXED_ROLES, 0)
-        cut = ordered[allowed:]
         read = {
             str(w)
             for (w,) in conn.execute(
                 text("SELECT work_id FROM spar_readings WHERE request_id = :r"), {"r": request_id}
             )
         }
-        for work in ordered[:allowed]:
-            slots.append(Slot("read", work))
-            done.append(work in read)
+        started = {str(r[2]) for r in rows if r[1] == "read"}
+        running = {str(r[2]) for r in rows if r[1] == "read" and r[3] is None}
+        # reader sessions left, retries counted; a failed paper's retry is reserved before a new
+        # paper is planned, so the tail of the list is what the budget cuts
+        left = allowed - sum(1 for r in rows if r[1] == "read")
+        keep = {w for w in ordered if w in read or w in running}
+        for w in ordered:
+            if w in started and w not in keep and left > 0:
+                keep.add(w)
+                left -= 1
+        for w in ordered:
+            if w not in started and left > 0:
+                keep.add(w)
+                left -= 1
+        cut = [w for w in ordered if w not in keep]
+        for work in ordered:
+            if work in keep:
+                slots.append(Slot("read", work))
+                done.append(work in read)
         unchecked = conn.execute(
             text(
                 "SELECT COUNT(*) FROM sheet_arguments a WHERE a.sheet_id = :s AND NOT EXISTS "
@@ -240,6 +276,10 @@ def plan(conn: Connection, request_id: str) -> Plan | None:
             covered is not None,
         ]
     open_run = next((str(r[0]) for r in rows if r[3] is None), None)
+    per_role: dict[str, int] = {}
+    for r in rows:
+        if r[1] != "read":
+            per_role[str(r[1])] = per_role.get(str(r[1]), 0) + 1
     next_index = next((i for i, d in enumerate(done) if not d), None)
     failed = False
     if next_index is not None:
@@ -256,6 +296,9 @@ def plan(conn: Connection, request_id: str) -> Plan | None:
         open_run=open_run,
         next_index=next_index,
         failed=failed,
+        reader_sessions=sum(1 for r in rows if r[1] == "read"),
+        fixed_retries=sum(max(n - 1, 0) for n in per_role.values()),
+        role_sessions=tuple(sorted(per_role.items())),
     )
 
 
@@ -282,9 +325,9 @@ def spar_v2_handlers(tables: SparV2Tables) -> dict[str, Handler]:
         current = plan(conn, payload.request_id)
         if current is None or current.open_run is not None or current.next is None:
             return
-        if current.sessions >= current.max_sessions:
-            return
         if current.next != Slot(payload.role, payload.work_id):
+            return
+        if not current.can_start(current.next):
             return
         stage = conn.execute(
             text("SELECT stage FROM runner_runs WHERE run_id = :r"), {"r": payload.run_id}

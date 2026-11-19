@@ -644,17 +644,20 @@ def test_the_session_budget_cuts_readers_and_refuses_to_start_past_it(
     got = cr.view_request(project, request)
     assert got.max_sessions == 6 and got.readers_cut == (sorted(world)[1],)
     assert got.next_work == sorted(world)[0] and len(got.readers_cut) == 1
-    # failures spend the budget: the reader run the watcher started and four retries all fail
-    # (exit status 1), then the budget of six is spent
+    # the one reader session fails: the paper is cut (no retry takes a fixed role's session) and
+    # the chain goes on to the case against, which the watcher starts
     v2_env.code = 1
     v2_env.processes[-1].code = 1
     _end(v2_env, _open_run(project))
-    for _ in range(4):
+    got = cr.view_request(project, request)
+    assert got.readers_cut == tuple(sorted(world)[:2]) and got.next_role == "against"
+    # the fixed roles fail: two retries are allowed, the third is refused
+    _end(v2_env, _open_run(project))
+    for _ in range(2):
         run = sv.advance(project, request, launcher=v2_env)
         assert run is not None
         _end(v2_env, run)
-    assert cr.view_request(project, request).sessions == 6
-    with pytest.raises(FactoryValidationError, match="budget of 6"):
+    with pytest.raises(FactoryValidationError, match="retry allowance of 2"):
         sv.advance(project, request, launcher=v2_env)
     minimal = _request(project, max_sessions=5)
     assert cr.view_request(project, minimal).max_sessions == 5
@@ -717,3 +720,72 @@ def test_no_real_claude_was_launched(project: Project, v2_env: FakeLauncher) -> 
     allowed = argv[argv.index("--allowedTools") + 1 : argv.index("--disallowedTools")]
     assert allowed == list(runner.STAGES["spar2-search"].tools)
     _end(v2_env, _open_run(project))
+
+
+# --------------------------------------------------- fix round: the fixed roles keep their budget
+
+
+def _fail_end(launcher: FakeLauncher, run_id: str) -> None:
+    """The open run's process exits with status 1 (and so does every later fake process)."""
+    launcher.processes[-1].code = 1
+    _end(launcher, run_id)
+
+
+def test_a_reader_retry_never_eats_the_fixed_roles_budget(
+    project: Project, world: list[str], v2_env: FakeLauncher
+) -> None:
+    # cap 7: five fixed roles and two reader sessions; both tier-1 papers are planned at first
+    request = _request(project, max_sessions=7)
+    w = sorted(world)
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    sheet = _search(project, world, request, run)
+    _end(v2_env, run)
+    assert cr.view_request(project, request).readers_cut == ()
+    reader = _open_run(project)
+    v2_env.code = 1
+    _fail_end(v2_env, reader)  # the first reader fails: its retry takes the second reader session
+    v2_env.code = 0
+    got = cr.view_request(project, request)
+    assert got.state == "failed" and got.next_work == w[0]
+    assert got.readers_cut == (w[1],)  # stated: one reader fewer, the fixed roles untouched
+    retry = sv.advance(project, request, launcher=v2_env)
+    assert retry is not None
+    _read(project, retry, w[0], 2)
+    _end(v2_env, retry)
+    got = cr.view_request(project, request)
+    assert got.next_role == "against" and got.readers_cut == (w[1],)
+    against = _open_run(project)
+    sh.record_arguments(project, _agent(20), sheet, [_arg(w[0], "against")], run_id=against)
+    sh.close_section(project, _agent(20), sheet, "against", run_id=against)
+    _end(v2_env, against)
+    writer = _open_run(project)
+    sh.record_arguments(project, _agent(21), sheet, [_arg(w[1], "for")], run_id=writer)
+    sh.close_section(project, _agent(21), sheet, "for", run_id=writer)
+    _end(v2_env, writer)
+    critic = _open_run(project)
+    view = sh.view_sheet(project, sheet)
+    ids = [a.argument_id for a in view.arguments]
+    sv.record_checks(project, _agent(30), critic, [sv.CheckInput(i, "holds", "ok") for i in ids])
+    _end(v2_env, critic)
+    assert cr.view_request(project, request).next_role == "cover"  # not stalled by the retry
+    assert sv.progress(project, request).state == "taken"
+
+
+def test_a_fixed_role_retries_within_a_small_separate_allowance(
+    project: Project, world: list[str], v2_env: FakeLauncher
+) -> None:
+    assert sv.FIXED_RETRIES == 2
+    request = _request(project, max_sessions=5)  # no reader budget at all, the roles are fixed
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    v2_env.code = 1
+    _fail_end(v2_env, run)
+    for _ in range(2):  # two retries of the searcher are allowed, beyond the cap of five
+        run = sv.advance(project, request, launcher=v2_env)
+        assert run is not None
+        _fail_end(v2_env, run)
+    assert cr.view_request(project, request).sessions == 3
+    with pytest.raises(FactoryValidationError, match="retry allowance"):
+        sv.advance(project, request, launcher=v2_env)
+    assert cr.view_request(project, request).sessions == 3

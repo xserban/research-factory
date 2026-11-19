@@ -22,10 +22,13 @@ Invariants:
   check is not a rating: it never enters `sheet_ratings`, and no role rates, writes the balance of
   the evidence, or records a lead. The allow-lists of the stages (`runner.STAGES`) leave those
   tools out, and the services refuse a role that writes outside its own role.
-- Budget: a request may start at most `max_sessions` role sessions (default 15), retries included.
-  Five roles are fixed, so the readers get `max_sessions - 5`; tier-1 papers beyond that are cut,
-  fewest sources first, and listed as `readers_cut`. A request whose budget is spent is not
-  advanced. Sessions are counted from the folded role runs.
+- Budget: five roles are fixed (search, against, for, critic, cover), so the readers share
+  `max_sessions - 5` sessions (default cap 15), their retries included; tier-1 papers beyond that
+  are cut, fewest sources first, and listed as `readers_cut`. A reader's retry takes a reader
+  session, never a fixed role's: when it spends the last one, the paper that no longer fits is cut
+  (stated in `readers_cut`) and the chain still reaches the cover. A fixed role that fails is
+  retried within a separate allowance of `FIXED_RETRIES` (2) retries per request, over all five
+  roles, beyond the cap; past it the request is not advanced. Counts are from the folded role runs.
 - Readers read one after another in v1 of v2; readers in parallel is later work.
 - Held-out handling follows decision 37.9 (the MCP tools scrub every reply).
 """
@@ -44,6 +47,7 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.spar_v2 import (
     DEFAULT_MAX_SESSIONS,
+    FIXED_RETRIES,
     FIXED_ROLES,
     MIN_MAX_SESSIONS,
     Plan,
@@ -75,6 +79,7 @@ from factory.services.work_ref import resolve_work_id
 
 __all__ = [
     "DEFAULT_MAX_SESSIONS",
+    "FIXED_RETRIES",
     "FIXED_ROLES",
     "MIN_MAX_SESSIONS",
     "CheckInput",
@@ -258,12 +263,18 @@ def _check_startable(current: Plan, *, retry: bool) -> Slot:
         raise _issue("request_id", "every role of this request is done")
     if current.failed and not retry:
         raise _issue("request_id", f"the role {slot.role} failed; advance retries it")
-    if current.sessions >= current.max_sessions:
-        raise _issue(
-            "request_id",
-            f"the session budget of {current.max_sessions} is spent after {current.sessions} "
-            f"role sessions; the role {slot.role} is not started",
-        )
+    if not current.can_start(slot):
+        if slot.role == "read":
+            why = (
+                f"the {current.max_sessions - FIXED_ROLES} reader sessions of the budget of "
+                f"{current.max_sessions} are spent"
+            )
+        else:
+            why = (
+                f"the retry allowance of {FIXED_RETRIES} for the fixed roles is spent "
+                f"(budget {current.max_sessions})"
+            )
+        raise _issue("request_id", f"{why}; the role {slot.role} is not started")
     return slot
 
 
@@ -324,10 +335,7 @@ def pending_by_role(project: Project, role: str) -> int:
     return sum(
         1
         for p in plans
-        if p.open_run is None
-        and p.next is not None
-        and p.next.role == role
-        and p.sessions < p.max_sessions
+        if p.open_run is None and p.next is not None and p.next.role == role and p.can_start(p.next)
     )
 
 
