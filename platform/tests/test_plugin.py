@@ -321,3 +321,10 @@ def test_technique_bounce_names_its_tools_and_the_labelling_rule() -> None:
         "Never call a `derives-from`",
     ):
         assert needed in text, needed
+
+
+def test_rf_chat_passes_the_digest_claim_key_to_sheet_argue() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split())
+    assert "pass that claim's row key as `claim_row_key`" in lowered
+    assert "key=" in lowered and "copy the text after" in lowered
