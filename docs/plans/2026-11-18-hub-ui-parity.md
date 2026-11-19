@@ -744,3 +744,32 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+Step 9 (gap fixes: Overview and Flow), branch `hub-port-gaps1`. Built, not yet run or reviewed.
+
+### Overview
+
+- HM-4 — done (overview.js: "From papers to findings" row; `hub_payloads.line_stations`). Hrefs of the four stations (`sources.html`, `miners.html`, `write.html`) assume the new page file names.
+- LY-1 — done for Overview (composition ⓘ and an ⓘ on the layer group state that the layer pass is not calibrated); open for the Corpus facet ⓘ (corpus.js, not in this step).
+- CT-3 — done (overview.js: Most cited, "Show all 50" table with year, cited here, same-author share, stored OpenAlex count; `most_cited` carries 50 rows).
+
+### Flow
+
+- DB-22 — done (flow.js:Screening › Screening status, ranking key-values; `hub_screening.screening_panel`)
+- DB-23 — done (flow.js:Screening › Screening status, passes table, records left, stale decisions)
+- DB-24 — done (flow.js:Screening › Stop rules table with run progress, state, not screened)
+- DB-25 — done (flow.js:Screening › Calibration and checks)
+- DB-26 — done (flow.js:Screening › full-text passes table, shown when the protocol has a full-text plan)
+- DB-27 — done (flow.js:Screening › Full text to resolve; the link to the conversion inspector waits for the Sources page, the read command is shown)
+- DB-28 — done (flow.js:Screening › Calibration and checks, bands in a details list)
+- RS-4 — done (flow.js:Screening › Stop rules note, deviation count from `list_deviations`)
+- LY-3 — done (flow.js:Replay › Layer moves; `hub_payloads.layer_replay_payload`)
+- PR-5 — done (flow.js:Screening › Criteria; statements, counts and background counts)
+- FL-3 — done (flow.js:Where the records went › Steps by source; `hub_payloads.by_source_table`)
+- FL-4 — done (flow.js: record list columns Source group, Sources, Step reached)
+- FL-5 — done (flow.js: Source group and Step reached facets)
+- FL-6 — done (flow.js: Download CSV of the filtered list, built client-side)
+- FL-8 — open (Paths now shows source group, sources, step reached, duplicate of and merged duplicates; the document and primary ids of each step are not in the journeys payload)
+- FL-9 — done (identification note in the ⓘ of the identified, source and duplicate nodes and of Steps by source)
