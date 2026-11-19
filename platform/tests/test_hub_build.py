@@ -553,4 +553,5 @@ def test_the_seven_ported_pages_have_registered_stub_builders(world: Project) ->
         assert name in hb.BUILDERS
         assert name in hub_ui.PAGES and hub_ui.PAGES[name].payloads == ("shell", name)
         assert hb.BUILDERS[name].__module__ == f"factory.services.hub_{name}"
-        assert hb.BUILDERS[name](hb.HubContext(world)) == {"methods": {}, "ready": False}
+        if name != "protocol":  # the protocol page is ported: tests/test_hub_protocol.py
+            assert hb.BUILDERS[name](hb.HubContext(world)) == {"methods": {}, "ready": False}

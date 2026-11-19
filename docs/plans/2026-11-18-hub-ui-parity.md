@@ -744,3 +744,23 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+### Protocol page (`protocol`)
+
+DB-7 — done (Protocol: header stats)
+DB-8 — done (Protocol › Plan: section chips with decision counts)
+DB-9 — done (Protocol › Plan › Question)
+DB-10 — done (Protocol › Plan › Criteria, with excluded counts per stage from the reasons wall)
+DB-11 — done (Protocol › Plan › Sources: sources, queries, limits)
+DB-12 — done (Protocol › Plan › Screening, Extraction, Snowballing)
+DB-13 — done (Protocol › Plan: Decisions behind this section)
+DB-14 — done (Protocol › Decisions: level, status, search, count, grouped)
+DB-15 — done (Protocol › Decisions: card header)
+DB-16 — done (Protocol › Decisions: card body, jump links, provenance)
+DB-17 — done (open cards kept across redraw; hash `#dec=<id>`; map dots jump)
+DB-18 — done (Protocol › Reviews)
+DB-19 — done (Protocol › Probes)
+DB-3 — open (ⓘ panels carry the methods text; the per-tab help paragraph is not ported verbatim)
+Deviations (RS-4, AC-11 share) — done (Protocol › Versions › Deviations)
