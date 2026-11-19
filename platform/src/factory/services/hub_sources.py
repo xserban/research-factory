@@ -19,6 +19,8 @@ import html
 import json
 import re
 from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from factory.document.optional import converter_infos
@@ -35,7 +37,7 @@ from factory.services.site_corpus import slug_of
 from factory.services.site_documents import KIND_TITLES, _slug
 from factory.services.site_inspector import documents as inspector_documents
 from factory.services.site_quality import REASONS, ROUTE_HELP, _works_info
-from factory.services.study_files import file_status, list_files
+from factory.services.study_files import Registration, file_status, list_files
 
 if TYPE_CHECKING:  # hub_build imports this module to register its builder
     from factory.services.hub_build import HubContext
@@ -274,6 +276,55 @@ def _conversion(project: Project) -> dict[str, Any]:
     }
 
 
+STUDY_FILE_CAP = 2_000_000
+_STUDY_TEXT = frozenset(
+    {".md", ".markdown", ".txt", ".json", ".jsonl", ".csv", ".tsv", ".yaml", ".yml", ".toml"}
+    | {".html", ".htm", ".xml", ".tex", ".bib", ".py", ".log", ".rst", ".ini", ".cfg"}
+)
+
+
+def _stamp(base: Path, path: str, status: Any) -> dict[str, Any]:
+    """The cache-key detail of one registered file (DC-6): the current content hash and the
+    stat (size, modified time) the old Study documents page used as its rebuild stamp."""
+    out: dict[str, Any] = {"current_sha": None, "size": None, "modified": None}
+    if status is not None:
+        out["current_sha"] = status.current_sha256
+    target = (base / path).resolve()
+    try:
+        if target.is_relative_to(base) and target.is_file():
+            st = target.stat()
+            out["size"] = st.st_size
+            out["modified"] = datetime.fromtimestamp(st.st_mtime, tz=UTC).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        pass
+    return out
+
+
+def study_file(project: Project, registration_id: str) -> tuple[bytes, str, str] | None:
+    """(bytes, content type, file name) of one registered version, read from its stored blob.
+
+    The registration's event id is the only key: no path comes from the caller, so nothing
+    outside the project is reachable. None for an unknown id or a blob over `STUDY_FILE_CAP`.
+    Text types are served as `text/plain` (never as a page); others get an octet-stream type
+    and the caller sends them as a download."""
+    found: Registration | None = None
+    for entry in list_files(project):
+        for reg in (entry.latest, *entry.history):
+            if reg.event_id == registration_id:
+                found = reg
+    if found is None:
+        return None
+    try:
+        body = project.blobs.get(found.blob)
+    except (OSError, KeyError, ValueError):
+        return None
+    if len(body) > STUDY_FILE_CAP:
+        return None
+    name = found.path.rsplit("/", 1)[-1]
+    text_like = Path(name).suffix.lower() in _STUDY_TEXT
+    return body, "text/plain; charset=utf-8" if text_like else "application/octet-stream", name
+
+
 def _documents(project: Project) -> dict[str, Any]:
     """Registered files by kind, each with its status and earlier versions."""
     files = list_files(project)
@@ -293,11 +344,15 @@ def _documents(project: Project) -> dict[str, Any]:
             is_md = latest.path.lower().endswith((".md", ".markdown"))
             rows.append(
                 {
+                    "id": latest.event_id,
+                    "url": f"study/{latest.event_id}",
                     "path": latest.path,
                     "title": latest.title,
                     "version": latest.version,
                     "registered": latest.registered_at[:10],
                     "sha": latest.sha256[:12],
+                    "sha_full": latest.sha256,
+                    **_stamp(base, latest.path, status.get(latest.path)),
                     "state": state,
                     "outside": outside,
                     "markdown": is_md,
@@ -305,7 +360,13 @@ def _documents(project: Project) -> dict[str, Any]:
                     if outside
                     else (f"../documents/{name}.html" if is_md else f"../documents/files/{name}"),
                     "history": [
-                        {"version": r.version, "at": r.registered_at[:10], "sha": r.sha256[:12]}
+                        {
+                            "id": r.event_id,
+                            "url": f"study/{r.event_id}",
+                            "version": r.version,
+                            "at": r.registered_at[:10],
+                            "sha": r.sha256[:12],
+                        }
                         for r in entry.history
                     ],
                 }

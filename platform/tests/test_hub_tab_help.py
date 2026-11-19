@@ -33,5 +33,5 @@ def test_every_ported_tab_is_in_its_payload_methods() -> None:
 def test_text_is_verbatim_from_the_old_dashboard() -> None:
     src = dashboard_page.PAGE
     for tab, text in TAB_HELP.items():
-        old = text.replace("’", "\\u2019")
+        old = text.replace("\u2019", "\\u2019")
         assert old in src, tab

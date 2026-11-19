@@ -372,10 +372,20 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
     </section>
     ${DC.kinds.map(k => `<section class="sx-sec">${header({ title: k.title })}
       <table class="t sx-plain"><thead><tr><th class="l">File</th><th class="l">Version</th><th class="l">Registered</th><th class="l">Status</th><th class="l">Earlier versions</th></tr></thead><tbody>
-      ${k.files.map(f => `<tr><td>${f.href ? `<a href="${esc(f.href)}">${esc(f.title || f.path)}</a>` : esc(f.title || f.path)}${f.outside ? ' <span class="sx-bad">outside the project</span>' : ''}<div class="meta mono">${esc(f.path)}</div></td>
+      ${k.files.map(f => `<tr><td>${f.href ? `<a href="${esc(HUB.served ? f.url : f.href)}"${HUB.served ? ' target="_blank" rel="noopener"' : ''}>${esc(f.title || f.path)}</a>` : esc(f.title || f.path)}${f.outside ? ' <span class="sx-bad">outside the project</span>' : ''}<div class="meta mono">${esc(f.path)}</div>
+          ${HUB.served && !f.outside ? `<div><button class="btn" type="button" data-sf="${esc(f.url)}">Show contents</button></div><div data-sfbox="${esc(f.url)}"></div>` : ''}
+          <div class="meta mono">registered sha256 ${esc(f.sha_full || '')}${f.current_sha ? `<br>on disk sha256 ${esc(f.current_sha)}` : '<br>not on disk'}${f.size != null ? `<br>${fmt(f.size)} bytes, modified ${esc(f.modified || '')}` : ''}</div></td>
         <td class="mono">v${fmt(f.version)}</td><td>${esc(f.registered)}</td>
         <td>${f.state === 'changed' ? '<span class="sx-warn">changed since registration</span>' : f.state === 'missing' ? '<span class="sx-bad">missing</span>' : 'unchanged'}</td>
-        <td>${f.history.map(r => `<div class="meta mono">v${fmt(r.version)}: ${esc(r.at)}, ${esc(r.sha)}</div>`).join('')}</td></tr>`).join('')}</tbody></table></section>`).join('')}`;
+        <td>${f.history.map(r => `<div class="meta mono">v${fmt(r.version)}: ${esc(r.at)}, ${esc(r.sha)}${HUB.served ? ` <button class="btn" type="button" data-sf="${esc(r.url)}">Show</button>` : ''}</div><div data-sfbox="${esc(r.url)}"></div>`).join('')}</td></tr>`).join('')}</tbody></table></section>`).join('')}`;
+    body.querySelectorAll('button[data-sf]').forEach(b => b.onclick = async () => {
+      const box = [...body.querySelectorAll('[data-sfbox]')].find(x => x.dataset.sfbox === b.dataset.sf);
+      if (box.firstChild) { box.replaceChildren(); return; }
+      const r = await fetch(b.dataset.sf);
+      if (!r.ok) { box.innerHTML = '<p class="meta">This file cannot be shown (too large or not stored).</p>'; return; }
+      if (!(r.headers.get('content-type') || '').startsWith('text/plain')) { box.innerHTML = `<p class="meta">Not a text file: <a href="${esc(b.dataset.sf)}">download it</a>.</p>`; return; }
+      box.innerHTML = `<pre class="sx-pre">${esc(await r.text())}</pre>`;
+    });
   }
 
   show();

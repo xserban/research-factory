@@ -36,6 +36,7 @@ Invariants:
   the local human, `cli:inbox add`). The pages' other acts are the routes above. Further read-only
   routes: `ui/data/sources-doc-<document_id>.json` (one converted document: texts, lost and added
   runs), `ui/file/original|markdown/<document_id>` (the stored files, by registered id only),
+  `ui/study/<registration_id>` (a registered study file, from its stored blob, by id only),
   `ui/ops/<path>` (a file of the project's `ops/` folder: no `..`, absolute path, symlink or
   directory, size capped), `ui/download/wiki.zip` (the vault, built once per fingerprint),
   `ui/status.json` (per payload: fresh, built_at, error) and `GET /api/screening`
@@ -71,6 +72,7 @@ import html as html_lib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1410,6 +1412,18 @@ def _handler_class(
             elif rest.startswith("file/"):
                 kind, _, doc_id = rest[len("file/") :].partition("/")
                 self._ui_document(slot, doc_id, kind)
+            elif rest.startswith("study/"):
+                found_study = hub_serve.study_file(slot.project, rest[len("study/") :])
+                if found_study is None:
+                    self._deny(404, "not found")
+                    return
+                body, kind, name = found_study
+                safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+                extra = {"X-Content-Type-Options": "nosniff"}
+                if not kind.startswith("text/plain"):
+                    extra["Content-Disposition"] = f'attachment; filename="{safe}"'
+                self._cache = "no-store"
+                self._send(200, body, kind, extra)
             elif rest.startswith("ops/"):
                 found_ops = hub_serve.ops_file(slot.project, rest[len("ops/") :])
                 if found_ops is None:

@@ -44,6 +44,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -695,12 +696,44 @@ def source_file(project: Project, document_id: str, kind: str) -> tuple[bytes, s
     return hub_sources.document_file(project, document_id, kind)
 
 
+def study_file(project: Project, registration_id: str) -> tuple[bytes, str, str] | None:
+    """A registered study file (stored blob) by registration id: (body, content type, name)."""
+    return hub_sources.study_file(project, registration_id)
+
+
 def ops_file(project: Project, rel: str) -> hub_costs.OpsFile | None:
     """A file of the project's `ops/` folder (see `hub_costs.read_ops_file`)."""
     return hub_costs.read_ops_file(project, rel)
 
 
 _WIKI_LOCK = threading.Lock()
+SKIPPED_LINKS = "SKIPPED-LINKS.txt"
+
+
+def _zip_vault(vault: Path, root: Path, dest: Path) -> str:
+    """Zip `vault` into `dest`. A symlink whose target is a file inside the project folder
+    `root` is stored as that file's content; one pointing outside the project, or to nothing, is
+    left out and listed in `SKIPPED-LINKS.txt` (WK-8). Returns the zip path."""
+    base = root.resolve()
+    skipped: list[str] = []
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(vault.rglob("*")):
+            rel = path.relative_to(vault).as_posix()
+            if path.is_symlink():
+                target = path.resolve()
+                if target.is_file() and target.is_relative_to(base):
+                    zf.write(target, rel)
+                else:
+                    skipped.append(rel)
+            elif path.is_file():
+                zf.write(path, rel)
+        if skipped:
+            zf.writestr(
+                SKIPPED_LINKS,
+                "Links left out of this archive because they point outside the project "
+                "folder or to a missing file:\n" + "\n".join(skipped) + "\n",
+            )
+    return str(dest)
 
 
 def wiki_zip(project: Project) -> Path:
@@ -720,7 +753,7 @@ def wiki_zip(project: Project) -> Path:
             vault = work / "vault"
             vault.mkdir()
             _build_wiki(project, vault)
-            made = shutil.make_archive(str(work / "wiki"), "zip", root_dir=vault)
+            made = _zip_vault(vault, project.paths.dir, work / "wiki.zip")
             for old in cache.glob("wiki-*.zip"):
                 old.unlink(missing_ok=True)
             Path(made).replace(target)

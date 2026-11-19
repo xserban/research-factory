@@ -1002,3 +1002,88 @@ def test_hub_routes_refuse_a_project_token(served: tuple[int, Project]) -> None:
     assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 403
     assert _req(port, "POST", "/api/projects/create", {"slug": "zz"}, token)[0] == 403
     assert len(_link_events(project)) == before
+
+
+def _register(project: Project, rel: str, content: bytes, title: str | None = None) -> str:
+    from factory.services.study_files import register_file
+
+    target = project.paths.dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return register_file(
+        project, rel, "study-document", title, project.human_actor()
+    ).registration.event_id
+
+
+def test_study_file_is_served_by_registered_id_only(served: tuple[int, Project]) -> None:
+    port, project = served
+    md = _register(project, "docs/plan.md", b"# Plan\n", "Plan")
+    blob = _register(project, "docs/data.bin", b"\x00\x01")
+    html = _register(project, "docs/page.html", b"<script>x()</script>")
+    before = _events(project)
+    ok = _req(port, "GET", f"{UI}/study/{md}")
+    assert ok[0] == 200 and ok[2] == b"# Plan\n"
+    assert ok[1]["content-type"].startswith("text/plain")
+    assert "attachment" not in ok[1].get("content-disposition", "")
+    # the stored version stays readable after the file changes on disk
+    (project.paths.dir / "docs/plan.md").write_bytes(b"# Plan v2\n")
+    assert _req(port, "GET", f"{UI}/study/{md}")[2] == b"# Plan\n"
+    other = _req(port, "GET", f"{UI}/study/{blob}")
+    assert other[0] == 200 and other[1]["content-disposition"].startswith("attachment")
+    page = _req(port, "GET", f"{UI}/study/{html}")  # a page is never served as a page
+    assert page[1]["content-type"].startswith("text/plain")
+    assert _events(project) == before
+
+
+def test_study_file_refuses_unknown_ids_paths_and_large_files(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hub_sources
+
+    port, project = served
+    reg = _register(project, "docs/plan.md", b"x" * 50)
+    for bad in (
+        "study/nope",
+        "study/",
+        "study/docs/plan.md",  # a path is not an id
+        "study/../outside.txt",
+        "study/%2e%2e/outside.txt",
+        "study/..%2fdocs%2fplan.md",
+        "study/%00",
+    ):
+        assert _req(port, "GET", f"{UI}/{bad}")[0] == 404, bad
+    assert _req(port, "GET", f"{UI}/study/{reg}")[0] == 200
+    monkeypatch.setattr(hub_sources, "STUDY_FILE_CAP", 10)
+    assert _req(port, "GET", f"{UI}/study/{reg}")[0] == 404
+
+
+def test_wiki_zip_copies_inside_symlinks_and_lists_outside_ones(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    import io
+    import zipfile
+
+    from factory.services import site as site_service
+
+    port, project = served
+    inside = project.paths.dir / "library-file.pdf"
+    inside.write_bytes(b"original bytes")
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_bytes(b"secret")
+
+    def fake(p: Project, out: Any) -> None:
+        (out / "docs").mkdir()
+        (out / "docs" / "a.pdf").symlink_to(inside)
+        (out / "docs" / "b.pdf").symlink_to(outside)
+        (out / "docs" / "dangling.pdf").symlink_to(tmp_path / "gone.pdf")
+        (out / "index.md").write_text("# vault", encoding="utf-8")
+
+    monkeypatch.setattr(site_service, "_build_wiki", fake)
+    status, _, body = _req(port, "GET", f"{UI}/download/wiki.zip")
+    assert status == 200
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    assert zf.read("docs/a.pdf") == b"original bytes"
+    assert "docs/b.pdf" not in zf.namelist() and "docs/dangling.pdf" not in zf.namelist()
+    note = zf.read("SKIPPED-LINKS.txt").decode()
+    assert "docs/b.pdf" in note and "docs/dangling.pdf" in note and "secret" not in note
+    assert "docs/a.pdf" not in note
