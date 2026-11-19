@@ -46,7 +46,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("lead_record", "framework"): "a framework's name, not a work id",
     ("corpus_search", "per_work_limit"): "a hit count per work, not a work id",
     ("technique_combinations", "min_works"): "a minimum count of works, not a work id",
-    ("technique_combinations", "max_co_works"): "a maximum count of co-occurring works, not a work id",
+    ("technique_combinations", "max_co_works"): "a maximum count of co-works, not a work id",
     ("technique_gaps", "min_works"): "a minimum count of works, not a work id",
     ("technique_landscape", "min_co_works"): "a minimum count of co-occurring works, not a work id",
     ("technique_neighbors", "min_works"): "a minimum count of works, not a work id",
