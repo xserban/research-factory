@@ -56,19 +56,22 @@ const EQ = {
 
 /* ---------- state and hash ---------- */
 const TABS = [['where', 'Where the records went'], ['screening', 'Screening'], ['replay', 'Replay'], ['paths', 'Paths']];
-const S = { tab: 'where', view: 'flow', node: 'included', facet: {}, sk: 'title', sd: 1, q: '', more: 100, stage: null, dfilter: 'all', dmore: 20, lanes: [] };
+const S = { tab: 'where', view: 'flow', node: 'included', facet: {}, sk: 'title', sd: 1, q: '', more: 100, stage: null, dfilter: 'all', dmore: 20, lanes: [], cell: null };
+const FACET_KEYS = ['layer', 'human', 'year', 'outcome', 'source', 'step'];
 function loadHash() {
   const h = H.hash.get(); S.lanes = (h.get('lanes') || '').split(',').filter(Boolean).slice(0, 20);
   S.tab = TABS.some(t => t[0] === h.get('tab')) ? h.get('tab') : S.lanes.length ? 'paths' : 'where';
   S.view = h.get('view') === 'waffle' ? 'waffle' : 'flow'; S.node = h.get('node') || 'included';
-  S.facet = {}; ['layer', 'human', 'year', 'outcome'].forEach(k => { if (h.get(k)) S.facet[k] = new Set(h.get(k).split('|')); });
+  S.facet = {}; FACET_KEYS.forEach(k => { if (h.get(k)) S.facet[k] = new Set(h.get(k).split('|')); });
+  S.cell = h.get('cell') ? h.get('cell').split('~') : null;
   if (h.get('sort')) { const [a, b] = h.get('sort').split(':'); S.sk = a; S.sd = +b || 1; }
   S.stage = h.get('stage'); S.dfilter = h.get('dis') || 'all';
 }
 function saveHash(extra = {}) {
   const o = { tab: S.tab === 'where' ? null : S.tab, view: S.tab === 'where' && S.view !== 'flow' ? S.view : null, node: S.tab === 'where' && S.node !== 'included' ? S.node : null,
     sort: S.tab === 'where' && !(S.sk === 'title' && S.sd === 1) ? S.sk + ':' + S.sd : null, lanes: S.lanes.join(',') || null, ...extra };
-  ['layer', 'human', 'year', 'outcome'].forEach(k => o[k] = S.tab === 'where' && S.facet[k] && S.facet[k].size ? [...S.facet[k]].join('|') : null);
+  FACET_KEYS.forEach(k => o[k] = S.tab === 'where' && S.facet[k] && S.facet[k].size ? [...S.facet[k]].join('|') : null);
+  o.cell = S.tab === 'where' && S.cell ? S.cell.join('~') : null;
   H.hash.set(o);
 }
 loadHash();
@@ -100,6 +103,13 @@ svg.sk{display:block;min-width:820px;width:100%;height:auto}
 .split{display:grid;grid-template-columns:240px minmax(0,1fr);gap:28px;align-items:start}
 .fg{margin-bottom:16px}.fg .fl{font:600 var(--t-xs) var(--f-ui);color:var(--mut);display:block;margin-bottom:6px}.fg .chips,.actives{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.actives{margin-bottom:10px}
 .t th button{all:unset;cursor:pointer;color:inherit}.t th button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}.t td.ti{width:100%;min-width:240px}.t td:not(.ti){white-space:nowrap}
+.bs{font-size:var(--t-s)}.bs td.r,.bs th.r{text-align:right}.bs .cellb{all:unset;cursor:pointer;color:var(--acc);font-family:var(--f-mono)}.bs .cellb:hover,.bs .cellb:focus-visible{text-decoration:underline}
+.bs td.sel{background:var(--acc-soft)}.bs tr.d0 td:first-child{font-weight:600}.bs .zero{color:var(--dim);font-family:var(--f-mono)}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 18px;font-size:var(--t-s);margin:0}.kv dt{color:var(--mut)}.kv dd{margin:0;overflow-wrap:anywhere}
+.sc2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px 32px;align-items:start}.sc2 h3.h3{margin:0 0 8px}
+.ck{background:var(--surface);border-radius:var(--r);padding:14px 16px;margin-top:10px}.ck .hd{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline}
+.rm{margin:4px 0 0;display:flex;flex-wrap:wrap;gap:2px 16px}
+.lyb{display:grid;grid-template-columns:130px minmax(0,1fr) 56px;gap:6px 10px;align-items:center;font-size:var(--t-s)}.lyb .tr{height:10px;background:var(--raised);border-radius:2px;overflow:hidden}.lyb .tr i{display:block;height:100%;transition:width .25s}.lyb .v{font-family:var(--f-mono);text-align:right;color:var(--mut)}
 .fpane{display:grid;gap:22px;margin-top:6px}.fpane h3.h3{margin:0 0 8px}
 .stats{display:flex;flex-wrap:wrap;gap:8px 34px;align-items:baseline}.stats .big{font:500 var(--t-xl)/1 var(--f-ui);font-variant-numeric:tabular-nums}
 .curve{display:block;width:100%;height:auto;max-height:420px}.curve .ln{fill:none;stroke:var(--acc);stroke-width:2}.curve .ref{stroke:var(--dim);stroke-dasharray:4 4;fill:none}
@@ -183,6 +193,7 @@ function nodeInfo(id) {
   if (n.crit) { t.title = n.crit + ' · ' + critLabel(n.crit); t.den = n.ft ? st.ass : st.screened; t.denL = n.ft ? 'assessed' : 'screened';
     t.text = `Excluded at ${n.ft ? 'full text' : 'title and abstract'} under criterion ${n.crit}.`; t.eq = n.ft ? EQ.included : EQ['ta-included']; return t; }
   const m = NODETXT[id]; if (m) { t.den = st[m[0]]; t.denL = m[1]; t.text = m[2]; } else { t.den = st.identified; t.denL = 'identified'; t.text = 'Records found by this source, before de-duplication.'; t.eq = EQ.identified; }
+  if (id === 'identified' || id === 'duplicates' || id.startsWith('src-')) t.more = d.flow.methods.identification;
   if (id === 'duplicates') t.eq = EQ.screened; if (id === 'not-sought') t.eq = EQ.sought; if (id === 'not-retrieved' || id === 'pending') t.eq = EQ.assessed;
   if (id === 'not-retrieved' && FT.not_retrieved_reasons) t.text += ' Routes tried: ' + Object.entries(FT.not_retrieved_reasons).map(([k, v]) => `${k} (${v})`).join(', ') + '.';
   return t;
@@ -241,41 +252,60 @@ function drawWaffle() {
   return infoPanel(`What happened to each of the ${fmt(st.screened)} records that were screened.`, 'One dot is one record. Filled means decided; a ring means no decision yet (not retrieved, pending).',
     `${fmt(t1)} + ${fmt(t2)} = ${fmt(t1 + t2)} ${t1 + t2 === st.screened ? '✓' : '✗'} screened records. Dots fill column by column, ${ROWS} to a column, so a block is as wide as its count. The ${fmt(st.dup)} duplicates were removed before screening and are not shown.`);
 }
-function selectNode(id) { S.node = id; S.more = 100; saveHash(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'nearest' }); }
+function selectNode(id) { S.node = id; S.cell = null; S.more = 100; saveHash(); drawBySource(); drawPanel(); markSel(); $('#panel').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'nearest' }); }
 function markSel() { document.querySelectorAll('#sk .nd').forEach(n => n.classList.toggle('sel', n.dataset.n === S.node)); document.querySelectorAll('#wf .g').forEach(b => b.setAttribute('aria-pressed', b.dataset.n === S.node)); }
 const FACETS = [['outcome', 'Outcome', r => outcomeOf(r), v => v, null], ['layer', 'Layer', r => (H.byId.get(r.id) || {}).layer, H.layerLabel, v => H.LAYERS.find(l => l[0] === v)?.[2]],
   ['human', 'Human role', r => { const w = H.byId.get(r.id); return w ? (H.val(w, 'human') || 'null') : null; }, v => H.humanLabel(v === 'null' ? null : v), v => (H.HUMAN.find(h => h[0] === v) || [, , '--h-null'])[2]],
-  ['year', 'Year', r => String(r.year), v => v, null]];
+  ['year', 'Year', r => String(r.year), v => v, null],
+  ['source', 'Source group', r => r.source, v => v, null], ['step', 'Step reached', r => r.step, v => v, null]];
+function cellModel(c) {
+  const [tag, crit, g] = c, row = d.flow.by_source.rows.find(r => r.tag === tag && (r.criterion || '') === crit);
+  if (!row) return null;
+  const pred = r => r.tags.includes(tag) && (crit === '' || (r.reason || 'unspecified') === crit) && (g === '' || r.source === g);
+  const total = d.flow.by_source.rows[0].counts[g === '' ? 'Total' : g];
+  return { pred, info: { title: row.label + (g ? ' · ' + g : ''), n: row.counts[g === '' ? 'Total' : g], den: total, denL: g ? 'records from this source' : 'records identified', sign: '',
+    text: 'The records that reached this step' + (g ? ' and were found by this source group.' : '.'), eq: '' } };
+}
+function downloadCsv(rows) {
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const cols = ['work_id', 'title', 'year', 'source_group', 'sources', 'step', 'outcome', 'criterion_or_reason', 'duplicate_of'];
+  const body = rows.map(r => [r.id, r.title, r.year, r.source, (r.sources || []).join('; '), r.step, r.outcome, r.reason, r.duplicate_of].map(q).join(','));
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([[cols.join(','), ...body].join('\n')], { type: 'text/csv' }));
+  a.download = 'flow-records.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function drawPanel() {
-  const pn = $('#panel'), i = nodeInfo(S.node);
+  const pn = $('#panel'), cm = S.cell && cellModel(S.cell), i = cm ? cm.info : nodeInfo(S.node);
   if (!i) { pn.innerHTML = `<div class="empty">Unknown stream “${esc(S.node)}”.</div>`; return; }
-  const head = `<div class="pn-head"><span class="pn-n" style="color:${i.sign === '−' ? 'var(--exc)' : i.sign === '+' ? 'var(--inc)' : 'var(--fg)'}">${i.sign ? i.sign + ' ' : ''}${fmt(i.n)}</span><h2 class="h2">${esc(i.title)} ${H.info(`<b>${esc(i.title)}</b>${esc(i.text)}<p><span class=k>How it's computed.</span> The arithmetic below is recomputed from the counts.</p><div class="eqs">${i.eq}</div>`, 'About ' + i.title)}</h2></div><p class="meta" style="margin:0">${pctTxt(i)}</p>`;
-  const pred = PRED[S.node];
+  const head = `<div class="pn-head"><span class="pn-n" style="color:${i.sign === '−' ? 'var(--exc)' : i.sign === '+' ? 'var(--inc)' : 'var(--fg)'}">${i.sign ? i.sign + ' ' : ''}${fmt(i.n)}</span><h2 class="h2">${esc(i.title)} ${H.info(`<b>${esc(i.title)}</b>${esc(i.text)}${i.more ? `<p>${esc(i.more)}</p>` : ''}<p><span class=k>How it's computed.</span> ${cm ? esc(d.flow.methods.by_source) : 'The arithmetic below is recomputed from the counts.'}</p><div class="eqs">${i.eq}</div>`, 'About ' + i.title)}</h2></div><p class="meta" style="margin:0">${pctTxt(i)}</p>`;
+  const pred = cm ? cm.pred : PRED[S.node];
   if (!pred) { pn.innerHTML = head + '<div class="empty">The record list is not split by source, so there is no list behind this count.</div>'; return; }
   const base = R.filter(pred); let note = '';
-  if (S.node === 'identified') note = `The list holds the ${fmt(base.length)} records that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
-  if (S.node.startsWith('src-')) note = `The list holds the ${fmt(base.length)} records of this source that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
-  if (S.node === 'duplicates') note = `${fmt(base.length)} duplicates kept a record of their own and are listed; the other ${fmt(i.n - base.length)} were merged away before getting one.`;
+  if (cm) note = 'Showing one cell of the table of steps by source.';
+  if (!cm && S.node === 'identified') note = `The list holds the ${fmt(base.length)} records that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
+  if (!cm && S.node.startsWith('src-')) note = `The list holds the ${fmt(base.length)} records of this source that kept a record of their own; the other ${fmt(i.n - base.length)} were merged into one before getting one.`;
+  if (!cm && S.node === 'duplicates') note = `${fmt(base.length)} duplicates kept a record of their own and are listed; the other ${fmt(i.n - base.length)} were merged away before getting one.`;
   const isW = base.filter(r => H.byId.has(r.id)).length * 2 > base.length;
   const fdefs = FACETS.filter(f => (isW || (f[0] !== 'layer' && f[0] !== 'human'))).map(f => { const m = new Map(); base.forEach(r => { const v = f[2](r); if (v != null) m.set(v, (m.get(v) || 0) + 1); }); return { f, m }; }).filter(x => x.m.size > 1);
   const act = fdefs.flatMap(x => [...(S.facet[x.f[0]] || [])].filter(v => x.m.has(v)).map(v => [x.f[0], v, x.f[3](v)]));
   const keep = r => fdefs.every(x => { const s = S.facet[x.f[0]]; return !s || !s.size || s.has(x.f[2](r)); }) && (!S.q || titleOf(r.id).toLowerCase().includes(S.q.toLowerCase()));
-  const val = r => S.sk === 'year' ? r.year : S.sk === 'cic' ? (H.byId.get(r.id) || {}).cic || 0 : titleOf(r.id).toLowerCase();
+  const val = r => S.sk === 'source' ? r.source : S.sk === 'step' ? r.step : S.sk === 'year' ? r.year : S.sk === 'cic' ? (H.byId.get(r.id) || {}).cic || 0 : titleOf(r.id).toLowerCase();
   const rows = base.filter(keep).sort((a, b) => { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : 0) * S.sd; });
   const th = (k, l, c = '') => `<th class="${c}" aria-sort="${S.sk === k ? (S.sd > 0 ? 'ascending' : 'descending') : 'none'}"><button data-sort="${k}">${l}${S.sk === k ? (S.sd > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
   const chip = (x, v, n) => { const tok = x.f[4] && x.f[4](v), hol = v === 'unlayered' || v === 'null';
     return `<button class="chip" aria-pressed="${!!(S.facet[x.f[0]] && S.facet[x.f[0]].has(v))}" data-f="${x.f[0]}" data-v="${esc(v)}">${tok ? `<span class="dot" style="${hol ? `border:1.5px solid var(${tok})` : `background:var(${tok})`}"></span>` : ''}${esc(x.f[3](v))} <span class="n">${n}</span></button>`; };
   const order = (x, a, b) => x.f[0] === 'year' ? a[0].localeCompare(b[0]) : b[1] - a[1];
-  pn.innerHTML = head + (note ? `<p class="meta" style="margin:0">${esc(note)}</p>` : '') + `<div class="split" style="margin-top:8px"><div>
+  pn.innerHTML = head + (note ? `<p class="meta" style="margin:0">${esc(note)}${cm ? ' <button class="chip" data-nocell="1">Back to the flow</button>' : ''}</p>` : '') + `<div class="split" style="margin-top:8px"><div>
     ${fdefs.map(x => `<div class="fg"><span class="fl">${x.f[1]}</span><div class="chips">${[...x.m].sort((a, b) => order(x, a, b)).map(([v, n]) => chip(x, v, n)).join('')}</div></div>`).join('')}</div>
    <div><div class="actives"><b class="num" style="margin-right:6px">${fmt(rows.length)}</b><span class="meta">of ${fmt(base.length)} records${act.length ? ', filtered by' : ''}</span>${act.map(([k, v, l]) => `<span class="chip" aria-pressed="true">${esc(l)} <button data-rm="${k}" data-v="${esc(v)}" aria-label="Remove filter ${esc(l)}" style="all:unset;cursor:pointer">×</button></span>`).join('')}${act.length ? '<button class="chip" data-clear="1">Clear</button>' : ''}
-     <input type="search" id="rq" placeholder="Search titles" aria-label="Search titles" value="${esc(S.q)}" style="margin-left:auto;min-width:180px"></div>
-   ${rows.length ? `<p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
-      return `<tr tabindex="0" data-id="${esc(r.id)}"><td class="ti">${esc(clip(r.title, 160))}</td><td>${esc(outcomeOf(r))}</td>${isW ? `<td>${w ? `<span class="dot" style="background:${H.layerColor(w.layer)};margin-right:6px"></span>${esc(H.layerLabel(w.layer))}` : ''}</td>` : ''}<td class="r">${esc(r.year)}</td>${isW ? `<td class="r">${w ? w.cic : ''}</td>` : ''}<td><a href="#lanes=${encodeURIComponent(r.id)}" data-lane="${esc(r.id)}">See path</a></td></tr>`; }).join('')}</tbody></table></div>
+     <button class="btn" data-csv="1" style="margin-left:auto" ${rows.length ? '' : 'disabled'}>Download CSV</button><input type="search" id="rq" placeholder="Search titles" aria-label="Search titles" value="${esc(S.q)}" style="min-width:180px"></div>
+   ${rows.length ? `<p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll"><table class="t"><thead><tr>${th('title', 'Title')}${th('source', 'Source group')}<th>Sources</th>${th('step', 'Step reached')}<th>Outcome</th>${isW ? '<th>Layer</th>' : ''}${th('year', 'Year', 'r')}${isW ? th('cic', 'Cited here', 'r') : ''}<th>Path</th></tr></thead><tbody>${rows.slice(0, S.more).map(r => { const w = H.byId.get(r.id);
+      return `<tr tabindex="0" data-id="${esc(r.id)}"><td class="ti">${esc(clip(r.title, 160))}</td><td>${esc(r.source)}</td><td>${esc((r.sources || []).join(', '))}</td><td>${esc(r.step)}</td><td>${esc(outcomeOf(r))}</td>${isW ? `<td>${w ? `<span class="dot" style="background:${H.layerColor(w.layer)};margin-right:6px"></span>${esc(H.layerLabel(w.layer))}` : ''}</td>` : ''}<td class="r">${esc(r.year)}</td>${isW ? `<td class="r">${w ? w.cic : ''}</td>` : ''}<td><a href="#lanes=${encodeURIComponent(r.id)}" data-lane="${esc(r.id)}">See path</a></td></tr>`; }).join('')}</tbody></table></div>
      ${rows.length > S.more ? `<p><button class="btn" data-more="1">Show ${Math.min(100, rows.length - S.more)} more</button> <span class="meta">${fmt(S.more)} of ${fmt(rows.length)} shown</span></p>` : ''}`
      : `<div class="empty"><b>No records match these filters.</b> <button class="chip" data-clear="1">Show all</button></div>`}</div></div>`;
   pn.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { const s = S.facet[b.dataset.f] || (S.facet[b.dataset.f] = new Set()); s.has(b.dataset.v) ? s.delete(b.dataset.v) : s.add(b.dataset.v); S.more = 100; saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { S.facet[b.dataset.rm].delete(b.dataset.v); saveHash(); drawPanel(); });
+  pn.querySelectorAll('[data-nocell]').forEach(b => b.onclick = () => { S.cell = null; saveHash(); tabWhereRefresh(); });
+  pn.querySelectorAll('[data-csv]').forEach(b => b.onclick = () => downloadCsv(rows));
   pn.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { S.facet = {}; S.q = ''; saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { if (S.sk === b.dataset.sort) S.sd *= -1; else { S.sk = b.dataset.sort; S.sd = S.sk === 'cic' ? -1 : 1; } saveHash(); drawPanel(); });
   pn.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { S.more += 100; drawPanel(); });
@@ -283,9 +313,20 @@ function drawPanel() {
   pn.querySelectorAll('[data-lane]').forEach(a => a.onclick = e => { e.preventDefault(); e.stopPropagation(); S.lanes = [a.dataset.lane]; showTab('paths'); });
   pn.querySelectorAll('tbody tr').forEach(r => { const go = () => H.byId.has(r.dataset.id) && H.openDrawer(r.dataset.id); r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter') go(); }; });
 }
+function drawBySource() {
+  const BS = d.flow.by_source, el = $('#bysrc'); if (!el || !BS || !BS.rows.length) return;
+  const sel = (r, g) => S.cell && S.cell[0] === r.tag && S.cell[1] === (r.criterion || '') && S.cell[2] === g;
+  const cell = (r, g, key) => { const n = r.counts[key]; return `<td class="r ${sel(r, g) ? 'sel' : ''}">${n ? `<button class="cellb" data-cell="${esc([r.tag, r.criterion || '', g].join('~'))}" aria-label="${esc(r.label)}: ${n}">${fmt(n)}</button>` : '<span class="zero">0</span>'}</td>`; };
+  el.innerHTML = `<div style="margin-top:26px">${H.header({ title: 'Steps by source', infoHtml: infoPanel('How many records reached each step, by the source that found them.', 'Rows are steps, columns are source groups. Click a number to list those records below.', esc(d.flow.methods.by_source) + '<p>' + esc(d.flow.methods.identification) + '</p>') })}</div>
+   <p class="sx-hint">Scroll sideways to see the rest →</p><div class="scroll card" style="padding:8px 12px"><table class="t bs"><thead><tr><th>Step</th>${BS.groups.map(g => `<th class="r">${esc(g)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+   ${BS.rows.map(r => `<tr class="d${Math.min(r.depth, 1)}"><td style="padding-left:${10 + 16 * r.depth}px">${esc(r.label)}</td>${BS.groups.map(g => cell(r, g, g)).join('')}${cell(r, '', 'Total')}</tr>`).join('')}</tbody></table></div>`;
+  el.querySelectorAll('[data-cell]').forEach(b => b.onclick = () => { S.cell = b.dataset.cell.split('~'); S.more = 100; S.facet = {}; saveHash(); drawBySource(); drawPanel(); $('#panel').scrollIntoView({ behavior: 'auto', block: 'nearest' }); });
+}
+const tabWhereRefresh = () => { drawBySource(); drawPanel(); };
 function tabWhere(p) {
   p.innerHTML = `<div class="bar" style="margin-top:6px"><div class="seg" role="group" aria-label="Lens"><button data-v="flow">Flow</button><button data-v="waffle">Every record</button></div><span class="grow" id="lensq"></span></div>
-    <div id="lens"></div><section class="panel" id="panel" aria-live="polite"></section>`;
+    <div id="lens"></div><section id="bysrc"></section><section class="panel" id="panel" aria-live="polite"></section>`;
+  drawBySource();
   const lens = () => { document.querySelectorAll('.seg [data-v]').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === S.view)); const L = $('#lens');
     if (S.view === 'flow') {
       $('#lensq').innerHTML = H.header({ title: 'Records at each step', infoHtml: infoPanel('How many records survive each stage, and why the rest leave.', 'Band width is proportional to the record count, on one scale for every column. Click a band or box to list its records below.', `Every band is drawn at ${(st.identified ? 470 / st.identified * 1000 : 0).toFixed(0)} px per 1,000 records; bands under 2 px are drawn at 2 px. The checks under the figure are recomputed from the counts.`) });
