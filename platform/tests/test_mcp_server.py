@@ -215,6 +215,18 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "decision_view",
             "develop_render",
             "progress_status",
+            "selection_resolve",
+            "corpus_search",
+            "chat_verify",
+            "chat_sections",
+            "paper_profiles",
+            "claims_digest",
+            "chat_candidates",
+            "sheet_open",
+            "sheet_argue",
+            "sheet_close",
+            "sheet_list",
+            "sheet_view",
         ]
         res = await client.call_tool("project_status", {"project": "demo"})
         body = _body(res)

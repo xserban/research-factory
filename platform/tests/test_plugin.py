@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
     "rf-appraise",
     "rf-cards",
+    "rf-chat",
     "rf-contributions",
     "rf-critic",
     "rf-curate",

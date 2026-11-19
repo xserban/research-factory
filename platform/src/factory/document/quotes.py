@@ -13,8 +13,15 @@ character (the CommonMark escapable set), and nothing else: a backslash before a
 space stays. Both sides get the same rule, so it can only accept more quotes, never fewer.
 Known limit: block text is flattened, so a literal backslash inside a code span or math is also
 dropped (quote `a_b` verifies against code `a\\_b`); accepted as a small false accept.
+
+Entity rule. The converter also stores HTML character references (`Planning &amp; Control`),
+which markdown-it decodes in the block text. Complete references (ending in `;`: named, decimal or
+hexadecimal) are decoded on both sides before the escape rule, so a quote copied as served or as
+rendered verifies; `&amp` without `;` is left as written, and so is a reference that decodes to a
+control character (category Cc, e.g. `&#1;`).
 """
 
+import html
 import re
 import unicodedata
 from collections.abc import Iterable
@@ -34,6 +41,7 @@ _INVISIBLE = frozenset(
     }
 )
 _ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
+_ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);")
 _LINE_BREAKS = frozenset({"softbreak", "hardbreak"})
 
 
@@ -72,9 +80,21 @@ def quote_in_element(element_markdown: str, quote: str) -> bool:
     )
 
 
+def _decode_entity(match: re.Match[str]) -> str:
+    """The decoded reference, or the reference as written when it does not decode to printable
+    non-control characters (`&#1;` is left alone, so it never matches a quote without it)."""
+    raw = match.group(0)
+    out = html.unescape(raw)
+    if out == raw or any(unicodedata.category(ch) == "Cc" for ch in out):
+        return raw
+    return out
+
+
 def _unescape(text: str) -> str:
-    """Remove a backslash before ASCII punctuation (the Markdown escape); see the module doc."""
-    return _ESCAPE.sub(r"\1", text)
+    """Remove a backslash before ASCII punctuation (the Markdown escape) and decode complete HTML
+    character references (`&amp;`, `&#8211;`, ending in `;`); see the module doc."""
+    decoded = _ENTITY.sub(_decode_entity, text)
+    return _ESCAPE.sub(r"\1", decoded)
 
 
 def _block_text(token: Token) -> str:

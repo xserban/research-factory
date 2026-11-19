@@ -213,6 +213,12 @@ from factory.model.seed import (
     SeedSplitDrawn,
     SeedUnresolved,
 )
+from factory.model.sheets import (
+    SheetArgumentRated,
+    SheetArgumentRecorded,
+    SheetOpened,
+    SheetSectionClosed,
+)
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 from factory.model.taxonomies import (
     MiningRequested,
@@ -313,6 +319,10 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("mining.requested", MiningRequested, 1))
     catalog.register(EventType("work.layer_set", WorkLayerSet, 1))
     catalog.register(EventType("page.recorded", PageRecorded, 1))
+    catalog.register(EventType("sheet.opened", SheetOpened, 1))
+    catalog.register(EventType("sheet.argument_recorded", SheetArgumentRecorded, 1))
+    catalog.register(EventType("sheet.section_closed", SheetSectionClosed, 1))
+    catalog.register(EventType("sheet.argument_rated", SheetArgumentRated, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

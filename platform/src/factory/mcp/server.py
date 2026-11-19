@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, JsonValue, StringConstraints, TypeAdapter
 
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
+from factory.document.passages import SectionKind
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.hypotheses.design import design_version
@@ -105,11 +106,15 @@ from factory.services import budgets as budget_service
 from factory.services import calibration as calibration_service
 from factory.services import cards as cards_service
 from factory.services import chase as chase_service
+from factory.services import chat_candidates as chat_candidates_service
+from factory.services import chat_read as chat_read_service
+from factory.services import claims_digest as claims_digest_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
 from factory.services import consolidation as consolidation_service
 from factory.services import contributions as contributions_service
 from factory.services import core_works as core_works_service
+from factory.services import corpus_search as corpus_search_service
 from factory.services import coverage as coverage_service
 from factory.services import curation as curation_service
 from factory.services import decisions as decisions_service
@@ -159,6 +164,7 @@ from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import outline as outline_service
 from factory.services import pages as pages_service
+from factory.services import paper_profile as paper_profile_service
 from factory.services import passes as passes_service
 from factory.services import probe as probe_service
 from factory.services import progress as progress_service
@@ -178,7 +184,9 @@ from factory.services import screening as screening_service
 from factory.services import screening_check as check_service
 from factory.services import search as search_service
 from factory.services import seeds as seeds_service
+from factory.services import selection as selection_service
 from factory.services import shared_mining as shared_mining_service
+from factory.services import sheets as sheets_service
 from factory.services import snowball as snowball_service
 from factory.services import tasks as tasks_service
 from factory.services import taxonomies as taxonomies_service
@@ -204,6 +212,7 @@ from factory.services.results import BatchResult, ItemError
 from factory.services.search import list_works
 from factory.services.seeds import SeedOutcome
 from factory.services.withholding import held_out_tokens, seed_id_tokens
+from factory.services.work_ref import resolve_work_id, resolve_work_ids
 from factory.services.workspace import workspace_counts
 from factory.services.xrun_accounting import hidden_acceptances
 from factory.sources.fulltext.base import FullTextRoute
@@ -5924,7 +5933,440 @@ def build_server(
 
         return _reply(project, status, include_work_ids=False)
 
+    @server.tool()
+    def selection_resolve(
+        project: str,
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Resolve a selection of papers for the chat: the works of the full-text-included
+        population, restricted to `layers` when given (layer ids of the current scheme), plus
+        `include` work ids, minus `exclude` work ids. Returns `works` (work_id, conversion_id,
+        chars of the pinned conversion), `excluded` (work, reason: no-conversion, excluded,
+        unknown-work), total `chars`, `est_tokens` (4 characters per token) and the `digest`
+        that names this selection. The result is cached while the event log is unchanged. A held
+        out seed's work is a work like any other. Read-only. Refused to a session that has joined
+        a pass."""
+
+        def resolve() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            result = selection_service.resolve_selection_cached(
+                opened, _selection_spec(layers, include, exclude)
+            )
+            return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
+
+        return _reply(project, resolve, include_work_ids=False)
+
+    @server.tool()
+    def corpus_search(
+        project: str,
+        queries: list[str],
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        limit: int = 20,
+        per_work_limit: int = 3,
+        kinds: list[str] | None = None,
+    ) -> dict[str, JsonValue]:
+        """Keyword search over the passages of the pinned conversions of a selection (spec as in
+        `selection_resolve`). `queries` are plain words (OR) or "quoted phrases"; up to 10;
+        queries are fused by reciprocal rank. It ranks and never drops a work: there is no score
+        threshold. `kinds` restricts to section kinds. Returns `hits` (work_id, title, passage_id,
+        anchors, section_path, text, rank, ranks_per_query, conversion_id, section_kind), the
+        selection `digest` and the sidecar index report. Anchors are exact: quote only from
+        them, and verify with `chat_verify`. Read-only (it rebuilds the sidecar index, never an
+        event). Refused to a session that has joined a pass."""
+
+        def search() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            wanted = None if kinds is None else [_section_kind(k) for k in kinds]
+            result = corpus_search_service.corpus_search(
+                opened,
+                queries,
+                _selection_spec(layers, include, exclude),
+                limit=limit,
+                per_work_limit=per_work_limit,
+                kinds=wanted,
+            )
+            return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
+
+        return _reply(project, search, include_work_ids=False)
+
+    @server.tool()
+    def chat_verify(project: str, items: list[dict[str, JsonValue]]) -> dict[str, JsonValue]:
+        """Verify quotes before citing them. Each item is `{work_id, anchor, quote}` with an
+        optional `conversion_id` (default: the work's pinned conversion). The quote must occur in
+        exactly that anchor's element. Returns `results` in item order, each with `status`
+        (accepted, unknown-work, no-conversion, anchor-missing, quote-not-in-anchor), the
+        `conversion_id` and `markdown_hash` used. Never cite a quote that is not accepted.
+        Read-only. Refused to a session that has joined a pass."""
+
+        def verify() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            opened.index.sync()
+            parsed = [
+                chat_read_service.VerifyItem(
+                    resolve_work_id(opened, fields["work_id"], field=f"items[{i}].work_id"),
+                    fields["anchor"],
+                    fields["quote"],
+                    fields.get("conversion_id") or None,
+                )
+                for i, fields in enumerate(
+                    _chat_items(items, "items", ("work_id", "anchor", "quote"), ("conversion_id",))
+                )
+            ]
+            results = chat_read_service.chat_verify(opened, parsed)
+            return _withheld(
+                opened, {"results": _plain([asdict(r) for r in results])}, include_work_ids=False
+            )
+
+        return _reply(project, verify, include_work_ids=False)
+
+    @server.tool()
+    def chat_sections(
+        project: str, work_id: str, conversion_id: str | None = None
+    ) -> dict[str, JsonValue]:
+        """The section outline of a work's pinned conversion, in document order: anchor, heading,
+        depth, and the paragraphs and words directly in each section. Use it to choose which
+        sections to read with `document_read`. Refused for an unknown work or a conversion that is
+        not the work's. Read-only. Refused to a session that has joined a pass."""
+
+        def sections() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            opened.index.sync()
+            work = resolve_work_id(opened, work_id)
+            outline = chat_read_service.chat_sections(opened, work, conversion_id)
+            return _withheld(opened, _plain(asdict(outline)), include_work_ids=False)
+
+        return _reply(project, sections, include_work_ids=False)
+
+    @server.tool()
+    def paper_profiles(project: str, work_ids: list[str]) -> dict[str, JsonValue]:
+        """One compact profile per work: what every miner listed in the protocol found in it
+        (final rows, else pass A rows marked `pass-a-only`), with quotes kept only for m-summary
+        and m-claims. Returns `profiles` (work_id, title, year, rows, missing_miners, `text`: the
+        rendered profile) and `size` (characters and estimated tokens of all text). An unknown
+        work id is refused. Read-only. Refused to a session that has joined a pass."""
+
+        def profiles() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            opened.index.sync()
+            ids = resolve_work_ids(opened, work_ids)
+            built = paper_profile_service.paper_profiles(opened, ids)
+            rendered = [paper_profile_service.render_profile(p) for p in built]
+            chars = sum(len(t) for t in rendered)
+            out: list[JsonValue] = []
+            for profile, text in zip(built, rendered, strict=True):
+                entry = _plain(asdict(profile))
+                assert isinstance(entry, dict)
+                entry["text"] = text
+                out.append(entry)
+            size: dict[str, JsonValue] = {
+                "chars": chars,
+                "est_tokens": sum(paper_profile_service.profile_size(t) for t in rendered),
+            }
+            return _withheld(opened, {"profiles": out, "size": size}, include_work_ids=False)
+
+        return _reply(project, profiles, include_work_ids=False)
+
+    @server.tool()
+    def claims_digest(
+        project: str,
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        miner: str = "m-claims",
+    ) -> dict[str, JsonValue]:
+        """The claims digest of a selection (spec as in `selection_resolve`): every paper of the
+        selection in work-id order with a stable code P01, P02, ..., its title and its m-claims
+        rows ordered limitation, negative-result, failure-analysis, finding, mechanism,
+        no-limitation-stated (one line each: type | about | direction | evidence | strength:
+        "quote" [anchor] [conditions]). Read it whole, then propose candidates with
+        `chat_candidates`. Returns `markdown` (the digest), `size` (chars, est_tokens), `papers`,
+        `claims`, `gaps` (code, work_id, gap: no-rows or absence-only: papers the digest cannot
+        speak for) and the selection `digest`. Rows are final, else pass A rows marked
+        `(pass-a-only)`. The miner must be listed in the protocol. Read-only. Refused to a
+        session that has joined a pass."""
+
+        def digest() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            built = claims_digest_service.claims_digest(
+                opened, _selection_spec(layers, include, exclude), miner=miner
+            )
+            by_code = {p.code: p.work_id for p in built.papers}
+            data: dict[str, JsonValue] = {
+                "markdown": claims_digest_service.render_claims_digest(built),
+                "size": _plain(asdict(built.size)),
+                "papers": len(built.papers),
+                "claims": built.claims,
+                "gaps": [
+                    {"code": code, "work_id": by_code[code], "gap": gap} for code, gap in built.gaps
+                ],
+                "digest": built.selection_digest,
+                "miner": built.miner,
+                "version": built.version,
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, digest, include_work_ids=False)
+
+    @server.tool()
+    def chat_candidates(
+        project: str,
+        proposals: list[dict[str, JsonValue]],
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        mode: str = "explore",
+        tier1_cap: int = chat_candidates_service.TIER1_CAP,
+    ) -> dict[str, JsonValue]:
+        """Check the candidates you propose after reading the claims digest, and compute tiers.
+        Each proposal is `{work_id, source, stance}` with `source` one of claims, keyword, miner,
+        graph, researcher and `stance` against or for; optional `anchor` and `quote` (required for
+        claims and keyword, checked against the pinned conversion) and `note`. Every work must be
+        in the selection (spec as in `selection_resolve`). Invalid input writes nothing and
+        returns located issues (`proposals[3].quote`). Returns every work of the selection once
+        (`candidates`: sources, stances, tier, over_cap, quotes, notes), with computed counts per
+        tier (1: two or more sources or a researcher pick; 2: one source; 3: not proposed) and
+        stance, `over_cap` and `total`. In `explore` mode tier 1 is capped at `tier1_cap`
+        (researcher picks first); `prepare` has no cap. Records nothing. Read-only. Refused to a
+        session that has joined a pass."""
+
+        def candidates() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            opened.index.sync()
+            parsed = [
+                chat_candidates_service.CandidateInput(
+                    fields["work_id"],
+                    fields["source"],
+                    fields["stance"],
+                    fields.get("anchor") or None,
+                    fields.get("quote") or None,
+                    fields.get("note") or None,
+                )
+                for fields in _chat_items(
+                    proposals,
+                    "proposals",
+                    ("work_id", "source", "stance"),
+                    ("anchor", "quote", "note"),
+                )
+            ]
+            result = chat_candidates_service.chat_candidates(
+                opened,
+                _selection_spec(layers, include, exclude),
+                parsed,
+                mode=cast(Literal["explore", "prepare"], mode),
+                tier1_cap=tier1_cap,
+            )
+            return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
+
+        return _reply(project, candidates, include_work_ids=False)
+
+    @server.tool()
+    def sheet_open(
+        project: str,
+        hypothesis: str,
+        proposals: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+        layers: list[str] | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
+        mode: str = "explore",
+        tier1_cap: int = chat_candidates_service.TIER1_CAP,
+        supersedes: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Open an argument sheet (Spar). The proposals are checked and tiered exactly as in
+        `chat_candidates` (same fields, same located issues); the computed candidates table, its
+        digest and its counts are recorded, never typed. `mode` is explore or prepare (prepare:
+        the case for must come from a session that wrote no argument against). `supersedes`
+        names an earlier sheet this one replaces. Writes one event; invalid input writes nothing.
+        Refused to a session that has joined a pass."""
+
+        def opening() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                chat_candidates_service.CandidateInput(
+                    fields["work_id"],
+                    fields["source"],
+                    fields["stance"],
+                    fields.get("anchor") or None,
+                    fields.get("quote") or None,
+                    fields.get("note") or None,
+                )
+                for fields in _chat_items(
+                    proposals,
+                    "proposals",
+                    ("work_id", "source", "stance"),
+                    ("anchor", "quote", "note"),
+                )
+            ]
+            payload = sheets_service.open_sheet(
+                opened,
+                actor,
+                hypothesis,
+                _selection_spec(layers, include, exclude),
+                parsed,
+                mode=cast(Literal["explore", "prepare"], mode),
+                tier1_cap=tier1_cap,
+                supersedes=supersedes,
+            )
+            view = sheets_service.view_sheet(opened, payload.sheet_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, opening, include_work_ids=False)
+
+    @server.tool()
+    def sheet_argue(
+        project: str,
+        sheet_id: str,
+        arguments: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record arguments of ONE section of a sheet, all or none. Each argument is
+        `{stance, work_id, anchor, quote, claim, strength}` with `stance` against or for,
+        `strength` strong, moderate or weak (your judgement, labelled as such), and optionally
+        `claim_row_key` (the m-claims row it rests on). The quote is verified against the anchor
+        of the work's pinned conversion; an unverified quote refuses the whole call with located
+        issues (`arguments[2].quote`). Order: arguments against first; close that section with
+        `sheet_close` before arguing for; in prepare mode a session that wrote arguments against
+        may not argue for. Refused to a session that has joined a pass."""
+
+        def argue() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                sheets_service.ArgumentInput(
+                    fields["stance"],
+                    fields["work_id"],
+                    fields["anchor"],
+                    fields["quote"],
+                    fields["claim"],
+                    fields["strength"],
+                    fields.get("claim_row_key") or None,
+                )
+                for fields in _chat_items(
+                    arguments,
+                    "arguments",
+                    ("stance", "work_id", "anchor", "quote", "claim", "strength"),
+                    ("claim_row_key",),
+                )
+            ]
+            recorded = sheets_service.record_arguments(opened, actor, sheet_id, parsed)
+            data: dict[str, JsonValue] = {"recorded": [r.model_dump(mode="json") for r in recorded]}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, argue, include_work_ids=False)
+
+    @server.tool()
+    def sheet_close(
+        project: str, sheet_id: str, section: str, role: str, model: str, skill: str
+    ) -> dict[str, JsonValue]:
+        """Close the section `against` or `for` of a sheet. `for` can be closed only after
+        `against`; a closed section takes no more arguments. Refused to a session that has
+        joined a pass."""
+
+        def closing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            payload = sheets_service.close_section(opened, actor, sheet_id, section)
+            data: dict[str, JsonValue] = {"closed": payload.model_dump(mode="json")}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, closing, include_work_ids=False)
+
+    @server.tool()
+    def sheet_list(project: str) -> dict[str, JsonValue]:
+        """The argument sheets of the project with their section state and argument counts.
+        Read-only. Refused to a session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            data: dict[str, JsonValue] = {
+                "sheets": _plain([asdict(i) for i in sheets_service.list_sheets(opened)])
+            }
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
+    def sheet_view(project: str, sheet_id: str) -> dict[str, JsonValue]:
+        """One sheet: its hypothesis, the arguments (verified quotes, claims, strengths, the
+        researcher's ratings) and the computed coverage (works per tier and source, works argued
+        per stance, tier-1 works without an argument, ratings). Read-only. Strengths are the
+        writer's judgement; ratings are the researcher's, made in the CLI."""
+
+        def viewing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = sheets_service.view_sheet(opened, sheet_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, viewing, include_work_ids=False)
+
     return server
+
+
+def _selection_spec(
+    layers: list[str] | None, include: list[str] | None, exclude: list[str] | None
+) -> selection_service.SelectionSpec:
+    return selection_service.SelectionSpec(
+        layers=list(layers or []), include=list(include or []), exclude=list(exclude or [])
+    )
+
+
+def _section_kind(value: str) -> SectionKind:
+    try:
+        return SectionKind(value)
+    except ValueError:
+        choices = ", ".join(k.value for k in SectionKind)
+        raise FactoryValidationError(
+            [ValidationIssue("kinds", f"must be one of: {choices}")]
+        ) from None
+
+
+def _chat_items(
+    items: list[dict[str, JsonValue]],
+    name: str,
+    required: tuple[str, ...],
+    optional: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Each item as a dict of strings; every problem is located as `name[i].key`."""
+    issues: list[ValidationIssue] = []
+    parsed: list[dict[str, str]] = []
+    for i, item in enumerate(items):
+        row: dict[str, str] = {}
+        for key in required + optional:
+            value = item.get(key)
+            if value is None or value == "":
+                if key in required:
+                    issues.append(ValidationIssue(f"{name}[{i}].{key}", "is required"))
+            elif isinstance(value, str):
+                row[key] = value
+            else:
+                issues.append(ValidationIssue(f"{name}[{i}].{key}", "must be a string"))
+        for key in sorted(set(item) - set(required) - set(optional)):
+            issues.append(ValidationIssue(f"{name}[{i}].{key}", "unknown key"))
+        parsed.append(row)
+    if issues:
+        raise FactoryValidationError(issues)
+    return parsed
 
 
 def _review_kind(value: str) -> ReviewKind:

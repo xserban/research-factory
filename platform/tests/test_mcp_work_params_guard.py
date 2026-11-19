@@ -35,6 +35,8 @@ RESOLVES: dict[str, frozenset[str]] = {
     "relation_propose": frozenset({"source_work"}),
     "relation_list": frozenset({"work_id"}),
     "flow_trail": frozenset({"work_id"}),
+    "chat_sections": frozenset({"work_id"}),
+    "paper_profiles": frozenset({"work_ids"}),
     "writing_outline": frozenset({"scope_works"}),
     "draft_create": frozenset({"scope_works"}),
     "draft_repin": frozenset({"scope_works"}),
@@ -42,6 +44,7 @@ RESOLVES: dict[str, frozenset[str]] = {
 
 EXEMPT: dict[tuple[str, str], str] = {
     ("lead_record", "framework"): "a framework's name, not a work id",
+    ("corpus_search", "per_work_limit"): "a hit count per work, not a work id",
 }
 
 

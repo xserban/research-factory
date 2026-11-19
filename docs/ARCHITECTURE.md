@@ -99,7 +99,7 @@ Skills in `plugin/skills/rf-*/SKILL.md` are the procedures Claude follows; the p
 | extraction | `rf-extract`, `rf-mine`, `rf-contributions` |
 | snowballing | `rf-references`, `rf-search` |
 | graph and interpretation layers | `rf-lineage`, `rf-intuition`, `rf-regions`, `rf-consolidate`, `rf-cards` |
-| hypotheses and experiments | `rf-ideate`, `rf-critic`, `rf-experiment` |
+| hypotheses and experiments | `rf-ideate`, `rf-critic`, `rf-experiment`, `rf-chat` |
 | writing | `rf-write`, `rf-verify` |
 | living review | `rf-living` |
 
