@@ -103,7 +103,7 @@ class CandidateQuote(StrictModel):
     role: str
     work_id: str
     extraction_id: str
-    quote: str
+    quote: str | None
     anchor: str | None
 
 
@@ -120,7 +120,9 @@ class Candidate(_Labelled):
     ten); `works_total` is every work the observation counts. `triggers` are exactly what a lead
     recorded from it would cite (at most 20); `trigger_note` states a cut. `overlap_works` counts
     corpus works whose rows already state the observed combination (None for claims); `score` is
-    the technique rank composite where it exists (None for challenges and claims)."""
+    the technique rank composite where it exists (None for challenges and claims). `flags` names
+    a defect of a cited row: `no-stored-quote` (the row stored no quote; the quote is None, never
+    the field value, and the row counts as unverified)."""
 
     candidate_id: str
     source: Source
@@ -135,6 +137,7 @@ class Candidate(_Labelled):
     miners: tuple[str, ...]
     overlap_works: int | None = None
     score: float | None = None
+    flags: tuple[str, ...] = ()
 
 
 class Skipped(StrictModel):
@@ -233,7 +236,7 @@ class OldestLead(StrictModel):
     event_id: str
 
 
-class LeadStats(StrictModel):
+class LeadStats(_Labelled):
     """Counts computed from the lead, hypothesis, review, registration and evaluation tables.
     `recorded` is every lead; `by_state` has `open`, `promoted`, `parked`, `discarded`.
     `promotion_rate` is promoted over recorded and `decided_promotion_rate` promoted over decided
@@ -257,5 +260,6 @@ class LeadStats(StrictModel):
     outcomes: dict[str, int]
     oldest_undecided: tuple[OldestLead, ...]
     notice: str = (
-        "counts of recorded work, computed; a promotion share is a use figure, not a quality figure"
+        "exploratory counts of recorded work, computed; a promotion share is a use figure, "
+        "not a quality figure"
     )

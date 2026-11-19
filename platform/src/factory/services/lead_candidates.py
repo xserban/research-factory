@@ -85,6 +85,7 @@ class _ClaimRow:
     quote: str | None
     anchor: str | None
     layer: str | None
+    has_quote_field: bool = True
 
 
 @dataclass(frozen=True)
@@ -141,8 +142,8 @@ def _read_claims(project: Project) -> _Claims:
         types[r.work_id].add(kind)
         quote_field = r.fields.get("claim_quote")
         quote = None
-        if quote_field is not None:
-            quote = (quote_field.quote or str(quote_field.value)).strip() or None
+        if quote_field is not None:  # the field `value` is never taken for a quote
+            quote = (quote_field.quote or "").strip() or None
         rows.append(
             _ClaimRow(
                 extraction_id=r.extraction_id,
@@ -153,6 +154,7 @@ def _read_claims(project: Project) -> _Claims:
                 quote=quote,
                 anchor=None if quote_field is None else quote_field.anchor,
                 layer=layers[r.work_id].layer if r.work_id in layers else None,
+                has_quote_field=quote_field is not None,
             )
         )
     absence = {
@@ -442,7 +444,7 @@ def claims_candidates(
     skipped: list[Skipped] = []
     for c in chosen[:per_source]:
         cid = f"claims-limitation:{c.extraction_id}"
-        if c.quote is None:
+        if not c.has_quote_field:
             skipped.append(Skipped(candidate_id=cid, reason="no-quote"))
             continue
         title = data.titles.get(c.work_id, c.work_id)
@@ -466,6 +468,7 @@ def claims_candidates(
                         anchor=c.anchor,
                     ),
                 ),
+                flags=() if c.quote is not None else ("no-stored-quote",),
                 triggers=(
                     CandidateTrigger(kind="item", ref=c.extraction_id),
                     CandidateTrigger(kind="work", ref=c.work_id),

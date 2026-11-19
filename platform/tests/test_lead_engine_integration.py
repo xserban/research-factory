@@ -83,6 +83,16 @@ def test_a_miner_row_key_is_not_a_row_trigger(
             LeadInput(text=LEAD_TEXT, triggers=(Trigger(kind=TriggerKind.ROW, ref=row.row_key),)),
         )
     assert caught.value.issues[0].field == "triggers.0"
+    for scope in ("m-tech-ideation", "m-tech-experiment", "m-claims"):  # every miner family
+        for r in live_rows(project, PassLabel.A, scope=MinerScope(scope)):
+            with pytest.raises(FactoryValidationError):
+                record_lead(
+                    project,
+                    LEAD_AUTHOR,
+                    LeadInput(
+                        text=LEAD_TEXT, triggers=(Trigger(kind=TriggerKind.ROW, ref=r.row_key),)
+                    ),
+                )
     for c in lead_candidates(project, **KNOBS).candidates:  # type: ignore[arg-type]
         assert {t.kind for t in c.triggers} <= {"item", "work"}
 
@@ -190,3 +200,29 @@ def test_a_lead_citing_a_superseded_row_is_flagged_by_m9_and_sorted_last(
         "claims-limitation:ghost": "unknown",
     }
     assert len(again.items) == len(fresh.candidates) + 2
+
+
+def test_a_stale_basis_is_flagged_sorted_last_and_kept(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M9 `stale`: the ledger of a scope names a row stale (an amendment recorded after it); the
+    queue flags every candidate citing it, sorts it last and keeps it."""
+    from factory.services import lead_queue as lq
+
+    engine_world(project, agent, human, world)
+    fresh = lead_candidates(project, **KNOBS)  # type: ignore[arg-type]
+    victim = next(c for c in fresh.candidates if c.source == "claims-limitation")
+    [ext] = [t.ref for t in victim.triggers if t.kind == "item"]
+    real = lq._stale
+    monkeypatch.setattr(
+        lq, "_stale", lambda p, scope: real(p, scope) | ({ext} if scope == "m-claims" else set())
+    )
+    queue = lead_queue(project, candidates=fresh, order_by=("support",), **KNOBS)  # type: ignore[arg-type]
+    last = queue.items[-1]
+    assert last.entry_id == victim.candidate_id and last.measures.basis == "stale"
+    assert last.stale_refs == (ext,) and "basis-stale" in last.flags
+    assert len(queue.items) == len(fresh.candidates)

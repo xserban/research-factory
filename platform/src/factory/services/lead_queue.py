@@ -6,13 +6,16 @@ decides which observation is better. Invariants:
   same parameters give the same queue. Every result is labelled exploratory.
 - The order is lexicographic over `order_by` (any sequence of `MEASURES`; the default is
   `DEFAULT_ORDER`), each measure with its printed direction, after one fixed rule: an entry whose
-  rows are not all live is flagged and sorted last, never dropped. Ties break by entry id. A
+  rows are not all live is flagged and sorted last, never dropped; a measure with no value (None)
+  sorts after every entry that has one. Ties break by entry id. A
   measure is comparable only with the others of the same call.
 - M1 support: works the observation counts (a lead: works behind its triggers). M2 independence:
   distinct works cited by the triggers (distinct works only; no venue or citation reading).
   M3 verification: cited `item` rows whose quote is verbatim in the row's pinned conversion
-  (`chat_verify`), over all cited `item` rows. M4 supportive share: cited technique rows with
-  supportive evidence over cited technique rows (None without one). M5 overlap: works whose rows
+  (`chat_verify`), over all cited `item` rows; a row that stored no quote counts as unverified and
+  carries the flag `no-stored-quote` (the field value is never read as a quote). M4 supportive
+  share: cited technique rows with supportive evidence over cited technique rows (None without
+  one). M5 overlap: works whose rows
   already state the observation (None for claims and leads). M6 diversity against the promoted
   leads: 1 minus the largest Jaccard of item ids and approaches, shared works never counting.
   M7 prior hits: parked or discarded leads, hypotheses (through their lead) and directions that
@@ -26,6 +29,7 @@ decides which observation is better. Invariants:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 from collections import defaultdict
@@ -52,6 +56,7 @@ from factory.model.lead_engine import (
 from factory.model.technique_graph import SUPPORTIVE
 from factory.services.chat_read import VerifyItem, chat_verify
 from factory.services.context import Project
+from factory.services.conversions import conversion_of
 from factory.services.extraction import stale_extractions
 from factory.services.lead_candidates import lead_candidates
 from factory.services.lead_stats import scope_source
@@ -75,11 +80,14 @@ _COMPARABILITY = (
     "corpus, these sources and these parameters, and say nothing across runs or projects"
 )
 _BATCH = 5000
-_VERIFIED: dict[tuple[str, str], bool] = {}
+_VERIFIED: set[tuple[str, ...]] = set()
 _VERIFIED_MAX = 50000
 _GUARD = threading.Lock()
-"""Verification of one row's quote never changes (the row and its pinned conversion are
-immutable), so it is memoised per project and extraction id."""
+"""Accepted verifications only, keyed on (project dir, extraction id, conversion id, markdown
+hash of that conversion, quote hash, anchor): a verbatim quote in an immutable conversion stays
+verbatim, but a changed conversion or a project rebuilt at the same path misses the key. A
+negative result is never stored (a conversion that is missing or unreadable now may be readable
+later)."""
 
 
 def _refuse(field_: str, reason: str) -> FactoryValidationError:
@@ -155,7 +163,7 @@ def _items(project: Project, ids: Collection[str]) -> dict[str, _Item]:
                 chosen = next((by_name[n] for n in _QUOTE_FIELDS if n in by_name), None)
                 if chosen is None:
                     chosen = next(((v, q, a) for _, v, q, a in fields if q), None)
-                quote = None if chosen is None else (chosen[1] or chosen[0]).strip() or None
+                quote = None if chosen is None else (chosen[1] or "").strip() or None
                 category = by_name.get("category")
                 evidence = by_name.get("evidence")
                 found[str(ext)] = _Item(
@@ -206,32 +214,61 @@ def _basis(project: Project, items: dict[str, _Item]) -> dict[str, str]:
     }
 
 
+def _verified_key(
+    project: Project, ext: str, item: _Item, hashes: dict[str, str | None]
+) -> tuple[str, ...] | None:
+    """The memo key of a row, or None when its conversion is not known to the index."""
+    if item.conversion_id not in hashes:
+        found = conversion_of(project, item.conversion_id)
+        hashes[item.conversion_id] = None if found is None else str(found.markdown_hash)
+    markdown_hash = hashes[item.conversion_id]
+    if markdown_hash is None:
+        return None
+    quote = hashlib.sha256((item.quote or "").encode()).hexdigest()
+    return (
+        str(project.paths.dir),
+        ext,
+        item.conversion_id,
+        markdown_hash,
+        quote,
+        item.anchor or "",
+    )
+
+
 def _verify(project: Project, items: dict[str, _Item]) -> dict[str, bool]:
-    key = str(project.paths.dir)
     out: dict[str, bool] = {}
-    todo: list[tuple[str, _Item]] = []
+    todo: list[tuple[str, _Item, tuple[str, ...] | None]] = []
+    hashes: dict[str, str | None] = {}
+    keyed = {
+        ext: _verified_key(project, ext, item, hashes)
+        for ext, item in items.items()
+        if item.quote is not None and item.anchor is not None
+    }
     with _GUARD:
         for ext, item in items.items():
             if item.quote is None or item.anchor is None:
                 out[ext] = False
-            elif (key, ext) in _VERIFIED:
-                out[ext] = _VERIFIED[(key, ext)]
+                continue
+            key = keyed[ext]
+            if key is not None and key in _VERIFIED:
+                out[ext] = True
             else:
-                todo.append((ext, item))
+                todo.append((ext, item, key))
     if todo:
         results = chat_verify(
             project,
             [
                 VerifyItem(i.work_id, i.anchor or "", i.quote or "", i.conversion_id)
-                for _, i in todo
+                for _, i, _ in todo
             ],
         )
         with _GUARD:
-            for (ext, _), res in zip(todo, results, strict=True):
+            for (ext, _, key), res in zip(todo, results, strict=True):
                 out[ext] = res.status == "accepted"
-                if len(_VERIFIED) >= _VERIFIED_MAX:
-                    _VERIFIED.clear()
-                _VERIFIED[(key, ext)] = out[ext]
+                if out[ext] and key is not None:
+                    if len(_VERIFIED) >= _VERIFIED_MAX:
+                        _VERIFIED.clear()
+                    _VERIFIED.add(key)
     return out
 
 
@@ -351,14 +388,23 @@ def _hits(
     return hits, closed
 
 
+def _last(value: float | None, *, descending: bool) -> tuple[object, ...]:
+    """A measure with no value (a claims candidate has no technique rows, a lead no overlap, an
+    entry without items no verification share) sorts after every entry that has one; it is never
+    read as 0."""
+    if value is None:
+        return (True, 0.0)
+    return (False, -value if descending else value)
+
+
 def _sort_key(item: QueueItem, order_by: Sequence[str]) -> tuple[object, ...]:
     m = item.measures
     parts: dict[str, tuple[object, ...]] = {
         "support": (-m.support,),
         "independence": (-m.independence,),
-        "verification": (-(m.verification.share or 0.0),),
-        "supportive_share": (-(m.supportive_share or 0.0),),
-        "overlap": (m.overlap or 0,),
+        "verification": _last(m.verification.share, descending=True),
+        "supportive_share": _last(m.supportive_share, descending=True),
+        "overlap": _last(m.overlap, descending=False),
         "diversity": (-m.diversity,),
         "prior_hits": (m.closed_direction_hit, m.narrow_prior_hits, m.prior_hits),
         "score": (-m.score,),
@@ -379,19 +425,31 @@ def _rule(order_by: Sequence[str]) -> str:
     )
 
 
-def _balanced(ordered: list[QueueItem], quota: int, top: int) -> list[QueueItem]:
-    """The first `quota` of each source in `ordered`, in `ordered`'s order, cut to `top` by
-    dropping from the global tail the entries that are not their source's first."""
+def _balanced(
+    ordered: list[QueueItem], quota: int, top: int, *, fill: bool = True
+) -> list[QueueItem]:
+    """At most `top` entries in `ordered`'s order: the first `quota` of each source; when that is
+    more than `top`, the entries that are not their source's first are dropped from the global
+    tail; when it is less (a source has fewer entries than its share) and `fill`, the freed slots
+    go to the entries left out, in the global order. `fill` is off for an explicit
+    `per_source_top`, which is a cap the caller asked for."""
     seen: dict[str, int] = defaultdict(int)
-    kept: list[tuple[QueueItem, int]] = []
+    ranks: list[int] = []
     for m in ordered:
         seen[m.source] += 1
-        if seen[m.source] <= quota:
-            kept.append((m, seen[m.source]))
-    while len(kept) > top:
-        drop = next((i for i in range(len(kept) - 1, -1, -1) if kept[i][1] > 1), len(kept) - 1)
-        del kept[drop]
-    return [m for m, _ in kept]
+        ranks.append(seen[m.source])
+    picked = [i for i, r in enumerate(ranks) if r <= quota]
+    while len(picked) > top:
+        drop = next((k for k in range(len(picked) - 1, -1, -1) if ranks[picked[k]] > 1), -1)
+        del picked[drop]
+    if fill and len(picked) < top:
+        chosen = set(picked)
+        for i in range(len(ordered)):
+            if len(chosen) >= top:
+                break
+            chosen.add(i)
+        picked = sorted(chosen)
+    return [ordered[i] for i in picked]
 
 
 def _check(
@@ -460,7 +518,9 @@ def lead_queue(
     Balance (default): when more than one source is in play, the best `per_source_top` of each
     source (in the queue's order within the source; default `ceil(top / sources)`) are kept and
     merged by the global order, so no source is crowded out of the top; the total never exceeds
-    `top` (surplus entries beyond each source's first are dropped from the global tail).
+    `top` (surplus entries beyond each source's first are dropped from the global tail; slots a
+    source leaves unused go to the other sources' entries in the global order, except with an
+    explicit `per_source_top`, which is kept as a cap).
     `balance=False` returns the plain global order. `parameters` shows `balance` (1 or 0) and the
     `per_source_top` applied (None when not balanced)."""
     _check(order_by, top, per_source, per_source_top, balance)
@@ -533,6 +593,8 @@ def lead_queue(
         flags = list(subject.flags)
         if basis != "live":
             flags.append(f"basis-{basis}")
+        if any(items[i].quote is None for i in subject.items if i in items):
+            flags.append("no-stored-quote")
         if closed:
             flags.append("closed-direction-hit")
         if subject.score is None:
@@ -587,7 +649,7 @@ def lead_queue(
     if balance and len({m.source for m in ordered}) > 1:
         n_sources = len({m.source for m in ordered})
         applied = per_source_top or -(-top // n_sources)
-        chosen = _balanced(ordered, applied, top)
+        chosen = _balanced(ordered, applied, top, fill=per_source_top is None)
     else:
         chosen = ordered[:top]
     return Queue(

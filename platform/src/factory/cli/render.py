@@ -2217,10 +2217,15 @@ def _engine_head(result: Any) -> list[str]:
 
 def _candidate_lines(c: Any, indent: str = "  ") -> list[str]:
     lines = [f"{indent}{c.candidate_id}  [{c.source}]  {c.observation}"]
+    if c.flags:
+        lines.append(f"{indent}  flags: {', '.join(c.flags)}")
     works = ", ".join(w.work_id for w in c.works)
     lines.append(f"{indent}  works ({c.works_total}): {works}")
     for q in c.quotes:
-        lines.append(f"{indent}  quote {q.role} {q.work_id} {q.anchor or '-'}: {q.quote}")
+        lines.append(
+            f"{indent}  quote {q.role} {q.work_id} {q.anchor or '-'}: "
+            + ("(no stored quote)" if q.quote is None else q.quote)
+        )
     lines.append(
         f"{indent}  triggers: "
         + ", ".join(f"{t.kind} {t.ref}" for t in c.triggers)

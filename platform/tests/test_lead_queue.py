@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
@@ -14,9 +15,11 @@ from factory.model.lead_engine import (
     QueueItem,
     Verification,
 )
+from factory.services import lead_queue as lq
+from factory.services.chat_read import VerifyResult
 from factory.services.context import Project
 from factory.services.lead_candidates import lead_candidates
-from factory.services.lead_queue import _sort_key, lead_queue
+from factory.services.lead_queue import _balanced, _sort_key, lead_queue
 from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.lead_engine_helpers import engine_world
 
@@ -143,3 +146,142 @@ def test_the_top_is_balanced_across_sources_unless_global_order_is_asked(
         with pytest.raises(FactoryValidationError) as caught:
             lead_queue(project, **bad)  # type: ignore[arg-type]
         assert caught.value.issues[0].field == "per_source_top"
+
+
+def _src(entry: str, source: str) -> QueueItem:
+    return _q(entry).model_copy(update={"source": source})
+
+
+def test_balanced_edge_cases_sources_above_top_empty_source_and_freed_slots() -> None:
+    many = [_src(f"{s}:0", s) for s in "abcde"]
+    assert [i.entry_id for i in _balanced(many, 1, 3)] == ["a:0", "b:0", "c:0"]  # global order
+    # a source with fewer entries than its share frees its slots for the others
+    ordered = [_src(f"a:{n}", "a") for n in range(10)] + [_src("b:0", "b")]
+    got = _balanced(ordered, 3, 6)
+    assert len(got) == 6 and "b:0" in {i.entry_id for i in got}
+    assert [i.entry_id for i in got if i.source == "a"] == [f"a:{n}" for n in range(5)]
+    assert len(_balanced(ordered, 3, 6, fill=False)) == 4  # an explicit cap is kept
+    # a source with no entry takes no slot: the one source left fills the top
+    only = [_src(f"a:{n}", "a") for n in range(10)]
+    assert len(_balanced(only, 3, 6)) == 6
+    # quota above top: the entries that are not a source's first go from the global tail
+    two = [_src(f"{s}:{n}", s) for n in range(4) for s in "ab"]
+    assert [i.entry_id for i in _balanced(two, 4, 3)] == ["a:0", "b:0", "a:1"]
+    # ties: the given order is kept
+    tied = [_src("a:0", "a"), _src("b:0", "b"), _src("a:1", "a"), _src("b:1", "b")]
+    assert [i.entry_id for i in _balanced(tied, 1, 4)] == ["a:0", "b:0", "a:1", "b:1"]
+
+
+def test_one_source_is_not_balanced_and_per_source_top_is_not_applied(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    one = lead_queue(
+        project, sources=("technique-gap",), top=5, per_source_top=1, order_by=("support",), **KNOBS
+    )  # type: ignore[arg-type]
+    assert len({i.source for i in one.items}) == 1 and one.parameters["per_source_top"] is None
+    assert len(one.items) == min(5, one.total_candidates)
+
+
+def test_a_measure_without_a_value_sorts_last_never_as_zero() -> None:
+    def v(ok: int, total: int, share: float | None) -> Verification:
+        return Verification(verified=ok, total=total, share=share)
+
+    items = [
+        _q("a", supportive_share=None, overlap=None, verification=v(0, 0, None)),
+        _q("b", supportive_share=0.0, overlap=7, verification=v(0, 2, 0.0)),
+        _q("c", supportive_share=0.5, overlap=0, verification=v(1, 2, 0.5)),
+    ]
+    for measure, want in (
+        ("supportive_share", ["c", "b", "a"]),
+        ("overlap", ["c", "b", "a"]),
+        ("verification", ["c", "b", "a"]),
+    ):
+        ranked = sorted(items, key=lambda i: _sort_key(i, (measure,)))
+        assert [i.entry_id for i in ranked] == want, measure
+
+
+def _count_verify(monkeypatch: pytest.MonkeyPatch, status: str | None) -> list[int]:
+    real = lq.chat_verify
+    calls: list[int] = []
+
+    def fake(project: Project, items: list[object]) -> list[VerifyResult]:
+        calls.append(len(items))
+        out = real(project, items)  # type: ignore[arg-type]
+        if status is None:
+            return out
+        return [VerifyResult(r.item, status, None, None) for r in out]
+
+    monkeypatch.setattr(lq, "chat_verify", fake)
+    return calls
+
+
+def _share(project: Project) -> float | None:
+    queue = lead_queue(project, order_by=("support",), **KNOBS)  # type: ignore[arg-type]
+    claim = next(i for i in queue.items if i.source == "claims-limitation")
+    return claim.measures.verification.share
+
+
+def test_only_accepted_verifications_are_remembered(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine_world(project, agent, human, world)
+    lq._VERIFIED.clear()
+    with monkeypatch.context() as m:  # a transient failure: conversion unreadable now
+        _count_verify(m, "no-conversion")
+        assert _share(project) == 0.0
+    assert not lq._VERIFIED  # a negative result is never stored
+    calls = _count_verify(monkeypatch, None)
+    assert _share(project) == 1.0 and calls  # readable again: verified
+    assert lq._VERIFIED
+    calls.clear()
+    assert _share(project) == 1.0 and not calls  # accepted verdicts are served from the memo
+
+
+def test_a_changed_conversion_at_the_same_path_is_verified_again(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine_world(project, agent, human, world)
+    lq._VERIFIED.clear()
+    assert _share(project) == 1.0 and lq._VERIFIED
+    real = lq.conversion_of
+
+    class _Other:
+        markdown_hash = "a-different-markdown"
+
+    monkeypatch.setattr(
+        lq, "conversion_of", lambda p, cid: None if real(p, cid) is None else _Other()
+    )
+    calls = _count_verify(monkeypatch, "quote-not-in-anchor")
+    assert _share(project) == 0.0 and calls  # the old verdict is not served for new content
+    assert len(lq._VERIFIED) >= 1
+
+
+def test_a_stored_row_without_a_quote_is_unverified_and_flagged_not_read_as_its_value(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    lq._VERIFIED.clear()
+    fresh = lead_candidates(project, **KNOBS)  # type: ignore[arg-type]
+    claim = next(c for c in fresh.candidates if c.source == "claims-limitation")
+    [ext] = [t.ref for t in claim.triggers if t.kind == "item"]
+    with project.index._engine.begin() as conn:  # a test world: the projection is rebuildable
+        conn.execute(
+            text(
+                "UPDATE extraction_fields SET quote = NULL "
+                "WHERE extraction_id = :e AND field = 'claim_quote'"
+            ),
+            {"e": ext},
+        )
+    queue = lead_queue(project, candidates=fresh, order_by=("support",), **KNOBS)  # type: ignore[arg-type]
+    item = next(i for i in queue.items if i.entry_id == claim.candidate_id)
+    assert item.measures.verification == Verification(verified=0, total=1, share=0.0)
+    assert "no-stored-quote" in item.flags

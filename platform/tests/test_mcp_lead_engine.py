@@ -149,7 +149,40 @@ def test_the_reply_is_bounded_and_says_so() -> None:
     cap = out["reply_cap"]
     assert cap["truncated"] is True and cap["shown"] == 40 and cap["of"] == 120
     assert cap["quotes_left_out"] == 40 * 3 and "narrow" in cap["note"]
-    items = [{"candidate": _candidate(i, "a", 1)} for i in range(50)]
+    items = [{"source": "a", "candidate": _candidate(i, "a", 1)} for i in range(50)]
     queue = bounds.bound_queue({"items": items, "leads": []})
     assert len(queue["items"]) == bounds.MAX_QUEUE_ITEMS
     assert queue["reply_cap"]["of"] == 50 and queue["reply_cap"]["truncated"] is True
+
+
+def _item(n: int, source: str) -> dict[str, Any]:
+    return {"source": source, "entry_id": f"{source}:{n}", "candidate": _candidate(n, source, 1)}
+
+
+def test_a_weak_sources_first_entry_survives_the_queue_cut_and_the_trim_is_named() -> None:
+    items = [_item(i, "abc"[i % 3]) for i in range(44)]
+    items.append(_item(0, "d"))  # global rank 45
+    items += [_item(100 + i, "a") for i in range(5)]
+    out = bounds.bound_queue({"items": items, "leads": []})
+    ids = [i["entry_id"] for i in out["items"]]
+    assert len(ids) == bounds.MAX_QUEUE_ITEMS and "d:0" in ids
+    order = [i["entry_id"] for i in items]
+    assert ids == [e for e in order if e in set(ids)]  # the global order is kept
+    cap = out["reply_cap"]
+    assert cap["truncated"] is True and cap["of"] == 50
+    assert cap["sources_trimmed"] == ["a", "b", "c"]
+
+
+def test_freed_slots_go_to_the_other_sources_in_the_global_order() -> None:
+    entries = [_item(i, "a") for i in range(40)] + [_item(0, "b"), _item(1, "b")]
+    kept = bounds._balanced_cut(entries, 30, lambda e: e["source"])
+    assert len(kept) == 30
+    assert [e["entry_id"] for e in kept if e["source"] == "b"] == ["b:0", "b:1"]
+    assert sum(1 for e in kept if e["source"] == "a") == 28
+    # more sources than the limit: the global order decides
+    many = [_item(0, f"s{i}") for i in range(10)]
+    assert [e["entry_id"] for e in bounds._balanced_cut(many, 3, lambda e: e["source"])] == [
+        "s0:0",
+        "s1:0",
+        "s2:0",
+    ]

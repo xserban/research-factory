@@ -35,22 +35,50 @@ def _trim_candidate(candidate: dict[str, Any]) -> int:
 def _balanced_cut(
     entries: list[dict[str, Any]], limit: int, source_of: Any
 ) -> list[dict[str, Any]]:
-    """The first `ceil(limit / sources)` entries of each source, in the given order."""
+    """At most `limit` entries, in the given order, so that no source loses its first entry.
+
+    Each source keeps its first `ceil(limit / sources)` entries; when that is more than `limit`
+    the entries that are not their source's first are dropped from the global tail, and when it
+    is less (a source has fewer entries than its share) the freed slots go to the entries left
+    out, in the global order. With more sources than `limit` the global order decides."""
     if len(entries) <= limit:
         return entries
     sources = {source_of(e) for e in entries}
     quota = ceil(limit / max(1, len(sources)))
     seen: dict[str, int] = {}
-    kept: list[dict[str, Any]] = []
+    ranks: list[int] = []
     for e in entries:
         s = source_of(e)
         seen[s] = seen.get(s, 0) + 1
-        if seen[s] <= quota and len(kept) < limit:
-            kept.append(e)
-    return kept
+        ranks.append(seen[s])
+    picked = [i for i, r in enumerate(ranks) if r <= quota]
+    while len(picked) > limit:
+        drop = next((k for k in range(len(picked) - 1, -1, -1) if ranks[picked[k]] > 1), -1)
+        del picked[drop]
+    if len(picked) < limit:
+        chosen = set(picked)
+        for i in range(len(entries)):
+            if len(chosen) >= limit:
+                break
+            chosen.add(i)
+        picked = sorted(chosen)
+    return [entries[i] for i in picked]
 
 
-def _cap(total: int, shown: int, quotes_cut: int, unit: str, limit: int) -> dict[str, Any]:
+def _trimmed(all_: list[dict[str, Any]], kept: list[dict[str, Any]], source_of: Any) -> list[str]:
+    """The sources with at least one entry left out, sorted."""
+    shown: dict[str, int] = {}
+    for e in kept:
+        shown[source_of(e)] = shown.get(source_of(e), 0) + 1
+    total: dict[str, int] = {}
+    for e in all_:
+        total[source_of(e)] = total.get(source_of(e), 0) + 1
+    return sorted(s for s in total if shown.get(s, 0) < total[s])
+
+
+def _cap(
+    total: int, shown: int, quotes_cut: int, unit: str, limit: int, trimmed: list[str]
+) -> dict[str, Any]:
     return {
         "max_" + unit: limit,
         "max_quotes_per_candidate": MAX_QUOTES,
@@ -59,6 +87,7 @@ def _cap(total: int, shown: int, quotes_cut: int, unit: str, limit: int) -> dict
         "of": total,
         "quotes_left_out": quotes_cut,
         "truncated": shown < total or quotes_cut > 0,
+        "sources_trimmed": trimmed,
         "note": (
             f"the reply shows at most {limit} {unit} and {MAX_QUOTES} quotes per candidate; "
             "narrow with sources, layer, top or per_source to see others"
@@ -71,20 +100,31 @@ def bound_candidates(data: dict[str, Any]) -> dict[str, Any]:
     kept = _balanced_cut(all_, MAX_CANDIDATES, lambda c: c["source"])
     cut = sum(_trim_candidate(c) for c in kept)
     data["candidates"] = kept
-    data["reply_cap"] = _cap(len(all_), len(kept), cut, "candidates", MAX_CANDIDATES)
+    trimmed = _trimmed(all_, kept, lambda c: c["source"])
+    data["reply_cap"] = _cap(len(all_), len(kept), cut, "candidates", MAX_CANDIDATES, trimmed)
     return data
 
 
 def bound_queue(data: dict[str, Any]) -> dict[str, Any]:
     items = list(data.get("items", []))
     leads = list(data.get("leads", []))
-    kept = items[:MAX_QUEUE_ITEMS]
+    kept = _balanced_cut(items, MAX_QUEUE_ITEMS, lambda i: i["source"])
     kept_leads = leads[:MAX_QUEUE_ITEMS]
     cut = 0
     for item in (*kept, *kept_leads):
         if item.get("candidate"):
             cut += _trim_candidate(item["candidate"])
     data["items"], data["leads"] = kept, kept_leads
-    cap = _cap(len(items) + len(leads), len(kept) + len(kept_leads), cut, "items", MAX_QUEUE_ITEMS)
+    trimmed = _trimmed(items, kept, lambda i: i["source"])
+    if len(kept_leads) < len(leads):
+        trimmed = sorted({*trimmed, "lead"})
+    cap = _cap(
+        len(items) + len(leads),
+        len(kept) + len(kept_leads),
+        cut,
+        "items",
+        MAX_QUEUE_ITEMS,
+        trimmed,
+    )
     data["reply_cap"] = cap
     return data

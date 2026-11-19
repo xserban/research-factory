@@ -102,7 +102,14 @@ def test_bad_options_are_refused_and_there_is_no_recording_command(
         ("queue", "--format", "xml"),
         ("queue", "--no-balance", "--per-source-top", "2"),
     ):
-        code, _, _ = _run(settings.root, *args)
+        code, _, err = _run(settings.root, *args)
         assert code != 0, args
+    for args in (
+        ("queue", "--order-by", "nope"),
+        ("queue", "--top", "0"),
+        ("queue", "--no-balance", "--per-source-top", "2"),
+    ):  # a service refusal carries the notice, as the MCP's does
+        code, _, err = _run(settings.root, *args)
+        assert code != 0 and "EXPLORATORY" in err, args
     code, _, _ = _run(settings.root, "record")
     assert code != 0

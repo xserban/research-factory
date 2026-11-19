@@ -135,3 +135,23 @@ def test_a_project_without_miners_gives_no_candidates_and_says_why(
     result = lead_candidates(project)
     assert result.candidates == () and result.absence_only_works == 0
     assert [s.candidate_id for s in result.skipped] == ["claims-limitation"]
+
+
+def test_a_claim_without_a_stored_quote_is_shown_flagged_and_never_quotes_its_value() -> None:
+    from factory.services.lead_candidates import _ClaimRow, _Claims, claims_candidates
+
+    def row(ext: str, quote: str | None, field: bool) -> _ClaimRow:
+        return _ClaimRow(ext, "W0", f"rk_{ext}", "limitation", "a", quote, "s3.p1", None, field)
+
+    data = _Claims(
+        1,
+        (row("ext_1", None, True), row("ext_2", "Lorem ipsum.", True), row("ext_3", None, False)),
+        {"W0": "Title"},
+        {},
+    )
+    found, total, skipped = claims_candidates(data, per_source=10, layer="all")
+    assert total == 3 and [s.candidate_id for s in skipped] == ["claims-limitation:ext_3"]
+    by_id = {c.candidate_id: c for c in found}
+    bare = by_id["claims-limitation:ext_1"]
+    assert bare.quotes[0].quote is None and bare.flags == ("no-stored-quote",)
+    assert by_id["claims-limitation:ext_2"].flags == ()

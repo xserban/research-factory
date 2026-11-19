@@ -87,3 +87,28 @@ def test_scope_source_labels() -> None:
     assert scope_source(["evidence"]) == "rows"
     assert scope_source(["m-other"]) == "other-miner"
     assert scope_source(["m-claims", "evidence"]) == "mixed"
+
+
+def test_the_stats_are_labelled_and_the_oldest_undecided_follow_the_event_not_the_id(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    from sqlalchemy import text
+
+    engine_world(project, agent, human, world)
+    found = lead_candidates(project, layer="all", technique_min_works=1)
+    first, second = found.candidates[0], found.candidates[1]
+    a, b = _record(project, first), _record(project, second)
+    stats = lead_stats(project)
+    assert stats.exploratory is True and stats.klass == "interpretation"
+    assert "exploratory" in stats.notice
+    assert '"class"' in stats.model_dump_json(by_alias=True)
+    assert [o.lead_id for o in stats.oldest_undecided] == sorted([a, b], key=lambda i: i)
+    with project.index._engine.begin() as conn:  # a test world: the projection is rebuildable
+        ids = {
+            str(r[0]): str(r[1]) for r in conn.execute(text("SELECT lead_id, event_id FROM leads"))
+        }
+        conn.execute(
+            text("UPDATE leads SET event_id = :e WHERE lead_id = :l"), {"e": "0", "l": max(a, b)}
+        )
+    order = [o.lead_id for o in lead_stats(project).oldest_undecided]
+    assert order == [max(a, b), min(a, b)] and ids  # the lead with the older event comes first

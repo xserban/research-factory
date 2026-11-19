@@ -681,6 +681,21 @@ def _reporting_errors() -> Iterator[None]:
         _fail(str(exc), 1)
 
 
+@contextmanager
+def _engine_errors() -> Iterator[None]:
+    """`_reporting_errors` for the lead engine commands: a refusal also carries the exploratory
+    notice on stderr, as the MCP refusals do."""
+    from factory.model.lead_engine import NOTICE
+
+    try:
+        with _reporting_errors():
+            yield
+    except typer.Exit as exc:
+        if exc.exit_code != 0:
+            typer.echo(f"EXPLORATORY: {NOTICE}", err=True)
+        raise
+
+
 def _authorized(state: CliState, project: Project) -> Project:
     """`project`, once the running command is allowed on it (slice 5 ruling 10)."""
     with (
@@ -7103,7 +7118,7 @@ def leads_candidates_cmd(
     """Observations to check, with quotes and the triggers a lead would cite (exploratory,
     read-only; records nothing)."""
     state = _state(ctx)
-    with _reporting_errors():
+    with _engine_errors():
         project = _resolve_project(state)
         chosen = _csv(sources, "--sources")
         result = lead_candidates_service(
@@ -7151,7 +7166,7 @@ def leads_queue_cmd(
 ) -> None:
     """Candidates and open leads ordered by computed measures (exploratory, read-only)."""
     state = _state(ctx)
-    with _reporting_errors():
+    with _engine_errors():
         project = _resolve_project(state)
         chosen = _csv(sources, "--sources")
         order = _csv(order_by, "--order-by")
@@ -7175,7 +7190,7 @@ def leads_queue_cmd(
 def leads_stats_cmd(ctx: typer.Context, format_: Annotated[str, _FORMAT_OPT] = "table") -> None:
     """Counts of recorded leads, the hypotheses drafted from them and their outcomes."""
     state = _state(ctx)
-    with _reporting_errors():
+    with _engine_errors():
         project = _resolve_project(state)
         result = lead_stats_service(project)
     _technique_out(result, render.lead_stats_lines, format_)

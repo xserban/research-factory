@@ -94,7 +94,7 @@ def lead_stats(project: Project) -> LeadStats:
             text(
                 "SELECT l.lead_id, l.state, l.framework, l.event_id, "
                 "(SELECT COUNT(*) FROM lead_triggers t WHERE t.lead_id = l.lead_id) "
-                "FROM leads l ORDER BY l.lead_id"
+                "FROM leads l ORDER BY l.event_id, l.lead_id"
             )
         ).all()
         hyps = conn.execute(
