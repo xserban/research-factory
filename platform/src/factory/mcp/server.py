@@ -3312,8 +3312,13 @@ def build_server(
         accepts. `sources` is any of technique-challenge, technique-combination, technique-gap,
         claims-limitation (default all); `per_source` caps each source; `layer` is core (default),
         all or a layer id; `technique_min_works` and `max_co_works` narrow combinations and gaps.
-        EXPLORATORY. Read-only (it records nothing); the reply shows at most 40 candidates and 6
-        quotes each (see `reply_cap`). Refused to a session that has joined a pass."""
+        Every cited row has its quote, with `side` (the approach it supports), `described_as` and
+        the miner's `evidence` class; a challenge carries the flag `failure-quote-not-checked`
+        (read the failed quote: the platform cannot tell whether it states a failure); a gap is
+        one candidate per approach with `target_stages`. EXPLORATORY. Read-only (it records
+        nothing); the reply shows at most 40 candidates and keeps a quote for every cited row,
+        cutting long text, not rows (see `reply_cap`). Refused to a session that has joined a
+        pass."""
         return _lead_engine_reply(
             project,
             lambda p: lead_candidates_service(
@@ -3341,17 +3346,25 @@ def build_server(
         technique_min_works: int = 3,
         max_co_works: int = 0,
         include_leads: bool = True,
+        recorded: str = "after",
     ) -> dict[str, JsonValue]:
         """The candidates (and the open leads) ordered by computed measures: support,
-        independence, verification, supportive_share, overlap, diversity, prior_hits, score,
-        basis; `order_by` lists the measures in turn (default: prior_hits, independence, support,
-        verification, diversity, score). `top` caps the list; with `balance` (default) the top is
-        shared across the sources in play (`per_source_top` each, default top divided by the
-        number of sources) and merged by the global order; `balance=false` keeps the global
-        order. `exclude_prior` leaves out candidates with a prior hit (parked or discarded lead,
-        hypothesis, closed direction). Prior hits name what they share. Measures are comparable
-        only within one call. EXPLORATORY. Read-only; the reply shows at most 30 entries and 6
-        quotes each (see `reply_cap`). Refused to a session that has joined a pass."""
+        independence, verification, supportive_share, overlap, diversity, prior_hits,
+        narrow_prior_hits, broad_prior_hits, score, basis; `order_by` lists the measures in turn
+        (default: independence, support, narrow_prior_hits, verification, diversity, score). Only
+        narrow prior hits (a shared `item`, a closed direction) take part in the default order; a
+        hit on a shared work only is broad: shown as `broad_prior_hits` and a flag, it reorders
+        nothing unless named. A candidate that an open or decided lead already cites (the same
+        `item`s, or at least half of them) carries `recorded_as` (lead id, state); `recorded` is
+        `after` (default: sorted after the unrecorded ones), `first` or `hide`, and an open lead
+        linked to a listed candidate is not listed again in `leads`. `top` caps the list; with
+        `balance` (default) the top is shared across the sources in play (`per_source_top` each,
+        default top divided by the number of sources) and merged by the global order;
+        `balance=false` keeps the global order. `exclude_prior` leaves out candidates with a prior
+        hit (parked or discarded lead, hypothesis, closed direction). Prior hits name what they
+        share. Measures are comparable only within one call. EXPLORATORY. Read-only; the reply
+        shows at most 30 entries and keeps a quote for every cited row, cutting long text, not
+        rows (see `reply_cap`). Refused to a session that has joined a pass."""
         return _lead_engine_reply(
             project,
             lambda p: lead_queue_service(
@@ -3367,6 +3380,7 @@ def build_server(
                 include_leads=include_leads,
                 balance=balance,
                 per_source_top=per_source_top,
+                recorded=recorded,
             ),
             bound_queue,
         )

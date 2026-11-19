@@ -19,7 +19,7 @@ from factory.services import lead_queue as lq
 from factory.services.chat_read import VerifyResult
 from factory.services.context import Project
 from factory.services.lead_candidates import lead_candidates
-from factory.services.lead_queue import _balanced, _sort_key, lead_queue
+from factory.services.lead_queue import _balanced, _rule, _sort_key, lead_queue
 from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.lead_engine_helpers import engine_world
 
@@ -73,6 +73,30 @@ def test_the_order_is_lexicographic_with_non_live_rows_last_and_ties_by_id() -> 
     by_support = sorted(items, key=lambda i: _sort_key(i, ("support",)))
     assert [i.entry_id for i in by_support] == ["b", "c", "d", "e", "a", "z"]
     assert set(MEASURES) >= set(DEFAULT_ORDER)
+
+
+def test_a_broad_prior_hit_never_reorders_by_default_but_a_narrow_or_closed_one_does() -> None:
+    """J4 friction 1: sharing only a work with a promoted lead is a broad hit; it must not sink
+    the candidate. Narrow (shared item) and closed-direction hits take part, after independence
+    and support."""
+    assert DEFAULT_ORDER[0] != "prior_hits" and "prior_hits" not in DEFAULT_ORDER
+    assert DEFAULT_ORDER.index("narrow_prior_hits") > DEFAULT_ORDER.index("support")
+    assert DEFAULT_ORDER.index("narrow_prior_hits") > DEFAULT_ORDER.index("independence")
+    items = [
+        _q("a", independence=2, support=5, prior_hits=3, broad_prior_hits=3),
+        _q("b", independence=2, support=5),
+        _q("c", independence=2, support=5, prior_hits=1, narrow_prior_hits=1),
+        _q("d", independence=2, support=5, prior_hits=1, closed_direction_hit=True),
+    ]
+    ranked = sorted(items, key=lambda i: _sort_key(i, DEFAULT_ORDER))
+    assert [i.entry_id for i in ranked] == ["a", "b", "c", "d"]
+    for name in ("narrow_prior_hits", "broad_prior_hits", "prior_hits"):
+        assert name in MEASURES
+    by_broad = sorted(items, key=lambda i: _sort_key(i, ("broad_prior_hits",)))
+    assert [i.entry_id for i in by_broad][-1] == "a"
+    by_narrow = sorted(items, key=lambda i: _sort_key(i, ("narrow_prior_hits",)))
+    assert [i.entry_id for i in by_narrow] == ["a", "b", "c", "d"]
+    assert "narrow" in _rule(DEFAULT_ORDER)
 
 
 def test_measures_of_the_candidates_of_a_world(

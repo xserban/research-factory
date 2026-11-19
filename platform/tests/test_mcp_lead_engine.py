@@ -143,12 +143,14 @@ def test_the_reply_is_bounded_and_says_so() -> None:
     shown = out["candidates"]
     assert len(shown) == bounds.MAX_CANDIDATES
     assert {c["source"] for c in shown} == {"a", "b"}
-    assert all(len(c["quotes"]) == bounds.MAX_QUOTES for c in shown)
+    assert all(len(c["quotes"]) == 9 for c in shown)  # a quote per cited row, none dropped
     assert all(len(c["triggers"]) == 20 for c in shown)  # triggers are never cut
     assert all(c["quotes"][0]["quote"].endswith("[cut]") for c in shown)
+    assert all(len(q["quote"]) <= bounds.quote_chars(9) + 6 for c in shown for q in c["quotes"])
     cap = out["reply_cap"]
     assert cap["truncated"] is True and cap["shown"] == 40 and cap["of"] == 120
-    assert cap["quotes_left_out"] == 40 * 3 and "narrow" in cap["note"]
+    assert cap["quotes_cut_in_text"] == 40 * 9 and "narrow" in cap["note"]
+    assert "every cited row keeps its quote" in cap["note"]
     items = [{"source": "a", "candidate": _candidate(i, "a", 1)} for i in range(50)]
     queue = bounds.bound_queue({"items": items, "leads": []})
     assert len(queue["items"]) == bounds.MAX_QUEUE_ITEMS

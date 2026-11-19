@@ -43,6 +43,7 @@ from factory.model.extraction import MinerScope, Scope, ScopeKey
 from factory.model.lead_engine import (
     DEFAULT_ORDER,
     MEASURES,
+    RECORDED,
     SOURCES,
     Candidate,
     Candidates,
@@ -50,6 +51,7 @@ from factory.model.lead_engine import (
     PriorHit,
     Queue,
     QueueItem,
+    RecordedAs,
     Skipped,
     Verification,
 )
@@ -71,6 +73,8 @@ _DIRECTION = {
     "overlap": "ascending",
     "diversity": "descending",
     "prior_hits": "ascending",
+    "narrow_prior_hits": "ascending",
+    "broad_prior_hits": "ascending",
     "score": "descending",
     "basis": "live first",
 }
@@ -272,6 +276,13 @@ def _verify(project: Project, items: dict[str, _Item]) -> dict[str, bool]:
     return out
 
 
+def _lead_states(project: Project) -> dict[str, str]:
+    """`lead id -> state` of every recorded lead."""
+    with project.index.connect() as conn:
+        rows = conn.execute(text("SELECT lead_id, state FROM leads ORDER BY lead_id")).all()
+    return {str(a): str(b) for a, b in rows}
+
+
 def _lead_rows(project: Project, state: str) -> list[tuple[str, str | None, str]]:
     with project.index.connect() as conn:
         rows = conn.execute(
@@ -397,7 +408,12 @@ def _last(value: float | None, *, descending: bool) -> tuple[object, ...]:
     return (False, -value if descending else value)
 
 
-def _sort_key(item: QueueItem, order_by: Sequence[str]) -> tuple[object, ...]:
+def _sort_key(
+    item: QueueItem, order_by: Sequence[str], recorded: str = "after"
+) -> tuple[object, ...]:
+    """The key of `item`: first the fixed rules (a row not live sorts last; with `recorded`
+    `after` a candidate already cited by a lead sorts after the unrecorded ones, with `first`
+    before them), then `order_by` in turn, then the entry id."""
     m = item.measures
     parts: dict[str, tuple[object, ...]] = {
         "support": (-m.support,),
@@ -407,21 +423,36 @@ def _sort_key(item: QueueItem, order_by: Sequence[str]) -> tuple[object, ...]:
         "overlap": _last(m.overlap, descending=False),
         "diversity": (-m.diversity,),
         "prior_hits": (m.closed_direction_hit, m.narrow_prior_hits, m.prior_hits),
+        "narrow_prior_hits": (m.closed_direction_hit, m.narrow_prior_hits),
+        "broad_prior_hits": (m.broad_prior_hits,),
         "score": (-m.score,),
         "basis": (),
     }
     key: list[object] = [m.basis != "live"]
+    if recorded == "after":
+        key.append(item.recorded_as is not None)
+    elif recorded == "first":
+        key.append(item.recorded_as is None)
     for name in order_by:
         key.extend(parts[name])
     key.append(item.entry_id)
     return tuple(key)
 
 
-def _rule(order_by: Sequence[str]) -> str:
+_RECORDED_RULE = {
+    "after": "a candidate already cited by a lead (recorded_as) sorts after the unrecorded ones",
+    "first": "a candidate already cited by a lead (recorded_as) sorts before the unrecorded ones",
+    "hide": "a candidate already cited by a lead (recorded_as) is left out of the items",
+}
+
+
+def _rule(order_by: Sequence[str], recorded: str = "after") -> str:
     steps = ", ".join(f"{n} ({_DIRECTION[n]})" for n in order_by)
     return (
-        "an entry with a row that is not live sorts last, whatever the order; then, in turn: "
-        f"{steps}; ties by entry id"
+        "an entry with a row that is not live sorts last, whatever the order; "
+        f"{_RECORDED_RULE[recorded]}; then, in turn: {steps}; ties by entry id. "
+        "narrow prior hits are shared items or a closed direction; a hit on shared works only "
+        "is broad (broad_prior_hits) and orders nothing unless named"
     )
 
 
@@ -458,7 +489,10 @@ def _check(
     per_source: int,
     per_source_top: int | None = None,
     balance: bool = True,
+    recorded: str = "after",
 ) -> None:
+    if recorded not in RECORDED:
+        raise _refuse("recorded", f"one of {', '.join(RECORDED)}")
     unknown = [n for n in order_by if n not in MEASURES]
     if not order_by or unknown:
         raise _refuse("order_by", f"measures: {', '.join(MEASURES)}; unknown {unknown}")
@@ -470,6 +504,34 @@ def _check(
         raise _refuse("per_source_top", "must be at least 1")
     if per_source_top is not None and not balance:
         raise _refuse("per_source_top", "applies only with balance=True")
+
+
+def _recorded_by(
+    subjects: Sequence[_Subject],
+    by_lead: dict[str, list[tuple[str, str]]],
+    states: dict[str, str],
+) -> dict[str, RecordedAs]:
+    """`candidate id -> the lead that already cites it`: the lead whose `item` triggers include
+    all of the candidate's, or at least half of them (the most shared first, an open lead before
+    a decided one, then by lead id)."""
+    cited = {
+        lead: {r for k, r in trig if k == "item"}
+        for lead, trig in by_lead.items()
+        if lead in states
+    }
+    found: dict[str, RecordedAs] = {}
+    for s in subjects:
+        mine = set(s.items)
+        if not mine:
+            continue
+        best = sorted(
+            (-len(mine & items), states[lead] != "open", lead)
+            for lead, items in cited.items()
+            if 2 * len(mine & items) >= len(mine)
+        )
+        if best:
+            found[s.entry_id] = RecordedAs(lead_id=best[0][2], state=states[best[0][2]])
+    return found
 
 
 def _sources_of(found: Candidates) -> tuple[str, ...]:
@@ -506,6 +568,7 @@ def lead_queue(
     include_leads: bool = True,
     balance: bool = True,
     per_source_top: int | None = None,
+    recorded: str = "after",
 ) -> Queue:
     """Candidates (`candidates`, else `lead_candidates` with the same `sources`, `per_source`,
     `layer`, `technique_min_works` and `max_co_works`) and, with `include_leads`, the open
@@ -522,8 +585,15 @@ def lead_queue(
     source leaves unused go to the other sources' entries in the global order, except with an
     explicit `per_source_top`, which is kept as a cap).
     `balance=False` returns the plain global order. `parameters` shows `balance` (1 or 0) and the
-    `per_source_top` applied (None when not balanced)."""
-    _check(order_by, top, per_source, per_source_top, balance)
+    `per_source_top` applied (None when not balanced).
+
+    Recorded: a candidate whose `item` triggers are already cited by an open or decided lead (the
+    same set, or at least half of the candidate's items) carries `recorded_as` (lead id and
+    state). `recorded` is `after` (default: sorted after the unrecorded candidates), `first` or
+    `hide` (left out of `items`); an open lead linked to a candidate listed in `items` is not
+    listed again in `leads`. Prior hits: only narrow hits (shared `item`, closed direction) are
+    in the default order; broad hits are shown as `broad_prior_hits`."""
+    _check(order_by, top, per_source, per_source_top, balance, recorded)
     fresh = candidates or lead_candidates(
         project,
         sources=sources,
@@ -536,7 +606,8 @@ def lead_queue(
     subjects = [_subject_of(c) for c in fresh.candidates]
     promoted = _lead_rows(project, "promoted")
     open_leads = _lead_rows(project, "open") if include_leads else []
-    by_lead = _lead_triggers(project, [r[0] for r in (*promoted, *open_leads)])
+    states = _lead_states(project)
+    by_lead = _lead_triggers(project, states)
 
     def lead_subject(lead_id: str) -> _Subject:
         trig = by_lead.get(lead_id, [])
@@ -591,6 +662,8 @@ def lead_queue(
         hits, closed = _hits(subject, leads_p, hyps_p, dirs_p)
         narrow = sum(1 for h in hits if h.shared_items)
         flags = list(subject.flags)
+        if len(hits) > narrow:
+            flags.append("broad-prior-hits")
         if basis != "live":
             flags.append(f"basis-{basis}")
         if any(items[i].quote is None for i in subject.items if i in items):
@@ -613,6 +686,7 @@ def lead_queue(
             diversity_vs=best[1] if best[0] > 0 else None,
             prior_hits=len(hits),
             narrow_prior_hits=narrow,
+            broad_prior_hits=len(hits) - narrow,
             closed_direction_hit=closed,
             score=subject.score or 0.0,
             score_flag=None if subject.score is not None else "no score for this source",
@@ -633,7 +707,11 @@ def lead_queue(
             candidate=subject.candidate,
         )
 
-    measured = [measure(s) for s in subjects]
+    recorded_by = _recorded_by(subjects, by_lead, states)
+    measured = [
+        m.model_copy(update={"recorded_as": recorded_by.get(m.entry_id)})
+        for m in (measure(s) for s in subjects)
+    ]
     excluded: list[Skipped] = []
     if exclude_prior:
         excluded = [
@@ -642,7 +720,9 @@ def lead_queue(
             if m.measures.prior_hits
         ]
         measured = [m for m in measured if not m.measures.prior_hits]
-    ordered = sorted(measured, key=lambda m: _sort_key(m, order_by))
+    if recorded == "hide":
+        measured = [m for m in measured if m.recorded_as is None]
+    ordered = sorted(measured, key=lambda m: _sort_key(m, order_by, recorded))
     lead_items = sorted((measure(s) for s in lead_subjects), key=lambda m: _sort_key(m, order_by))
     applied: int | None = None
     chosen = ordered
@@ -652,9 +732,11 @@ def lead_queue(
         chosen = _balanced(ordered, applied, top, fill=per_source_top is None)
     else:
         chosen = ordered[:top]
+    linked = {m.recorded_as.lead_id for m in chosen if m.recorded_as is not None}
+    lead_items = [m for m in lead_items if m.entry_id not in linked]
     return Queue(
         order_by=tuple(order_by),
-        order_rule=_rule(order_by),
+        order_rule=_rule(order_by, recorded),
         comparability=_COMPARABILITY,
         parameters={
             "sources": _sources_of(fresh),
@@ -667,6 +749,7 @@ def lead_queue(
             "max_co_works": max_co_works,
             "balance": int(balance),
             "per_source_top": applied,
+            "recorded": recorded,
         },
         items=tuple(m.model_copy(update={"rank": r}) for r, m in enumerate(chosen, 1)),
         leads=tuple(m.model_copy(update={"rank": r}) for r, m in enumerate(lead_items[:top], 1)),

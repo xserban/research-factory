@@ -2215,15 +2215,68 @@ def _engine_head(result: Any) -> list[str]:
     return [f"EXPLORATORY: {NOTICE}"]
 
 
+WIDTH = 110
+"""The width of the compact lead-engine table; `--full` and `--show` are not bound by it."""
+_SHORT = {
+    "technique-challenge": "chall",
+    "technique-combination": "combo",
+    "technique-gap": "gap",
+    "claims-limitation": "claim",
+}
+QUOTE_SHOWN = 160
+
+
+def _fit(lines: list[str]) -> list[str]:
+    """Every line at most `WIDTH` characters: a longer one is wrapped, the continuation indented."""
+    import textwrap
+
+    out: list[str] = []
+    for line in lines:
+        if len(line) <= WIDTH:
+            out.append(line)
+            continue
+        indent = " " * (len(line) - len(line.lstrip()))
+        out += textwrap.wrap(
+            line,
+            width=WIDTH,
+            subsequent_indent=indent + "    ",
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+    return out
+
+
+def _clip(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1] + "\u2026"
+
+
+def _short_id(entry_id: str) -> str:
+    return entry_id.split(":", 1)[-1]
+
+
 def _candidate_lines(c: Any, indent: str = "  ") -> list[str]:
+    """One candidate in full: observation, flags, works, every quote with its side, description
+    and evidence class, and every trigger."""
     lines = [f"{indent}{c.candidate_id}  [{c.source}]  {c.observation}"]
     if c.flags:
         lines.append(f"{indent}  flags: {', '.join(c.flags)}")
+    if c.target_stages:
+        lines.append(f"{indent}  target stages: {', '.join(c.target_stages)}")
     works = ", ".join(w.work_id for w in c.works)
     lines.append(f"{indent}  works ({c.works_total}): {works}")
     for q in c.quotes:
+        meta = " ".join(
+            part
+            for part in (
+                q.role,
+                f"side={q.side}" if q.side else "",
+                f"evidence={q.evidence}" if q.evidence else "",
+                f"described_as={q.described_as!r}" if q.described_as else "",
+            )
+            if part
+        )
         lines.append(
-            f"{indent}  quote {q.role} {q.work_id} {q.anchor or '-'}: "
+            f"{indent}  quote {meta} {q.work_id} {q.anchor or '-'}: "
             + ("(no stored quote)" if q.quote is None else q.quote)
         )
     lines.append(
@@ -2234,18 +2287,78 @@ def _candidate_lines(c: Any, indent: str = "  ") -> list[str]:
     return lines
 
 
-def lead_candidates_lines(result: Any) -> list[str]:
+def _first_quote(c: Any) -> list[str]:
+    """The first quote of a candidate, at most `QUOTE_SHOWN` characters, on at most two lines."""
+    import textwrap
+
+    if not c.quotes:
+        return []
+    q = c.quotes[0]
+    if q.quote is None:
+        body = "(no stored quote)"
+    else:
+        flat = " ".join(q.quote.split())
+        body = flat if len(flat) <= QUOTE_SHOWN else flat[:QUOTE_SHOWN] + "\u2026"
+    label = " ".join(p for p in (q.role, q.evidence or "") if p)
+    return textwrap.wrap(
+        f"[{label}] {body}",
+        width=WIDTH,
+        initial_indent="    ",
+        subsequent_indent="      ",
+        break_long_words=True,
+    )
+
+
+def _hint(*, shown: int, of: int, top: int | None) -> str:
+    cut = f" (top {top} of {of})" if top is not None and shown < of else ""
+    return (
+        f"{shown} shown{cut}; compact view: --full prints every quote and trigger, "
+        "--show <candidate_id> one candidate in full, --format json is complete"
+    )
+
+
+def _candidate_row(n: int, c: Any) -> str:
+    overlap = "-" if c.overlap_works is None else c.overlap_works
+    score = "-" if c.score is None else f"{c.score:.2f}"
+    flags = f" !{','.join(c.flags)}" if c.flags else ""
+    return _clip(
+        f"{n:>2} {_SHORT[c.source]:<5} {_clip(_short_id(c.candidate_id), 38):<38} "
+        f"works={c.works_total} cited={len(c.works)} overlap={overlap} score={score}{flags}",
+        WIDTH,
+    )
+
+
+def _find(entries: Any, wanted: str) -> Any:
+    found = [e for e in entries if getattr(e, "candidate_id", getattr(e, "entry_id", "")) == wanted]
+    if not found:
+        raise ValueError(f"no candidate {wanted!r} in this result")
+    return found[0]
+
+
+def lead_candidates_lines(
+    result: Any, *, top: int | None = 20, full: bool = False, show: str | None = None
+) -> list[str]:
+    """The compact table (default): a line per candidate, the first quote cut at `QUOTE_SHOWN`
+    characters, every line at most `WIDTH`; `full` prints each of the first `top` as before;
+    `show` prints one candidate in full."""
     lines = _engine_head(result)
+    if show is not None:
+        return lines + _candidate_lines(_find(result.candidates, show))
     lines.append("parameters: " + ", ".join(f"{k}={v}" for k, v in result.parameters.items()))
     lines.append(
         "totals before the per-source cap: "
         + ", ".join(f"{k}={v}" for k, v in result.totals.items())
     )
-    lines.append(f"{len(result.candidates)} candidates")
-    for c in result.candidates:
-        lines += _candidate_lines(c)
+    chosen = result.candidates if top is None else result.candidates[:top]
+    lines.append(_hint(shown=len(chosen), of=len(result.candidates), top=top))
+    for n, c in enumerate(chosen, 1):
+        if full:
+            lines += _candidate_lines(c)
+        else:
+            lines.append(_candidate_row(n, c))
+            lines += _first_quote(c)
     lines += [f"skipped {s.candidate_id}: {s.reason}" for s in result.skipped]
-    return lines
+    return lines if full else _fit(lines)
 
 
 def _measure_text(m: Any) -> str:
@@ -2255,35 +2368,86 @@ def _measure_text(m: Any) -> str:
     return (
         f"support={m.support} independence={m.independence} verified={v.verified}/{v.total} "
         f"({share}) diversity={m.diversity:.2f} overlap={overlap} "
-        f"prior_hits={m.prior_hits} (narrow {m.narrow_prior_hits}) score={m.score:.3f} "
-        f"basis={m.basis}"
+        f"prior_hits={m.prior_hits} (narrow {m.narrow_prior_hits}, broad {m.broad_prior_hits}) "
+        f"score={m.score:.3f} basis={m.basis}"
     )
 
 
-def lead_queue_lines(result: Any) -> list[str]:
+def _queue_row(i: Any) -> str:
+    m = i.measures
+    v = m.verification
+    recorded = f" rec:{i.recorded_as.lead_id}({i.recorded_as.state})" if i.recorded_as else ""
+    flags = [f for f in i.flags if f != "no-score"]
+    flag_text = f" !{','.join(flags)}" if flags else ""
+    return _clip(
+        f"{i.rank:>2} {_SHORT.get(i.source, i.source[:5]):<5} "
+        f"{_clip(_short_id(i.entry_id), 30):<30} sup={m.support} ind={m.independence} "
+        f"ver={v.verified}/{v.total} div={m.diversity:.2f} "
+        f"prior={m.narrow_prior_hits}+{m.broad_prior_hits}{recorded}{flag_text}",
+        WIDTH,
+    )
+
+
+def lead_queue_lines(result: Any, *, full: bool = False, show: str | None = None) -> list[str]:
+    """The compact queue (default): a line per entry with rank, source, id, support,
+    independence, verified quotes, diversity and prior hits (narrow+broad), flags and the lead
+    that already records it; `full` adds measures, priors, quotes and triggers; `show` prints one
+    candidate in full with its measures."""
     lines = _engine_head(result)
-    lines.append("order: " + result.order_rule)
-    lines.append("parameters: " + ", ".join(f"{k}={v}" for k, v in result.parameters.items()))
-    lines.append(f"{len(result.items)} of {result.total_candidates} candidates shown")
-    for i in result.items:
-        lines.append(
-            f"{i.rank}. {i.entry_id}  [{i.source}]"
-            + (f"  flags: {', '.join(i.flags)}" if i.flags else "")
-        )
-        lines.append("    " + _measure_text(i.measures))
-        for h in i.prior:
+    if show is not None:
+        item = _find(result.items, show)
+        lines.append("    " + _measure_text(item.measures))
+        if item.recorded_as:
+            lines.append(f"    recorded as {item.recorded_as.lead_id} ({item.recorded_as.state})")
+        for h in item.prior:
             lines.append(
                 f"    prior {h.kind} {h.id}: items {', '.join(h.shared_items) or '-'}; "
                 f"works {', '.join(h.shared_works) or '-'}"
             )
-        if i.candidate is not None:
-            lines += _candidate_lines(i.candidate, "    ")
+        return lines + _candidate_lines(item.candidate) if item.candidate else lines
+    lines.append("order: " + result.order_rule)
+    lines.append("parameters: " + ", ".join(f"{k}={v}" for k, v in result.parameters.items()))
+    lines.append(f"{len(result.items)} of {result.total_candidates} candidates shown")
+    lines.append(
+        "columns: rank source id sup=support ind=independence ver=verified/cited quotes "
+        "div=diversity prior=narrow+broad hits"
+    )
+    for i in result.items:
+        if full:
+            lines.append(
+                f"{i.rank}. {i.entry_id}  [{i.source}]"
+                + (f"  flags: {', '.join(i.flags)}" if i.flags else "")
+                + (
+                    f"  recorded as {i.recorded_as.lead_id} ({i.recorded_as.state})"
+                    if i.recorded_as
+                    else ""
+                )
+            )
+            lines.append("    " + _measure_text(i.measures))
+            for h in i.prior:
+                lines.append(
+                    f"    prior {h.kind} {h.id}: items {', '.join(h.shared_items) or '-'}; "
+                    f"works {', '.join(h.shared_works) or '-'}"
+                )
+            if i.candidate is not None:
+                lines += _candidate_lines(i.candidate, "    ")
+        else:
+            lines.append(_queue_row(i))
+            if i.candidate is not None:
+                lines += _first_quote(i.candidate)
     for i in result.leads:
-        lines.append(f"open lead {i.rank}. {i.entry_id}  [{i.source}]")
-        lines.append("    " + _measure_text(i.measures))
+        if full:
+            lines.append(f"open lead {i.rank}. {i.entry_id}  [{i.source}]")
+            lines.append("    " + _measure_text(i.measures))
+        else:
+            lines.append("lead " + _queue_row(i))
     lines += [f"excluded {s.candidate_id}: {s.reason}" for s in result.excluded]
+    lines.append(
+        "compact view: --full prints every quote and trigger, --show <candidate_id> one "
+        "candidate in full, --format json is complete"
+    )
     lines.append(result.comparability)
-    return lines
+    return lines if full else _fit(lines)
 
 
 def lead_stats_lines(result: Any) -> list[str]:
@@ -2305,4 +2469,4 @@ def lead_stats_lines(result: Any) -> list[str]:
     )
     for o in result.oldest_undecided:
         lines.append(f"oldest undecided {o.lead_id} [{o.source}] triggers={o.triggers}")
-    return lines
+    return _fit(lines)

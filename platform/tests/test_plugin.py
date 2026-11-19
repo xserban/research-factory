@@ -328,6 +328,7 @@ def test_hypothesis_engine_names_its_tools_and_gates() -> None:
     text = (REPO_ROOT / "plugin" / "skills" / "rf-hypothesis-engine" / "SKILL.md").read_text(
         "utf-8"
     )
+    text = " ".join(text.split())
     for needed in (
         "technique_gaps",
         "technique_combinations",
@@ -354,5 +355,14 @@ def test_hypothesis_engine_names_its_tools_and_gates() -> None:
         "exactly as returned",
         "Never call `lead_decide`",
         "found / not found in this corpus",
+        "at most 80 characters",
+        "is for discussion and review",
+        "does not name the methods, the margin or the direction",
+        "`cutoff-unknown`, `insufficient-evidence` and `method-unresolved`",
+        "`request_incomplete`",
+        "recorded_as",
+        "failure-quote-not-checked",
+        "broad_prior_hits",
+        "--show <candidate_id>",
     ):
         assert needed in text, needed

@@ -46,7 +46,7 @@ from factory.model.lead_engine import (
     Skipped,
 )
 from factory.model.screening import PassLabel
-from factory.model.technique_graph import SUPPORTIVE, Lens
+from factory.model.technique_graph import SUPPORTIVE, GapCandidate, Lens
 from factory.services import technique_graph as tg
 from factory.services.call_memo import entering
 from factory.services.claims_digest import ABSENCE_TYPE, CLAIM_ORDER
@@ -64,7 +64,9 @@ LIMITATION_TYPES = ("limitation", "negative-result", "failure-analysis")
 """The claim types that state a limitation; the order of `CLAIM_ORDER` is kept."""
 MAX_CITED_WORKS = 10
 """Works a candidate cites: one `item` and one `work` trigger each, so 20 triggers at most."""
-QUOTE_CAP = 4
+OTHER_STAGE = "other"
+"""The residual stage of the technique miners: never a gap's target (it fits no stage)."""
+CHALLENGE_FLAG = "failure-quote-not-checked"
 T = TypeVar("T")
 
 
@@ -246,7 +248,13 @@ def _assemble(
     miners: tuple[str, ...],
     overlap: int | None,
     score: float | None,
+    flags: tuple[str, ...] = (),
+    target_stages: tuple[str, ...] = (),
+    side_of: Mapping[str, str] | None = None,
 ) -> Candidate | None:
+    """The candidate citing the best quoted row of up to `MAX_CITED_WORKS` works; every cited row
+    is quoted, with its side (`side_of[role]`, the approach it supports), what the row calls the
+    approach and its evidence class."""
     picks = _round_robin(sides, MAX_CITED_WORKS)
     if not picks:
         return None
@@ -277,8 +285,11 @@ def _assemble(
                 extraction_id=r.extraction_id,
                 quote=r.quote or "",
                 anchor=r.anchor,
+                side=None if side_of is None else side_of.get(role),
+                described_as=r.described_as,
+                evidence=r.evidence,
             )
-            for role, r in picks[:QUOTE_CAP]
+            for role, r in picks
         ),
         triggers=triggers[:MAX_TRIGGERS_PER_CANDIDATE],
         basis=tuple(
@@ -286,9 +297,11 @@ def _assemble(
             for role, r in picks
         ),
         trigger_note=note,
+        target_stages=target_stages,
         miners=miners,
         overlap_works=overlap,
         score=score,
+        flags=flags,
     )
 
 
@@ -344,6 +357,8 @@ def technique_candidates(
                 miners=miners,
                 overlap=len(fw & sw),
                 score=None,
+                flags=(CHALLENGE_FLAG,),
+                side_of={"failed": c.approach.id, "supported": c.approach.id},
             )
             if cand is not None:
                 out.append(cand)
@@ -371,54 +386,69 @@ def technique_candidates(
                 miners=miners,
                 overlap=len(k.co_works),
                 score=None if k.score is None else k.score.composite,
+                side_of={"a": a, "b": b},
             )
             if cand is not None:
                 out.append(cand)
     if "technique-gap" in sources:
         stages = sorted({s.stage for s in inputs.stages})
-        gaps: list[tuple[float, str, str, str, Candidate]] = []
-        gap_total = 0
+        # one candidate per approach: every target stage no user of it has a row at (a target
+        # stage is never `other`), the best composite over the targets
+        found_by: dict[str, list[tuple[str, GapCandidate]]] = defaultdict(list)
         for from_stage in stages:
             for to_stage in stages:
-                if from_stage == to_stage:
+                if from_stage == to_stage or to_stage == OTHER_STAGE:
                     continue
-                found = tg.build_gaps(
+                gap_found = tg.build_gaps(
                     inputs,
                     lens,
                     from_stage=from_stage,
                     to_stage=to_stage,
                     min_works=min_works,
                     max_to_share=0.0,
-                    limit=per_source,
-                    top=per_source,
+                    limit=None,
+                    top=None,
                 )
-                gap_total += found.total
-                for g in found.gaps:
-                    users = set(g.works)
-                    mine = [
-                        r
-                        for r in by_approach[g.approach.id]
-                        if r.stage == from_stage and r.work_id in users
-                    ]
-                    cand = _assemble(
-                        inputs,
-                        source="technique-gap",
-                        key=f"{g.approach.id}:{from_stage}>{to_stage}",
-                        observation=g.statement,
-                        approaches=(g.approach.id,),
-                        sides=(("from-stage", mine),),
-                        works_total=len(g.works),
-                        miners=miners,
-                        overlap=len(g.works_with_to_stage),
-                        score=None if g.score is None else g.score.composite,
-                    )
-                    if cand is not None:
-                        gaps.append(
-                            (-(cand.score or 0.0), g.approach.id, from_stage, to_stage, cand)
-                        )
-        totals["technique-gap"] = gap_total
-        gaps.sort(key=lambda t: t[:4])
-        out.extend(t[4] for t in gaps[:per_source])
+                for g in gap_found.gaps:
+                    found_by[g.approach.id].append((to_stage, g))
+        gaps: list[tuple[float, str, Candidate]] = []
+        for approach, targets in sorted(found_by.items()):
+            first = targets[0][1]
+            users = {w for _, g in targets for w in g.works}
+            from_stage = first.from_stage
+            mine = [
+                r for r in by_approach[approach] if r.stage == from_stage and r.work_id in users
+            ]
+            to_stages = tuple(sorted({t for t, _ in targets}))
+            scores = [g.score.composite for _, g in targets if g.score is not None]
+            best = max(scores) if scores else None
+            cand = _assemble(
+                inputs,
+                source="technique-gap",
+                key=approach,
+                observation=(
+                    f"{name(approach)} is used by {len(users)} work(s) at {from_stage}; no user "
+                    f"has a row at {', '.join(to_stages)} in this corpus (exploratory, pass-A "
+                    f"rows); best composite {best:.3f}"
+                    if best is not None
+                    else f"{name(approach)} is used by {len(users)} work(s) at {from_stage}; "
+                    f"no user has a row at {', '.join(to_stages)} in this corpus "
+                    "(exploratory, pass-A rows)"
+                ),
+                approaches=(approach,),
+                sides=(("from-stage", mine),),
+                works_total=len(users),
+                miners=miners,
+                overlap=0,
+                score=best,
+                target_stages=to_stages,
+                side_of={"from-stage": approach},
+            )
+            if cand is not None:
+                gaps.append((-(cand.score or 0.0), approach, cand))
+        totals["technique-gap"] = len(found_by)
+        gaps.sort(key=lambda t: t[:2])
+        out.extend(t[2] for t in gaps[:per_source])
     return out, totals
 
 

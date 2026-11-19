@@ -117,15 +117,16 @@ def test_a_parked_lead_shows_as_a_prior_hit_with_narrow_and_broad_collisions(
     sharing_work = [i for i in before.items if i.source == "claims-limitation"]
     broad = [h for i in sharing_work for h in i.prior if not h.shared_items]
     assert broad and all(h.id == parked and h.shared_works for h in broad)
-    # fewest prior hits first (closed direction, narrow, then all): the key never decreases
-    keys = [
-        (m.closed_direction_hit, m.narrow_prior_hits, m.prior_hits)
-        for m in (i.measures for i in before.items)
-    ]
-    assert keys == sorted(keys)
-    # the open lead is in the queue's lead list, its own id never a hit against itself
-    assert [i.entry_id for i in before.leads] == [other]
-    assert before.leads[0].source == "claims" and before.leads[0].measures.basis == "live"
+    assert all(
+        i.measures.broad_prior_hits == i.measures.prior_hits - i.measures.narrow_prior_hits
+        for i in before.items
+    )
+    assert all("broad-prior-hits" in i.flags for i in sharing_work if i.measures.broad_prior_hits)
+    # the open lead is listed in `leads` (its candidate hidden here), never a hit against itself
+    hidden = lead_queue(project, recorded="hide", **KNOBS)  # type: ignore[arg-type]
+    assert [i.entry_id for i in hidden.leads] == [other]
+    assert hidden.leads[0].source == "claims" and hidden.leads[0].measures.basis == "live"
+    assert claim.candidate_id not in {i.entry_id for i in hidden.items}
     left = lead_queue(project, exclude_prior=True, **KNOBS)  # type: ignore[arg-type]
     assert challenge.candidate_id in {e.candidate_id for e in left.excluded}
     assert challenge.candidate_id not in {i.entry_id for i in left.items}
@@ -167,7 +168,7 @@ def test_a_lead_citing_a_superseded_row_is_flagged_by_m9_and_sorted_last(
     )
     live_claim = next(c for c in fresh.candidates if new in {t.ref for t in c.triggers})
     live_lead = _record(project, live_claim)
-    queue = lead_queue(project, candidates=fresh, **KNOBS)  # type: ignore[arg-type]
+    queue = lead_queue(project, candidates=fresh, recorded="hide", **KNOBS)  # type: ignore[arg-type]
     by_lead = {i.entry_id: i for i in queue.leads}
     assert by_lead[stale_lead].measures.basis == "superseded"
     assert (
@@ -240,3 +241,76 @@ def test_recording_a_lead_emits_no_warning(
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         _record(project, first["technique-combination"])
+
+
+def test_a_work_shared_with_a_promoted_lead_keeps_the_rank_of_the_candidate(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    """J4 friction 1: after a lead is decided, a candidate sharing only a work with it is a broad
+    hit; the default order of the other candidates is the same with and without that lead."""
+    engine_world(project, agent, human, world)
+    first = _first_of_each(project)
+    before = lead_queue(project, **KNOBS)  # type: ignore[arg-type]
+    parked = _record(project, first["technique-challenge"])
+    decide_lead(project, human, parked, "park")
+    after = lead_queue(project, **KNOBS)  # type: ignore[arg-type]
+    cid = first["technique-challenge"].candidate_id
+    broad_only = [
+        i
+        for i in after.items
+        if i.entry_id != cid and i.measures.broad_prior_hits and not i.measures.narrow_prior_hits
+    ]
+    assert broad_only, "the world must have a candidate sharing only a work"
+    assert all(i.measures.prior_hits == i.measures.broad_prior_hits for i in broad_only)
+    rank_before = {i.entry_id: i.rank for i in before.items}
+    clean = {i.entry_id for i in after.items if i.measures.narrow_prior_hits == 0} - {cid}
+    others_before = [i.entry_id for i in before.items if i.entry_id in clean]
+    others_after = [i.entry_id for i in after.items if i.entry_id in clean]
+    assert others_before == others_after  # a shared work alone reorders nothing
+    assert all(rank_before[i.entry_id] > 0 for i in broad_only)
+
+
+def test_a_candidate_already_cited_by_a_lead_is_linked_sorted_after_or_hidden(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    first = _first_of_each(project)
+    plain = lead_queue(project, **KNOBS)  # type: ignore[arg-type]
+    assert all(i.recorded_as is None for i in plain.items)
+    combo = first["technique-combination"]
+    open_lead = _record(project, combo)
+    parked_lead = _record(project, first["technique-challenge"])
+    decide_lead(project, human, parked_lead, "park")
+    after = lead_queue(project, **KNOBS)  # type: ignore[arg-type]
+    by_id = {i.entry_id: i for i in after.items}
+    assert by_id[combo.candidate_id].recorded_as is not None
+    assert by_id[combo.candidate_id].recorded_as.lead_id == open_lead  # type: ignore[union-attr]
+    assert by_id[combo.candidate_id].recorded_as.state == "open"  # type: ignore[union-attr]
+    parked = by_id[first["technique-challenge"].candidate_id].recorded_as
+    assert parked is not None and (parked.lead_id, parked.state) == (parked_lead, "parked")
+    flags = [i.recorded_as is not None for i in after.items if i.measures.basis == "live"]
+    assert flags == sorted(flags)  # unrecorded first, recorded after
+    assert open_lead not in {i.entry_id for i in after.leads}  # linked: not listed a second time
+    assert after.parameters["recorded"] == "after" and "recorded_as" in after.order_rule
+    first_ = lead_queue(project, recorded="first", **KNOBS)  # type: ignore[arg-type]
+    flags = [i.recorded_as is None for i in first_.items if i.measures.basis == "live"]
+    assert flags == sorted(flags)
+    hidden = lead_queue(project, recorded="hide", **KNOBS)  # type: ignore[arg-type]
+    assert combo.candidate_id not in {i.entry_id for i in hidden.items}
+    assert open_lead in {i.entry_id for i in hidden.leads}  # candidate hidden: lead listed
+    with pytest.raises(FactoryValidationError) as caught:
+        lead_queue(project, recorded="nope", **KNOBS)  # type: ignore[arg-type]
+    assert caught.value.issues[0].field == "recorded"
+    # half of the candidate's items is enough: a lead citing one of two items links the candidate
+    items = [t for t in combo.triggers if t.kind == "item"]
+    assert len(items) >= 2
+    half = record_lead(
+        project,
+        LEAD_AUTHOR,
+        LeadInput(text=LEAD_TEXT, triggers=(Trigger(kind=TriggerKind.ITEM, ref=items[0].ref),)),
+    )
+    linked = lead_queue(project, **KNOBS)  # type: ignore[arg-type]
+    assert next(i for i in linked.items if i.entry_id == combo.candidate_id).recorded_as is not None
+    assert half in {i.entry_id for i in linked.leads} or any(
+        i.recorded_as and i.recorded_as.lead_id == half for i in linked.items
+    )

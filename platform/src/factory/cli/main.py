@@ -7103,6 +7103,39 @@ _SOURCES_OPT = typer.Option(
 _PER_SOURCE_OPT = typer.Option("--per-source", help="Candidates kept per source (default 20).")
 _TECH_MIN_OPT = typer.Option("--technique-min-works", help="Works each approach needs (3).")
 _CO_WORKS_OPT = typer.Option("--max-co-works", help="Works that may already use both (0).")
+_FULL_OPT = typer.Option(
+    "--full", help="Table: print every quote and trigger (default is the compact view)."
+)
+_SHOW_OPT = typer.Option(
+    "--show", help="Print one candidate in full (all quotes and triggers) by candidate id."
+)
+
+
+def _engine_table(
+    result: BaseModel,
+    lines: Callable[[], list[str]],
+    format_: str,
+    show: str | None = None,
+) -> None:
+    """Print a lead-engine result: the table (compact unless `--full`, one candidate with
+    `--show`) or complete JSON (the one candidate with `--show`)."""
+    if format_ not in ("table", "json"):
+        raise typer.BadParameter("must be table or json", param_hint="--format")
+    try:
+        if format_ == "json" and show is not None:
+            from factory.cli.render import _find
+
+            items = getattr(result, "candidates", None) or getattr(result, "items", ())
+            picked = _find(items, show)
+            typer.echo(picked.model_dump_json(by_alias=True, indent=2))
+            return
+        if format_ == "json":
+            typer.echo(result.model_dump_json(by_alias=True, indent=2))
+            return
+        for line in lines():
+            typer.echo(line)
+    except ValueError as err:
+        raise typer.BadParameter(str(err), param_hint="--show") from err
 
 
 @leads_app.command("candidates")
@@ -7113,10 +7146,16 @@ def leads_candidates_cmd(
     layer: Annotated[str, _LAYER_OPT] = "core",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    top: Annotated[
+        int, typer.Option("--top", min=1, help="Candidates in the table (default 20).")
+    ] = 20,
+    full: Annotated[bool, _FULL_OPT] = False,
+    show: Annotated[str | None, _SHOW_OPT] = None,
     format_: Annotated[str, _FORMAT_OPT] = "table",
 ) -> None:
-    """Observations to check, with quotes and the triggers a lead would cite (exploratory,
-    read-only; records nothing)."""
+    """Observations to check (exploratory, read-only; records nothing). The table is compact:
+    a line per candidate and its first quote; `--full` prints every quote and trigger,
+    `--show <candidate_id>` one candidate in full; `--top` limits the table, JSON is complete."""
     state = _state(ctx)
     with _engine_errors():
         project = _resolve_project(state)
@@ -7129,7 +7168,12 @@ def leads_candidates_cmd(
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
         )
-    _technique_out(result, render.lead_candidates_lines, format_)
+    _engine_table(
+        result,
+        lambda: render.lead_candidates_lines(result, top=top, full=full, show=show),
+        format_,
+        show,
+    )
 
 
 @leads_app.command("queue")
@@ -7143,7 +7187,9 @@ def leads_queue_cmd(
         typer.Option(
             "--order-by",
             help="Comma list of measures in turn: support, independence, verification, "
-            "supportive_share, overlap, diversity, prior_hits, score, basis.",
+            "supportive_share, overlap, diversity, prior_hits, narrow_prior_hits, "
+            "broad_prior_hits, score, basis. Default: independence, support, narrow_prior_hits, "
+            "verification, diversity, score (a shared work alone never reorders).",
         ),
     ] = None,
     top: Annotated[int, typer.Option("--top", help="Entries shown (default 50).")] = 50,
@@ -7160,11 +7206,22 @@ def leads_queue_cmd(
     exclude_prior: Annotated[
         bool, typer.Option("--exclude-prior", help="Leave out candidates with a prior hit.")
     ] = False,
+    recorded: Annotated[
+        str,
+        typer.Option(
+            "--recorded",
+            help="A candidate already cited by a lead: after (default), first or hide.",
+        ),
+    ] = "after",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    full: Annotated[bool, _FULL_OPT] = False,
+    show: Annotated[str | None, _SHOW_OPT] = None,
     format_: Annotated[str, _FORMAT_OPT] = "table",
 ) -> None:
-    """Candidates and open leads ordered by computed measures (exploratory, read-only)."""
+    """Candidates and open leads ordered by computed measures (exploratory, read-only). The
+    table is compact (a line per entry, the first quote); `--full` prints every quote and
+    trigger, `--show <candidate_id>` one candidate in full; JSON is complete."""
     state = _state(ctx)
     with _engine_errors():
         project = _resolve_project(state)
@@ -7182,8 +7239,14 @@ def leads_queue_cmd(
             max_co_works=max_co_works,
             balance=balance,
             per_source_top=per_source_top,
+            recorded=recorded,
         )
-    _technique_out(result, render.lead_queue_lines, format_)
+    _engine_table(
+        result,
+        lambda: render.lead_queue_lines(result, full=full, show=show),
+        format_,
+        show,
+    )
 
 
 @leads_app.command("stats")

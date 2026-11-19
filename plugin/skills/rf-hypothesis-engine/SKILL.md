@@ -142,7 +142,7 @@ For each remaining candidate:
    cited rows whose quote you verified, then least overlap with promoted leads, then date. Show the
    components; an order is not a judgement of merit.
 2. Record each candidate the researcher wants kept with `lead_record` (`text`, `triggers`,
-   `framework`, and the usual `role`, `model`, `skill`). Read `prior` in the answer and say how
+   `framework` of at most 80 characters, and the usual `role`, `model`, `skill`). Read `prior` in the answer and say how
    the lead differs from each item in it, or withdraw the lead.
 3. The researcher promotes, parks or discards each lead with `factory leads` on the command line.
    `lead_decide` exists as a tool, but the platform refuses an agent unless the gate
@@ -189,6 +189,12 @@ hypothesis `statement`.
 
 From each promoted lead, and only from a promoted lead, call `hypothesis_draft` with a `spec`:
 
+- A lead from the claims digest or from a claims-limitation candidate is for discussion and
+  review. Draft it as a literature-direction hypothesis only if you can name a method for the
+  `treatment` and a method for the `baseline`; a trade-off or a divergence between measures has
+  no natural treatment and baseline, and inventing a pair (or a metric the evidence schema does
+  not hold) gives a hypothesis that can never resolve. Leave such a lead a lead. Combination,
+  challenge and gap leads name methods and can become hypotheses.
 - `kind` and `test`: the default is a literature window (`kind` `literature`, `test`
   `{kind: literature, window_start, sources}`, decision rule `literature-direction` with `n_min`
   and `q`). An `experiment` hypothesis is recorded in the project but tested elsewhere; use it
@@ -198,11 +204,17 @@ From each promoted lead, and only from a promoted lead, call `hypothesis_draft` 
   `prediction` with a margin stated before any result, `decision_rule` from the menu
   (`superiority`, `non-inferiority`, `literature-direction`), `lead` (the promoted lead id),
   `rationale`, and `supersedes` only for a draft of your own.
-- Read the falsifier sentence in the answer. If it does not say what you meant to risk, supersede
-  the draft; do not argue it away. Tell the researcher plainly that, in a project with no evidence-scope rows
-  naming the methods, a registered literature hypothesis cannot be evaluated: its evaluation is
-  `incomplete` (`method-unresolved`) until an evidence schema with a method name and comparability
-  keys exists. Where the evidence schema is missing, `conditions` must be `{}` and the methods are
+- Read the falsifier sentence in the answer. For a literature hypothesis the sentence the platform
+  prints does not name the methods, the margin or the direction of the metric: state all three in
+  the hypothesis `statement` (the two methods by name, the margin, and whether higher or lower is
+  better), so that the critic and the researcher read them. If the sentence does not say what you
+  meant to risk, supersede the draft; do not argue it away. The statement holds at most 600
+  characters: one or two short quotes with their anchors, the exploratory label and the claim.
+  Tell the researcher plainly that, in a project with no evidence-scope rows naming the methods,
+  a registered literature hypothesis cannot be evaluated: its evaluation is `incomplete` with the
+  flags `cutoff-unknown`, `insufficient-evidence` and `method-unresolved`, and
+  `evaluate_hypothesis` runs only with `request_incomplete`, until an evidence schema with a
+  method name and comparability keys exists. Where the evidence schema is missing, `conditions` must be `{}` and the methods are
   given by `name`; a method given as a card must be a method card, and a `row_key` a final
   evidence row.
 - Technique counts are never the evidence of a hypothesis.
@@ -249,31 +261,46 @@ were used.
 
 Three read-only tools do the bookkeeping of steps 1, 2, 4, 5 and 10 (the platform computes; you
 judge). Each reply starts with the exploratory notice, is refused to a session that has joined a
-pass, and shows at most 40 candidates (30 queue entries) with at most 6 quotes each; `reply_cap`
-says what was left out. None of them records anything.
+pass, and shows at most 40 candidates (30 queue entries); every cited row keeps its quote (a
+combination cites up to 10 rows), and only the text of a long quote is cut (marked `[cut]`);
+`reply_cap` says what was left out. None of them records anything.
 
 1. Ask the researcher for the knobs and state the defaults: `sources` (any of
    `technique-challenge`, `technique-combination`, `technique-gap`, `claims-limitation`; default
    all), `layer` (default `core`), `technique_min_works` (3) and `max_co_works` (0) for
    combinations and gaps, `order_by` (a list of measures: `support`, `independence`,
-   `verification`, `supportive_share`, `overlap`, `diversity`, `prior_hits`, `score`, `basis`;
-   default `prior_hits`, `independence`, `support`, `verification`, `diversity`, `score`), `top`,
-   `exclude_prior`, and `balance` (default true: the top is shared across the sources in play, so
+   `verification`, `supportive_share`, `overlap`, `diversity`, `prior_hits`, `narrow_prior_hits`,
+   `broad_prior_hits`, `score`, `basis`; default `independence`, `support`, `narrow_prior_hits`,
+   `verification`, `diversity`, `score`), `top`, `exclude_prior`, `recorded` (`after` by default,
+   `first` or `hide`; see below), and `balance` (default true: the top is shared across the sources in play, so
    the many combinations do not crowd out challenges, gaps and limitations; `per_source_top` sets
    the share; `balance=false` is the plain global order).
 2. Call `lead_queue` with those knobs (`lead_candidates` shows the same candidates unordered, to
    see everything one source produced). Show the researcher the ordered list as the tool returned
    it: for each entry the source, the observation, the measures (support, independence, verified
    quotes over total, diversity, overlap, score and its flag), every prior hit with what it shares
-   (an `item` shared is narrow; a shared work only is broad), the flags (`basis-stale` and the
-   like sort last and are reported, never hidden), and the quotes with anchors. Say that the order
+   (an `item` shared is narrow; a shared work only is broad: `broad_prior_hits` is shown and, by
+   default, orders nothing, because in a corpus where the same works recur two observations that
+   share a work say little about each other), the flags (`basis-stale` and the
+   like sort last and are reported, never hidden), and the quotes with anchors: every cited row
+   has its quote, with its `side` (for a combination the approach each quote supports),
+   `described_as` (what the row calls the approach) and the miner's `evidence` class beside it.
+   A challenge carries the flag `failure-quote-not-checked`: the platform cannot tell whether the
+   `failed` quote states a failure (the label is the pass-A evidence class, not the quote's
+   content), so read it and drop the candidate if it states a method and no failure. A gap
+   candidate is one per approach with `target_stages` listing every stage no user of it has a row
+   at (never `other`). A candidate that an open or decided lead already cites (the same `item`s, or
+   at least half of them) carries `recorded_as` (`lead_id`, `state`) and sorts after the unrecorded
+   ones; the open lead is then not listed a second time in `leads`. Do not record it again: say
+   which lead it is. Say that the order
    is a printed rule over computed measures, comparable only within this call, and not a verdict.
 3. The researcher picks (HUMAN DECISION POINT H5). Read each picked quote yourself (`chat_verify`
    and `document_read`) before you rely on it.
 4. For each pick call `lead_record` with the candidate's `triggers` exactly as returned (`item` and
    `work`, at most 20; never edit, add or retype one, and never use `row` for a miner row), a
    `text` of at most 600 characters that names the source and says it is exploratory, and the
-   knobs used in `framework`. Read `prior` in the answer and say how the lead differs from each
+   knobs used in `framework`: at most 80 characters (a longer value is refused by `LeadInput`
+   before the service runs; shorten it, for example `layer core; min_works 3; balanced`). Read `prior` in the answer and say how the lead differs from each
    item, or withdraw it.
 5. The critic sees the hypothesis statement and, for each trigger, the verbatim quote of an
    `item` row (a technique or m-claims row), but never the lead text (R-51). Put the exploratory
@@ -285,7 +312,13 @@ says what was left out. None of them records anything.
    recorded and decided, promotion share as a use figure, discard reasons, hypotheses drafted,
    reviews, registrations, oldest undecided).
 
-If a tool is refused or absent, report that verbatim. The by-hand route is: steps 1 and 2 with
+The command line shows the same tools compactly: `factory leads candidates|queue|stats` print a
+line per entry (at most 110 characters wide, the first quote cut at 160 characters, `--top` 20 for
+candidates); `--full` prints every quote and trigger, `--show <candidate_id>` one candidate in
+full, `--format json` is complete. Tell the researcher which view you are reading from.
+
+If a tool is refused or absent, report that verbatim. A `framework` over 80 characters is refused
+as a validation error naming the field; shorten it and record again. The by-hand route is: steps 1 and 2 with
 `technique_*`, `claims_digest`, `corpus_search` and `chat_verify`; step 4 with `lead_list`,
 `hypothesis_list` and two `corpus_search` calls; step 5 with a hand order; step 10 counted from
 `lead_list` and `hypothesis_list` and said to be counted by hand.

@@ -7,10 +7,18 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from factory.cli import render
 from factory.cli.main import app
 from factory.config import Settings
 from factory.events.envelope import Actor
-from factory.model.lead_engine import SOURCES
+from factory.model.lead_engine import (
+    SOURCES,
+    Candidate,
+    CandidateQuote,
+    Candidates,
+    CandidateTrigger,
+    CandidateWork,
+)
 from factory.services.context import Project
 from factory.services.lead_candidates import lead_candidates
 from factory.services.lead_queue import lead_queue
@@ -113,3 +121,83 @@ def test_bad_options_are_refused_and_there_is_no_recording_command(
         assert code != 0 and "EXPLORATORY" in err, args
     code, _, _ = _run(settings.root, "record")
     assert code != 0
+
+
+def test_the_table_is_compact_and_full_and_show_print_everything(
+    settings: Settings, project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    for args in (("candidates",), ("queue",), ("stats",)):
+        extra = KNOBS if args[0] != "stats" else ()
+        code, out, err = _run(settings.root, *args, *extra)
+        assert code == 0, err
+        assert out.startswith("EXPLORATORY:")
+        assert max(len(line) for line in out.splitlines()) <= render.WIDTH, args
+        if args[0] != "stats":
+            assert "--full" in out and "--show" in out
+            assert "triggers:" not in out  # the compact view lists no trigger ids
+    code, full, err = _run(settings.root, "candidates", "--full", *KNOBS)
+    assert code == 0 and "triggers:" in full and "quote " in full, err
+    want = lead_candidates(project, layer="all", technique_min_works=1).candidates
+    assert len(want) > 1
+    code, one, err = _run(settings.root, "candidates", "--top", "1", *KNOBS)
+    assert code == 0, err
+    rows = [ln for ln in one.splitlines() if ln.startswith(" 1 ") or ln.startswith(" 2 ")]
+    assert len(rows) == 1 and rows[0].startswith(" 1 ")
+    combo = next(c for c in want if c.source == "technique-combination")
+    for cmd in ("candidates", "queue"):
+        code, shown, err = _run(settings.root, cmd, "--show", combo.candidate_id, *KNOBS)
+        assert code == 0, err
+        assert shown.startswith("EXPLORATORY:") and "triggers:" in shown
+        assert shown.count("  quote ") == len(combo.quotes) and "side=" in shown
+        assert all(t.ref in shown for t in combo.triggers)
+        code, _, err = _run(settings.root, cmd, "--show", "technique-gap:nope", *KNOBS)
+        assert code != 0
+        code, js, err = _run(
+            settings.root, cmd, "--show", combo.candidate_id, "--format", "json", *KNOBS
+        )
+        assert code == 0 and combo.candidate_id in js, err
+    code, rec, err = _run(settings.root, "queue", "--recorded", "hide", "--format", "json", *KNOBS)
+    assert code == 0 and json.loads(rec)["parameters"]["recorded"] == "hide", err
+    code, _, err = _run(settings.root, "queue", "--recorded", "nope", *KNOBS)
+    assert code != 0 and "EXPLORATORY" in err
+
+
+def test_a_long_quote_is_cut_at_160_characters_and_no_line_exceeds_the_width() -> None:
+    long = "word " * 200
+    c = Candidate(
+        candidate_id="technique-combination:a+b",
+        source="technique-combination",
+        observation="obs " * 80,
+        approaches=("a", "b"),
+        works=(CandidateWork(work_id="w1", title="T"),),
+        works_total=1,
+        quotes=(
+            CandidateQuote(
+                role="a", work_id="w1", extraction_id="ext_1", quote=long, anchor="s1", side="a"
+            ),
+            CandidateQuote(
+                role="b", work_id="w1", extraction_id="ext_2", quote="second", anchor="s1"
+            ),
+        ),
+        triggers=(CandidateTrigger(kind="item", ref="ext_1"),),
+        basis=(),
+        miners=("m v1",),
+        flags=("x" * 300,),
+    )
+    result = Candidates(
+        parameters={"sources": SOURCES},
+        totals={"technique-combination": 1},
+        candidates=(c,),
+    )
+    lines = render.lead_candidates_lines(result)
+    assert all(len(line) <= render.WIDTH for line in lines)
+    quote_text = "".join(
+        ln.strip() for ln in lines if ln.startswith("    ") or ln.startswith("      ")
+    )
+    assert "…" in quote_text and "second" not in quote_text  # first quote only, cut
+    shown = [ln for ln in lines if "word" in ln]
+    assert sum(len(ln.replace("word", "").strip()) for ln in shown) < 160 + 40
+    assert "obs " * 80 not in "\n".join(lines)
+    full = render.lead_candidates_lines(result, full=True)
+    assert any("second" in ln for ln in full) and any(len(ln) > render.WIDTH for ln in full)

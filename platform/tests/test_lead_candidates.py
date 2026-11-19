@@ -12,7 +12,8 @@ from factory.model.lead_engine import SOURCES, Candidate
 from factory.model.screening import PassLabel
 from factory.services.context import Project
 from factory.services.extraction import live_rows
-from factory.services.lead_candidates import lead_candidates
+from factory.services.lead_candidates import lead_candidates, technique_candidates
+from factory.services.technique_graph import Inputs, RawRow, StageInfo, WorkMeta
 from tests.claims_helpers import QUOTES
 from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.lead_engine_helpers import QUOTE, engine_world
@@ -75,9 +76,11 @@ def test_combination_gap_and_claims_candidates(
     assert pair.overlap_works == 0 and pair.score is not None
     assert "technique-combination:ide-01+ide-02" not in combos  # W1 uses both: co-used
     gaps = {c.candidate_id: c for c in found["technique-gap"]}
-    gap = gaps["technique-gap:ide-03:ideation>experiment"]
+    gap = gaps["technique-gap:ide-03"]
     assert gap.works_total == 1 and gap.overlap_works == 0 and gap.score is not None
     assert [w.work_id for w in gap.works] == [ordered[1]]
+    assert gap.target_stages == ("experiment",) and gap.quotes[0].side == "ide-03"
+    assert all(":" not in c.candidate_id.split(":", 1)[1] for c in gaps.values())
     claims = found["claims-limitation"]
     assert [c.quotes[0].quote for c in claims] == [QUOTES[0], QUOTES[1]]
     assert all(c.source == "claims-limitation" and len(c.triggers) == 2 for c in claims)
@@ -155,3 +158,86 @@ def test_a_claim_without_a_stored_quote_is_shown_flagged_and_never_quotes_its_va
     bare = by_id["claims-limitation:ext_1"]
     assert bare.quotes[0].quote is None and bare.flags == ("no-stored-quote",)
     assert by_id["claims-limitation:ext_2"].flags == ()
+
+
+STAGE_LIST = ("ideation", "experiment", "analysis", "other")
+CATALOGUE = {
+    "ide-a": ("ideation", "Idea A", "Defn."),
+    "ide-b": ("ideation", "Idea B", "Defn."),
+    "exp-a": ("experiment", "Exp A", "Defn."),
+    "exp-b": ("experiment", "Exp B", "Defn."),
+}
+
+
+def _row(work: str, approach: str, evidence: str, n: int = 0) -> RawRow:
+    return RawRow(
+        approach=approach,
+        stage=CATALOGUE[approach][0],
+        work_id=work,
+        extraction_id=f"ext_{approach}_{work}_{n}",
+        status="core",
+        evidence=evidence,
+        described_as=f"{approach} as described in {work}",
+        quote=f"quote {approach} {work}",
+        anchor="s1.p1",
+        parameters=None,
+    )
+
+
+def _inputs(rows: list[RawRow]) -> Inputs:
+    works = sorted({r.work_id for r in rows})
+    return Inputs(
+        catalogue=CATALOGUE,
+        rows=tuple(rows),
+        stages=tuple(StageInfo(s, "m", 1, 0, None, None) for s in STAGE_LIST),
+        works={w: WorkMeta(f"Title {w}", "2024-01-01", 2024, "core") for w in works},
+        cites=(),
+    )
+
+
+def _technique(inputs: Inputs, sources: set[str]) -> tuple[list[Candidate], dict[str, int]]:
+    return technique_candidates(
+        inputs, sources=sources, per_source=50, layer="all", min_works=3, max_co_works=0
+    )
+
+
+def test_one_gap_candidate_per_approach_lists_every_target_stage_and_never_other() -> None:
+    rows = [_row(f"w{i}", "ide-a", "own-ablation") for i in range(3)]
+    rows += [_row(f"v{i}", "exp-a", "own-ablation") for i in range(3)]
+    found, totals = _technique(_inputs(rows), {"technique-gap"})
+    ids = [c.candidate_id for c in found]
+    assert ids == sorted(set(ids)) and set(ids) == {"technique-gap:ide-a", "technique-gap:exp-a"}
+    assert totals == {"technique-gap": 2}
+    by_id = {c.candidate_id: c for c in found}
+    assert by_id["technique-gap:ide-a"].target_stages == ("analysis", "experiment")
+    assert by_id["technique-gap:exp-a"].target_stages == ("analysis", "ideation")
+    for c in found:
+        assert "other" not in c.target_stages and "other" not in c.observation.split("row at")[-1]
+        assert c.approaches and c.triggers
+
+
+def test_a_candidate_quotes_every_cited_row_with_side_description_and_evidence() -> None:
+    rows = [_row(f"a{i}", "ide-a", "own-ablation") for i in range(7)]
+    rows += [_row(f"b{i}", "exp-a", "independent-test") for i in range(7)]
+    found, _ = _technique(_inputs(rows), {"technique-combination"})
+    [combo] = [c for c in found if c.candidate_id == "technique-combination:exp-a+ide-a"]
+    items = [t for t in combo.triggers if t.kind == "item"]
+    assert len(items) == 10 and len(combo.quotes) == 10  # a quote for every cited row
+    assert {q.extraction_id for q in combo.quotes} == {t.ref for t in items}
+    assert {(q.role, q.side) for q in combo.quotes} == {("a", "exp-a"), ("b", "ide-a")} or {
+        (q.role, q.side) for q in combo.quotes
+    } == {("a", "ide-a"), ("b", "exp-a")}
+    for q in combo.quotes:
+        assert q.described_as and q.described_as.startswith(q.side or "?")
+        assert q.evidence in {"own-ablation", "independent-test"} and q.quote
+
+
+def test_a_challenge_flags_that_its_failure_quote_was_not_checked() -> None:
+    rows = [_row("w0", "ide-a", "reported-failure")]
+    rows += [_row(f"w{i}", "ide-a", "own-ablation") for i in range(1, 4)]
+    found, _ = _technique(_inputs(rows), {"technique-challenge"})
+    [challenge] = found
+    assert "failure-quote-not-checked" in challenge.flags
+    failed = next(q for q in challenge.quotes if q.role == "failed")
+    assert failed.evidence == "reported-failure" and failed.described_as
+    assert failed.side == "ide-a"

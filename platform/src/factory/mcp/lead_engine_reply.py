@@ -1,9 +1,11 @@
 """Bounds on the reply of the lead engine tools (`lead_candidates`, `lead_queue`).
 
 Invariants: pure functions over the JSON of a service result; nothing is recomputed and no figure
-is changed, only whole entries and quotes beyond a stated cap are left out, and the cut is named
-in `reply_cap` so the reader never takes a bounded reply for the whole. A candidate is cut as a
-unit: its `triggers` are never shortened.
+is changed, only whole entries beyond a stated cap are left out, and the cut is named in
+`reply_cap` so the reader never takes a bounded reply for the whole. A candidate is cut as a
+unit: its `triggers` are never shortened and every cited row keeps its quote (a combination
+cites up to ten rows); the text of a quote is cut, marked `[cut]`, to fit a per-candidate
+character budget, never the row.
 """
 
 from __future__ import annotations
@@ -13,20 +15,29 @@ from typing import Any
 
 MAX_CANDIDATES = 40
 MAX_QUEUE_ITEMS = 30
-MAX_QUOTES = 6
 MAX_QUOTE_CHARS = 600
+QUOTE_CHARS_BUDGET = 3600
+MIN_QUOTE_CHARS = 150
+
+
+def quote_chars(rows: int) -> int:
+    """Characters one quote may show when a candidate cites `rows` rows: the budget divided by
+    the rows, at least `MIN_QUOTE_CHARS`, at most `MAX_QUOTE_CHARS`."""
+    return max(MIN_QUOTE_CHARS, min(MAX_QUOTE_CHARS, QUOTE_CHARS_BUDGET // max(1, rows)))
 
 
 def _trim_candidate(candidate: dict[str, Any]) -> int:
-    """Keep at most `MAX_QUOTES` quotes of one candidate, each at most `MAX_QUOTE_CHARS`
-    characters (marked when cut); return the number of quotes left out."""
+    """Keep the quote of every cited row, each cut to `quote_chars` characters (marked
+    `[cut]`); return the number of quotes whose text was cut."""
     quotes = candidate.get("quotes") or []
-    cut = max(0, len(quotes) - MAX_QUOTES)
+    limit = quote_chars(len(quotes))
     kept: list[dict[str, Any]] = []
-    for q in quotes[:MAX_QUOTES]:
+    cut = 0
+    for q in quotes:
         text = q.get("quote") or ""
-        if len(text) > MAX_QUOTE_CHARS:
-            q = {**q, "quote": text[:MAX_QUOTE_CHARS] + " [cut]"}
+        if len(text) > limit:
+            q = {**q, "quote": text[:limit] + " [cut]"}
+            cut += 1
         kept.append(q)
     candidate["quotes"] = kept
     return cut
@@ -81,16 +92,19 @@ def _cap(
 ) -> dict[str, Any]:
     return {
         "max_" + unit: limit,
-        "max_quotes_per_candidate": MAX_QUOTES,
+        "quotes_per_candidate": "every cited row keeps its quote; only the text is cut",
         "max_quote_chars": MAX_QUOTE_CHARS,
+        "quote_chars_budget_per_candidate": QUOTE_CHARS_BUDGET,
         "shown": shown,
         "of": total,
-        "quotes_left_out": quotes_cut,
+        "quotes_cut_in_text": quotes_cut,
         "truncated": shown < total or quotes_cut > 0,
         "sources_trimmed": trimmed,
         "note": (
-            f"the reply shows at most {limit} {unit} and {MAX_QUOTES} quotes per candidate; "
-            "narrow with sources, layer, top or per_source to see others"
+            f"the reply shows at most {limit} {unit}; every cited row keeps its quote, each "
+            f"cut (marked [cut]) to fit {QUOTE_CHARS_BUDGET} characters per candidate "
+            f"(at most {MAX_QUOTE_CHARS} each); narrow with sources, layer, top or per_source "
+            "to see others"
         ),
     }
 

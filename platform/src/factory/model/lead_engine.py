@@ -26,6 +26,7 @@ __all__ = [
     "MAX_TRIGGERS_PER_CANDIDATE",
     "MEASURES",
     "NOTICE",
+    "RECORDED",
     "SOURCES",
     "BasisRow",
     "Candidate",
@@ -39,6 +40,7 @@ __all__ = [
     "PriorHit",
     "Queue",
     "QueueItem",
+    "RecordedAs",
     "Skipped",
     "Verification",
 ]
@@ -66,14 +68,31 @@ MEASURES = (
     "overlap",
     "diversity",
     "prior_hits",
+    "narrow_prior_hits",
+    "broad_prior_hits",
     "score",
     "basis",
 )
 """The measures an order may name: M1 support, M2 independence, M3 verification, M4 supportive
-share, M5 overlap, M6 diversity, M7 prior hits, M8 score, M9 basis (live rows first)."""
-DEFAULT_ORDER = ("prior_hits", "independence", "support", "verification", "diversity", "score")
-"""Fewest prior hits first, then most independent works, most supporting works, highest share of
-verified quotes, most different from the promoted leads, highest source score; ties by id."""
+share, M5 overlap, M6 diversity, M7 prior hits (`prior_hits`: closed direction, narrow, then all;
+`narrow_prior_hits`: closed direction, then narrow only; `broad_prior_hits`: work-only hits), M8
+score, M9 basis (live rows first)."""
+DEFAULT_ORDER = (
+    "independence",
+    "support",
+    "narrow_prior_hits",
+    "verification",
+    "diversity",
+    "score",
+)
+"""Most independent works, most supporting works, then the entries without a narrow prior hit (a
+shared `item`, the same approach pair or a closed direction; fewest first), highest share of
+verified quotes, most different from the promoted leads, highest source score; ties by id. A broad
+hit (a shared work only) never reorders by default: in a corpus where the same works recur, two
+observations sharing a work say little about each other."""
+RECORDED = ("after", "first", "hide")
+"""Where a candidate already cited by an open or decided lead goes: after the unrecorded ones
+(default), first, or out of `items`."""
 BASIS_STATES = ("live", "stale", "superseded", "unknown")
 
 
@@ -98,13 +117,19 @@ class CandidateWork(StrictModel):
 
 class CandidateQuote(StrictModel):
     """A verbatim quote of a cited row with its anchor; `role` names the side it supports
-    (`failed`, `supported`, `a`, `b`, `from-stage`, `limitation`)."""
+    (`failed`, `supported`, `a`, `b`, `from-stage`, `limitation`). `side` is the approach id the
+    quote supports (what `a` and `b` stand for in a combination); `described_as` is what the row
+    says the approach is called and `evidence` the miner's evidence class of the row (a class,
+    not what the quote says)."""
 
     role: str
     work_id: str
     extraction_id: str
     quote: str | None
     anchor: str | None
+    side: str | None = None
+    described_as: str | None = None
+    evidence: str | None = None
 
 
 class BasisRow(StrictModel):
@@ -120,9 +145,12 @@ class Candidate(_Labelled):
     ten); `works_total` is every work the observation counts. `triggers` are exactly what a lead
     recorded from it would cite (at most 20); `trigger_note` states a cut. `overlap_works` counts
     corpus works whose rows already state the observed combination (None for claims); `score` is
-    the technique rank composite where it exists (None for challenges and claims). `flags` names
-    a defect of a cited row: `no-stored-quote` (the row stored no quote; the quote is None, never
-    the field value, and the row counts as unverified)."""
+    the technique rank composite where it exists (None for challenges and claims). A gap candidate
+    is one per approach and `target_stages` lists every stage no user of it has a row at (never
+    `other`). `flags` names a defect of a cited row or a caution:
+    `failure-quote-not-checked` (a challenge: the platform cannot tell whether the `failed` quote
+    states a failure; the session must read it); `no-stored-quote` (the row stored no quote; the
+    quote is None, never the field value, and the row counts as unverified)."""
 
     candidate_id: str
     source: Source
@@ -134,6 +162,7 @@ class Candidate(_Labelled):
     triggers: tuple[CandidateTrigger, ...]
     basis: tuple[BasisRow, ...]
     trigger_note: str | None = None
+    target_stages: tuple[str, ...] = ()
     miners: tuple[str, ...]
     overlap_works: int | None = None
     score: float | None = None
@@ -195,15 +224,25 @@ class Measures(StrictModel):
     diversity_vs: str | None
     prior_hits: int
     narrow_prior_hits: int
+    broad_prior_hits: int = 0
     closed_direction_hit: bool
     score: float
     score_flag: str | None
     basis: Literal["live", "stale", "superseded", "unknown"]
 
 
+class RecordedAs(StrictModel):
+    """The open or decided lead that already cites a candidate's triggers (the same `item` set,
+    or at least half of the candidate's `item` triggers)."""
+
+    lead_id: str
+    state: str
+
+
 class QueueItem(_Labelled):
     """A candidate or an open lead with its measures. `rank` is 1-based within `Queue.items` or
-    `Queue.leads`. A candidate whose rows are not all live is flagged and sorted last."""
+    `Queue.leads`. A candidate whose rows are not all live is flagged and sorted last. A
+    candidate already cited by a lead carries `recorded_as`."""
 
     kind: Literal["candidate", "lead"]
     entry_id: str
@@ -214,6 +253,7 @@ class QueueItem(_Labelled):
     flags: tuple[str, ...]
     stale_refs: tuple[str, ...] = ()
     candidate: Candidate | None = None
+    recorded_as: RecordedAs | None = None
 
 
 class Queue(_Labelled):
