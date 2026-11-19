@@ -548,10 +548,9 @@ def test_a_failed_payload_deletes_its_stale_files_and_the_pages_that_need_it(
     assert all(f"removed stale {r}" in hb.format_report(again) for r in again.removed)
 
 
-def test_the_seven_ported_pages_have_registered_stub_builders(world: Project) -> None:
+def test_the_seven_ported_pages_have_registered_builders(world: Project) -> None:
+    """Each new page has its own payload module; its content is tested in tests/test_hub_<page>.py."""
     for name in NEW_PAGES:
         assert name in hb.BUILDERS
-        assert name in hub_ui.PAGES and hub_ui.PAGES[name].payloads == ("shell", name)
+        assert name in hub_ui.PAGES and hub_ui.PAGES[name].payloads[:2] == ("shell", name)
         assert hb.BUILDERS[name].__module__ == f"factory.services.hub_{name}"
-        if name != "protocol":  # the protocol page is ported: tests/test_hub_protocol.py
-            assert hb.BUILDERS[name](hb.HubContext(world)) == {"methods": {}, "ready": False}
