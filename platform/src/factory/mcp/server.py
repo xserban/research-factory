@@ -190,6 +190,7 @@ from factory.services import selection as selection_service
 from factory.services import shared_mining as shared_mining_service
 from factory.services import sheets as sheets_service
 from factory.services import snowball as snowball_service
+from factory.services import spar_v2 as spar_v2_service
 from factory.services import tasks as tasks_service
 from factory.services import taxonomies as taxonomies_service
 from factory.services import taxonomy_agreement as taxonomy_agreement_service
@@ -6245,6 +6246,7 @@ def build_server(
                 tier1_cap=tier1_cap,
                 supersedes=supersedes,
                 request_id=request_id,
+                run_id=unit_cap.run_id,
             )
             view = sheets_service.view_sheet(opened, payload.sheet_id)
             return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
@@ -6290,7 +6292,9 @@ def build_server(
                     ("claim_row_key",),
                 )
             ]
-            recorded = sheets_service.record_arguments(opened, actor, sheet_id, parsed)
+            recorded = sheets_service.record_arguments(
+                opened, actor, sheet_id, parsed, run_id=unit_cap.run_id
+            )
             data: dict[str, JsonValue] = {"recorded": [r.model_dump(mode="json") for r in recorded]}
             return _withheld(opened, data, include_work_ids=False)
 
@@ -6316,7 +6320,7 @@ def build_server(
             _refuse_pass_session(opened)
             actor = make_agent_actor(settings, session, role, model, skill)
             payload = sheets_service.close_section(
-                opened, actor, sheet_id, section, request_id=request_id
+                opened, actor, sheet_id, section, request_id=request_id, run_id=unit_cap.run_id
             )
             data: dict[str, JsonValue] = {"closed": payload.model_dump(mode="json")}
             return _withheld(opened, data, include_work_ids=False)
@@ -6480,6 +6484,147 @@ def build_server(
             return _withheld(opened, _plain(asdict(info)), include_work_ids=False)
 
         return _reply(project, viewing, include_work_ids=False)
+
+    @server.tool()
+    def spar_role_next(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """Serve the assignment of this headless role run of the agentic spar (v2): the request's
+        `hypothesis`, `mode` and `selection`, your `role` (search, read, against, for, critic or
+        cover), the paper to read (`work_id`, readers only), the `sheet_id` once the searcher has
+        opened it, the tier-1 papers (`tier1`), the papers no source proposed (`unproposed`, cover
+        only) and the session budget. The platform derives the request from the run: pass no
+        request id to any tool. One unit per run: a second call is refused with `cap-reached`.
+        Refused (field `run`) to a session that is not an open role run. Refused to a session that
+        has joined a pass."""
+
+        def serve() -> JsonValue:
+            with unit_cap.serving() as done:
+                opened = open_project(settings, project, session=session, clock=clock)
+                _refuse_pass_session(opened)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                task = spar_v2_service.serve_task(opened, actor, unit_cap.run_id)
+                served: dict[str, JsonValue] = {"task": _plain(asdict(task))}
+                done(served)
+            return _withheld(opened, served, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def spar_reading_record(
+        project: str,
+        work_id: str,
+        items: list[dict[str, JsonValue]],
+        sections_read: list[str],
+        role: str,
+        model: str,
+        skill: str,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the reading of the paper this reader run was assigned (all or none). Each item
+        is `{anchor, quote, stance, why}`: a passage relevant to the hypothesis, `stance` against,
+        for or neither (your proposal, not a rating), `why` at most 600 characters. Every quote is
+        verified against the anchor of the pinned conversion; an unverified one refuses the whole
+        call with located issues (`items[1].quote`). `sections_read` lists the section anchors
+        (`chat_sections`) you read; the platform computes how many of the paper's sections that is.
+        An empty `items` is valid: the paper was read and holds nothing relevant. Refused (field
+        `run`) to a session that is not the open reader run of this paper. Refused to a session that
+        has joined a pass."""
+
+        def recording() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                spar_v2_service.ReadingInput(
+                    fields["anchor"], fields["quote"], fields["stance"], fields["why"]
+                )
+                for fields in _chat_items(items, "items", ("anchor", "quote", "stance", "why"), ())
+            ]
+            payload = spar_v2_service.record_reading(
+                opened, actor, unit_cap.run_id, work_id, parsed, sections_read, note
+            )
+            data: dict[str, JsonValue] = {"recorded": payload.model_dump(mode="json")}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, recording, include_work_ids=False)
+
+    @server.tool()
+    def spar_readings_view(project: str, request_id: str) -> dict[str, JsonValue]:
+        """What the readers of a v2 spar request recorded: the passages (work, anchor, quote,
+        proposed stance, why) and the readers table (per planned paper: read or not, sections read
+        of the total, passages by stance, all computed), plus the papers cut for the session budget.
+        Read-only. Refused to a session that has joined a pass."""
+
+        def viewing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            view = spar_v2_service.readings_view(opened, request_id)
+            return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, viewing, include_work_ids=False)
+
+    @server.tool()
+    def sheet_check(
+        project: str,
+        checks: list[dict[str, JsonValue]],
+        role: str,
+        model: str,
+        skill: str,
+    ) -> dict[str, JsonValue]:
+        """Record the critic's checks of arguments of this run's sheet (all or none). Each check is
+        `{argument_id, verdict, reason}`: `verdict` holds, overreaches or misread, after reading
+        the quote against its full paragraph (`document_read`). A check is not a rating: the
+        researcher rates. Refused (field `run`) to a session that is not the open critic run.
+        Refused to a session that has joined a pass."""
+
+        def checking() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            parsed = [
+                spar_v2_service.CheckInput(
+                    fields["argument_id"], fields["verdict"], fields["reason"]
+                )
+                for fields in _chat_items(
+                    checks, "checks", ("argument_id", "verdict", "reason"), ()
+                )
+            ]
+            recorded = spar_v2_service.record_checks(opened, actor, unit_cap.run_id, parsed)
+            data: dict[str, JsonValue] = {"recorded": [r.model_dump(mode="json") for r in recorded]}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, checking, include_work_ids=False)
+
+    @server.tool()
+    def spar_coverage_record(
+        project: str,
+        examined: list[str],
+        role: str,
+        model: str,
+        skill: str,
+        flagged: list[dict[str, JsonValue]] | None = None,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Record the coverage sweep over the papers no source proposed (`unproposed` of
+        `spar_role_next`): `examined` are the papers you looked at (digest rows, abstracts), and
+        `flagged` (`{work_id, reason}`) those that should have been read. The counts are computed.
+        Refused (field `run`) to a session that is not the open cover run. Refused to a session
+        that has joined a pass."""
+
+        def covering() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            marks = [
+                (f["work_id"], f["reason"])
+                for f in _chat_items(flagged or [], "flagged", ("work_id", "reason"), ())
+            ]
+            payload = spar_v2_service.record_coverage(
+                opened, actor, unit_cap.run_id, examined, marks, note
+            )
+            data: dict[str, JsonValue] = {"recorded": payload.model_dump(mode="json")}
+            return _withheld(opened, data, include_work_ids=False)
+
+        return _reply(project, covering, include_work_ids=False)
 
     return server
 
