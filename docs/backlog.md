@@ -970,3 +970,10 @@ Status: built, light review (diff read by the coordinator), merged into main 202
 **Why:** one non-English paper that stays `unsure` must not stop a whole round; a few percent of leftovers is an accepted error.
 **Rigour notes:** never silent: every tolerated work is listed in the event and the plan render; the tolerance is a hashed protocol section, so it is amended and versioned like any other rule.
 **Open questions:** whether the size should be the full-text promoted set rather than all ordinary works at full-text stages; whether tolerated works should appear in the PRISMA flow as "not completed".
+
+### IDEA-101 — Papers chat v2: a more agentic spar process
+Status: proposed (researcher, 2026-11-18, after the first spar; v1 accepted as is) · B
+**What:** replace the single-session spar of the `rf-chat` skill (read the claims digest, propose candidates, read the cited sections, write against then for) with a more agentic orchestration. For example, separate agents for searching, reading whole papers, arguing against and arguing for, a critic that checks each argument against its full paragraph, and a pass over papers no source proposed.
+**Why:** in the first spar (core layer, hypothesis "fully automated AI-scientist papers pass peer review at a top venue on their merits"), the researcher rated 14 of 21 arguments with the full paragraph and judged 13 sound and 1 weak. v1 is good enough to keep. Its limits were: one session wrote both sides; full texts were read only at the cited sections; 81 of 92 papers were never proposed; arguments were not linked to m-claims rows (the digest does not expose row keys); and the quote alone hid context until the paragraph was shown.
+**Rigour notes:** agent roles must stay independent where a result can feed a lead (the Prepare split); every argument keeps a verified quote and its paragraph; ratings remain human; coverage over unproposed papers is computed.
+**Open questions:** the orchestration (workflow vs skill with subagents); cost per spar; whether the critic's verdict is recorded as an event or kept as a note.
