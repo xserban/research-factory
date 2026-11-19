@@ -152,7 +152,7 @@ HUB.load(['shell', 'living']).then(d => {
       <div class="lv-form"><label>Link or identifier<input type="text" id="lvLink" size="34" placeholder="10.1000/xyz or arxiv.org/abs/…"${off}></label>
       <label>Note (optional)<input type="text" id="lvLinkNote" size="24"${off}></label>
       <button type="button" class="btn primary" id="lvLinkGo"${off}>Add to the inbox (as you)</button></div>
-      <div class="lv-msg" id="lvLinkMsg" aria-live="polite">${HUB.served ? '' : OFFNOTE}</div></section>`;
+      <div class="lv-msg" id="lvLinkMsg" aria-live="polite">${HUB.served ? '' : OFFNOTE}</div><p class="meta">The added paper appears in <a href="pipeline.html#tab=queue">Pipeline, Work queue</a> with its stage.</p></section>`;
   }
   function wireAddLink() {
     const go = main.querySelector('#lvLinkGo'); if (!go) return;
@@ -207,6 +207,14 @@ HUB.load(['shell', 'living']).then(d => {
       ${k(S.due ? 'Due now' : 'Not due', `Next window from ${dayOf(S.next_window_from)}`)}
       ${k(FEED.ranking_id ? `${fmt(FEED.total_shown)} of ${fmt(FEED.total_ranked)}` : 'none', FEED.ranking_id ? 'Shown of ranked' : 'No ranking yet')}
       ${k(`${fmt(FEED.config.shown_per_cycle)} · ${fmt(FEED.config.interval_days)} d`, 'Shown per cycle · interval')}</div>`;
+  }
+
+  /* Top shown titles (DB-34, FD-14): the best-ranked shown papers with their reaction and the last seven days of activity. */
+  function topShown() {
+    const top = (FEED.cards || []).slice(0, 10);
+    if (!top.length) return '';
+    return `<section class="card lv-card lv-sec"><h3 class="h3">Top shown titles ${H.info('The ten best-ranked papers of the latest ranking. Score is the ranker\u2019s own. Reactions 7d and Adds 7d count the reactions and the sends to the inbox recorded for the paper in the last seven days, as of the build.', 'About top shown titles')}</h3>
+      <div class="lv-scroll"><table class="lv-tbl"><tr><th>Title</th><th class="num">Score</th><th>Reaction</th><th>Sent</th><th class="num">Reactions 7d</th><th class="num">Adds 7d</th></tr>${top.map(c => `<tr><td><a href="https://arxiv.org/abs/${esc(c.entry_id)}" target="_blank" rel="noopener">${esc(c.title)}</a></td><td class="num">${c.score.toFixed(3)}</td><td>${c.reaction ? esc((RWORD[c.reaction] || c.reaction).toLowerCase()) : 'none'}</td><td>${c.sent ? 'yes' : 'no'}</td><td class="num">${fmt(c.reactions_7d || 0)}</td><td class="num">${fmt(c.adds_7d || 0)}</td></tr>`).join('')}</table></div></section>`;
   }
 
   const cardHtml = c => {
@@ -264,7 +272,7 @@ HUB.load(['shell', 'living']).then(d => {
       <label class="meta">Order <select id="lvOrder" aria-label="Order of the cards"><option value="rank"${st.order === 'rank' ? ' selected' : ''}>Rank</option><option value="new"${st.order === 'new' ? ' selected' : ''}>Date, newest first</option><option value="old"${st.order === 'old' ? ' selected' : ''}>Date, oldest first</option></select></label></div>` : '';
     const grid = cards.length || further.length ? `<div class="lv-cards ${st.layout}" id="lvCards">${cards.map(cardHtml).join('')}${further.map(cardHtml).join('')}</div>` : (FEED.configured ? '<div class="card lv-empty">The latest ranking shows no items.</div>' : '');
     const rest = further.length ? `<div class="lv-more"><button type="button" class="btn" id="lvMore">Show next ${Math.min(30, further.length)}</button> <span class="meta">${fmt(further.length)} ranked beyond the shown ones${FEED.cut ? `; the first ${fmt(FEED.cap)} are listed, ${fmt(FEED.cut)} more are not` : ''}. A reaction or add here is recorded as beyond the shown list.</span></div>` : '';
-    const body = bar + statusBlock() + tools + grid + rest + `<p class="meta" id="lvAddNote"></p>` + reactionViz() + addLinkBox() + settingsBlock();
+    const body = bar + statusBlock() + topShown() + tools + grid + rest + `<p class="meta" id="lvAddNote">Papers you add enter the work queue: see <a href="pipeline.html#tab=queue">Pipeline, Work queue</a>.</p>` + reactionViz() + addLinkBox() + settingsBlock();
     return { lead, info, body, draw: drawFeed };
   }
   function drawFeed() {

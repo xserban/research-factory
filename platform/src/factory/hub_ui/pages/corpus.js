@@ -114,7 +114,7 @@ const dnaHTML = w => `<span class="dna" data-dna="${esc(w.id)}">${SEGS.map(([k])
 const tipDNA = w => `<div style="font-weight:600;margin-bottom:4px">DNA</div>` + SEGS.map(([k, l]) => `<div style="font-size:12px"><span class="dot" style="background:${colorOf(k, sv(w, k))};margin-right:6px"></span>${l} · <b>${esc(segName(k, sv(w, k)))}</b></div>`).join('');
 
 /* ---------- state and URL hash ---------- */
-const ST = {view: 'list', grp: 'technique', sort: 'new', rev: false, q: '', cite: 0, ft: false, id: '', f: {}, sel: new Set(), fq: {}, all: {}, cur: -1, lnAll: false};
+const ST = {view: 'list', grp: 'technique', sort: 'new', rev: false, q: '', cite: 0, ft: false, id: '', f: {}, sel: new Set(), fq: {}, all: {}, cur: -1, lnAll: false, month: ''};
 const GD = new Set(['technique', 'stage', 'cites']);
 const VIEWS = [['list','List'],['timeline','Timeline'],['chrono','Chronology'],['lineage','Lineage'],['graph','Graph']];
 const SORTS = [['new','Date, newest first'],['old','Date, oldest first'],['cited','Most cited here'],['title','Title A to Z']];
@@ -127,13 +127,13 @@ function readHash() {
   ST.view = VIEWS.some(v => v[0] === p.get('view')) ? p.get('view') : 'list';
   ST.grp = p.get('grp') && (p.get('grp') === 'none' || DIM[p.get('grp')]) ? p.get('grp') : 'technique';
   ST.sort = SORTS.some(s => s[0] === p.get('sort')) ? p.get('sort') : 'new'; ST.rev = p.get('rev') === '1';
-  setQ(p.get('q') || ''); ST.cite = parseInt(p.get('cite'), 10) || 0; ST.ft = p.get('ft') === '1';
+  setQ(p.get('q') || ''); ST.cite = parseInt(p.get('cite'), 10) || 0; ST.ft = p.get('ft') === '1'; ST.month = /^\d{4}-\d{2}$/.test(p.get('month') || '') ? p.get('month') : '';
   ST.f = {}; for (const [k] of DD) { const v = (p.get(k) || '').split(/[~,]/).filter(Boolean); if (v.length) ST.f[k] = new Set(v); }
   ST.id = p.get('id') || '';
 }
 function writeHash() {
   const o = {view: ST.view === 'list' ? null : ST.view, grp: ST.grp === 'technique' ? null : ST.grp, sort: ST.sort === 'new' ? null : ST.sort,
-    rev: ST.rev ? 1 : null, q: ST.q || null, cite: ST.cite || null, ft: ST.ft ? 1 : null, id: ST.id || null};
+    rev: ST.rev ? 1 : null, q: ST.q || null, cite: ST.cite || null, ft: ST.ft ? 1 : null, month: ST.month || null, id: ST.id || null};
   for (const [k] of DD) o[k] = ST.f[k] && ST.f[k].size ? [...ST.f[k]].join('~') : null;
   HUB.hash.set(o);
 }
@@ -142,6 +142,7 @@ function writeHash() {
 function ok(w, skip) {
   if (ST.cite > 0 && !(w.cited_in_corpus >= ST.cite)) return false;
   if (ST.ft && !w.doc) return false;
+  if (ST.month && w.month !== ST.month) return false;
   if (TERMS.length && !TERMS.every(t => w._t.includes(t))) return false;
   for (const k in ST.f) { const s = ST.f[k]; if (k !== skip && s.size && !w._d[k].some(v => s.has(v))) return false; }
   return true;
@@ -191,7 +192,7 @@ function paintFacets() {
 function paintBar(ws) {
   const chips = [];
   for (const [k, l] of DD.map(x => [x[0], x[1]])) for (const v of ST.f[k] || []) chips.push([`${l}: ${lab(k, v)}`, `data-k="${k}" data-v="${esc(v)}"`]);
-  if (ST.q) chips.push([`Search: ${ST.q}`, 'data-x="q"']); if (ST.cite > 0) chips.push([`Cited here at least ${ST.cite}`, 'data-x="cite"']); if (ST.ft) chips.push(['With full text', 'data-x="ft"']);
+  if (ST.q) chips.push([`Search: ${ST.q}`, 'data-x="q"']); if (ST.cite > 0) chips.push([`Cited here at least ${ST.cite}`, 'data-x="cite"']); if (ST.ft) chips.push(['With full text', 'data-x="ft"']); if (ST.month) chips.push([`Published ${ST.month}`, 'data-x="month"']);
   const one = k => ST.f[k] && ST.f[k].size === 1 ? [...ST.f[k]][0] : '';
   const ex = new URLSearchParams(); if (ST.q) ex.set('t', ST.q); if (one('human')) ex.set('h', one('human')); if (one('layer')) ex.set('l', one('layer'));
   const dp = new URLSearchParams(); for (const k of ['layer', 'human', 'technique', 'year']) if (one(k)) dp.set(k, one(k));
@@ -361,7 +362,7 @@ function detailHTML(w) {
   <h3 class="h3">Classification</h3>${kv(w.cls)}<h3 class="h3">Process, human role, blueprint</h3>${kv(w.map)}<h3 class="h3">Descriptors</h3>${kv(w.desc)}
   <h3 class="h3">Results ${w.n_design ? `<span class="meta">${fmt(w.n_design)} rows</span>` : ''}</h3>${w.design.slice(0, 12).map(r => `<div class="kv">${esc(r.system)} · ${esc(pretty(r.stage))} · ${esc(pretty(r.approach))} <span class="meta">${esc(pretty(r.system_role || ''))} · ${esc(pretty(r.evidence_grade || ''))}</span></div>`).join('') || '<div class="meta">No rows.</div>'}
   <h3 class="h3">Mine and layer</h3><div class="acts">${actsHTML(w)}</div>
-  <h3 class="h3">What you can do</h3>${w.doc ? `<p class="meta"><a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener">Conversion inspector</a>: the original beside its extracted text.</p>` : ''}${copy(`factory --project ${P} document read ${w.id}`)}${copy(`factory --project ${P} trace ${w.id}`)}`;
+  <h3 class="h3">What you can do</h3>${w.doc ? `<p class="meta"><a href="sources.html#tab=conversion&amp;conv=${encodeURIComponent(w.id)}">Conversion inspector</a>: the original beside its extracted text. <a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener">Classic page</a></p>` : ''}${copy(`factory --project ${P} document read ${w.id}`)}${copy(`factory --project ${P} trace ${w.id}`)}<p class="meta">Each value was read by a model from the converted document (pass A), and every value is quoted from it; a second reading of a sample checks the first. The Miners page gives the sample and the agreement.</p>`;
 }
 function openWork(w, silent) {
   if (!w) return; ST.id = w.id; const p = $('#cdet'); p.innerHTML = detailHTML(w); p.setAttribute('open', ''); p.scrollTop = 0; if (!silent) writeHash();
@@ -387,7 +388,7 @@ function render() {
 function mark() { document.querySelectorAll('.cr.cur').forEach(r => r.classList.remove('cur')); const id = VIS[ST.cur]; if (id) { const r = document.querySelector(`.cr[data-id="${CSS.escape(id)}"]`); if (r) { r.classList.add('cur'); r.scrollIntoView({block: 'nearest'}); } } }
 
 /* ---------- page shell ---------- */
-const infoPage = `<b>What it shows</b> The included papers, with what the miners read from each one.<p><span class="k">How to read it.</span> Tick values on the left to narrow every view; the counts update as you go. Open a paper to see each value beside the sentence it came from. List, Timeline, Chronology, Lineage and Graph are five ways to look at the same filtered set.</p><p><span class="k">How it's computed.</span> Counts come from the corpus payload. Search looks in titles, abstracts and the quotes. Select papers to download their ids for the factory export command.</p>`;
+const infoPage = `<b>What it shows</b> The included papers, with what the miners read from each one.<p><span class="k">How to read it.</span> Tick values on the left to narrow every view; the counts update as you go. Open a paper to see each value beside the sentence it came from. List, Timeline, Chronology, Lineage and Graph are five ways to look at the same filtered set.</p><p><span class="k">How it's computed.</span> Counts come from the corpus payload. Search looks in titles, abstracts and the quotes. Select papers to download their ids for the factory export command.</p><p>Other pages link here with a filter in the address (for example <span class="mono">#technique=…</span>, <span class="mono">#month=2025-03</span> or <span class="mono">#id=…</span>); the filters shown above the list are those in force, and each can be removed.</p>`;
 $('#main').innerHTML = H.header({title: 'Corpus', level: 1, infoHtml: infoPage, sub: 'Filter the papers, then open one to see each value with its quote.'}) + `
 <div class="ctool"><input type="text" class="q" id="cq" placeholder="Search titles, abstracts and quotes" aria-label="Search titles, abstracts and quotes"><span class="kbd" title="Press f to search">f</span>
  <span class="seg" id="viewSeg">${VIEWS.map(v => `<button type="button" data-v="${v[0]}">${v[1]}</button>`).join('')}</span><button type="button" class="btn ftoggle" id="ftog">Filters</button></div>
@@ -409,7 +410,7 @@ side.addEventListener('click', e => {
   const m = e.target.closest('[data-more]'); if (m) { ST.all[m.dataset.more] = !ST.all[m.dataset.more]; paintFacets(); }
   const c = e.target.closest('[data-cg]'); if (c) { e.preventDefault(); e.stopPropagation(); DD.filter(x => x[2] === c.dataset.cg).forEach(x => delete ST.f[x[0]]); render(); } });
 $('#cbar').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return;
-  if (b.dataset.k) ST.f[b.dataset.k].delete(b.dataset.v); else if (b.dataset.x === 'q') setQ(''); else if (b.dataset.x === 'cite') ST.cite = 0; else if (b.dataset.x === 'ft') ST.ft = false; else if (b.dataset.x === 'all') { ST.f = {}; setQ(''); ST.cite = 0; ST.ft = false; }
+  if (b.dataset.k) ST.f[b.dataset.k].delete(b.dataset.v); else if (b.dataset.x === 'q') setQ(''); else if (b.dataset.x === 'cite') ST.cite = 0; else if (b.dataset.x === 'ft') ST.ft = false; else if (b.dataset.x === 'month') ST.month = ''; else if (b.dataset.x === 'all') { ST.f = {}; setQ(''); ST.cite = 0; ST.ft = false; ST.month = ''; }
   render(); });
 $('#cq').oninput = e => { setQ(e.target.value); render(); };
 $('#viewSeg').onclick = e => { const b = e.target.closest('button'); if (b) { ST.view = b.dataset.v; render(); } };

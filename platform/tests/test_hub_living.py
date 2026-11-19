@@ -258,6 +258,7 @@ def test_feed_view_cards_status_and_reactions(project: Project) -> None:
     first = view["cards"][0]
     assert first["rank"] == 1 and first["beyond"] is False
     assert first["reaction"] == "like"
+    assert first["reactions_7d"] == 1 and first["adds_7d"] == 0
     assert all(f["beyond"] for f in view["further"])
     assert view["reactions"]["total"] == 1
     assert view["reactions"]["over_time"][0]["total"] == 1
