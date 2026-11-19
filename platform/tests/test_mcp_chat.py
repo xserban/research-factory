@@ -74,6 +74,33 @@ async def test_corpus_search_tool(
 
 
 @pytest.mark.anyio
+async def test_corpus_search_method_argument(
+    settings: Settings,
+    project: Project,
+    clock: FixedClock,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.services import corpus_search as cs
+    from factory.services.ranking_model import ranker_unavailable
+
+    def unavailable() -> Any:
+        raise ranker_unavailable("FACTORY_RANKER_MODEL is not set")
+
+    monkeypatch.setattr(cs, "default_embedder", unavailable)
+    hybrid = await _call(settings, clock, "corpus_search", queries=["lorem"], method="hybrid")
+    assert hybrid["ok"] is True, hybrid
+    assert hybrid["data"]["method"] == "keyword" and "keyword only" in hybrid["data"]["note"]
+    assert all(h["vector_rank"] is None for h in hybrid["data"]["hits"])
+    vector = await _call(settings, clock, "corpus_search", queries=["lorem"], method="vector")
+    assert vector["ok"] is False and vector["errors"][0]["field"] == "ranker"
+    bad = await _call(settings, clock, "corpus_search", queries=["lorem"], method="nonsense")
+    assert bad["ok"] is False and bad["errors"][0]["field"] == "method"
+    plain = await _call(settings, clock, "corpus_search", queries=["lorem"])
+    assert plain["data"]["method"] == "keyword" and plain["data"]["note"] is None
+
+
+@pytest.mark.anyio
 async def test_claims_digest_and_candidates_tools(
     settings: Settings, project: Project, agent: Actor, clock: FixedClock, world: list[str]
 ) -> None:
