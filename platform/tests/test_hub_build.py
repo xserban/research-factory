@@ -530,7 +530,7 @@ def test_journeys_payload_carries_the_journey_index(world: Project, tmp_path: Pa
     assert idx["scope"] == "included" and idx["bytes"] == len(
         json.dumps(idx["works"], separators=(",", ":"))
     )
-    assert any(len(stop) == 9 for stops in idx["works"].values() for stop in stops)
+    assert any(len(stop) == 11 for stops in idx["works"].values() for stop in stops)
     assert report.payloads["journeys"].bytes < 3_000_000
 
 
