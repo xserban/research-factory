@@ -23,7 +23,10 @@ Invariants:
   token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
-  and writes nothing). A refusal is a structured error, nothing is
+  and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional
+  `note`; the project is the slot's, a `project` field is refused) and
+  `POST /p/<slug>/api/feed/run|refetch` (the same hub-wide feed run) with its own token; the hub
+  token is on no project page. A refusal is a structured error, nothing is
   written. `GET /api/layers` reads the latest scheme's layer ids and each work's layer. Any
   other POST path is 404; PUT, DELETE and PATCH are 405. Apart from those acts the server writes
   nothing but the site folder, through `site.build`.
@@ -569,6 +572,60 @@ def export_works_zip(project: Project, body: dict[str, Any]) -> tuple[int, dict[
     return 200, {"ok": True, "_zip": str(tmp / name), "_name": name}
 
 
+def inbox_add_in(found: Slot, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Capture one link or identifier in `found`'s inbox as the local human, like `factory inbox
+    add`. The project is the slot's; a `project` field of the body is never read here. A link
+    whose identifier is already in the inbox is a `duplicate` and writes nothing. Offline."""
+    value, bad = _optional_str(body, "value")
+    note, extra = _optional_str(body, "note")
+    bad += extra
+    if value is None or not value.strip():
+        bad.append(ValidationIssue("value", "required"))
+    if bad:
+        return 400, _issues(*bad)
+    assert value is not None
+    project = found.project
+    link = value.strip()
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:inbox add")
+        with found.write_lock, project.index.exclusive():
+            project.index.sync()
+            same = inbox_service.find_open_duplicate(project, link)
+            if same is not None:
+                return 200, {"ok": True, "duplicate": True, "item_id": same}
+            result = inbox_service.add_links(
+                project, actor, [inbox_service.LinkInput(link, note=note)], Channel.CLI
+            )
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    if result.rejected:
+        return 400, _issues(*result.rejected[0].issues)
+    return 200, {"ok": True, "duplicate": False, "item_id": result.written[0]}
+
+
+def project_inbox_add(slot: Slot, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """`POST /p/<slug>/api/inbox/add` {value, note}: the project is the slot's; a `project` field
+    is refused, so a page of one project cannot write into another."""
+    if "project" in body:
+        return 400, _issues(ValidationIssue("project", "not accepted; the project is the page's"))
+    return inbox_add_in(slot, body)
+
+
+def feed_run_here(_project: Project, _body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Marker route `POST /p/<slug>/api/feed/run`: `do_POST` hands it to the hub's feed runner.
+    The feed is hub-wide (one run covers every project), so a project page starting it is the
+    same act as the hub's, under the project token."""
+    raise NotImplementedError
+
+
+def feed_refetch_here(_project: Project, _body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Marker route `POST /p/<slug>/api/feed/refetch`; see `feed_run_here`."""
+    raise NotImplementedError
+
+
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
     "/api/feed/add": feed_add,
@@ -582,6 +639,9 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/layers/move": move_layer,
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
+    "/api/inbox/add": project_inbox_add,
+    "/api/feed/run": feed_run_here,
+    "/api/feed/refetch": feed_refetch_here,
 }
 
 
@@ -1323,18 +1383,6 @@ def _handler_class(
                     return
                 text = _with_meta(text, auth.page_credential(site_auth.Scope(slot.slug)), prefix)
                 text = text.replace("<head>", "<head><meta name='factory-served' content='1'>", 1)
-                # The hub token (scope: the hub, not this project) is only on pages sent by this
-                # handler, which `_allowed` has already limited to a loopback Host, and the only
-                # code that reads it is the shell's project switcher (`HUB.post` with `hub: true`,
-                # `POST /api/projects/create`). It opens no other write: act routes check the
-                # project token, and the hub token fits no project scope.
-                text = text.replace(
-                    "<head>",
-                    "<head><meta name='factory-hub-token' content='"
-                    + auth.page_credential(site_auth.Scope(None))
-                    + "'>",
-                    1,
-                )
                 self._cache = "no-cache"
                 self._html(text)
             elif rest.startswith("assets/"):
@@ -1571,7 +1619,17 @@ def _handler_class(
                 return
             assert slot is not None and route is not None
             project = slot.project
-            if route in (
+            if route is project_inbox_add:
+                code, payload = project_inbox_add(slot, body)
+            elif route in (feed_run_here, feed_refetch_here):
+                feed_act = (hub_acts or {}).get(
+                    "/api/feed/run" if route is feed_run_here else "/api/feed/refetch"
+                )
+                if feed_act is None:
+                    code, payload = 503, _issues(ValidationIssue("feed", "the feed runner is off"))
+                else:
+                    code, payload = feed_act({})
+            elif route in (
                 feed_react,
                 feed_configure,
                 mine_work,
@@ -1927,42 +1985,17 @@ class MainHub:
 
     def inbox_add(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
         """The add-to-inbox act (the portal's form): capture one link or identifier in a listed
-        project's inbox as the local human, like `factory inbox add`. A link whose identifier is
-        already in the inbox is a `duplicate` and writes nothing. Offline; no lookup runs."""
+        project's inbox as the local human, like `factory inbox add`."""
         slug, bad = _optional_str(body, "project")
-        value, more = _optional_str(body, "value")
-        note, extra = _optional_str(body, "note")
-        bad += more + extra
         if not slug:
             bad.append(ValidationIssue("project", "required"))
-        if value is None or not value.strip():
-            bad.append(ValidationIssue("value", "required"))
         if bad:
             return 400, _issues(*bad)
-        assert slug is not None and value is not None
+        assert slug is not None
         found = self.slot(slug)
         if found is None:
             return 400, _issues(ValidationIssue("project", "unknown project"))
-        project = found.project
-        link = value.strip()
-        try:
-            actor = project.human_actor()
-            authorize_command(project, project.principal, "cli:inbox add")
-            with found.write_lock, project.index.exclusive():
-                project.index.sync()
-                same = inbox_service.find_open_duplicate(project, link)
-                if same is not None:
-                    return 200, {"ok": True, "duplicate": True, "item_id": same}
-                result = inbox_service.add_links(
-                    project, actor, [inbox_service.LinkInput(link, note=note)], Channel.CLI
-                )
-        except FactoryValidationError as exc:
-            return 400, _issues(*exc.issues)
-        except FactoryError as exc:
-            return 403, _issues(ValidationIssue("permission", str(exc)))
-        if result.rejected:
-            return 400, _issues(*result.rejected[0].issues)
-        return 200, {"ok": True, "duplicate": False, "item_id": result.written[0]}
+        return inbox_add_in(found, body)
 
     def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
         return {

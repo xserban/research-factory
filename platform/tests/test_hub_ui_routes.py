@@ -625,7 +625,7 @@ def test_the_seven_new_pages_and_payloads_are_served(served: tuple[int, Project]
 def test_the_switcher_and_the_hub_token_exist_only_when_served(served: tuple[int, Project]) -> None:
     port, _ = served
     page = _req(port, "GET", f"{UI}/protocol.html")[2].decode()
-    assert "name='factory-served'" in page and "name='factory-hub-token'" in page
+    assert "name='factory-served'" in page
     shell = _req(port, "GET", f"{UI}/assets/shell.js")[2].decode()
     assert "if (HUB.served) projectSwitcher" in shell
     assert "/api/projects" in shell
@@ -795,3 +795,51 @@ def test_new_ui_routes_refuse_a_non_loopback_host(served: tuple[int, Project]) -
     for path in ("status.json", "ops/x", f"file/original/{DOC}", "download/wiki.zip"):
         status, _, _ = _req(port, "GET", f"{UI}/{path}", headers={"Host": "evil.example"})
         assert status == 403
+
+
+def test_a_project_page_carries_no_hub_token(served: tuple[int, Project]) -> None:
+    port, _ = served
+    for name in ("overview", "living", "corpus"):
+        page = _req(port, "GET", f"{UI}/{name}.html")[2].decode()
+        assert "factory-hub-token" not in page
+        shell = _req(port, "GET", f"{UI}/assets/shell.js")[2].decode()
+        assert "factory-hub-token" not in shell and "/api/projects/create" not in shell
+
+
+INBOX = "/p/demo/api/inbox/add"
+
+
+def test_project_inbox_add_writes_to_the_slots_project_only(served: tuple[int, Project]) -> None:
+    port, project = served
+    token = {"X-Factory-Token": _token(port)}
+    before = len(_link_events(project))
+    status, _, data = _req(port, "POST", INBOX, {"value": "10.1234/abc", "note": "n"}, token)
+    assert status == 200 and json.loads(data)["duplicate"] is False
+    assert len(_link_events(project)) == before + 1
+    # no token: refused; a project field: refused and nothing written
+    assert _req(port, "POST", INBOX, {"value": "10.1234/def"})[0] == 403
+    status, _, _ = _req(port, "POST", INBOX, {"value": "10.1234/def", "project": "other"}, token)
+    assert status == 400 and len(_link_events(project)) == before + 1
+
+
+def test_project_feed_routes_are_reachable_with_the_project_token(
+    served: tuple[int, Project],
+) -> None:
+    port, _ = served
+    token = {"X-Factory-Token": _token(port)}
+    for route in ("run", "refetch"):
+        path = f"/p/demo/api/feed/{route}"
+        assert _req(port, "POST", path, {})[0] == 403
+        # the runner is off in this fixture: 503 (not 403/404) shows the route was reached
+        assert _req(port, "POST", path, {}, token)[0] in (202, 409, 503)
+
+
+def test_hub_routes_refuse_a_project_token(served: tuple[int, Project]) -> None:
+    port, project = served
+    token = {"X-Factory-Token": _token(port)}
+    before = len(_link_events(project))
+    body = {"project": "demo", "value": "10.1234/xyz"}
+    assert _req(port, "POST", "/api/inbox/add", body, token)[0] == 403
+    assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 403
+    assert _req(port, "POST", "/api/projects/create", {"slug": "zz"}, token)[0] == 403
+    assert len(_link_events(project)) == before

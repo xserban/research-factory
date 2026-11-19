@@ -257,4 +257,4 @@ def test_one_acts_helper_is_documented_and_the_switcher_is_served_only() -> None
     for name in ("HUB.act", "HUB.post", "HUB.issues", "HUB.confirm"):
         assert name in head
     assert "if (HUB.served) projectSwitcher" in shell
-    assert "'/api/projects/create'" in shell and "{hub: true}" in shell
+    assert "factory-hub-token" not in shell and 'href="/">New project' in shell

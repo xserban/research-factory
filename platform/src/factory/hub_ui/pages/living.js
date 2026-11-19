@@ -160,7 +160,7 @@ HUB.load(['shell', 'living']).then(d => {
       const v = main.querySelector('#lvLink').value.trim(), note = main.querySelector('#lvLinkNote').value.trim();
       const host = main.querySelector('#lvLinkMsg');
       if (!v) { host.textContent = 'Enter a link or identifier first.'; return; }
-      act(host, 'Add this link to the inbox?', '/api/inbox/add', { project: SLUG, value: v, note: note || null }, LINKMSG, { hub: true });
+      act(host, 'Add this link to the inbox?', '/api/inbox/add', { value: v, note: note || null }, LINKMSG);
     };
   }
 
@@ -272,7 +272,7 @@ HUB.load(['shell', 'living']).then(d => {
     if (HUB.served && RUN.available === null) pollRunner();
     main.querySelectorAll('[data-run]').forEach(b => b.onclick = () => {
       const host = main.querySelector('#lvRunMsg'), refetch = b.dataset.run === 'refetch';
-      act(host, refetch ? 'Refetch now without the cache?' : 'Fetch now for every project?', '/api/feed/' + b.dataset.run, {}, () => 'Started.', { hub: true });
+      act(host, refetch ? 'Refetch now without the cache?' : 'Fetch now for every project?', '/api/feed/' + b.dataset.run, {}, () => 'Started.');
       /* the poll starts after the answer, not before */
       const t = setInterval(() => { if (!host.querySelector('button')) { clearInterval(t); RUN.polls = 0; setTimeout(pollRunner, 500); } }, 400);
       setTimeout(() => clearInterval(t), 20000);

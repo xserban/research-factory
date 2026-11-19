@@ -2,10 +2,9 @@
    Page scripts call HUB.init(payload) once, then HUB.mount({page, crumb}). Nothing is read from
    globals at load time. Payload (services/hub_build.build_shell): {slug, generated, project, prisma, sets, works, cites (index pairs into works), dna_dims, glossary, labels}. */
 /* Acts (one helper for every researcher write; none runs in the static build, where HUB.served is false):
-     HUB.act(path, body, opts?)  POST JSON to `/p/<slug>/api...` (path as the route is named, e.g. '/api/queue/process')
+     HUB.act(path, body)         POST JSON to `/p/<slug>/api...` (path as the route is named, e.g. '/api/queue/process')
                                  with the project token (X-Factory-Token) and the page's origin. Resolves to the Response.
-                                 opts.hub = true posts to a hub-level route (e.g. '/api/projects/create') with the hub token.
-     HUB.post(path, body, opts?) the same, resolved to {ok, status, json, message}; `message` is the structured
+     HUB.post(path, body)        the same, resolved to {ok, status, json, message}; `message` is the structured
                                  issues of a refusal as text, or a network error. Never rejects.
      HUB.issues(json)            'field message; ...' from a refusal body.
      HUB.confirm(host, message, onYes, extra?)  inline Confirm / Cancel in `host` (no browser dialog); onYes(host) may
@@ -408,23 +407,20 @@ HUB.load = function(names){
 const meta = n => { const m = document.querySelector('meta[name="' + n + '"]'); return m ? m.content : ''; };
 HUB.served = !!meta('factory-served');
 /* POST a researcher act to the server; resolves to the Response (the caller reads json or a zip).
-   `opts.hub` addresses a hub-level route (no project prefix) with the hub token. The browser adds the
+   Always the project route with the project token (no hub token is on any page). The browser adds the
    Origin header; the server refuses any origin but its own loopback address. */
-HUB.act = (path, body, opts) => {
-  const hub = !!(opts && opts.hub);
-  return fetch((hub ? '' : meta('factory-api')) + path, {method: 'POST', body: JSON.stringify(body),
-    headers: {'Content-Type': 'application/json', 'X-Factory-Token': meta(hub ? 'factory-hub-token' : 'factory-token')}});
-};
+HUB.act = (path, body) => fetch(meta('factory-api') + path, {method: 'POST', body: JSON.stringify(body),
+  headers: {'Content-Type': 'application/json', 'X-Factory-Token': meta('factory-token')}});
 HUB.get = path => fetch(meta('factory-api') + path);
 /* The server's refusals are {issues: [{field, message|reason}]}; both spellings are read. */
 HUB.issues = j => ((j && j.issues) || []).map(i => i.field + ' ' + (i.message || i.reason || '')).join('; ') || 'refused';
 /* HUB.act resolved to {ok, status, json, message}; never rejects. */
-HUB.post = (path, body, opts) => HUB.act(path, body, opts)
+HUB.post = (path, body) => HUB.act(path, body)
   .then(r => r.json().catch(() => null).then(json => ({ok: r.ok && !(json && json.ok === false), status: r.status, json,
     message: r.ok ? '' : HUB.issues(json) === 'refused' && r.status === 403 ? 'not allowed (open the hub from this machine)' : HUB.issues(json)})))
   .catch(e => ({ok: false, status: 0, json: null, message: 'request failed: ' + (e && e.message || e)}));
 
-/* ---------- project switcher (served only): the projects of /api/projects, and an inline "New project" form ---------- */
+/* ---------- project switcher (served only): the projects of /api/projects, and a "New project" link to the portal ---------- */
 function projectSwitcher(host){
   host.hidden = false;
   host.innerHTML = '<button type="button" class="btn" aria-haspopup="true" aria-expanded="false">' + svgI('projects').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"') + ' Projects</button><div class="proj-panel" hidden></div>';
@@ -433,16 +429,7 @@ function projectSwitcher(host){
   const here = (RF && RF.slug) || '';
   const render = rows => {
     panel.innerHTML = '<ul>' + rows.map(p => `<li><a href="/p/${encodeURIComponent(p.slug)}/ui/" ${p.slug===here?'aria-current="true"':''}>${esc(p.title||p.slug)}<span class="meta"> ${esc(p.slug)}</span></a></li>`).join('') + '</ul>' +
-      '<div class="proj-new"><button type="button" class="btn" data-new>New project</button><form hidden>' +
-      '<input type="text" name="slug" placeholder="slug-like-this" required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="64" aria-label="Slug">' +
-      '<input type="text" name="title" placeholder="Title (optional)" maxlength="120" aria-label="Title">' +
-      '<select name="profile" aria-label="Profile"><option>exploratory</option><option>pilot</option><option>systematic</option></select>' +
-      '<button type="submit" class="btn primary">Create</button><span class="meta" role="status"></span></form></div>';
-    const form = panel.querySelector('form'), msg = form.querySelector('.meta');
-    panel.querySelector('[data-new]').onclick = () => { form.hidden = !form.hidden; if (!form.hidden) form.slug.focus(); };
-    form.onsubmit = ev => { ev.preventDefault(); msg.textContent = 'Creating…';
-      HUB.post('/api/projects/create', {slug: form.slug.value, title: form.title.value, profile: form.profile.value}, {hub: true})
-        .then(r => { if (r.ok && r.json && r.json.url) location.href = r.json.url + 'ui/'; else msg.textContent = 'Refused: ' + r.message; }); };
+      '<div class="proj-new"><a class="btn" href="/">New project</a></div>';
   };
   btn.onclick = () => {
     if (!panel.hidden) return close();
