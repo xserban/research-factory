@@ -157,11 +157,11 @@ def test_cli_request_v2_list_and_advance(
     assert bad.exit_code != 0
     [row] = cr.list_requests(project)
     assert row.engine == "v2" and row.max_sessions == 8
-    started = runner_.invoke(app, ["chat", "advance", row.request_id], env=env)
+    started = runner_.invoke(app, ["chat", "advance", row.request_id, "--no-wait"], env=env)
     assert started.exit_code == 0 and "started rnr_" in started.output, started.output
     listing = runner_.invoke(app, ["chat", "requests"], env=env)
     assert "v2 1/8 next search" in listing.output and "[taken]" in listing.output
-    again = runner_.invoke(app, ["chat", "advance", row.request_id], env=env)
+    again = runner_.invoke(app, ["chat", "advance", row.request_id, "--no-wait"], env=env)
     assert again.exit_code == 2 and "open" in again.output  # one run at a time
     run = sv.progress(project, row.request_id).open_run
     assert run is not None

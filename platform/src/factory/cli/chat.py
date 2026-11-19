@@ -20,7 +20,12 @@ from factory.errors import FactoryValidationError
 from factory.services import chat_requests as chat_requests_service
 from factory.services import runner
 from factory.services import spar_v2 as spar_v2_service
+from factory.services.context import Project
 from factory.services.selection import SelectionSpec
+
+ADVANCE_POLL_SECONDS = 60.0
+"""How long `chat advance` waits for the next role to start after a run closed."""
+ADVANCE_POLL_INTERVAL = 0.2
 
 chat_app = typer.Typer(
     name="chat",
@@ -146,6 +151,37 @@ def requests_cmd(
         typer.echo(f"{r.request_id} {r.kind}{mode}{v2} [{r.state}]{follow}{result}: {what}")
 
 
+def wait_for_chain(
+    project: Project,
+    request_id: str,
+    *,
+    seconds: float | None = None,
+    interval: float | None = None,
+) -> None:
+    """Stay while the request's chain runs: wait for the open role run to close, then poll (up to
+    `seconds`) until the request is done or failed or the next role run is open, and repeat. Ends
+    when the request is done or failed, or when nothing started within `seconds` of a run
+    closing (no watcher: another process must pick the request up)."""
+    import time
+
+    limit = ADVANCE_POLL_SECONDS if seconds is None else seconds
+    pause = ADVANCE_POLL_INTERVAL if interval is None else interval
+    while True:
+        running = spar_v2_service.progress(project, request_id)
+        if running.open_run is None:
+            return
+        ended = running.open_run
+        runner.wait_until_closed(project, ended)
+        deadline = time.monotonic() + limit
+        while time.monotonic() < deadline:
+            after = spar_v2_service.progress(project, request_id)
+            if after.state in ("done", "failed") or after.open_run not in (None, ended):
+                break
+            time.sleep(pause)
+        else:
+            return
+
+
 @chat_app.command("advance")
 def advance_cmd(
     ctx: typer.Context,
@@ -154,14 +190,19 @@ def advance_cmd(
         bool, typer.Option("--retry/--no-retry", help="Retry a failed role as a new run.")
     ] = True,
     wait: Annotated[
-        bool, typer.Option("--wait", help="Stay until the request is done or a role fails.")
-    ] = False,
+        bool,
+        typer.Option(
+            "--wait/--no-wait",
+            help="Stay until the request is done or a role fails (default); --no-wait starts "
+            "one role and returns.",
+        ),
+    ] = True,
 ) -> None:
-    """Start the next role run of a v2 spar request (a failed role is retried). After a role run
-    ends, the process that watches it starts the next role; with `--wait` this command stays and
-    does that."""
-    import time
-
+    """Start the next role run of a v2 spar request (a failed role is retried) and, by default,
+    stay and start each following role until the request is done or a role fails. The chain
+    continues only while a watching process runs: this command (without --no-wait) or the hub;
+    with `--no-wait` it stops after the role started here, and the next `chat advance` or the
+    hub's reconcile picks the request up."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
@@ -178,16 +219,14 @@ def advance_cmd(
             return
         current = spar_v2_service.progress(project, request_id)
         typer.echo(f"started {run_id} ({current.next.role if current.next else 'done'})")
-        while wait:
-            running = spar_v2_service.progress(project, request_id)
-            if running.open_run is not None:
-                runner.wait_until_closed(project, running.open_run)
-                time.sleep(1.0)  # the watcher starts the next role right after the run closes
-                continue
-            break
-        if wait:
-            final = chat_requests_service.view_request(project, request_id)
+        if not wait:
             typer.echo(
-                f"{request_id}: {final.state}"
-                + (f" at {final.next_role}" if final.next_role else "")
+                "the chain continues only while a watching process runs (the hub or "
+                "`chat advance` without --no-wait); otherwise run `chat advance` again"
             )
+            return
+        wait_for_chain(project, request_id)
+        final = chat_requests_service.view_request(project, request_id)
+        typer.echo(
+            f"{request_id}: {final.state}" + (f" at {final.next_role}" if final.next_role else "")
+        )

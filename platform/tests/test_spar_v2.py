@@ -7,11 +7,16 @@ No real `claude` is started: the launcher is faked and `subprocess.Popen` is mad
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any
 
 import pytest
 from sqlalchemy import text
+from typer.testing import CliRunner
 
+from factory.cli.main import app
+from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor
 from factory.model.chat_requests import ChatRequested
@@ -24,6 +29,7 @@ from factory.services.chat_candidates import CandidateInput as C
 from factory.services.chat_read import chat_sections
 from factory.services.context import Project
 from factory.services.selection import SelectionSpec
+from tests.cli_helpers import _env
 from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.helpers import install_skill
 from tests.test_runner import FakeLauncher
@@ -789,3 +795,81 @@ def test_a_fixed_role_retries_within_a_small_separate_allowance(
     with pytest.raises(FactoryValidationError, match="retry allowance"):
         sv.advance(project, request, launcher=v2_env)
     assert cr.view_request(project, request).sessions == 3
+
+
+# ------------------------------------------------------- `chat advance` stays while the chain runs
+
+
+def _await(predicate: Any, seconds: float = 20.0) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_chat_advance_loop_waits_through_a_slow_next_start(
+    project: Project,
+    world: list[str],
+    v2_env: FakeLauncher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from factory.cli import chat as cli_chat
+
+    request = _request(project)
+    original = sv.advance_open
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        time.sleep(2.5)  # the watcher takes longer than the old fixed second
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sv, "advance_open", slow)
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    thread = threading.Thread(target=lambda: cli_chat.wait_for_chain(project, request))
+    thread.start()
+    _search(project, world, request, run)
+    _end(v2_env, run)  # the searcher ends; the watcher is slow to start the first reader
+    assert _await(lambda: sv.progress(project, request).open_run not in (None, run))
+    assert thread.is_alive()  # still waiting: the chain went on
+    reader = sv.progress(project, request).open_run
+    assert reader is not None
+    _fail_end(v2_env, reader)  # the reader fails: the chain stops and the loop ends
+    thread.join(30)
+    assert not thread.is_alive()
+    assert sv.progress(project, request).state == "failed"
+
+
+def test_chat_advance_loop_gives_up_when_nothing_starts(
+    project: Project, world: list[str], v2_env: FakeLauncher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.cli import chat as cli_chat
+
+    request = _request(project)
+    monkeypatch.setattr(sv, "advance_open", lambda *a, **k: None)  # no watcher starts a role
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    _search(project, world, request, run)
+    started = time.monotonic()
+    thread = threading.Thread(
+        target=lambda: cli_chat.wait_for_chain(project, request, seconds=0.5, interval=0.05)
+    )
+    thread.start()
+    _end(v2_env, run)
+    thread.join(10)
+    assert not thread.is_alive() and time.monotonic() - started < 9
+    assert sv.progress(project, request).state == "open"
+
+
+def test_chat_advance_no_wait_starts_one_role_and_returns(
+    settings: Settings, project: Project, v2_env: FakeLauncher
+) -> None:
+    request = _request(project)
+    env = {**_env(settings.root), "FACTORY_PLUGIN_DIR": str(settings.plugin_dir)}
+    result = CliRunner().invoke(app, ["chat", "advance", request, "--no-wait"], env=env)
+    assert result.exit_code == 0 and "started rnr_" in result.output, result.output
+    assert "only while a watching process runs" in result.output
+    run = sv.progress(project, request).open_run
+    assert run is not None
+    _end(v2_env, run)
