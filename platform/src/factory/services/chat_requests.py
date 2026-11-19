@@ -59,6 +59,8 @@ __all__ = [
     "list_requests",
     "open_count",
     "request_chat",
+    "request_respar",
+    "respar_parent",
     "take_next",
     "view_request",
 ]
@@ -103,6 +105,8 @@ class ChatRequestInfo:
     actor: str
     ts: str
     selection: dict[str, Any] = field(default_factory=dict)
+    respar: bool = False
+    """A re-spar: `parent` is the earlier sheet, repeated over today's papers (N7)."""
 
 
 def _issue(field_name: str, message: str) -> FactoryValidationError:
@@ -132,6 +136,7 @@ def _info(row: Any) -> ChatRequestInfo:
         actor=row["actor"],
         ts=row["ts"],
         selection=json.loads(row["selection"]),
+        respar=bool(row["respar"]),
     )
 
 
@@ -177,6 +182,40 @@ def _parent_issues(
     return []
 
 
+def _respar_issues(project: Project, parent: str) -> list[ValidationIssue]:
+    """Why `parent` cannot be re-sparred (empty when it can): it is a sheet with both sections
+    closed, and no other re-spar of it is open or taken."""
+    if re.fullmatch(PARENT_RE, parent) is None or not parent.startswith("sht_"):
+        return [ValidationIssue("parent", f"{parent}: a re-spar repeats a sheet")]
+    with project.index.connect() as conn:
+        sheet = conn.execute(
+            text("SELECT against_closed, for_closed FROM sheets WHERE sheet_id = :s"),
+            {"s": parent},
+        ).first()
+    if sheet is None:
+        return [ValidationIssue("parent", f"{parent}: no such sheet")]
+    if not (sheet[0] and sheet[1]):
+        return [ValidationIssue("parent", f"{parent}: only a sheet with both sections closed")]
+    pending = [
+        r.request_id
+        for r in _select(project, "WHERE r.parent = :p AND r.respar", {"p": parent})
+        if r.state in ("open", "taken")
+    ]
+    if pending:
+        return [ValidationIssue("parent", f"{parent}: already has the open re-spar {pending[0]}")]
+    return []
+
+
+def respar_parent(project: Project, request_id: str) -> str | None:
+    """The sheet a re-spar request repeats; None for any other request. Read-only."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT parent, respar FROM chat_requests WHERE request_id = :r"),
+            {"r": request_id},
+        ).first()
+    return None if row is None or not row[1] else str(row[0])
+
+
 def request_chat(
     project: Project,
     actor: Actor,
@@ -188,11 +227,14 @@ def request_chat(
     mode: str | None = None,
     parent: str | None = None,
     note: str | None = None,
+    respar: bool = False,
 ) -> ChatRequested:
     """Record one request as the researcher. A spar needs `hypothesis` (and `mode`, default
     explore) and no `question`; an ask needs `question` and neither `hypothesis` nor `mode`.
     Raises `FactoryValidationError` (nothing written, every issue together) for a non-human actor,
-    a bad kind, text, mode or note, or a `parent` that is no sheet or answer of the project."""
+    a bad kind, text, mode or note, or a `parent` that is no sheet or answer of the project.
+    `respar` (a spar only) repeats the closed sheet `parent` over today's papers: `hypothesis` and
+    `mode` default to the sheet's, and the Prepare case-for rule does not apply."""
     if actor.kind != "human":
         raise _issue("actor", "a request is the researcher's act")
     issues: list[ValidationIssue] = []
@@ -201,6 +243,20 @@ def request_chat(
     hypothesis = (hypothesis or "").strip() or None
     question = (question or "").strip() or None
     note = (note or "").strip() or None
+    if respar:
+        if kind != "spar":
+            issues.append(ValidationIssue("kind", "only a spar can be a re-spar"))
+        if parent is None:
+            issues.append(ValidationIssue("parent", "a re-spar names the sheet it repeats"))
+        else:
+            project.index.sync()
+            with project.index.connect() as conn:
+                found = conn.execute(
+                    text("SELECT hypothesis, mode FROM sheets WHERE sheet_id = :s"), {"s": parent}
+                ).first()
+            if found is not None:
+                hypothesis = hypothesis or str(found[0])
+                mode = mode or str(found[1])
     if kind == "spar":
         if hypothesis is None or len(hypothesis) > TEXT_MAX:
             issues.append(
@@ -226,7 +282,11 @@ def request_chat(
         issues.append(ValidationIssue("note", f"a note has at most {NOTE_MAX} characters"))
     project.index.sync()
     if parent is not None:
-        issues.extend(_parent_issues(project, kind, mode, parent))
+        issues.extend(
+            _respar_issues(project, parent)
+            if respar
+            else _parent_issues(project, kind, mode, parent)
+        )
     if issues:
         raise FactoryValidationError(issues)
     payload = ChatRequested(
@@ -238,17 +298,40 @@ def request_chat(
         mode=mode,
         parent=parent,
         note=note,
+        respar=respar,
     )
     with project.index.exclusive():
         project.index.sync()
         if parent is not None:
-            found = _parent_issues(project, kind, mode, parent)
-            if found:
-                raise FactoryValidationError(found)
+            again = (
+                _respar_issues(project, parent)
+                if respar
+                else _parent_issues(project, kind, mode, parent)
+            )
+            if again:
+                raise FactoryValidationError(again)
         project.record(
             [project.events.make("chat.requested", payload, actor, refs=(payload.request_id,))]
         )
     return payload
+
+
+def request_respar(
+    project: Project, actor: Actor, sheet_id: str, *, note: str | None = None
+) -> ChatRequested:
+    """Order the re-spar of the closed sheet `sheet_id`: the same hypothesis and mode over the
+    sheet's own selection spec, resolved afresh when the run starts. A human act."""
+    from factory.services.selection import SelectionSpec
+
+    project.index.sync()
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text("SELECT selection FROM sheets WHERE sheet_id = :s"), {"s": sheet_id}
+        ).first()
+    if row is None:
+        raise _issue("parent", f"{sheet_id}: no such sheet")
+    spec = SelectionSpec.model_validate(json.loads(row[0]))
+    return request_chat(project, actor, "spar", spec, parent=sheet_id, note=note, respar=True)
 
 
 def check_result_request(
@@ -264,7 +347,8 @@ def check_result_request(
     another kind, a request that this session did not take or whose taking run is no longer open,
     and, when `parent` is given, a request whose parent is not that. `opens_mode` is set when the
     result is a new sheet: the request's mode must be it and the request must have no parent (a
-    follow-up writes into its parent sheet). None passes. Read-only; the caller has synced the
+    follow-up writes into its parent sheet), unless it is a re-spar, which opens a new sheet. None
+    passes. Read-only; the caller has synced the
     index."""
     if request_id is None:
         return
@@ -274,7 +358,7 @@ def check_result_request(
         row = conn.execute(
             text(
                 "SELECT r.kind, r.parent, r.mode, r.taken_run, r.taken_session, x.outcome,"
-                " x.run_id FROM chat_requests r"
+                " x.run_id, r.respar FROM chat_requests r"
                 " LEFT JOIN runner_runs x ON x.run_id = r.taken_run WHERE r.request_id = :r"
             ),
             {"r": request_id},
@@ -292,7 +376,7 @@ def check_result_request(
     if parent is not None and row[1] != parent:
         raise _issue("request_id", f"{request_id}: does not follow up {parent}")
     if opens_mode is not None:
-        if row[1] is not None:
+        if row[1] is not None and not row[7]:
             raise _issue(
                 "request_id", f"{request_id}: a follow-up writes into its parent sheet {row[1]}"
             )

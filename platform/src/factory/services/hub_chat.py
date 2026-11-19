@@ -33,6 +33,7 @@ from factory.mining.spec import Population
 from factory.services import answers as answers_service
 from factory.services import chat_requests
 from factory.services import runner as runner_service
+from factory.services import sheet_diff as sheet_diff_service
 from factory.services import sheets as sheets_service
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
@@ -183,6 +184,7 @@ def _request_row(
         "question": r.question,
         "mode": r.mode,
         "parent": r.parent,
+        "respar": r.respar,
         "note": r.note,
         "state": r.state,
         "result": r.result,
@@ -226,6 +228,7 @@ def _lists(project: Project) -> tuple[list[dict[str, Any]], list[dict[str, Any]]
                 "unrated": view.coverage.unrated,
                 "has_balance": view.balance is not None,
                 "supersedes": s.supersedes,
+                "respar_of": s.respar_of,
                 "ts": s.ts,
                 "case_for_available": (
                     s.mode == "prepare"
@@ -304,6 +307,57 @@ def _claim(linked: Any) -> dict[str, Any] | None:
     }
 
 
+def _arg_row(project: Project, a: sheets_service.ArgumentView) -> dict[str, Any]:
+    return {
+        "argument_id": a.argument_id,
+        "stance": a.stance,
+        "work_id": a.work_id,
+        "title": _title(project, a.work_id),
+        "anchor": a.anchor,
+        "quote": a.quote,
+        "claim": a.claim,
+        "strength": a.strength,
+        "rating": a.rating,
+    }
+
+
+def _staleness(project: Project, sheet_id: str) -> dict[str, Any]:
+    st = sheet_diff_service.sheet_staleness(project, sheet_id)
+    return {
+        "stale": st.stale,
+        "reasons": list(st.reasons),
+        "works_added": [{"work_id": w, "title": _title(project, w)} for w in st.works_added],
+        "works_removed": list(st.works_removed),
+        "rows_changed": [{"work_id": w, "title": _title(project, w)} for w in st.rows_changed],
+        "claims_checked": st.claims_checked,
+    }
+
+
+def _diff(project: Project, old_id: str, new_id: str) -> dict[str, Any]:
+    """The re-spar diff: arguments added, dropped and kept; the old ratings only as suggestions
+    (`suggested_rating`), never as ratings of the new arguments."""
+    diff = sheet_diff_service.sheet_diff(project, old_id, new_id)
+    return {
+        "old": old_id,
+        "new": new_id,
+        "counts": diff.counts,
+        "label": diff.suggestion_label,
+        "added": [_arg_row(project, a) for a in diff.added],
+        "dropped": [_arg_row(project, a) for a in diff.dropped],
+        "kept": [
+            {
+                **_arg_row(project, k.new),
+                "new_argument_id": k.new.argument_id,
+                "old_argument_id": k.old.argument_id,
+                "old_claim": k.old.claim,
+                "suggested_rating": k.suggested_rating,
+                "suggested_note": k.suggested_note or "",
+            }
+            for k in diff.kept
+        ],
+    }
+
+
 def sheet_view(project: Project, sheet_id: str) -> dict[str, Any]:
     """One sheet for the page: the researcher's balance first (or an empty box), then the
     arguments, each with quote, full paragraph, linked claim and rating. Read-only."""
@@ -361,6 +415,12 @@ def sheet_view(project: Project, sheet_id: str) -> dict[str, Any]:
         "arguments": arguments,
         "selection": view.selection,
         "method": METHODS["proposal"],
+        "staleness": _staleness(project, sheet_id),
+        "can_respar": both,
+        "respar_of": view.info.respar_of,
+        "diff": None
+        if view.info.respar_of is None
+        else _diff(project, view.info.respar_of, sheet_id),
     }
 
 
@@ -471,6 +531,8 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
     layer or work in the selection, or what `request_chat` refuses. When the run cannot start
     (another run is open, no `claude` on PATH) the request stays recorded: `run_id` is None and
     `run_error` and `command` say how to start it."""
+    if "respar" in body:
+        return _order_respar(project, actor, body)
     issues: list[ValidationIssue] = []
     kind = _text(body, "kind", issues)
     texts = {
@@ -503,10 +565,22 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
         )
     with project.index.exclusive():  # the duplicate check and the record are one step
         _refuse_duplicate(project, kind, chosen.digest, texts)
-        payload = chat_requests.request_chat(project, actor, kind, spec, **texts)
+        payload = chat_requests.request_chat(
+            project,
+            actor,
+            kind,
+            spec,
+            hypothesis=texts["hypothesis"],
+            question=texts["question"],
+            mode=texts["mode"],
+            parent=texts["parent"],
+            note=texts["note"],
+        )
     out: dict[str, object] = {"request_id": payload.request_id, "kind": kind, "run_id": None}
-    if start is False:
-        return out
+    return out if start is False else _start(project, kind, out)
+
+
+def _start(project: Project, kind: str, out: dict[str, object]) -> dict[str, object]:
     try:
         out["run_id"] = runner_service.start_run(project, kind)
     except FactoryError as exc:
@@ -517,6 +591,25 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
         out["run_error"] = str(exc) or type(exc).__name__
         out["command"] = f"factory queue process --stage {kind}"
     return out
+
+
+def _order_respar(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str, object]:
+    """The re-spar order: `respar` is the closed sheet to repeat over today's papers (N7), `note`
+    optional, `start` as for `order_chat`. Nothing else may be given."""
+    issues: list[ValidationIssue] = []
+    sheet_id = _required(body, "respar", issues)
+    note = _text(body, "note", issues)
+    start = body.get("start", True)
+    if not isinstance(start, bool):
+        issues.append(ValidationIssue("start", "must be true or false"))
+    extra = sorted(set(body) - {"respar", "note", "start"})
+    if extra:
+        issues.append(ValidationIssue(extra[0], "not used by a re-spar"))
+    if issues:
+        raise FactoryValidationError(issues)
+    payload = chat_requests.request_respar(project, actor, sheet_id, note=note)
+    out: dict[str, object] = {"request_id": payload.request_id, "kind": "spar", "run_id": None}
+    return out if start is False else _start(project, "spar", out)
 
 
 def _refuse_duplicate(

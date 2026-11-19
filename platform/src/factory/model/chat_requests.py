@@ -43,9 +43,14 @@ class ChatRequested(StrictModel):
     mode: ChatMode | None = None
     parent: str | None = Field(default=None, pattern=PARENT_RE)
     note: str | None = Field(default=None, max_length=NOTE_MAX)
+    respar: bool = False
+    """A re-spar (N7): a new spar of the same hypothesis over today's papers; `parent` is the
+    earlier sheet, which the new sheet does not write into. Old events lack it."""
 
     @model_validator(mode="after")
     def _shape(self) -> ChatRequested:
+        if self.respar and (self.kind != "spar" or not (self.parent or "").startswith("sht_")):
+            raise ValueError("a re-spar is a spar whose parent is a sheet")
         if self.kind == "spar":
             if self.hypothesis is None or self.question is not None or self.mode is None:
                 raise ValueError("a spar has a hypothesis and a mode, and no question")

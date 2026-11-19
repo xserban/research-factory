@@ -30,6 +30,11 @@ HUB.load(['shell', 'chat']).then(d => {
 .ch-rate{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .ch-rate input[type=text]{flex:1;min-width:160px;font:400 var(--t-s) var(--f-ui);background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-s);padding:6px}
 .ch-list a{overflow-wrap:anywhere}
+.ch-stale{background:var(--raised);border-radius:var(--r);padding:12px 16px;margin:12px 0;border-left:3px solid var(--exc)}
+.ch-stale h3,.ch-diff h3{margin:0 0 6px;font:500 var(--t-m) var(--f-ui)}
+.ch-diff{background:var(--raised);border-radius:var(--r);padding:12px 16px;margin:12px 0}
+.ch-diff ul{margin:6px 0;padding-left:18px}.ch-diff li{margin:6px 0;overflow-wrap:anywhere}
+.ch-sugg{margin-top:4px;padding:6px 8px;border-radius:var(--r-s);background:var(--surface);font:400 var(--t-s) var(--f-ui)}
 .ch-empty{color:var(--dim);font:400 var(--t-s) var(--f-ui);padding:8px 0}`;
     document.head.appendChild(st);
   }
@@ -174,11 +179,42 @@ HUB.load(['shell', 'chat']).then(d => {
       <button type="button" class="btn primary" id="ch-bal-save" ${b.writable && HUB.served ? '' : 'disabled'}>Record my balance</button><span class="meta" id="ch-bal-msg" aria-live="polite"></span></div>
       ${b.writable ? '' : '<p class="meta">Both cases must be closed before you can write it.</p>'}<p class="note">${esc(v.balance_label || '')}</p></div>`;
   }
+  /* ---------- living sheet: what changed since it opened, and what a re-spar changed ---------- */
+  function stalePanel(v) {
+    const s = v.staleness || {};
+    if (s.stale === null) return `<div class="ch-stale"><h3>Changed since</h3><p class="meta">${esc((s.reasons || []).join('; ') || 'The selection cannot be checked.')}</p></div>`;
+    if (!s.stale) return '';
+    const names = list => (list || []).slice(0, 12).map(w => esc(w.title || w.work_id)).join('; ') + ((list || []).length > 12 ? ` and ${fmt(list.length - 12)} more` : '');
+    return `<div class="ch-stale"><h3>Changed since this sheet opened ${H.info('Computed now from today’s papers and claims. The sheet itself is unchanged: this is a prompt to spar again, not a verdict.', 'About staleness')}</h3>
+      <ul>${(s.reasons || []).map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+      ${(s.works_added || []).length ? `<div class="meta">Papers added: ${names(s.works_added)}</div>` : ''}
+      ${(s.rows_changed || []).length ? `<div class="meta">Claims rows changed for: ${names(s.rows_changed)}</div>` : ''}
+      ${s.claims_checked ? '' : '<div class="meta">This sheet predates claims tracking; only the selection was checked.</div>'}</div>`;
+  }
+  function diffHtml(d) {
+    if (!d) return '';
+    const item = x => `<li><b>${esc(x.stance)}</b> ${esc(x.title || x.work_id)} <span class="meta mono">${esc(x.anchor)}</span><div>${esc(x.claim)}</div><blockquote class="ch-quote">${esc(x.quote)}</blockquote></li>`;
+    const keptItem = k => {
+      let sugg = '';
+      if (k.rating) sugg = `<div class="ch-sugg">You already rated this one: ${esc(k.rating)}.</div>`;
+      else if (k.suggested_rating) sugg = `<div class="ch-sugg">Rating suggested from the earlier sheet: <b>${esc(k.suggested_rating)}</b>${k.suggested_note ? ' · ' + esc(k.suggested_note) : ''}. It is not your rating until you accept it. <button type="button" class="btn" data-accept="${esc(k.new_argument_id)}" data-rating="${esc(k.suggested_rating)}" data-note="${esc(k.suggested_note || '')}" ${HUB.served ? '' : 'disabled'}>Accept this rating</button><span class="meta" data-amsg aria-live="polite"></span></div>`;
+      else sugg = '<div class="ch-sugg">The earlier sheet had no rating for this argument.</div>';
+      return `<li><b>${esc(k.stance)}</b> ${esc(k.title || k.work_id)} <span class="meta mono">${esc(k.anchor)}</span><div>${esc(k.claim)}</div>${sugg}</li>`;
+    };
+    const c = d.counts || {};
+    return `<div class="ch-diff"><h3>Compared with the earlier sheet ${H.info('Arguments are matched by paper, anchor and stance. A rating you gave the earlier argument is only suggested here; nothing is rated until you accept it.', 'About the comparison')}</h3>
+      <div class="meta"><b class="num">${fmt(c.added || 0)}</b> added · <b class="num">${fmt(c.dropped || 0)}</b> dropped · <b class="num">${fmt(c.kept || 0)}</b> kept · earlier sheet <a href="#sheet=${encodeURIComponent(d.old)}" data-result="${esc(d.old)}">${esc(d.old)}</a></div>
+      <p class="note">${esc(d.label || '')}</p>
+      <div class="h3">Added</div><ul>${(d.added || []).map(item).join('') || '<li class="meta">None.</li>'}</ul>
+      <div class="h3">Dropped</div><ul>${(d.dropped || []).map(item).join('') || '<li class="meta">None.</li>'}</ul>
+      <div class="h3">Kept</div><ul>${(d.kept || []).map(keptItem).join('') || '<li class="meta">None.</li>'}</ul></div>`;
+  }
   function sheetHtml(v) {
     const c = v.counts, entry = (C.sheets || []).find(s => s.sheet_id === v.sheet_id) || {};
     const caseFor = entry.case_for_available ? `<div class="ch-row"><button type="button" class="btn" id="ch-casefor" ${HUB.served ? '' : 'disabled'}>Order the case for</button><span class="meta">The case against is closed. A different session writes the case for.</span><span class="meta" id="ch-cf-msg" aria-live="polite"></span></div>` : '';
     const items = v.arguments.map((a, i) => `<article class="ch-item ${esc(a.stance)}"><div class="meta"><b>${esc(a.stance)}</b> · strength ${esc(a.strength)} (the writer’s judgement)</div><p>${esc(a.claim)}</p>${where(a)}${quoteBlock(a)}${a.linked_claim ? `<div class="meta">Linked claim: ${esc(a.linked_claim.claim_type)} · ${esc(a.linked_claim.about)}<blockquote class="ch-quote">${esc(a.linked_claim.quote)}</blockquote></div>` : ''}${rateRow('argument', a.argument_id, i, a.rating, a.rating_note)}</article>`).join('');
-    return `<h3>Sheet: ${esc(v.hypothesis)} <span class="meta">${esc(v.mode)}</span></h3>${balanceBox(v)}${caseFor}
+    const respar = v.can_respar ? `<div class="ch-row"><button type="button" class="btn" id="ch-respar" ${HUB.served ? '' : 'disabled'}>Re-spar with today’s papers</button><span class="meta">Spars the same hypothesis again over the papers as they are now; the new sheet is compared with this one.</span><span class="meta" id="ch-rs-msg" aria-live="polite"></span></div>` : '';
+    return `<h3>Sheet: ${esc(v.hypothesis)} <span class="meta">${esc(v.mode)}</span></h3>${stalePanel(v)}${balanceBox(v)}${caseFor}${respar}${diffHtml(v.diff)}
       <div class="meta"><b class="num">${fmt(c.arguments)}</b> arguments (${fmt(c.against)} against, ${fmt(c.for)} for) · rated sound ${fmt(c.ratings.sound || 0)}, weak ${fmt(c.ratings.weak || 0)}, wrong ${fmt(c.ratings.wrong || 0)} · <b class="num">${fmt(c.unrated)}</b> not rated by you</div>
       ${items || '<div class="ch-empty">No argument has been written yet.</div>'}`;
   }
@@ -204,6 +240,18 @@ HUB.load(['shell', 'chat']).then(d => {
       if (note) body.note = note;
       HUB.confirm(msg, 'Record this as your balance?', () => HUB.post('/ui/act/chat-balance', body).then(r => { say(msg, r.ok ? 'Recorded.' : 'Refused: ' + r.message); if (r.ok) openResult(); }));
     };
+    const rs = host.querySelector('#ch-respar');
+    if (rs) rs.onclick = () => {
+      const msg = host.querySelector('#ch-rs-msg');
+      HUB.confirm(msg, 'Spar this hypothesis again over today’s papers?', () => order({ respar: v.sheet_id }, msg));
+    };
+    host.querySelectorAll('[data-accept]').forEach(b => {
+      b.onclick = () => {
+        const msg = b.parentNode.querySelector('[data-amsg]');
+        HUB.confirm(msg, 'Record this as your rating?', () => HUB.post('/ui/act/chat-rate-argument', { argument_id: b.dataset.accept, rating: b.dataset.rating, note: b.dataset.note || '' }).then(r => { say(msg, r.ok ? 'Saved as your rating.' : 'Refused: ' + r.message); if (r.ok) refresh(); }));
+      };
+    });
+    wireResults(host);
     const cf = host.querySelector('#ch-casefor');
     if (cf) cf.onclick = () => {
       const msg = host.querySelector('#ch-cf-msg');

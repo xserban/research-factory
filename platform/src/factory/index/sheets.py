@@ -23,6 +23,8 @@ Handlers are total: a failure at any point folds nothing and never raises, on re
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import Boolean, Column, Index, Integer, MetaData, String, Table, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
@@ -72,6 +74,8 @@ def sheet_tables(metadata: MetaData) -> SheetTables:
         Column("supersedes", String),
         Column("request_id", String),
         Column("for_request_id", String),
+        Column("respar_of", String),
+        Column("claims_fingerprint", String),
         Column("against_closed", Boolean, nullable=False),
         Column("for_closed", Boolean, nullable=False),
         Column("session", String),
@@ -144,6 +148,8 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
             return
         if payload.supersedes is not None and not _exists(conn, payload.supersedes):
             return
+        if payload.respar_of is not None and not _exists(conn, payload.respar_of):
+            return
         conn.execute(
             sqlite_insert(tables.sheets)
             .values(
@@ -156,6 +162,14 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
                 tier1_cap=payload.tier1_cap,
                 supersedes=payload.supersedes,
                 request_id=payload.request_id,
+                respar_of=payload.respar_of,
+                claims_fingerprint=(
+                    None
+                    if payload.claims_fingerprint is None
+                    else json.dumps(
+                        payload.claims_fingerprint, sort_keys=True, separators=(",", ":")
+                    )
+                ),
                 against_closed=False,
                 for_closed=False,
                 session=event.actor.session,

@@ -7,7 +7,8 @@ results that name the request (`sheets.request_id`, `sheets.for_request_id`,
 
 An event is folded only when it is consistent with what `services/chat_requests.py` enforces; one
 that fails stays in the log and changes nothing (no service writes one, so it was written by hand):
-- a request needs a human actor and a parent that is a folded sheet or answer when one is named;
+- a request needs a human actor and a parent that is a folded sheet or answer when one is named
+  (a re-spar names a sheet);
 - a taking needs an agent actor, a folded request not taken before and, when the run is known, a
   run of the request's stage (`spar` or `ask`).
 
@@ -16,7 +17,7 @@ Handlers are total: a failure at any point folds nothing and never raises, on re
 
 from __future__ import annotations
 
-from sqlalchemy import Column, MetaData, String, Table, text
+from sqlalchemy import Boolean, Column, MetaData, String, Table, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
@@ -46,6 +47,7 @@ def chat_request_tables(metadata: MetaData) -> ChatRequestTables:
         Column("mode", String),
         Column("parent", String),
         Column("note", String),
+        Column("respar", Boolean, nullable=False, server_default="0"),
         Column("actor", String, nullable=False),
         Column("ts", String, nullable=False),
         Column("event_id", String, nullable=False),
@@ -72,6 +74,8 @@ def chat_request_handlers(tables: ChatRequestTables) -> dict[str, Handler]:
             ).first()
             if found is None:
                 return
+        if payload.respar and not payload.parent:
+            return
         conn.execute(
             sqlite_insert(tables.requests)
             .values(
@@ -83,6 +87,7 @@ def chat_request_handlers(tables: ChatRequestTables) -> dict[str, Handler]:
                 mode=payload.mode,
                 parent=payload.parent,
                 note=payload.note,
+                respar=payload.respar,
                 actor=event.actor.id,
                 ts=format_ts(event.ts),
                 event_id=event.id,

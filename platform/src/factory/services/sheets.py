@@ -70,12 +70,13 @@ from factory.services.chat_candidates import (
     chat_candidates,
 )
 from factory.services.chat_read import VerifyItem, chat_verify
-from factory.services.chat_requests import check_result_request
+from factory.services.chat_requests import check_result_request, respar_parent
 from factory.services.context import Project
 from factory.services.paper_profile import (
     RawMinerRow,
     listed_miner_versions,
     load_miner_work_rows,
+    load_miner_work_state,
 )
 from factory.services.selection import SelectionSpec, resolve_selection_cached
 from factory.services.work_ref import resolve_work_id
@@ -133,6 +134,8 @@ class SheetInfo:
     actor: str
     session: str | None
     ts: str
+    respar_of: str | None = None
+    """The earlier sheet this one re-spars (N7), or None."""
 
 
 @dataclass(frozen=True)
@@ -236,6 +239,35 @@ def _sheet_row(project: Project, sheet_id: str) -> dict[str, Any] | None:
     return None if row is None else dict(row)
 
 
+def claims_fingerprint(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
+    """Per work, a 12-hex hash of what the m-claims miner serves for it now: the served row keys
+    with their versions and whether the work is reviewed-empty, gold-empty or only newer-version.
+    A new row, a new version or a reopened work changes the hash. Read-only; the same hash for
+    the same served state (it names no time). Without a listed claims miner every work gets the
+    hash of the empty state."""
+    unique = list(dict.fromkeys(work_ids))
+    version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
+    state = (
+        None if version is None else load_miner_work_state(project, CLAIMS_MINER, version, unique)
+    )
+    out: dict[str, str] = {}
+    for work in unique:
+        served: dict[str, Any] = {"rows": [], "flags": []}
+        if state is not None:
+            served["rows"] = sorted((r.row_key, r.version) for r in state.rows.get(work, []))
+            served["flags"] = [
+                name
+                for name, group in (
+                    ("emptied", state.emptied),
+                    ("newer", state.newer),
+                    ("gold-empty", state.gold_empty),
+                )
+                if work in group
+            ]
+        out[work] = hashlib.sha256(canonical_json(served)).hexdigest()[:12]
+    return out
+
+
 def _digest(candidates: Candidates) -> tuple[str, tuple[SheetCandidate, ...]]:
     table = tuple(
         SheetCandidate(
@@ -285,6 +317,8 @@ def open_sheet(
         raise FactoryValidationError(issues)
     result = chat_candidates(project, spec, proposals, mode=mode, tier1_cap=tier1_cap)
     digest, table = _digest(result)
+    respar_of = None if request_id is None else respar_parent(project, request_id)
+    fingerprint = claims_fingerprint(project, [c.work_id for c in table])
     sheet_id = project.ids.new("sht")
     payload = SheetOpened(
         sheet_id=sheet_id,
@@ -297,6 +331,8 @@ def open_sheet(
         tier1_cap=tier1_cap,
         supersedes=supersedes,
         request_id=request_id,
+        respar_of=respar_of,
+        claims_fingerprint=fingerprint,
     )
     blob = project.blobs.put_json(
         {
@@ -722,6 +758,7 @@ def _info(row: dict[str, Any], arguments: int) -> SheetInfo:
         actor=row["actor"],
         session=row["session"],
         ts=row["ts"],
+        respar_of=row["respar_of"],
     )
 
 

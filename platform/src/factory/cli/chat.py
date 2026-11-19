@@ -41,21 +41,43 @@ def _spec(layers: list[str], include: list[str], exclude: list[str]) -> Selectio
 @request_app.command("spar")
 def request_spar_cmd(
     ctx: typer.Context,
-    hypothesis: Annotated[str, typer.Argument(help="The hypothesis to argue against and for.")],
+    hypothesis: Annotated[
+        str | None, typer.Argument(help="The hypothesis to argue against and for.")
+    ] = None,
     layer: Annotated[list[str] | None, _LAYER] = None,
     include: Annotated[list[str] | None, _INCLUDE] = None,
     exclude: Annotated[list[str] | None, _EXCLUDE] = None,
-    mode: Annotated[str, typer.Option("--mode", help="explore (default) or prepare.")] = "explore",
+    mode: Annotated[
+        str | None, typer.Option("--mode", help="explore (default) or prepare.")
+    ] = None,
     parent: Annotated[str | None, _PARENT] = None,
     note: Annotated[str | None, _NOTE] = None,
+    respar: Annotated[
+        str | None,
+        typer.Option(
+            "--respar",
+            help="A closed sht_ id to spar again over today's papers: its hypothesis, mode and "
+            "selection are repeated (the hypothesis may be reworded).",
+        ),
+    ] = None,
 ) -> None:
     """Order a spar as the researcher. Prepare writes only the case against; order the case for
-    afterwards with `--parent <sheet> --mode prepare`."""
+    afterwards with `--parent <sheet> --mode prepare`. `--respar <sheet>` repeats a closed sheet
+    over today's papers; the new sheet records which one it repeats."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
+        if respar is not None:
+            payload = chat_requests_service.request_respar(
+                project, project.human_actor(), respar, note=note
+            )
+            typer.echo(
+                f"{payload.request_id} re-spar of {respar} ({payload.mode}) ordered: "
+                f"{payload.hypothesis}"
+            )
+            return
         payload = chat_requests_service.request_chat(
             project,
             project.human_actor(),

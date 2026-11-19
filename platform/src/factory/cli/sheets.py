@@ -14,6 +14,7 @@ from typing import Annotated
 
 import typer
 
+from factory.services import sheet_diff as diff_service
 from factory.services import sheet_export as export_service
 from factory.services import sheets as sheets_service
 
@@ -160,3 +161,38 @@ def sheets_export_cmd(
     else:
         write_brief(out, brief, force)
         typer.echo(f"{sheet} exported to {out}")
+
+
+def _diff_line(a: sheets_service.ArgumentView) -> str:
+    return f"  [{a.stance}] {a.work_id} {a.anchor}: {a.claim}"
+
+
+@sheets_app.command("diff")
+def sheets_diff_cmd(
+    ctx: typer.Context,
+    old: Annotated[str, typer.Argument(help="The earlier sht_ id.")],
+    new: Annotated[str, typer.Argument(help="The later sht_ id, usually its re-spar.")],
+) -> None:
+    """The arguments of the later sheet against the earlier one: added, dropped and kept, matched
+    by work, anchor and stance. An earlier rating of a kept argument is shown as a suggestion
+    only; nothing is rated. Read-only."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        diff = diff_service.sheet_diff(project, old, new)
+    typer.echo(f"{old} -> {new}")
+    typer.echo(f"Added ({len(diff.added)})")
+    for a in diff.added:
+        typer.echo(_diff_line(a))
+    typer.echo(f"Dropped ({len(diff.dropped)})")
+    for a in diff.dropped:
+        typer.echo(_diff_line(a))
+    typer.echo(f"Kept ({len(diff.kept)})")
+    for k in diff.kept:
+        typer.echo(_diff_line(k.new))
+        if k.suggested_rating is not None:
+            note = f" ({k.suggested_note})" if k.suggested_note else ""
+            typer.echo(f"    suggested from the earlier sheet: {k.suggested_rating}{note}")
+    typer.echo(diff.suggestion_label)
