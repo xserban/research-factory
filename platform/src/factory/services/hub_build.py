@@ -21,12 +21,14 @@ import re
 import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
 from sqlalchemy import text as sql_text
 
 from factory.services import (
+    citations,
     hub_costs,
     hub_findings,
     hub_graph,
@@ -527,6 +529,18 @@ def _unread_entry(ctx: HubContext, work_id: str, meta: dict[str, Any]) -> dict[s
     }
 
 
+def _doc_link(doc: Mapping[str, str] | None, slug: str) -> dict[str, str] | None:
+    """The stored original of a work as the page may show it: its kind and name and the path of the
+    conversion inspector page. The absolute library path is dropped (the payload is published)."""
+    if not doc:
+        return None
+    return {
+        "kind": doc["kind"],
+        "name": doc["name"],
+        "inspector": f"../conversion/doc/{slug}.html",
+    }
+
+
 def build_corpus(ctx: HubContext) -> dict[str, Any]:
     """`site_corpus.corpus_payload` restricted to the included set (plan 4.1).
 
@@ -554,6 +568,7 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         item["id"] = w
         item["slug"] = site_corpus.slug_of(w)
         item["layer"] = layer_of[w]
+        item["doc"] = _doc_link(entry.get("doc"), item["slug"])
         if source_of[w] != w:
             item["mapped_from"] = source_of[w]
         works.append(item)
@@ -564,6 +579,13 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         ia, ib = to_included.get(slug_to_id[a]), to_included.get(slug_to_id[b])
         if ia and ib and ia != ib:
             pairs.add((slug_of_included[ia], slug_of_included[ib]))
+    report = citations.citation_report(ctx.project, as_of_year=datetime.now(UTC).year)
+    design = {
+        w["id"]: [{k: str(r.get(k) or "") for k in site_corpus.DESIGN_FIELDS} for r in w["design"]]
+        for w in works
+        if w.get("design")
+    }
+    n_design = {w["id"]: int(w.get("n_design") or 0) for w in works if w.get("design")}
     return {
         "dims": raw["dims"],
         "works": works,
@@ -571,6 +593,16 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
         "cites": sorted([a, b] for a, b in pairs),
         "refs_done": raw["refs_done"],
         "sets": hp.sets_payload(ctx.flow_data.sets),
+        "citation": hub_lenses.citation_rate(
+            report.works,
+            ctx.included,
+            extractions=report.extractions,
+            entries=report.entries,
+            resolved_links=report.resolved_links,
+            works_total=report.works_total,
+            as_of_year=report.as_of_year,
+        ),
+        "results": hub_lenses.results_grid(design, n_design),
     }
 
 

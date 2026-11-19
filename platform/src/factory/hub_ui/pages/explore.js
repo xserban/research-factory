@@ -161,9 +161,9 @@ const mLabel=i=>MN[i%12]+' '+(MY0+Math.floor(i/12));
 const eraOf=i=>{const y=MY0+Math.floor(i/12);return y+'-H'+((i%12)<6?1:2)};
 const eraLabel=e=>{const[y,h]=e.split('-H');return(h==='1'?'Jan–Jun ':'Jul–Dec ')+y};
 const ERAS=[];for(let i=0;i<NM;i++){const e=eraOf(i);if(!ERAS.includes(e))ERAS.push(e)}
-const RINGS=[['core','Core',36,150],['benchmark','Benchmark',150,240],['applied','Applied',240,370],['adjacent','Adjacent',370,440],['outer','Outer',440,500]];
+const RINGS=[['core','Core',36,130],['benchmark','Benchmark',130,210],['applied','Applied',210,310],['adjacent','Adjacent',310,380],['background','Background',380,425],['off-topic','Off-topic',425,465],['unlayered','Unlayered',465,500]];
 const RR=500;
-const ringOf=l=>['core','benchmark','applied','adjacent'].includes(l)?l:'outer';
+const ringOf=l=>RINGS.some(r=>r[0]===l)?l:'unlayered';
 const hash32=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0)/4294967296};
 const D=RF.works.map((w,i)=>({w,i,id:w.id,title:w.title,cic:w.cic||0,mi:mIdx(w),tech:HUB.val(w,'technique'),arch:HUB.val(w,'architecture'),span:HUB.val(w,'span'),hum:HUB.val(w,'human'),layer:w.layer,ring:ringOf(w.layer),m:true}));
 D.forEach(d=>{d.era=eraOf(d.mi);d.rr=3.2+1.15*Math.sqrt(d.cic)});
@@ -241,7 +241,7 @@ const techVals=[...ORD.technique,'∅'];
 const SLOT={
  t:{any:'any technique',vals:()=>techVals,label:v=>v==='∅'?'not coded':pretty(v),get:d=>sk(d.tech)},
  h:{any:'any role',vals:()=>[...ORD.human,'∅'],label:v=>ROLE[v],get:d=>sk(d.hum)},
- l:{any:'any layer',vals:()=>RINGS.map(r=>r[0]),label:v=>v==='outer'?'outer (background, off-topic, unlayered)':v,get:d=>d.ring},
+ l:{any:'any layer',vals:()=>RINGS.map(r=>r[0]),label:v=>layerLabel(v),get:d=>d.ring},
  s:{any:'any month',vals:()=>Array.from({length:NM},(_,i)=>String(i)),label:v=>mLabel(+v),get:d=>String(d.mi)},
 };
 function counts(key){
@@ -306,7 +306,7 @@ const INFO_PAGE=`<b>What it shows</b> Where in the field a kind of system sits, 
 <p><span class=k>How to read it.</span> Complete the sentence by picking an option in each slot; the rings, the wall, the counts and the compare tray all follow it. Each option shows how many papers it would keep.</p>
 <p><span class=k>How it's computed.</span> ${XM.filter||''}</p>`;
 const INFO_RINGS=`<b>What it shows</b> Every paper as a dot, placed by how central it is, what ${HUB.term('technique','technique')} it uses and when it appeared.
-<p><span class=k>How to read it.</span> Rings are the ${HUB.term('layer','layer')}, core at the centre (${ringN}; outer holds background, off-topic and unlayered papers). Sectors are the technique, widest where there are most papers. Inside a sector the angle is the publication month, ${mLabel(0)} to ${mLabel(NM-1)}, older to newer clockwise; the distance within a ring is jitter and means nothing. Size is ${HUB.term('cic','how often other papers here cite it')}; colour follows the buttons above. Faded dots are papers the sentence leaves out. Zooming adds detail: dots, then titles, then cards with month and role, then cards with the first evidence ${HUB.term('quote','quote')}.</p>
+<p><span class=k>How to read it.</span> Rings are the ${HUB.term('layer','layer')}, core at the centre (${ringN}; the outer rings hold background, off-topic and unlayered papers, each on its own ring). A dot with a dashed halo is a paper the researcher moved to its layer by hand, whatever the miner said. Sectors are the technique, widest where there are most papers. Inside a sector the angle is the publication month, ${mLabel(0)} to ${mLabel(NM-1)}, older to newer clockwise; the distance within a ring is jitter and means nothing. Size is ${HUB.term('cic','how often other papers here cite it')}; colour follows the buttons above. Faded dots are papers the sentence leaves out. Zooming adds detail: dots, then titles, then cards with month and role, then cards with the first evidence ${HUB.term('quote','quote')}.</p>
 <p><span class=k>How it's computed.</span> ${XM.rings||''}</p>`;
 const INFO_WALL=`<b>What it shows</b> One row per matching paper, with its ${HUB.term('dna','DNA')}: six coloured squares, one per field.
 <p><span class=k>How to read it.</span> The squares are technique, architecture, automated span, human role, layer and half-year, left to right. Click a column name to sort; click again to reverse. Hover a square for its value; the key below the header lists the colours.</p>
@@ -506,7 +506,7 @@ function draw(){
   const k=cam.z*k0,z=cam.z,LOD=lodOf(z);
   // geometry in world space
   ctx.save();ctx.translate(W/2,H/2);ctx.rotate(cam.rot);ctx.scale(k,k);ctx.translate(-cam.cx,-cam.cy);
-  const fills=[CL.raised,CL.surface,CL.bg,CL.surface,CL.bg];
+  const fills=[CL.raised,CL.surface,CL.bg,CL.surface,CL.bg,CL.surface,CL.bg];
   for(let i=RINGS.length-1;i>=0;i--){ctx.beginPath();ctx.arc(0,0,RINGS[i][3],0,7);ctx.fillStyle=fills[i];ctx.fill();ctx.lineWidth=1/k;ctx.strokeStyle=CL.line;ctx.stroke()}
   ctx.beginPath();ctx.arc(0,0,RINGS[0][2],0,7);ctx.fillStyle=CL.bg;ctx.fill();ctx.strokeStyle=CL.line;ctx.stroke();
   if(ST.sec){const s=SECT.find(x=>x.key===ST.sec);if(s){ctx.beginPath();ctx.arc(0,0,RINGS[0][2],s.a0,s.a1);ctx.arc(0,0,RR,s.a1,s.a0,true);ctx.closePath();ctx.globalAlpha=.45;ctx.fillStyle=CL.accSoft;ctx.fill();ctx.globalAlpha=1}}
@@ -554,6 +554,7 @@ function draw(){
   // pins and hover rings
   ST.pins.forEach((id,i)=>{const d=DB.get(id);if(!d||!d.on)return;ctx.beginPath();ctx.arc(d.sx,d.sy,d.rs+4,0,7);ctx.lineWidth=2;ctx.strokeStyle=CL.acc;ctx.stroke();
     ctx.fillStyle=CL.acc;ctx.beginPath();ctx.arc(d.sx+d.rs+3,d.sy-d.rs-3,8,0,7);ctx.fill();ctx.fillStyle=CL.accInk;ctx.font=`600 10px ${FU}`;ctx.textAlign='center';ctx.fillText('ABCD'[i],d.sx+d.rs+3,d.sy-d.rs);ctx.textAlign='left'});
+  for(const d of D){if(!d.moved||!d.on)continue;ctx.save();ctx.setLineDash([3,2]);ctx.beginPath();ctx.arc(d.sx,d.sy,d.rs+2.5,0,7);ctx.lineWidth=1.2;ctx.strokeStyle=CL.fg;ctx.stroke();ctx.restore()}
   if(hover&&hover.on){ctx.beginPath();ctx.arc(hover.sx,hover.sy,hover.rs+3,0,7);ctx.lineWidth=1.5;ctx.strokeStyle=CL.fg;ctx.stroke()}
   // fresh hit rects (dots)
   rects=mt.filter(d=>d.on).concat(vis.filter(d=>!d.m));
@@ -678,7 +679,7 @@ cv.addEventListener('keydown',e=>{
   else if(e.key==='['||e.key===']'){const i=SECT.findIndex(s=>s.key===ST.sec);const n=(i<0?(e.key===']'?0:SECT.length-1):(i+(e.key===']'?1:-1)+SECT.length)%SECT.length);zoomSector(SECT[n])}
   else if(e.key==='.'||e.key===','){const M=D.filter(d=>d.m).sort((a,b)=>b.cic-a.cic||a.i-b.i);if(M.length){const i=M.indexOf(cur);cur=M[i<0?0:(i+(e.key==='.'?1:-1)+M.length)%M.length];hover=cur;dirty();$('#live').textContent=cur.title+'. Press P to pin, Enter to open.'}}
   else if(e.key==='Enter'&&cur)HUB.openDrawer(cur.id);else return;e.preventDefault()});
-function tipHTML(d){return `<div class="t1">${esc(d.title)}</div><div class="t2">${mLabel(d.mi)} · ${esc(layerLabel(d.layer))} · cited here ${d.cic}×${d.m?'':' · <b>outside the sentence</b>'}</div>${tipDNA(d)}<div class="t3">Click to open · P to pin to the compare tray</div>`}
+function tipHTML(d){return `<div class="t1">${esc(d.title)}</div><div class="t2">${mLabel(d.mi)} · ${esc(layerLabel(d.layer))}${d.moved?' (moved by the researcher'+(d.moved.miner?'; the miner said '+esc(layerLabel(d.moved.miner)):'')+')':''} · cited here ${d.cic}×${d.m?'':' · <b>outside the sentence</b>'}</div>${tipDNA(d)}<div class="t3">Click to open · P to pin to the compare tray</div>`}
 
 /* ======================= DNA wall ======================= */
 const ordIndex=(s,d)=>{const v=s.get(d);if(v==null)return 999;const i=ORD[s.k].indexOf(v);return i<0?998:i};
@@ -773,6 +774,11 @@ tray.addEventListener('mousemove',e=>{const i=e.target.closest('i[data-seg]');if
   if(!d)return;const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b>`,e)});
 tray.addEventListener('mouseleave',e=>HUB.tipHtml('',e));
 
+/* Layer provenance (EX/LY-2): the corpus payload says which layers the researcher moved. Loaded after the first
+   paint so the page never waits for it; without it the rings simply carry no mark. */
+HUB.load(['corpus']).then(x=>{const ws=(x.corpus&&x.corpus.works)||[];let n=0;
+  for(const w of ws){const d=DB.get(w.id);if(d&&w.layer_source==='moved'){d.moved={miner:w.layer_miner||''};n++}}
+  if(n&&typeof draw==='function')draw()}).catch(()=>{});
 /* ======================= global wiring ======================= */
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{ST.view=b.dataset.view;commit(ST.view==='wall'?'DNA wall':'rings',true);refresh()});
 document.querySelectorAll('[data-col]').forEach(b=>b.onclick=()=>{ST.col=b.dataset.col;commit('colour: '+b.dataset.col,true);refresh()});

@@ -30,9 +30,10 @@ from sqlalchemy import text
 from factory.mining.spec import EnumKind, MinerSpec, kind_to_json
 from factory.mining.taxonomy import TaxonomySpec
 from factory.services import mining as mining_service
-from factory.services import site_corpus
+from factory.services import site_corpus, site_miners
 from factory.services.context import Project
 from factory.services.hub_payloads import Sets, load_flow_data, reconcile_sets, sets_payload
+from factory.services.miner_info import miner_detail
 from factory.services.site_agreement import (
     ANCHOR_SUFFIX,
     MULTI_ROW_RATIO,
@@ -206,6 +207,9 @@ class MiningData:
     codebook: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     layers: Mapping[str, str] = field(default_factory=dict)
     """Included work id -> its layer (absent or "unlayered" when none); gives a miner's scope."""
+    detail: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    """Miner name -> {"status": `mine_status` counts and digest, "use": the protocol's use,
+    "versions": every registered version}; empty for a miner the protocol does not list."""
 
     def info(self, name: str) -> MinerInfo:
         for m in self.miners:
@@ -341,13 +345,19 @@ def _as_site_rows(rows: Mapping[str, Sequence[MRow]]) -> dict[str, list[dict[str
     return out
 
 
-def _fairer(info: MinerInfo, att: Attributed) -> dict[str, Any]:
-    m = measure(
+def _measure(info: MinerInfo, att: Attributed) -> Any:
+    return measure(
         info.spec,
         _as_site_rows(att.by_pass.get("A", {})),
         _as_site_rows(att.by_pass.get("B", {})),
     )
+
+
+def _fairer(info: MinerInfo, att: Attributed) -> dict[str, Any]:
+    m = _measure(info, att)
     agreed, total = m.overall()
+    p_agreed, p_total = m.overall(primary_only=True)
+    per_field = Counter(d["field"] for d in m.disagreements)
     return {
         "measure": FAIRER_LABEL,
         "by_field": {
@@ -356,14 +366,40 @@ def _fairer(info: MinerInfo, att: Attributed) -> dict[str, Any]:
                 "total": m.total[n],
                 "rate": _rate(m.agreed[n], m.total[n]),
                 "one_sided": m.one_sided[n],
+                "disagreements": per_field[n],
             }
             for n in sorted(m.total)
         },
         "overall": {"agreed": agreed, "total": total, "rate": _rate(agreed, total)},
+        "primary": {"agreed": p_agreed, "total": p_total, "rate": _rate(p_agreed, p_total)},
         "matched": m.matched,
+        "rows_a": m.rows_a,
+        "rows_b": m.rows_b,
+        "one_sided": sum(m.one_sided.values()),
+        "disagreements": len(m.disagreements),
         "works_both": m.works_both,
         "note": m.note,
     }
+
+
+def _how_reads(spec: MinerSpec) -> dict[str, Any]:
+    """The selector, procedure and evidence rule of a spec, as recorded."""
+    sel = spec.selector
+    return {
+        "population": sel.population.value,
+        "elements": [str(getattr(e, "value", e)) for e in sel.elements],
+        "heading_patterns": list(sel.heading_patterns),
+        "max_works": sel.max_units,
+        "procedure": spec.procedure,
+        "row_key": list(spec.row_key_fields),
+        "min_quotes_per_record": spec.evidence.min_quotes_per_record,
+        "enum_needs_quote": spec.evidence.enum_needs_quote,
+        "absence_values": list(spec.evidence.absence_values),
+    }
+
+
+def _commands(name: str) -> list[str]:
+    return ["mine status", f"mine agreement {name}", "mine resolve --help"]
 
 
 # ------------------------------------------------------------------ miners
@@ -479,6 +515,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
             p["agreed"] += e_agreed
             p["total"] += e_total
         regime = info.spec.regime
+        detail = data.detail.get(info.name, {})
         by_model = (
             {
                 "a": key[0],
@@ -507,6 +544,12 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
                     "field_agreement_min": regime.field_agreement_min,
                 },
                 "row_key": list(info.spec.row_key_fields),
+                "digest": str(detail.get("status", {}).get("digest", "")),
+                "status": dict(detail.get("status", {})),
+                "use": detail.get("use"),
+                "versions": list(detail.get("versions", ())),
+                "how_reads": _how_reads(info.spec),
+                "commands": _commands(info.name),
                 "fields": [f.as_dict() for f in info.fields],
                 "pass_a": _pass_block(att, "A", ma),
                 "pass_b": _pass_block(att, "B", mb),
@@ -554,6 +597,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
         "corpus": {"included": len(data.sets.included)},
         "miners": out,
         "by_model_pair": by_pair,
+        "columns": [{"name": n, "meaning": t} for n, t in site_miners.COLUMNS],
     }
 
 
@@ -748,6 +792,44 @@ def _dumps(payload: object) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=None)
 
 
+DISAGREE_PER_FIELD = 40
+DISAGREE_TEXT = 400
+
+
+def _disagreements(info: MinerInfo, att: Attributed) -> dict[str, Any]:
+    """Per field, sorted by count: the field's definition and its disagreeing pairs of the fairer
+    measure (both readings with quote and anchor). At most `DISAGREE_PER_FIELD` pairs per field
+    are listed; `count` is the exact number and `shown` the number listed."""
+    m = _measure(info, att)
+    by_field: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for d in m.disagreements:
+        by_field[d["field"]].append(d)
+    fields: list[dict[str, Any]] = []
+    for name, items in sorted(by_field.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        f = next((x for x in info.fields if x.name == name), None)
+        fields.append(
+            {
+                "field": name,
+                "desc": f.desc if f else "",
+                "values": list(f.values) if f else [],
+                "agreed": m.agreed[name],
+                "total": m.total[name],
+                "count": len(items),
+                "shown": min(len(items), DISAGREE_PER_FIELD),
+                "items": [
+                    {k: (v[:DISAGREE_TEXT] if isinstance(v, str) else v) for k, v in d.items()}
+                    for d in items[:DISAGREE_PER_FIELD]
+                ],
+            }
+        )
+    return {
+        "fields": fields,
+        "count": len(m.disagreements),
+        "per_field_cap": DISAGREE_PER_FIELD,
+        "works_both": m.works_both,
+    }
+
+
 def miner_grid(data: MiningData, info: MinerInfo, att: Attributed) -> dict[str, Any]:
     """One miner's grid: its fields as columns and a row for every included work its pass A
     read. A cell is null (no value) or [value, quote, anchor]; for a work with several values of
@@ -795,6 +877,7 @@ def miner_grid(data: MiningData, info: MinerInfo, att: Attributed) -> dict[str, 
         "multi_row": any(len(v) > 1 for v in a.values()),
         "gap_values": sorted(GAP_VALUES),
         "methods": METHODS["grid"],
+        "disagreements": _disagreements(info, att),
     }
 
 
@@ -1067,10 +1150,31 @@ def load_mining_data(
     sets = sets or load_flow_data(project).sets
     schemas = {f"{i.name}@{v}": i.name for i, v in chosen}
     platform: dict[str, tuple[float | None, float | None]] = {}
+    detail: dict[str, dict[str, Any]] = {}
     if with_platform:
-        platform = {
-            s.name: (s.agreement, s.agreement_aligned) for s in mining_service.mine_status(project)
-        }
+        statuses = mining_service.mine_status(project)
+        platform = {s.name: (s.agreement, s.agreement_aligned) for s in statuses}
+        versions = {i.name: v for i, v in chosen}
+        for s in statuses:
+            d = miner_detail(project, s.name, s.version)
+            detail[s.name] = {
+                "status": {
+                    "version": s.version,
+                    "digest": s.digest,
+                    "units": s.units,
+                    "closed": s.closed,
+                    "open": s.open,
+                    "rows": s.rows,
+                    "stale": s.stale,
+                    "imported_dual": s.imported_dual,
+                    "imported_single": s.imported_single,
+                },
+                "use": d["use"],
+                "versions": d["versions"],
+            }
+        for name, v in versions.items():
+            if name not in detail:  # registered, not listed: versions only
+                detail[name] = {"versions": miner_detail(project, name, v)["versions"]}
     return MiningData(
         miners=tuple(i for i, _v in chosen),
         rows=load_rows(project, schemas),
@@ -1079,6 +1183,7 @@ def load_mining_data(
         titles=_load_titles(project, sets.included),
         platform=platform,
         codebook=load_codebook(project),
+        detail=detail,
     )
 
 

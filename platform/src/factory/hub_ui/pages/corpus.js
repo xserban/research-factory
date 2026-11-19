@@ -160,7 +160,14 @@ function groups(ws, k) {
 const glab = (k, v) => v === '' ? 'Not coded' : lab(k, v);
 
 /* ---------- facets (skeleton once; values refreshed) ---------- */
-const infoOf = ([k, l, , gk, def]) => HUB.info(`<b>${esc(l)}</b><p>${esc(gk && HUB.GLOSSARY[gk] ? HUB.GLOSSARY[gk][1] : def)}</p><p><span class="k">How it's counted.</span> Each number is the papers that match your other filters and have this value. Values with none are dimmed.</p>`, 'About ' + l);
+const LAYER_NOTE = k => k === 'layer' ? '<p><span class="k">A first triage.</span> A layer comes from the layer miner or from a researcher’s move. The layer pass has not been calibrated, so a layer is a starting sort, not a finding. A paper moved by hand is marked “moved by the researcher”; the miner’s own layer is given in its detail.</p>' : '';
+function citeNote() {
+  const c = C.citation;
+  if (!c) return 'Reference lists have been read for ' + fmt(C.refs_done) + ' papers so far. A paper whose citers were never read shows none, which is not a known zero.';
+  if (!c.extractions) return 'No reference list has been extracted, so every in-corpus citation count is unknown (not zero).';
+  return 'Counts come from the ' + fmt(c.extractions) + ' works whose reference list was extracted (' + fmt(c.entries) + ' entries, ' + fmt(c.resolved_links) + ' resolved to a work of the project) out of ' + fmt(c.works_total) + ' works. A count is a lower bound: a citing work counts once, and a paper whose citers were never read shows none, which is not a known zero.';
+}
+const infoOf = ([k, l, , gk, def]) => HUB.info(`<b>${esc(l)}</b><p>${esc(gk && HUB.GLOSSARY[gk] ? HUB.GLOSSARY[gk][1] : def)}</p>${LAYER_NOTE(k)}<p><span class="k">How it's counted.</span> Each number is the papers that match your other filters and have this value. Values with none are dimmed.</p>`, 'About ' + l);
 function sideSkeleton() {
   return GROUPS.map(g => `<details class="fg" data-g="${esc(g)}" ${g === 'Paper' || g === 'System' ? 'open' : ''}><summary>${esc(g)}<span class="ga"></span><button type="button" class="lnk" data-cg="${esc(g)}">Clear group</button></summary>` +
     DD.filter(x => x[2] === g).map(x => `<div class="fc" data-d="${x[0]}"><div class="fh">${esc(x[1])}${infoOf(x)}${ORD[x[0]].length > 10 ? `<input type="text" data-fq="${x[0]}" placeholder="Find a value" aria-label="Find a value in ${esc(x[1])}">` : ''}</div><div class="fv"></div></div>`).join('') + '</details>').join('');
@@ -210,7 +217,7 @@ function rowHTML(w) {
   const hv = w._d.human[0], c = w.cited_in_corpus;
   return `<div class="cr" role="button" tabindex="-1" data-id="${esc(w.id)}" aria-selected="${ST.sel.has(w.id)}"><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${ST.sel.has(w.id) ? 'checked' : ''} aria-label="Select this paper" title="Select"><div class="cm">
     <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}${w.not_read_yet ? ' <span class="meta" title="Included, but no miner has read it yet.">(not read yet)</span>' : ''}</div>
-    <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}</div>
+    <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}${w.layer_source === 'moved' ? `<span title="${esc('Moved to this layer by the researcher' + (w.layer_miner ? '; the miner said ' + H.layerLabel(w.layer_miner) : ''))}">moved by the researcher</span>` : ''}</div>
     ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span></div></div>`;
 }
 function viewList(ws) {
@@ -231,7 +238,7 @@ function viewChrono(ws) {
   return `<div class="scroll"><div class="chr">${months.map(m => `<div class="mon"><h4>${esc(m)} <span>${by[m].length}</span></h4>${by[m].sort(cmp).map(w => {
     const q = (w.desc.contribution && w.desc.contribution.q) || (w.cls.technique_primary && w.cls.technique_primary.q) || '', o = (OUT[w.slug] || []).length, i = (INN[w.slug] || []).length;
     return `<div class="card2" data-id="${esc(w.id)}">${esc(dateOf(w))}<b>${hl(w.title)}</b><span class="tag">${esc(lab('technique', w._d.technique[0] || ''))}</span> <span class="tag">${esc(lab('architecture', w._d.architecture[0] || ''))}</span> <span class="tag">${esc(lab('human', w._d.human[0] || ''))}</span>
-      <div style="margin-top:5px">${w._d.stage.map(s => `<span class="sd" title="${esc(pretty(s))}" style="background:${colorOf('stage', s)}"></span>`).join('')}</div>${o || i ? `<div>cites ${o} · cited by ${i} here</div>` : ''}${q ? `<div class="qt">“${esc(q.slice(0, 200))}”</div>` : ''}</div>`; }).join('')}</div>`).join('') || '<p class="meta">No papers match.</p>'}</div></div>`;
+      <div style="margin-top:5px">${w._d.stage.map(s => `<span class="sd" title="${esc(pretty(s))}" style="background:${colorOf('stage', s)}"></span>`).join('')}</div>${o || i ? `<div>cites ${o} · cited by ${i} here</div>` : ''}${q ? `<div class="qt">“${esc(q.slice(0, 200))}”</div>` : ''}${w.doc ? `<div><a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open the converted document (${esc(w.doc.kind)})</a></div>` : ''}</div>`; }).join('')}</div>`).join('') || '<p class="meta">No papers match.</p>'}</div></div>`;
 }
 function viewLineage(ws) {
   const inSet = new Set(ws.map(w => w.slug)), edges = C.cites.filter(([a, b]) => inSet.has(a) && inSet.has(b)), linked = new Set(edges.flat());
@@ -342,19 +349,19 @@ function detailHTML(w) {
   return `<div style="display:flex;justify-content:space-between;align-items:center"><span class="meta"><i class="dot" style="background:${colorOf('layer', w._d.layer[0])}"></i> ${esc(H.layerLabel(w._d.layer[0]))}${src}</span><button type="button" class="btn" id="cdClose">Close <span class="kbd">Esc</span></button></div>
   <h2 class="display" style="font-size:28px;margin:14px 0 8px">${hl(w.title)}</h2>
   <p class="meta">${esc((w.authors || []).join(', ') || 'No author recorded')} · ${esc(dateOf(w))}${w.venue ? ' · ' + esc(w.venue) : ''}${w.cited_by != null ? ' · cited by ' + w.cited_by + ' elsewhere' : ''}</p>
-  <p class="meta">${HUB.term('cic', 'Cited here')} <b class="num">${w.cited_in_corpus ?? 0}</b> times · ${links}${w.doc ? ` · full text on file (${esc(w.doc.kind)})` : ' · no full text on file'}</p>
+  <p class="meta">${HUB.term('cic', 'Cited here')} <b class="num">${w.cited_in_corpus ?? 0}</b> times · ${links}${w.doc ? ` · full text on file (${esc(w.doc.kind)}): <a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener">Conversion inspector</a> <button type="button" class="btn" disabled title="The hub has no route that serves the stored original yet">Open the original ${esc(w.doc.kind)}</button> ${HUB.info('The stored original file is not served by the v2 hub yet. The conversion inspector shows it beside the extracted text.', 'About the original file')}` : ' · no full text on file'}</p>
   ${w.not_read_yet ? `<p class="meta">Included, but no miner has read it yet, so it has no coded values.</p>` : ''}
   ${w.mapped_from ? `<p class="meta">Its fields were read from a duplicate record of the same paper (<span class="mono">${esc(w.mapped_from)}</span>).</p>` : ''}
   <p style="margin:8px 0">${dnaHTML(w)}</p>
   <details><summary class="h3" style="cursor:pointer">Abstract</summary><p style="font-size:var(--t-s)">${w.abstract ? hl(w.abstract) : '<span class="meta">No abstract recorded.</span>'}</p></details>
   <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${l}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
-  <h3 class="h3">Citations within the corpus ${HUB.info('Reference lists have been read for ' + fmt(C.refs_done) + ' papers so far. A paper whose citers were never read shows none, which is not a known zero.', 'About citations')}</h3>
+  <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')}</h3>
   <b class="meta">Cites</b><ul>${L(o)}</ul><b class="meta">Cited by</b><ul>${L(i)}</ul>
   <h3 class="h3">Lifecycle stages</h3>${w.stages.map(x => `<div class="kv"><span class="tag">${esc(pretty(x.stage))}</span> <span class="meta">${esc(x.mode || '')}</span><blockquote class="quote">“${hl(x.quote)}” <span class="meta">${esc(x.anchor || '')}</span></blockquote></div>`).join('') || '<div class="meta">None recorded.</div>'}
   <h3 class="h3">Classification</h3>${kv(w.cls)}<h3 class="h3">Process, human role, blueprint</h3>${kv(w.map)}<h3 class="h3">Descriptors</h3>${kv(w.desc)}
   <h3 class="h3">Results ${w.n_design ? `<span class="meta">${fmt(w.n_design)} rows</span>` : ''}</h3>${w.design.slice(0, 12).map(r => `<div class="kv">${esc(r.system)} · ${esc(pretty(r.stage))} · ${esc(pretty(r.approach))} <span class="meta">${esc(pretty(r.system_role || ''))} · ${esc(pretty(r.evidence_grade || ''))}</span></div>`).join('') || '<div class="meta">No rows.</div>'}
   <h3 class="h3">Mine and layer</h3><div class="acts">${actsHTML(w)}</div>
-  <h3 class="h3">Commands</h3>${copy(`factory --project ${P} document read ${w.id}`)}${copy(`factory --project ${P} trace ${w.id}`)}`;
+  <h3 class="h3">What you can do</h3>${w.doc ? `<p class="meta"><a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener">Conversion inspector</a>: the original beside its extracted text.</p>` : ''}${copy(`factory --project ${P} document read ${w.id}`)}${copy(`factory --project ${P} trace ${w.id}`)}`;
 }
 function openWork(w, silent) {
   if (!w) return; ST.id = w.id; const p = $('#cdet'); p.innerHTML = detailHTML(w); p.setAttribute('open', ''); p.scrollTop = 0; if (!silent) writeHash();

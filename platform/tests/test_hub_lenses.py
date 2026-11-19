@@ -180,3 +180,81 @@ def test_payload_matrices_for_every_pair_and_icicle_dims():
     assert p["matrices"]["b|a"]["observed"] != [] and p["matrix"] == m
     assert p["icicle"]["dims"] == ["a", "b"]
     assert all(len(ids) == n for col in p["chains"]["links"] for _, _, n, ids in col)
+
+
+# ---------------------------------------------------------------- results grid, citation rate
+
+
+def test_results_grid_counts_own_system_rows_by_stage_and_approach() -> None:
+    rows = {
+        "w1": [
+            {"stage": "s1", "approach": "a1", "system_role": "own-system", "evidence_grade": "g1"},
+            {"stage": "s1", "approach": "a1", "system_role": "own-system", "evidence_grade": "g2"},
+            {"stage": "s1", "approach": "a2", "system_role": "baseline", "evidence_grade": "g1"},
+        ],
+        "w2": [{"stage": "s2", "approach": "a1", "system_role": "own-system", "value_kind": "k"}],
+        "w3": [],
+    }
+    out = L.results_grid(rows, {"w1": 5, "w2": 1})
+    assert out["rows"] == 4 and out["own"] == 3 and out["works_with_rows"] == 2
+    assert out["left_out"] == 2  # w1 had 5 rows, 3 are read
+    assert out["stages"] == ["s1", "s2"] and out["approaches"] == ["a1"]
+    assert out["cells"] == [
+        {"stage": "s1", "approach": "a1", "n": 2, "works": ["w1"]},
+        {"stage": "s2", "approach": "a1", "n": 1, "works": ["w2"]},
+    ]
+    assert out["bars"]["system_role"] == [["own-system", 3], ["baseline", 1]]
+    assert out["bars"]["evidence_grade"] == [["g1", 2], ["g2", 1]]
+    assert out["bars"]["value_kind"] == [["k", 1]]
+    json.dumps(out)
+
+
+def test_results_grid_without_rows_is_empty_and_json_safe() -> None:
+    out = L.results_grid({})
+    assert out["rows"] == 0 and out["cells"] == [] and out["left_out"] == 0
+    json.dumps(out)
+
+
+def _wc(i: str, year: int | None, by: int | None, per: float | None, ext: int | None = None):
+    from factory.services.citations import WorkCitations
+
+    return WorkCitations(i, i, year, by, 0 if by is not None else None, (), per, ext)
+
+
+def test_citation_rate_ranks_included_works_and_keeps_two_counts_apart() -> None:
+    works = [
+        _wc("a", 2020, 4, 1.0, ext=900),
+        _wc("b", 2024, 3, 1.5),
+        _wc("c", 2020, 0, 0.0, ext=5),
+        _wc("x", 2020, 9, 9.0),  # not included
+        _wc("u", None, 2, None),  # no year: unknown, never zero
+    ]
+    out = L.citation_rate(
+        works,
+        {"a", "b", "c", "u"},
+        extractions=7,
+        entries=70,
+        resolved_links=30,
+        works_total=10,
+        as_of_year=2025,
+        top=2,
+    )
+    assert [r["id"] for r in out["rows"]] == ["b", "a"]
+    assert out["rows"][1]["external"] == 900 and out["rows"][1]["cited_by"] == 4
+    assert out["unknown"] == 1 and out["included"] == 4
+    assert (out["extractions"], out["entries"], out["resolved_links"]) == (7, 70, 30)
+    assert out["as_of_year"] == 2025
+    json.dumps(out)
+
+
+def test_citation_rate_without_extractions_has_no_year_and_no_rows() -> None:
+    out = L.citation_rate(
+        [_wc("a", 2020, None, None)],
+        {"a"},
+        extractions=0,
+        entries=0,
+        resolved_links=0,
+        works_total=1,
+        as_of_year=2025,
+    )
+    assert out["rows"] == [] and out["as_of_year"] is None and out["unknown"] == 1
