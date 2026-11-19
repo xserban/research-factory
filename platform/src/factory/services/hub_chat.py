@@ -21,7 +21,10 @@ Invariants:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import copy
+import logging
+import threading
+from typing import TYPE_CHECKING, Any, Final
 
 from factory.document.quotes import quote_span
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
@@ -35,7 +38,14 @@ from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.mining import population_works
 from factory.services.search import get_work
-from factory.services.selection import SelectionSpec, resolve_selection
+from factory.services.selection import (
+    SelectionSpec,
+    event_log_signature,
+    resolve_selection,
+    resolve_selection_cached,
+)
+
+_LOG: Final = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # hub_build imports this module to register its builder
     from factory.services.hub_build import HubContext
@@ -92,9 +102,9 @@ def parse_spec(query: dict[str, str]) -> tuple[SelectionSpec, bool]:
 
 
 def narrow(project: Project, spec: SelectionSpec) -> SelectionSpec:
-    """`spec` for "only the papers in `include`": a selection with no layer takes the whole
-    population, so every population work not listed is excluded, explicitly. The recorded spec is
-    then plain layers, include and exclude, as the runner and the skill read it."""
+    """The open-form "only the papers in `include`": every population work not listed excluded
+    explicitly. Used for the UI's count of papers not picked only; the recorded spec for "only
+    these papers" is the closed form (`closed` true, `include`), which a later work cannot enter."""
     keep = set(spec.include)
     out = set(spec.exclude)
     for work in population_works(project, spec.population):
@@ -114,8 +124,8 @@ def basket_payload(project: Project, spec: SelectionSpec, only: bool = False) ->
     are counted, not listed. Read-only; `FactoryValidationError` for an unknown layer or work id."""
     shown = spec
     if only:
-        spec = narrow(project, spec)
-    chosen = resolve_selection(project, spec)
+        spec = spec.model_copy(update={"closed": True})
+    chosen = resolve_selection_cached(project, spec)
     asked = set(shown.exclude)
     works = [
         {
@@ -127,18 +137,19 @@ def basket_payload(project: Project, spec: SelectionSpec, only: bool = False) ->
         for w in chosen.works
     ]
     return {
-        "spec": {"layers": shown.layers, "include": shown.include, "exclude": shown.exclude},
+        "spec": {
+            "layers": shown.layers,
+            "include": shown.include,
+            "exclude": shown.exclude,
+            "closed": spec.closed,
+        },
         "only": only,
         "count": len(works),
         "works": works,
         "left_out": [
-            {"work_id": w, "title": _title(project, w), "reason": why}
-            for w, why in chosen.excluded
-            if not only or w in asked or why != "excluded"
+            {"work_id": w, "title": _title(project, w), "reason": why} for w, why in chosen.excluded
         ],
-        "not_picked": sum(
-            1 for w, why in chosen.excluded if only and why == "excluded" and w not in asked
-        ),
+        "not_picked": len(set(narrow(project, shown).exclude) - asked) if only else 0,
         "chars": chosen.chars,
         "est_tokens": chosen.est_tokens,
         "digest": chosen.digest,
@@ -184,13 +195,23 @@ def _request_row(
     }
 
 
-def chat_payload(project: Project) -> dict[str, Any]:
-    """The Chat page data: requests (newest first, by state), earlier sheets and answers (newest
-    first) and computed counts."""
-    runs = _run_states(project)
+_LISTS: dict[str, tuple[tuple[int, float], tuple[list[dict[str, Any]], list[dict[str, Any]]]]] = {}
+_LISTS_LOCK = threading.Lock()
+_LISTS_KEPT = 8
+
+
+def _lists(project: Project) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The sheet and answer rows of the page, reused while the event log is unchanged (the key is
+    the log signature, as `resolve_selection_cached` uses; any appended event ends it). The request
+    rows and their run states are not cached: a run's state changes without an event."""
+    key = str(project.paths.dir)
+    signature = event_log_signature(project)
+    with _LISTS_LOCK:
+        hit = _LISTS.get(key)
+        if hit is not None and hit[0] == signature:
+            return copy.deepcopy(hit[1])
     infos = _requests(project)
     pending = {r.parent for r in infos if r.parent and r.state in ("open", "taken")}
-    requests = [_request_row(r, runs) for r in reversed(infos)]
     sheets = []
     for s in reversed(sheets_service.list_sheets(project)):
         view = sheets_service.view_sheet(project, s.sheet_id)
@@ -224,6 +245,21 @@ def chat_payload(project: Project) -> dict[str, Any]:
         }
         for a in reversed(answers_service.list_answers(project))
     ]
+    with _LISTS_LOCK:
+        _LISTS.pop(key, None)
+        _LISTS[key] = (signature, (sheets, answers))
+        while len(_LISTS) > _LISTS_KEPT:
+            del _LISTS[next(iter(_LISTS))]
+    return copy.deepcopy((sheets, answers))
+
+
+def chat_payload(project: Project) -> dict[str, Any]:
+    """The Chat page data: requests (newest first, by state), earlier sheets and answers (newest
+    first) and computed counts. The sheet and answer rows are cached on the event-log signature
+    (`_lists`); the requests and their run states are read each time."""
+    runs = _run_states(project)
+    requests = [_request_row(r, runs) for r in reversed(_requests(project))]
+    sheets, answers = _lists(project)
     counts = {
         s: sum(1 for r in requests if r["state"] == s) for s in ("open", "taken", "done", "failed")
     }
@@ -413,14 +449,18 @@ def _spec_of(body: dict[str, Any], issues: list[ValidationIssue]) -> SelectionSp
             issues.append(ValidationIssue(f"selection.{key}", "must be a list of text"))
             value = []
         lists[key] = list(value)
+    closed = raw.get("closed", False)
+    if not isinstance(closed, bool):
+        issues.append(ValidationIssue("selection.closed", "must be true or false"))
+        closed = False
     population = raw.get("population")
     if population is None:
-        return SelectionSpec(**lists)
+        return SelectionSpec(**lists, closed=closed)
     try:
-        return SelectionSpec(**lists, population=Population(population))
+        return SelectionSpec(**lists, closed=closed, population=Population(population))
     except ValueError:
         issues.append(ValidationIssue("selection.population", "not a known population"))
-        return SelectionSpec(**lists)
+        return SelectionSpec(**lists, closed=closed)
 
 
 def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str, object]:
@@ -454,11 +494,16 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
         raise FactoryValidationError(issues)
     assert kind is not None
     if only:
-        spec = narrow(project, spec)
-    resolve_selection(
-        project, spec
-    )  # an unknown layer or work is refused before anything is written
-    payload = chat_requests.request_chat(project, actor, kind, spec, **texts)
+        spec = spec.model_copy(update={"closed": True})
+    # an unknown layer or work is refused before anything is written
+    chosen = resolve_selection(project, spec)
+    if not chosen.works:
+        raise FactoryValidationError(
+            [ValidationIssue("selection", "the selection resolves to no papers; pick some")]
+        )
+    with project.index.exclusive():  # the duplicate check and the record are one step
+        _refuse_duplicate(project, kind, chosen.digest, texts)
+        payload = chat_requests.request_chat(project, actor, kind, spec, **texts)
     out: dict[str, object] = {"request_id": payload.request_id, "kind": kind, "run_id": None}
     if start is False:
         return out
@@ -467,7 +512,38 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
     except FactoryError as exc:
         out["run_error"] = "; ".join(i.reason for i in getattr(exc, "issues", [])) or str(exc)
         out["command"] = f"factory queue process --stage {kind}"
+    except Exception as exc:  # the request is recorded; whatever went wrong starting the run
+        _LOG.warning("chat run did not start: %r", exc, exc_info=True)
+        out["run_error"] = str(exc) or type(exc).__name__
+        out["command"] = f"factory queue process --stage {kind}"
     return out
+
+
+def _refuse_duplicate(
+    project: Project, kind: str, digest: str, texts: dict[str, str | None]
+) -> None:
+    """A second waiting or running request with the same kind, selection digest and text (a double
+    click) is refused on field `request`; nothing is written."""
+    wanted = ((texts["hypothesis"] if kind == "spar" else texts["question"]) or "").strip()
+    for info in _requests(project):
+        if info.state not in ("open", "taken") or info.kind != kind:
+            continue
+        had = ((info.hypothesis if kind == "spar" else info.question) or "").strip()
+        if had != wanted:
+            continue
+        try:
+            same = resolve_selection_cached(project, SelectionSpec.model_validate(info.selection))
+        except (FactoryValidationError, ValueError):
+            continue
+        if same.digest == digest:
+            raise FactoryValidationError(
+                [
+                    ValidationIssue(
+                        "request",
+                        f"the same order is already waiting or running ({info.request_id})",
+                    )
+                ]
+            )
 
 
 def _required(body: dict[str, Any], key: str, issues: list[ValidationIssue]) -> str:

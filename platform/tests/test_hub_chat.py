@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from factory.clock import FixedClock
 from factory.config import Settings
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.events.reader import read_all
 from factory.services import answers as an
@@ -28,13 +28,12 @@ from factory.services import hub_build, hub_chat, hub_ui, site_server
 from factory.services import runner as runner_service
 from factory.services import sheets as sh
 from factory.services.chat_candidates import CandidateInput as C
-from factory.services.context import Project, list_projects, open_project
+from factory.services.context import Project, list_projects
 from factory.services.selection import SelectionSpec, resolve_selection_cached
 from tests.extraction_helpers import (
     screened,  # noqa: F401
     world,  # noqa: F401
 )
-from tests.helpers import SESSION
 
 UI = "/p/demo/ui"
 ANCHOR, QUOTE = "s3.p1", "Lorem ipsum"
@@ -250,7 +249,7 @@ def served(
     hub = site_server.MainHub(
         settings.root,
         lambda: list_projects(settings),
-        lambda slug: open_project(settings, slug, session=SESSION, clock=clock),
+        lambda slug: project,  # one handle, as the real hub's slot: ids stay monotonic
         min_gap=300.0,
         background=False,
     )
@@ -329,11 +328,42 @@ def test_request_route_records_a_human_request_and_starts_the_run(
         "include": [],
         "exclude": [sorted(world)[0]],
         "population": "included-ft",
+        "closed": False,
     }
 
 
+def test_only_these_papers_is_recorded_closed_and_a_later_work_cannot_enter(
+    project: Project, human: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    works = sorted(world)
+    assert len(works) >= 2
+    picked = works[:-1]
+    real = hub_chat.population_works  # type: ignore[attr-defined]
+    # the last work "joins the population later": it is missing when the order is placed
+    monkeypatch.setattr(
+        hub_chat, "population_works", lambda p, pop: [w for w in real(p, pop) if w != works[-1]]
+    )
+    body = {
+        "kind": "ask",
+        "question": "Q?",
+        "start": False,
+        "selection": {"only": True, "include": picked},
+    }
+    hub_chat.order_chat(project, human, body)
+    monkeypatch.undo()
+    [event] = [
+        e for e in read_all(project.paths.events_dir, project.catalog) if e.type == "chat.requested"
+    ]
+    recorded = SelectionSpec.model_validate(event.payload["selection"])
+    assert recorded.closed is True and recorded.include == picked and recorded.exclude == []
+    resolved = resolve_selection_cached(project, recorded)
+    assert [w.work_id for w in resolved.works] == picked
+
+
 def test_request_route_keeps_the_request_when_the_run_cannot_start(
-    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+    served: tuple[int, Project],
+    monkeypatch: pytest.MonkeyPatch,
+    world: list[str],
 ) -> None:
     port, project = served
 
@@ -350,7 +380,9 @@ def test_request_route_keeps_the_request_when_the_run_cannot_start(
 
 
 def test_request_route_without_start_only_records(
-    served: tuple[int, Project], started: list[tuple[str, int | None]]
+    served: tuple[int, Project],
+    started: list[tuple[str, int | None]],
+    world: list[str],
 ) -> None:
     port, project = served
     auth = {"X-Factory-Token": _token(port)}
@@ -432,6 +464,25 @@ def test_rate_argument_route_writes_a_human_rating_and_refuses_bad_input(
         if e.type == "sheet.argument_rated"
     ]
     assert event.actor.kind == "human" and event.payload["rating"] == "wrong"
+
+
+def test_a_write_through_the_hub_is_read_back_at_once_under_a_frozen_clock(
+    served: tuple[int, Project], agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flake root cause: with a frozen clock two Project handles mint ids in the same millisecond
+    from their own random starts, so the hub's rating could sort BEFORE the sheet events the test
+    handle wrote earlier, and the projection ignored it. Worst case forced here: random bits 0."""
+
+    import secrets
+
+    monkeypatch.setattr(secrets, "randbits", lambda n: 0)
+    port, project = served
+    sheet = _sheet(project, agent, world)
+    arg = hub_chat.sheet_view(project, sheet)["arguments"][0]["argument_id"]
+    auth = {"X-Factory-Token": _token(port)}
+    body = {"argument_id": arg, "rating": "weak", "note": "n"}
+    assert _req(port, "POST", ROUTES["argument"], body, auth)[0] == 200
+    assert hub_chat.sheet_view(project, sheet)["arguments"][0]["rating"] == "weak"
 
 
 def test_rate_sentence_route_rates_a_sentence_or_the_whole_answer(
@@ -554,3 +605,203 @@ def test_entry_points_link_to_the_chat_hash() -> None:
     assert "Spar with this paper" in shell
     contra = _js("pages/contradictions.js")
     assert "Spar this pair" in contra and "HUB.chatHref" in contra and "seed" in contra
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def test_the_marked_span_is_escaped_in_the_rendered_paragraph() -> None:
+    """Run chat.js `paragraph()` itself (node) on a long paragraph whose marked quote holds markup;
+    the static check pins the three escaped pieces when node is absent."""
+    import shutil
+    import subprocess
+
+    src = _js("pages/chat.js")
+    body = re.search(r"function paragraph\(a\) \{.*?\n  \}\n", src, flags=re.S)
+    assert body is not None
+    fn = body.group(0)
+    assert fn.count("esc(") >= 4 and "<mark>${esc(p.slice(m[0], m[1]))}</mark>" in fn
+    node = shutil.which("node")
+    if node is None:
+        return
+    quote = "<img src=x onerror=alert(1)>"
+    para = "A long enough paragraph of more than forty characters, with " + quote + " inside it."
+    start = para.index(quote)
+    script = (
+        "const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')"
+        ".replace(/>/g,'&gt;').replace(/\"/g,'&quot;');\n"
+        + fn
+        + f"\nconsole.log(paragraph({{paragraph: {json.dumps(para)}, "
+        f"mark: [{start}, {start + len(quote)}]}}));"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout
+    assert "<img" not in out and "&lt;img src=x onerror=alert(1)&gt;" in out
+    assert out.count("<mark>") == 1 and len(para) > 40
+
+
+def test_a_view_carries_the_whole_paragraph_not_a_clip(
+    project: Project, agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    sheet = _sheet(project, agent, world)
+    full = "Before the quote, a long opening sentence. Lorem ipsum dolor sit amet. And a tail."
+    assert len(full) > 40
+    manifest = SimpleNamespace(get=lambda anchor: SimpleNamespace(text=full))
+    monkeypatch.setattr(hub_chat, "conversion_manifest", lambda p, c: manifest)
+    shown = hub_chat.sheet_view(project, sheet)["arguments"][0]
+    assert shown["paragraph"] == full
+    start, end = shown["mark"]
+    assert shown["paragraph"][start:end] == QUOTE
+
+
+BODIES: dict[str, dict[str, Any]] = {
+    "request": {"kind": "ask", "question": "Q?", "start": False},
+    "argument": {"argument_id": "arg_X", "rating": "sound"},
+    "sentence": {"answer_id": "ans_X", "rating": "sound"},
+    "balance": {"sheet_id": "sht_X", "text": "t"},
+}
+
+
+@pytest.mark.parametrize("name", list(ROUTES))
+def test_a_principal_without_the_human_act_permission_is_refused_on_every_route(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    port, project = served
+    asked: list[str] = []
+
+    def refuse(*a: Any, **k: Any) -> None:
+        asked.append(str(a[2]))
+        raise FactoryError("permission: human-act:confirm not held")
+
+    monkeypatch.setattr(site_server, "authorize_command", refuse)
+    before = _total(project)
+    auth = {"X-Factory-Token": _token(port)}
+    status, _, data = _req(port, "POST", ROUTES[name], BODIES[name], auth)
+    assert status == 403 and json.loads(data)["issues"]
+    assert _total(project) == before and len(asked) == 1 and asked[0].startswith("cli:")
+
+
+def test_an_unknown_kind_is_refused_before_any_access_row_is_chosen(
+    served: tuple[int, Project],
+    monkeypatch: pytest.MonkeyPatch,
+    world: list[str],
+) -> None:
+    port, _ = served
+    asked: list[str] = []
+    monkeypatch.setattr(site_server, "authorize_command", lambda *a, **k: asked.append(str(a[2])))
+    auth = {"X-Factory-Token": _token(port)}
+    body = {"kind": "talk", "question": "Q?"}
+    assert _req(port, "POST", ROUTES["request"], body, auth)[0] == 400
+    assert asked == []
+    assert _req(port, "POST", ROUTES["request"], {"kind": "ask", "question": "Q"}, auth)[0] == 200
+    assert asked == ["cli:chat request ask"]
+
+
+def test_a_failing_run_start_keeps_the_request_and_answers_run_error(
+    served: tuple[int, Project],
+    monkeypatch: pytest.MonkeyPatch,
+    world: list[str],
+) -> None:
+    port, project = served
+
+    def boom(*a: Any, **k: Any) -> str:
+        raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(runner_service, "start_run", boom)
+    auth = {"X-Factory-Token": _token(port)}
+    status, _, data = _req(
+        port, "POST", ROUTES["request"], BODIES["request"] | {"start": True}, auth
+    )
+    answer = json.loads(data)
+    assert status == 200 and answer["run_id"] is None and "spawn failed" in answer["run_error"]
+    assert answer["command"] == "factory queue process --stage ask"
+    assert _count(project, "chat.requested") == 1
+
+
+def test_a_double_click_does_not_record_the_same_order_twice(
+    served: tuple[int, Project],
+    started: list[tuple[str, int | None]],
+    world: list[str],
+) -> None:
+    port, project = served
+    auth = {"X-Factory-Token": _token(port)}
+    body = {"kind": "ask", "question": "Q?", "start": False}
+    assert _req(port, "POST", ROUTES["request"], body, auth)[0] == 200
+    status, _, data = _req(port, "POST", ROUTES["request"], body, auth)
+    assert status == 400 and json.loads(data)["issues"][0]["field"] == "request"
+    assert _count(project, "chat.requested") == 1
+    other = dict(body, question="Another?")
+    assert _req(port, "POST", ROUTES["request"], other, auth)[0] == 200
+    narrower = dict(body, selection={"only": True, "include": [sorted(project_works(project))[0]]})
+    assert _req(port, "POST", ROUTES["request"], narrower, auth)[0] == 200
+    assert _count(project, "chat.requested") == 3
+
+
+def project_works(project: Project) -> list[str]:
+    return [w.work_id for w in resolve_selection_cached(project, SPEC).works]
+
+
+def test_the_order_button_is_disabled_while_the_post_is_in_flight() -> None:
+    src = _js("pages/chat.js")
+    assert "go.disabled = true" in src and "go.disabled = false" in src
+    assert "st.size = ok ? j.count : null" in src
+    assert "document.activeElement &&" in src
+
+
+def test_an_order_whose_selection_resolves_to_no_works_is_refused(
+    served: tuple[int, Project], started: list[tuple[str, int | None]], world: list[str]
+) -> None:
+    port, project = served
+    auth = {"X-Factory-Token": _token(port)}
+    before = _total(project)
+    for selection in (
+        {"only": True, "include": []},
+        {"closed": True, "include": []},
+        {"exclude": sorted(world)},
+    ):
+        body = {"kind": "ask", "question": "Q?", "selection": selection}
+        status, _, data = _req(port, "POST", ROUTES["request"], body, auth)
+        assert status == 400, selection
+        assert json.loads(data)["issues"][0]["field"] == "selection"
+    assert _total(project) == before and started == []
+
+
+def test_the_chat_payload_is_cached_on_the_event_log_signature(
+    project: Project, agent: Actor, human: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sheet(project, agent, world)
+    calls: list[str] = []
+    real = sh.view_sheet
+
+    def counting(p: Project, sheet_id: str) -> Any:
+        calls.append(sheet_id)
+        return real(p, sheet_id)
+
+    monkeypatch.setattr(sh, "view_sheet", counting)
+    first = hub_chat.chat_payload(project)
+    n = len(calls)
+    assert n >= 1
+    assert hub_chat.chat_payload(project) == first and len(calls) == n
+    cr.request_chat(project, human, "ask", SPEC, question="Q?")
+    again = hub_chat.chat_payload(project)
+    assert len(again["requests"]) == 1 and len(calls) > n
+
+
+def test_the_basket_uses_the_cached_resolution(
+    project: Project, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import selection as selection_module
+
+    calls: list[int] = []
+    real = selection_module.resolve_selection
+
+    def counting(p: Project, spec: SelectionSpec) -> Any:
+        calls.append(1)
+        return real(p, spec)
+
+    monkeypatch.setattr(selection_module, "resolve_selection", counting)
+    spec = SelectionSpec(include=[sorted(world)[0]])
+    hub_chat.basket_payload(project, spec)
+    hub_chat.basket_payload(project, spec)
+    assert len(calls) == 1

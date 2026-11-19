@@ -520,7 +520,10 @@ def _chat_route(
         # a request is authorised as the CLI command of its kind
         name = command
         if command == "cli:chat request":
-            name = f"cli:chat request {'ask' if body.get('kind') == 'ask' else 'spar'}"
+            kind = body.get("kind")
+            if kind not in ("ask", "spar"):  # no access row is chosen for an unknown kind
+                return 400, _issues(ValidationIssue("kind", "must be spar or ask"))
+            name = f"cli:chat request {kind}"
         return _layer_act(project, name, [], lambda actor: act(project, actor, body))
 
     return route

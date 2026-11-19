@@ -204,3 +204,39 @@ def test_cached_resolution_reused_until_the_log_changes(
     with pytest.raises(FactoryValidationError):
         sel_mod.resolve_selection_cached(project, SelectionSpec(layers=["nope"]))
     assert len(calls) == 4
+
+
+def test_closed_selection_reads_only_include_and_ignores_the_population(
+    project: Project, screened: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    works = sorted(screened)
+    assert len(works) >= 3
+    _convert(project)
+    closed = SelectionSpec(closed=True, include=works[:2])
+    assert [w.work_id for w in resolve_selection(project, closed).works] == works[:2]
+    # a work that joins the population later does not enter a closed selection
+    from factory.services import selection as selection_module
+
+    real = selection_module.population_works
+    monkeypatch.setattr(
+        selection_module, "population_works", lambda p, pop: [*real(p, pop), "wrk_NEW"]
+    )
+    assert [w.work_id for w in resolve_selection(project, closed).works] == works[:2]
+    # exclude still applies to a closed selection
+    narrowed = SelectionSpec(closed=True, include=works[:2], exclude=[works[0]])
+    assert [w.work_id for w in resolve_selection(project, narrowed).works] == [works[1]]
+
+
+def test_closed_and_open_specs_differ_in_digest_and_old_specs_stay_open(
+    project: Project, screened: list[str]
+) -> None:
+    works = sorted(screened)
+    _convert(project)
+    assert SelectionSpec().closed is False
+    old = SelectionSpec.model_validate({"layers": [], "include": [], "exclude": []})
+    assert old.closed is False
+    everything = SelectionSpec(include=works)
+    closed = SelectionSpec(closed=True, include=works)
+    a, b = resolve_selection(project, everything), resolve_selection(project, closed)
+    assert [w.work_id for w in a.works] == [w.work_id for w in b.works]
+    assert a.digest != b.digest

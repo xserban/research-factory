@@ -95,7 +95,7 @@ HUB.load(['shell', 'chat']).then(d => {
     if (!HUB.served) return;
     getLive(basketQuery()).then(({ ok, j }) => {
       host.innerHTML = basketHtml(ok ? j : null, ok ? '' : HUB.issues(j)); wireBasket();
-      st.size = ok ? j.count : 0;
+      st.size = ok ? j.count : null;
     }).catch(() => { host.innerHTML = basketHtml(null, 'The basket could not be counted just now.'); wireBasket(); });
   }
 
@@ -140,7 +140,7 @@ HUB.load(['shell', 'chat']).then(d => {
       if (st.kind === 'spar') body.mode = st.mode;
       if (st.parent) body.parent = st.parent;
       if (note) body.note = note;
-      HUB.confirm(host, 'Order this ' + (st.kind === 'spar' ? 'spar' : 'ask') + ' over ' + (st.size == null ? 'the basket' : fmt(st.size) + ' papers') + '?', () => order(body, host));
+      HUB.confirm(host, 'Order this ' + (st.kind === 'spar' ? 'spar' : 'ask') + ' over ' + (st.size == null ? 'the basket' : fmt(st.size) + ' papers') + '?', () => { go.disabled = true; return order(body, host).finally(() => { go.disabled = false; }); });
     };
   }
   const paintForm = () => { main.querySelector('#ch-form').innerHTML = formHtml(); wireForm(); };
@@ -249,7 +249,7 @@ HUB.load(['shell', 'chat']).then(d => {
   function refresh() {
     if (!HUB.served) { paintProgress(); paintEarlier(); return Promise.resolve(); }
     return getLive('').then(({ ok, j }) => { if (ok) { C = j; paintProgress(); paintEarlier(); const sel = main.querySelector('#ch-parent'); if (sel && document.activeElement !== sel) sel.innerHTML = parentOptions(); } })
-      .then(() => { if ((st.sheet || st.answer) && !main.contains(document.activeElement.closest('.ch-rate, .ch-bal'))) return openResult(); })
+      .then(() => { if ((st.sheet || st.answer) && !(document.activeElement && document.activeElement.closest('.ch-rate, .ch-bal') && main.contains(document.activeElement.closest('.ch-rate, .ch-bal')))) return openResult(); })
       .catch(() => {});
   }
   const changed = () => { writeHash(); paintBasket(); };

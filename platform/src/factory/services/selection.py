@@ -23,13 +23,14 @@ Invariants:
   files). Any appended event changes the size, so it ends the cache; nothing else does, and a
   result is never older than the log it was read from. The cache is per process and holds
   `CACHE_ENTRIES` results at most (oldest dropped first).
+- `closed` (default false): the base is empty and only `include` is read; the digest of a closed
+  selection differs from that of an open one resolving to the same pairs.
 - `digest` is the sha256 of the canonical JSON of the sorted `[work_id, conversion_id]` pairs, so
   it does not depend on input order and changes when a conversion changes.
 """
 
 from __future__ import annotations
 
-import hashlib
 import threading
 from dataclasses import dataclass
 
@@ -39,6 +40,7 @@ from sqlalchemy import text
 from factory.canonical import canonical_json
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.reader import event_files
+from factory.index.answers import selection_digest_of
 from factory.mining.spec import Population
 from factory.model.base import StrictModel
 from factory.services.context import Project
@@ -66,12 +68,17 @@ CHARS_PER_TOKEN = 4
 
 class SelectionSpec(StrictModel):
     """Which works a chat reads: the works of `population`, restricted to `layers` when given,
-    plus `include` (known works, even outside the population), minus `exclude`."""
+    plus `include` (known works, even outside the population), minus `exclude`. With `closed` the
+    works are the `include` list alone (minus `exclude`)."""
 
     layers: list[str] = Field(default_factory=list)
     include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     population: Population = Population.INCLUDED_FT
+    closed: bool = False
+    """When true the base is empty: only `include` is read (layers and population are ignored) and
+    `exclude` still applies. A later work in the population never enters. Default false keeps
+    earlier events valid."""
 
 
 @dataclass(frozen=True)
@@ -125,8 +132,8 @@ def resolve_selection(project: Project, spec: SelectionSpec) -> Selection:
             [ValidationIssue("layers", f"unknown layer: {', '.join(unknown)}")]
         )
 
-    base = list(population_works(project, spec.population))
-    if spec.layers:
+    base = [] if spec.closed else list(population_works(project, spec.population))
+    if spec.layers and not spec.closed:
         wanted = set(spec.layers)
         found = layers_for(project, base)
         base = [w for w in base if w in found and found[w].layer in wanted]
@@ -167,7 +174,7 @@ def resolve_selection(project: Project, spec: SelectionSpec) -> Selection:
         excluded=tuple(sorted(excluded.items())),
         chars=total,
         est_tokens=total // CHARS_PER_TOKEN,
-        digest=hashlib.sha256(canonical_json(pairs)).hexdigest(),
+        digest=selection_digest_of(pairs, spec.closed),
     )
 
 
