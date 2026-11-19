@@ -197,6 +197,30 @@ def test_interrupted_section_carries_the_panel_lines_and_is_clean_flag(
         assert got["lines"] == ["Nothing is interrupted."]
 
 
+@pytest.mark.parametrize(("status", "expected"), [("running", True), ("done", False)])
+def test_runs_section_pipeline_open_follows_a_running_pipeline(
+    world: Project,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    expected: bool,
+) -> None:
+    class Pipe:
+        def __init__(self, status: str) -> None:
+            self.status = status
+
+        def model_dump(self, mode: str = "python") -> dict[str, Any]:
+            return {"status": self.status}
+
+    monkeypatch.setattr(
+        pipeline_service,
+        "pipeline_status",
+        lambda project, limit=None: [Pipe("done"), Pipe(status)],
+    )
+    assert hpl.runs_section(world)["pipeline_open"] is expected
+    monkeypatch.setattr(pipeline_service, "pipeline_status", lambda project, limit=None: [])
+    assert hpl.runs_section(world)["pipeline_open"] is False
+
+
 def test_activity_section_states_its_constants(world: Project) -> None:  # noqa: F811
     got = hpl.activity_section(world)
     assert got["stale_minutes"] == 10

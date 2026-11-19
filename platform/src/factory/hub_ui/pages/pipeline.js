@@ -132,10 +132,10 @@ HUB.load(['shell', 'pipeline']).then(d => {
 
   function lineSec() {
     if (!STATIONS.length) return card('Production line', 'stations', empty('The line appears once the review has records.'));
-    const arrow = s => `<div class="pl-arr" aria-hidden="true"><svg viewBox="0 0 22 14"><path d="M1 7h19M14 2l6 5-6 5"/></svg>${s.pct == null ? '' : '<span>' + s.pct + '%</span>'}</div>`;
+    const arrow = s => `<div class="pl-arr" aria-hidden="true"><svg viewBox="0 0 22 14"><path d="M1 7h19M14 2l6 5-6 5"/></svg>${s.pct == null ? '' : '<span>' + esc(s.pct) + '%</span>'}</div>`;
     const html = STATIONS.map((s, i) => `${i ? arrow(s) : ''}<a class="pl-st" href="${esc(s.page)}.html" aria-label="${esc(s.label)}: ${s.n == null ? 'not run' : fmt(s.n)} ${esc(s.sub)}">
       <div class="k">${esc(s.label)}</div><div class="v">${s.n == null ? '–' : fmt(s.n)}</div><div class="s">${esc(s.sub)}</div>
-      ${s.pct != null ? `<div class="q" title="${s.pct}% of the previous stage"><i style="width:${Math.min(100, s.pct)}%"></i></div>` : ''}
+      ${s.pct != null ? `<div class="q" title="${esc(s.pct)}% of the previous stage"><i style="width:${Math.min(100, s.pct)}%"></i></div>` : ''}
       ${s.pending ? `<div class="w">${fmt(s.pending)} waiting</div>` : ''}</a>`).join('');
     return card('Production line', 'stations', `<div class="pl-line">${html}</div>`, 'Work moves left to right. Open a station for its page.');
   }
@@ -324,22 +324,22 @@ HUB.load(['shell', 'pipeline']).then(d => {
   const A = () => live.act;
   function passRow(p) {
     const pct = p.total ? 100 * p.done / p.total : 0, held = p.total ? 100 * p.claimed / p.total : 0;
-    const name = p.kind === 'miner' ? `${p.name}${p.version != null ? '@' + p.version : ''}${p.pass_label ? ' · pass ' + p.pass_label : ''}${p.mode ? ' · ' + p.mode : ''}` : H.pretty(p.name);
+    const name = p.kind === 'miner' ? `${p.name}${p.version != null ? '@' + esc(p.version) : ''}${p.pass_label ? ' · pass ' + p.pass_label : ''}${p.mode ? ' · ' + p.mode : ''}` : H.pretty(p.name);
     return `<div class="pl-pass"><div class="hd"><span class="nm">${esc(name)}</span><span class="meta">${fmt(p.done)} of ${fmt(p.total)} done</span></div>
       <div class="tr" role="img" aria-label="${esc(name)}: ${fmt(p.done)} of ${fmt(p.total)} done"><i style="width:${pct}%"></i><i class="h" style="left:${pct}%;width:${Math.min(held, 100 - pct)}%"></i></div>
-      <div class="ft"><span>Held <b>${fmt(p.claimed)}</b></span><span>Abandoned <b>${fmt(p.abandoned)}</b></span><span>Done in ${A().rate_window_minutes} min <b>${fmt(p.completed_recent)}</b></span>
+      <div class="ft"><span>Held <b>${fmt(p.claimed)}</b></span><span>Abandoned <b>${fmt(p.abandoned)}</b></span><span>Done in ${esc(A().rate_window_minutes)} min <b>${fmt(p.completed_recent)}</b></span>
       <span>Rate, estimated <b>${p.rate_estimate_per_hour ? fmt(Math.round(p.rate_estimate_per_hour)) + ' per hour' : 'none'}</b></span><span>Time left, estimated <b>${esc(mins(p.eta_estimate_minutes))}</b></span><span>Released <b>${fmt(p.released)}</b></span></div></div>`;
   }
   function activityBody() {
     const a = A();
     if (!a) return empty('Activity is not available.');
     const passes = a.passes.length ? a.passes.map(passRow).join('') : empty('No pass is open.');
-    const dormant = a.dormant.length ? `<details class="pl-note" style="margin-top:10px"><summary>${plural(a.dormant.length, 'dormant pass', 'dormant passes')}</summary>${a.dormant.map(p => `<div class="meta" style="padding:4px 0">${esc(p.name)}${p.version != null ? '@' + p.version : ''}: ${fmt(p.done)} of ${fmt(p.total)}${p.abandoned ? ', ' + fmt(p.abandoned) + ' abandoned' : ''}</div>`).join('')}</details>` : '';
+    const dormant = a.dormant.length ? `<details class="pl-note" style="margin-top:10px"><summary>${plural(a.dormant.length, 'dormant pass', 'dormant passes')}</summary>${a.dormant.map(p => `<div class="meta" style="padding:4px 0">${esc(p.name)}${p.version != null ? '@' + esc(p.version) : ''}: ${fmt(p.done)} of ${fmt(p.total)}${p.abandoned ? ', ' + fmt(p.abandoned) + ' abandoned' : ''}</div>`).join('')}</details>` : '';
     const held = a.active.length ? `<div class="card"><table class="t"><thead><tr><th>Session</th><th>Task</th><th>Paper</th><th class="r">Held</th><th class="r">Lease left</th><th class="r">Rows</th><th>Last event</th><th>State</th></tr></thead><tbody>${a.active.slice(0, 6).map(r => `<tr><td class="num">${esc(String(r.session).slice(-8))}</td>
-      <td>${esc(r.scope)}${r.miner_version != null ? '@' + r.miner_version : ''}${r.pass_label ? ' · ' + esc(r.pass_label) : ''}${r.mode ? ' · ' + esc(r.mode) : ''}</td>
+      <td>${esc(r.scope)}${r.miner_version != null ? '@' + esc(r.miner_version) : ''}${r.pass_label ? ' · ' + esc(r.pass_label) : ''}${r.mode ? ' · ' + esc(r.mode) : ''}</td>
       <td>${wid(r.work_id) ? `<button type="button" class="chip" data-open="${esc(r.work_id)}">${esc((r.title || r.work_id).slice(0, 60))}</button>` : esc(r.title || r.work_id || '')}</td>
       <td class="r">${esc(mins(r.minutes_held))}</td><td class="r">${esc(mins(r.lease_minutes_left))}</td><td class="r">${fmt(r.rows_recorded)}</td><td class="meta">${esc(r.last_event_at ? clock(r.last_event_at) : '')}</td>
-      <td>${r.stale ? `<span class="pl-warn">stale (no event for ${a.stale_minutes} min)</span>` : 'active'}</td></tr>`).join('')}</tbody></table></div>` : empty('No task is held.');
+      <td>${r.stale ? `<span class="pl-warn">stale (no event for ${esc(a.stale_minutes)} min)</span>` : 'active'}</td></tr>`).join('')}</tbody></table></div>` : empty('No task is held.');
     const ops = a.operations.length ? `<div class="card"><div class="pl-bars">${a.operations.map(o => {
       const pct = o.total ? Math.min(100, 100 * o.done / o.total) : 0;
       return `<div class="pl-bar" style="grid-template-columns:180px minmax(0,1fr) auto"><span>${esc(o.label || o.kind)} <span class="meta">${esc(o.state)}</span></span><div class="tr"><i class="${o.state === 'failed' ? 's-stopped' : 's-done'}" style="width:${pct}%"></i></div>
@@ -354,7 +354,7 @@ HUB.load(['shell', 'pipeline']).then(d => {
     if (!ok(s) || !s || !(s.recent || s.totals)) return card('Screening live', 'screening', empty('No screening decisions yet.'));
     const tot = Object.entries(s.totals || {}).map(([pass, v]) => `<div class="pl-tile"><div class="k">Pass ${esc(pass)}</div><div class="v">${fmt(Object.values(v).reduce((a, b) => a + b, 0))}</div><div class="k">${Object.entries(v).map(([k, n]) => esc(k) + ' ' + fmt(n)).join(' · ')}</div></div>`).join('');
     const sess = (s.sessions || []).map(x => `<span class="chip" title="${esc(x.actor)}"><span class="dot" style="background:${x.active ? 'var(--inc)' : 'var(--dim)'}"></span>${esc(x.session)} <span class="n">${fmt(x.decisions)} decisions · ${fmt(x.includes)} included${x.rate_per_minute != null ? ' · ' + x.rate_per_minute + '/min' : ''}</span></span>`).join(' ');
-    const stops = (s.stops || []).map(x => `<div class="pl-bar"><span>Stop rule${x.below_score ? ' (score below ' + x.below_score + ')' : ''}</span><div class="tr"><i class="${x.stopped ? 's-stopped' : 's-done'}" style="width:${Math.min(100, 100 * x.run / x.n)}%"></i></div><span class="meta">${fmt(x.run)} of ${fmt(x.n)}${x.stopped ? ' · stopped' : ''}</span></div>`).join('');
+    const stops = (s.stops || []).map(x => `<div class="pl-bar"><span>Stop rule${x.below_score ? ' (score below ' + esc(x.below_score) + ')' : ''}</span><div class="tr"><i class="${x.stopped ? 's-stopped' : 's-done'}" style="width:${Math.min(100, 100 * x.run / x.n)}%"></i></div><span class="meta">${fmt(x.run)} of ${fmt(x.n)}${x.stopped ? ' · stopped' : ''}</span></div>`).join('');
     const rec = (s.recent || []).length ? `<table class="t" style="margin-top:12px"><thead><tr><th>Time</th><th>Pass</th><th>Paper</th><th>Verdict</th><th class="r">Score</th><th>Criterion</th></tr></thead><tbody>${s.recent.map(r => `<tr><td class="meta">${esc(clock(r.ts))}</td><td>${esc(r.pass)}</td><td title="${esc(r.rationale || '')}">${esc(r.title || '')}</td><td>${esc(r.verdict)}</td><td class="r">${r.score == null ? '' : esc(r.score)}</td><td class="meta">${esc(r.criterion || '')}</td></tr>`).join('')}</tbody></table>` : '';
     return card('Screening live', 'screening', `<div class="card"><div class="pl-tiles">${tot}</div><div>${sess}</div><div class="pl-bars" style="margin-top:10px">${stops}</div>${rec}</div>`, 'As of the time this page was built.');
   }
@@ -410,22 +410,25 @@ HUB.load(['shell', 'pipeline']).then(d => {
   const outBox = id => main.querySelector(id);
   function syncButtons() {
     main.querySelectorAll('[data-run]').forEach(b => {
-      const off = !served || live.busy;
-      if (off) b.disabled = true;
-      b.title = !served ? notServed : live.busy ? 'A run is open.' : '';
+      const off = !served || live.busy || live.starting;
+      b.disabled = off;
+      b.title = !served ? notServed : live.busy || live.starting ? 'A run is open.' : '';
     });
     const rs = main.querySelector('[data-resume]');
-    if (rs) rs.disabled = !served || live.busy || !live.intr || live.intr.is_clean;
+    if (rs) rs.disabled = !served || live.busy || live.starting || !live.intr || live.intr.is_clean;
   }
   function runStage(btn) {
     const key = btn.dataset.run, host = main.querySelector(`[data-host="${key}"]`), out = outBox('#pl-act-out');
-    if (!served || !host) return;
+    if (!served || !host || live.busy || live.starting) return;
     const cap = capValue();
     if (!capOk(cap)) { out.className = 'pl-out err'; out.textContent = `The unit cap must be a whole number from 1 to ${CAP.max}.`; return; }
     const what = key === 'all' ? 'Start the whole pipeline' : 'Start ' + stageLabel(key);
     HUB.confirm(host, `${what}, at most ${cap} units per run? This calls a model through the runner.`, () => {
+      if (live.busy || live.starting) { host.innerHTML = ''; out.className = 'pl-out err'; out.textContent = 'A run is already open or starting.'; return; }
       out.className = 'pl-out'; out.textContent = 'Starting…';
+      live.starting = true; syncButtons();
       return HUB.post('/api/queue/process', { stage: key, unit_cap: cap }).then(r => {
+        live.starting = false; syncButtons();
         host.innerHTML = '';
         if (!r.ok) { out.className = 'pl-out err'; out.textContent = 'Refused: ' + r.message; return; }
         const j = r.json || {};
@@ -447,8 +450,11 @@ HUB.load(['shell', 'pipeline']).then(d => {
     HUB.confirm(host, 'Resume the interrupted work? This can start a model run. Unit cap (optional):', () => {
       const v = cap.value === '' ? undefined : Number(cap.value);
       if (v !== undefined && !capOk(v)) { out.className = 'pl-out err'; out.textContent = `The unit cap must be a whole number from 1 to ${CAP.max}.`; host.innerHTML = ''; return; }
+      if (live.busy || live.starting) { host.innerHTML = ''; out.className = 'pl-out err'; out.textContent = 'A run is already open or starting.'; return; }
       out.className = 'pl-out'; out.textContent = 'Starting…';
+      live.starting = true; syncButtons();
       return HUB.post('/api/queue/resume', v === undefined ? {} : { unit_cap: v }).then(r => {
+        live.starting = false; syncButtons();
         host.innerHTML = '';
         if (!r.ok) { out.className = 'pl-out err'; out.textContent = 'Refused: ' + r.message; pollIntr(); return; }
         out.textContent = 'Resume started; the outcome appears under Interrupted when it ends.';
