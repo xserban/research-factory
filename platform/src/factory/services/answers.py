@@ -135,7 +135,6 @@ def _issue(field_name: str, message: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field_name, message)])
 
 
-
 def _parent_exists(project: Project, parent: str) -> bool:
     table, column = (
         ("answers", "answer_id") if parent.startswith("ans_") else ("sheets", "sheet_id")
