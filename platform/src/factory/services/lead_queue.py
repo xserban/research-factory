@@ -379,7 +379,28 @@ def _rule(order_by: Sequence[str]) -> str:
     )
 
 
-def _check(order_by: Sequence[str], top: int, per_source: int) -> None:
+def _balanced(ordered: list[QueueItem], quota: int, top: int) -> list[QueueItem]:
+    """The first `quota` of each source in `ordered`, in `ordered`'s order, cut to `top` by
+    dropping from the global tail the entries that are not their source's first."""
+    seen: dict[str, int] = defaultdict(int)
+    kept: list[tuple[QueueItem, int]] = []
+    for m in ordered:
+        seen[m.source] += 1
+        if seen[m.source] <= quota:
+            kept.append((m, seen[m.source]))
+    while len(kept) > top:
+        drop = next((i for i in range(len(kept) - 1, -1, -1) if kept[i][1] > 1), len(kept) - 1)
+        del kept[drop]
+    return [m for m, _ in kept]
+
+
+def _check(
+    order_by: Sequence[str],
+    top: int,
+    per_source: int,
+    per_source_top: int | None = None,
+    balance: bool = True,
+) -> None:
     unknown = [n for n in order_by if n not in MEASURES]
     if not order_by or unknown:
         raise _refuse("order_by", f"measures: {', '.join(MEASURES)}; unknown {unknown}")
@@ -387,6 +408,10 @@ def _check(order_by: Sequence[str], top: int, per_source: int) -> None:
         raise _refuse("top", "must be at least 1")
     if per_source < 1:
         raise _refuse("per_source", "must be at least 1")
+    if per_source_top is not None and (isinstance(per_source_top, bool) or per_source_top < 1):
+        raise _refuse("per_source_top", "must be at least 1")
+    if per_source_top is not None and not balance:
+        raise _refuse("per_source_top", "applies only with balance=True")
 
 
 def _sources_of(found: Candidates) -> tuple[str, ...]:
@@ -421,14 +446,24 @@ def lead_queue(
     technique_min_works: int = 3,
     max_co_works: int = 0,
     include_leads: bool = True,
+    balance: bool = True,
+    per_source_top: int | None = None,
 ) -> Queue:
     """Candidates (`candidates`, else `lead_candidates` with the same `sources`, `per_source`,
     `layer`, `technique_min_works` and `max_co_works`) and, with `include_leads`, the open
     leads, each with its measures, ordered by `order_by` (see the module invariants); at most
     `top` of each are returned, `total_candidates` is before that. With `exclude_prior` a
     candidate with any prior hit is left out and listed in `excluded`. Refused with nothing
-    computed: an unknown measure, `top` or `per_source` below 1 (the field named)."""
-    _check(order_by, top, per_source)
+    computed: an unknown measure, `top` or `per_source` below 1, `per_source_top` below 1 or given
+    with `balance=False` (the field named).
+
+    Balance (default): when more than one source is in play, the best `per_source_top` of each
+    source (in the queue's order within the source; default `ceil(top / sources)`) are kept and
+    merged by the global order, so no source is crowded out of the top; the total never exceeds
+    `top` (surplus entries beyond each source's first are dropped from the global tail).
+    `balance=False` returns the plain global order. `parameters` shows `balance` (1 or 0) and the
+    `per_source_top` applied (None when not balanced)."""
+    _check(order_by, top, per_source, per_source_top, balance)
     fresh = candidates or lead_candidates(
         project,
         sources=sources,
@@ -547,6 +582,14 @@ def lead_queue(
         measured = [m for m in measured if not m.measures.prior_hits]
     ordered = sorted(measured, key=lambda m: _sort_key(m, order_by))
     lead_items = sorted((measure(s) for s in lead_subjects), key=lambda m: _sort_key(m, order_by))
+    applied: int | None = None
+    chosen = ordered
+    if balance and len({m.source for m in ordered}) > 1:
+        n_sources = len({m.source for m in ordered})
+        applied = per_source_top or -(-top // n_sources)
+        chosen = _balanced(ordered, applied, top)
+    else:
+        chosen = ordered[:top]
     return Queue(
         order_by=tuple(order_by),
         order_rule=_rule(order_by),
@@ -560,8 +603,10 @@ def lead_queue(
             "include_leads": int(include_leads),
             "technique_min_works": technique_min_works,
             "max_co_works": max_co_works,
+            "balance": int(balance),
+            "per_source_top": applied,
         },
-        items=tuple(m.model_copy(update={"rank": r}) for r, m in enumerate(ordered[:top], 1)),
+        items=tuple(m.model_copy(update={"rank": r}) for r, m in enumerate(chosen, 1)),
         leads=tuple(m.model_copy(update={"rank": r}) for r, m in enumerate(lead_items[:top], 1)),
         total_candidates=len(ordered),
         excluded=tuple(excluded),

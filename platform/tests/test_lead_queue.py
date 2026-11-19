@@ -114,3 +114,32 @@ def test_the_order_and_the_top_cap_are_runtime_knobs(
         with pytest.raises(FactoryValidationError) as caught:
             lead_queue(project, **bad)  # type: ignore[arg-type]
         assert caught.value.issues[0].field == next(iter(bad))
+
+
+def test_the_top_is_balanced_across_sources_unless_global_order_is_asked(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    fresh = lead_candidates(project, **KNOBS)  # type: ignore[arg-type]
+    sources = {c.source for c in fresh.candidates}
+    assert len(sources) > 1
+    flat = lead_queue(project, candidates=fresh, order_by=("support",), top=50, balance=False)
+    for top in range(len(sources), len(flat.items) + 1):
+        queue = lead_queue(project, candidates=fresh, order_by=("support",), top=top)
+        assert {i.source for i in queue.items} == sources
+        assert len(queue.items) <= top
+        assert [i.rank for i in queue.items] == list(range(1, len(queue.items) + 1))
+        order = [i.entry_id for i in flat.items]
+        got = [i.entry_id for i in queue.items]
+        assert got == sorted(got, key=order.index)  # merged by the global order
+        assert queue.parameters["balance"] == 1
+    narrow = lead_queue(project, candidates=fresh, order_by=("support",), top=1, balance=False)
+    assert [i.entry_id for i in narrow.items] == [flat.items[0].entry_id]
+    assert narrow.parameters["balance"] == 0
+    assert flat.total_candidates == len(fresh.candidates)
+    one = lead_queue(project, candidates=fresh, order_by=("support",), top=50, per_source_top=1)
+    assert len(one.items) == len(sources) and one.parameters["per_source_top"] == 1
+    for bad in ({"per_source_top": 0}, {"per_source_top": 2, "balance": False}):
+        with pytest.raises(FactoryValidationError) as caught:
+            lead_queue(project, **bad)  # type: ignore[arg-type]
+        assert caught.value.issues[0].field == "per_source_top"
