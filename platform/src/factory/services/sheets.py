@@ -70,6 +70,7 @@ from factory.services.chat_candidates import (
     chat_candidates,
 )
 from factory.services.chat_read import VerifyItem, chat_verify
+from factory.services.chat_requests import check_result_request
 from factory.services.context import Project
 from factory.services.paper_profile import (
     RawMinerRow,
@@ -259,6 +260,7 @@ def open_sheet(
     mode: Mode = "explore",
     tier1_cap: int = TIER1_CAP,
     supersedes: str | None = None,
+    request_id: str | None = None,
 ) -> SheetOpened:
     """Open a sheet over the selection of `spec`: run `chat_candidates` on `proposals` and record
     the computed table. Raises `FactoryValidationError` (nothing written) for a system or human
@@ -274,6 +276,10 @@ def open_sheet(
     project.index.sync()
     if supersedes is not None and _sheet_row(project, supersedes) is None:
         issues.append(ValidationIssue("supersedes", f"{supersedes}: no such sheet"))
+    try:
+        check_result_request(project, actor, request_id, "spar", opens_mode=mode)
+    except FactoryValidationError as err:
+        issues.extend(err.issues)
     if issues:
         raise FactoryValidationError(issues)
     result = chat_candidates(project, spec, proposals, mode=mode, tier1_cap=tier1_cap)
@@ -289,6 +295,7 @@ def open_sheet(
         candidates=table,
         tier1_cap=tier1_cap,
         supersedes=supersedes,
+        request_id=request_id,
     )
     blob = project.blobs.put_json(
         {
@@ -573,15 +580,20 @@ def _linked_claims(project: Project, work_id: str) -> dict[str, LinkedClaim]:
 
 
 def close_section(
-    project: Project, actor: Actor, sheet_id: str, section: str
+    project: Project, actor: Actor, sheet_id: str, section: str, *, request_id: str | None = None
 ) -> SheetSectionClosed:
     """Close a section of a sheet: `against` once, then `for` once. Refused (nothing written) for
     a non-agent actor, an unknown sheet or section, a section already closed, and `for` before
-    `against` is closed."""
+    `against` is closed. `request_id` (section `for` only) names the Prepare follow-up request,
+    whose parent is this sheet, that this closing answers."""
     _require_agent(actor)
     if section not in get_args(Section):
         raise _issue("section", f"{section}: must be against or for")
-    payload = SheetSectionClosed(sheet_id=sheet_id, section=section)
+    if request_id is not None and section != "for":
+        raise _issue("request_id", "only the section for answers a follow-up request")
+    project.index.sync()
+    check_result_request(project, actor, request_id, "spar", parent=sheet_id)
+    payload = SheetSectionClosed(sheet_id=sheet_id, section=section, request_id=request_id)
     with project.index.exclusive():
         project.index.sync()
         row = _sheet_row(project, sheet_id)

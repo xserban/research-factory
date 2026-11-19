@@ -104,6 +104,36 @@ propose stays "proposed" until then.
 5. Report the pairs you proposed, each with its two quotes and your note, the pairs you looked at
    and dropped (and why), and how the researcher decides. Do not say which side is right.
 
+## Unattended run
+
+A headless run (stage `spar` or `ask`, started by the runner) has no researcher to talk to. The
+researcher ordered the work beforehand as a recorded request, and one run answers one request.
+
+1. Call `chat_request_next`. It serves the oldest open request of your kind and marks it taken.
+   If `batch` is null, say so and stop. Never ask the researcher anything and never wait for a
+   reply: the request holds what the agreeing steps would have settled: the hypothesis or the
+   question, the selection (`layers`, `include`, `exclude`), the mode and a note.
+2. Follow the Procedure (spar) or Ask with the request's own selection, hypothesis or question.
+   Skip the steps that show a list to the researcher for additions; the researcher rates the
+   result afterwards. Explore unless the request says `prepare`.
+3. In Prepare, one run writes one side. A request with no `parent` is the case against: open the
+   sheet in mode `prepare`, write the case against, close `against` and stop. A request whose
+   `parent` is a sheet with `against` closed is the case for: do not open a sheet; read it with
+   `sheet_view`, `sheet_argue` the case for into it, and close `for`, passing `request_id`. The
+   researcher orders that second request (`factory chat request spar ... --parent <sht_ id>
+   --mode prepare`); this run is a session that wrote no argument against, as the platform
+   requires.
+   One run answers one request: a second `chat_request_next` is refused, and a chat run is not
+   resumed (the researcher orders it again). A result links to the request only from the session
+   that took it, while the run is open; a Prepare follow-up never opens a sheet.
+4. Pass the served `request_id` to `sheet_open` (or, for the case for, to `sheet_close`) and to
+   `answer_record`, so the result is linked to its request. A `parent` that is an earlier sheet or
+   answer is read first (`sheet_view`, `answer_view`) and taken into account; an Ask passes it
+   as `parent`.
+5. End with a short summary: the request id, the sheet or answer id, how many arguments or
+   sentences, the gaps and any refusal verbatim. You never rate, and you never write the balance
+   of the evidence: the researcher rates and writes the balance later.
+
 ## Tool arguments
 
 Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`, `answer_record`, `contradiction_propose`) take `project`, `role`, `model` (your own
@@ -111,6 +141,7 @@ model id) and `skill`, the bare name `rf-chat`; the platform computes the skill 
 
 ## Never
 
+- Never ask a question in an unattended run; take the request and decide by the skill.
 - Never invent or paraphrase a quote; an argument rests only on text you have read.
 - Never judge the balance of the evidence, give a verdict or suggest a lean: the balance is the
   researcher's (`factory sheets balance`); no tool lets you write it.

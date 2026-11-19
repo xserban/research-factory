@@ -341,3 +341,12 @@ def test_rf_chat_has_a_contradictions_mode() -> None:
         "never decide",
     ):
         assert needed in lowered, needed
+
+
+def test_rf_chat_has_an_unattended_run_section() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split()).lower()
+    assert "## Unattended run" in text
+    assert "`chat_request_next`" in text and "never ask the researcher anything" in lowered
+    assert "`request_id`" in text and "the researcher rates and writes the balance" in lowered
+    assert "explore unless the request says `prepare`" in lowered

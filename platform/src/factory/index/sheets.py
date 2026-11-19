@@ -70,6 +70,8 @@ def sheet_tables(metadata: MetaData) -> SheetTables:
         Column("candidates_digest", String, nullable=False),
         Column("tier1_cap", Integer, nullable=False),
         Column("supersedes", String),
+        Column("request_id", String),
+        Column("for_request_id", String),
         Column("against_closed", Boolean, nullable=False),
         Column("for_closed", Boolean, nullable=False),
         Column("session", String),
@@ -153,6 +155,7 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
                 candidates_digest=payload.candidates_digest,
                 tier1_cap=payload.tier1_cap,
                 supersedes=payload.supersedes,
+                request_id=payload.request_id,
                 against_closed=False,
                 for_closed=False,
                 session=event.actor.session,
@@ -247,8 +250,8 @@ def sheet_handlers(tables: SheetTables) -> dict[str, Handler]:
             )
         elif payload.section == "for" and against_closed and not for_closed:
             conn.execute(
-                text("UPDATE sheets SET for_closed = 1 WHERE sheet_id = :s"),
-                {"s": payload.sheet_id},
+                text("UPDATE sheets SET for_closed = 1, for_request_id = :r WHERE sheet_id = :s"),
+                {"s": payload.sheet_id, "r": payload.request_id},
             )
 
     def rated(conn: Connection, event: Event) -> None:

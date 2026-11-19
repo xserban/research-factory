@@ -47,6 +47,7 @@ from factory.model.answers import (
     SelectionWork,
 )
 from factory.services.chat_read import VerifyItem, chat_verify
+from factory.services.chat_requests import check_result_request
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
 from factory.services.selection import SelectionSpec, resolve_selection_cached
@@ -156,6 +157,7 @@ def record_answer(
     *,
     unanswered: str | None = None,
     parent: str | None = None,
+    request_id: str | None = None,
 ) -> AnswerRecorded:
     """Record one answer, all or none (see the module invariants). Raises `FactoryValidationError`
     (nothing written) for a non-agent actor, a bad question, note or parent, a stale selection,
@@ -184,6 +186,10 @@ def record_answer(
         re.fullmatch(PARENT_RE, parent) is None or not _parent_exists(project, parent)
     ):
         issues.append(ValidationIssue("parent", f"{parent}: no such answer or sheet"))
+    try:
+        check_result_request(project, actor, request_id, "ask")
+    except FactoryValidationError as err:
+        issues.extend(err.issues)
     selection = resolve_selection_cached(project, spec)
     if selection.digest != selection_digest:
         issues.append(
@@ -265,6 +271,7 @@ def record_answer(
                 SelectionWork(work_id=w.work_id, conversion_id=w.conversion_id) for w in again.works
             ),
             parent=parent,
+            request_id=request_id,
             sentences=tuple(
                 AnswerSentence(
                     text=s.text.strip(),

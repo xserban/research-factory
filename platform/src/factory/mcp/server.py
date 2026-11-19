@@ -109,6 +109,7 @@ from factory.services import cards as cards_service
 from factory.services import chase as chase_service
 from factory.services import chat_candidates as chat_candidates_service
 from factory.services import chat_read as chat_read_service
+from factory.services import chat_requests as chat_requests_service
 from factory.services import claims_digest as claims_digest_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
@@ -6204,12 +6205,14 @@ def build_server(
         mode: str = "explore",
         tier1_cap: int = chat_candidates_service.TIER1_CAP,
         supersedes: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Open an argument sheet (Spar). The proposals are checked and tiered exactly as in
         `chat_candidates` (same fields, same located issues); the computed candidates table, its
         digest and its counts are recorded, never typed. `mode` is explore or prepare (prepare:
         the case for must come from a session that wrote no argument against). `supersedes`
-        names an earlier sheet this one replaces. Writes one event; invalid input writes nothing.
+        names an earlier sheet this one replaces. `request_id` names the spar request
+        (`chat_request_next`) this sheet answers. Writes one event; invalid input writes nothing.
         Refused to a session that has joined a pass."""
 
         def opening() -> JsonValue:
@@ -6241,6 +6244,7 @@ def build_server(
                 mode=cast(Literal["explore", "prepare"], mode),
                 tier1_cap=tier1_cap,
                 supersedes=supersedes,
+                request_id=request_id,
             )
             view = sheets_service.view_sheet(opened, payload.sheet_id)
             return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
@@ -6294,17 +6298,26 @@ def build_server(
 
     @server.tool()
     def sheet_close(
-        project: str, sheet_id: str, section: str, role: str, model: str, skill: str
+        project: str,
+        sheet_id: str,
+        section: str,
+        role: str,
+        model: str,
+        skill: str,
+        request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Close the section `against` or `for` of a sheet. `for` can be closed only after
-        `against`; a closed section takes no more arguments. Refused to a session that has
-        joined a pass."""
+        `against`; a closed section takes no more arguments. `request_id` (section `for` only)
+        names the follow-up spar request, whose parent is this sheet, that the closing answers.
+        Refused to a session that has joined a pass."""
 
         def closing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             actor = make_agent_actor(settings, session, role, model, skill)
-            payload = sheets_service.close_section(opened, actor, sheet_id, section)
+            payload = sheets_service.close_section(
+                opened, actor, sheet_id, section, request_id=request_id
+            )
             data: dict[str, JsonValue] = {"closed": payload.model_dump(mode="json")}
             return _withheld(opened, data, include_work_ids=False)
 
@@ -6359,6 +6372,7 @@ def build_server(
         exclude: list[str] | None = None,
         unanswered: str | None = None,
         parent: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, JsonValue]:
         """Record an answer (Ask), all or none. `selection_digest` is the digest of the selection
         you worked on (`selection_resolve`); a selection that changed since refuses the call.
@@ -6366,7 +6380,8 @@ def build_server(
         sentence needs a quote the work's pinned conversion contains in that anchor; an unverified
         quote or a work outside the selection refuses the whole call with located issues
         (`sentences[2].quote`). There is no unsupported sentence: say what the papers do not
-        answer in `unanswered`. `parent` names an earlier answer or sheet this follows up. The
+        answer in `unanswered`. `parent` names an earlier answer or sheet this follows up;
+        `request_id` names the ask request (`chat_request_next`) this answers. The
         reply shows each sentence with its full paragraph. The rating is the researcher's, made in
         the CLI. Writes one event; invalid input writes nothing. Refused to a session that has
         joined a pass."""
@@ -6392,6 +6407,7 @@ def build_server(
                 parsed,
                 unanswered=unanswered,
                 parent=parent,
+                request_id=request_id,
             )
             view = answers_service.view_answer(opened, payload.answer_id)
             return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
@@ -6425,6 +6441,43 @@ def build_server(
             _refuse_pass_session(opened)
             view = answers_service.view_answer(opened, answer_id)
             return _withheld(opened, _plain(asdict(view)), include_work_ids=False)
+
+        return _reply(project, viewing, include_work_ids=False)
+
+    @server.tool()
+    def chat_request_next(project: str, role: str, model: str, skill: str) -> dict[str, JsonValue]:
+        """Serve the oldest open chat request (a spar or an ask the researcher ordered) of this
+        headless run's kind, and mark it taken by the run. Served only to a run of the stage
+        `spar` or `ask`; any other session is refused with field `run`. `batch` holds the request
+        (`request_id`, `kind`, `hypothesis` or `question`, `mode`, `selection` with `layers`,
+        `include` and `exclude`, `parent`, `note`), or is null when none is open. One unit per run:
+        a second call is refused with `cap-reached`. Pass the `request_id` to `sheet_open`,
+        `sheet_close` or `answer_record`. Refused to a session that has joined a pass."""
+
+        def serve() -> JsonValue:
+            with unit_cap.serving() as done:
+                opened = open_project(settings, project, session=session, clock=clock)
+                _refuse_pass_session(opened)
+                actor = make_agent_actor(settings, session, role, model, skill)
+                taken = chat_requests_service.take_next(opened, actor, unit_cap.run_id)
+                served: dict[str, JsonValue] = {
+                    "batch": None if taken is None else _plain(asdict(taken))
+                }
+                done(served)
+            return _withheld(opened, served, include_work_ids=False)
+
+        return _reply(project, serve, include_work_ids=False)
+
+    @server.tool()
+    def chat_request_view(project: str, request_id: str) -> dict[str, JsonValue]:
+        """One chat request with its derived state (open, taken, done, failed) and the sheet or
+        answer that answers it. Read-only. Refused to a session that has joined a pass."""
+
+        def viewing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            info = chat_requests_service.view_request(opened, request_id)
+            return _withheld(opened, _plain(asdict(info)), include_work_ids=False)
 
         return _reply(project, viewing, include_work_ids=False)
 

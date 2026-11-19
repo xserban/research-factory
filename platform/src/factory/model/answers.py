@@ -24,6 +24,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 
 from factory.model.base import StrictModel
+from factory.model.chat_requests import REQUEST_ID_RE
 from factory.model.identity import ULID_RE
 
 ANSWER_ID_RE = rf"^ans_{ULID_RE}$"
@@ -66,6 +67,8 @@ class AnswerRecorded(StrictModel):
     selection_digest: str = Field(pattern=SHA256_HEX_RE)
     selection_works: tuple[SelectionWork, ...]
     parent: str | None = Field(default=None, pattern=PARENT_RE)
+    request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
+    """The chat request this answer answers (`chat.requested`), when a headless run wrote it."""
     sentences: tuple[AnswerSentence, ...]
     unanswered: str | None = Field(default=None, max_length=UNANSWERED_MAX)
     """What the papers of the selection do not answer, when they do not."""

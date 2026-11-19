@@ -18,6 +18,7 @@ from factory.services.modules import (
     benchmark_ledger,
     briefing,
     cards,
+    chat_requests,
     contradictions,
     contributions,
     conversion,
@@ -74,7 +75,7 @@ def default_modules() -> ModuleRegistry:
         snapshots, ranking, lineage,
         intuition, vocabulary, contradictions, discovery, coverage, finders, matching, exports,
         portfolio, regions, mining, hypotheses, labels, views, experiments, pages, sheets, answers,
-        files,
+        chat_requests, files,
         evaluation, benchmark_ledger, directions, curation, decisions, develop, writing, briefing,
         manuscripts,
     ]  # fmt: skip

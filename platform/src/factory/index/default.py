@@ -12,6 +12,7 @@ from factory.index.budgets import (
 )
 from factory.index.cards import card_handlers, card_tables
 from factory.index.chase import chase_handlers, chase_tables
+from factory.index.chat_requests import chat_request_handlers, chat_request_tables
 from factory.index.conclusions import conclusion_handlers, conclusion_tables
 from factory.index.core_works import core_work_handlers, core_work_tables
 from factory.index.curation import curation_handlers, curation_tables
@@ -72,7 +73,7 @@ from factory.index.taxonomies import taxonomy_handlers, taxonomy_tables
 from factory.index.watch import run_started_handler, watch_handlers, watch_tables
 
 # Bump on any change to the tables or handlers below; the index is then rebuilt.
-PROJECTION_VERSION = "91"
+PROJECTION_VERSION = "92"
 
 
 def default_projection(blobs: BlobStore | None = None) -> Projection:
@@ -144,6 +145,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
     budgets = budget_tables(metadata)
     sheets = sheet_tables(metadata)
     answers = answer_tables(metadata)
+    chat_requests = chat_request_tables(metadata)
     handlers: dict[str, Handler] = {
         "project.created": project_created_handler(project),
         "project.hosted": project_hosted_handler(project_hosts),
@@ -203,6 +205,7 @@ def default_projection(blobs: BlobStore | None = None) -> Projection:
         **budget_handlers(budgets, members),
         **sheet_handlers(sheets),
         **answer_handlers(answers),
+        **chat_request_handlers(chat_requests),
     }
     # A direction fails in the event that decides it: derived after that event's own fold.
     chain_derived(handlers, directions)

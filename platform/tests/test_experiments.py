@@ -304,7 +304,7 @@ def test_rebuild_state_hash_stable(project: Project, human: Actor, xw: XW) -> No
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "91"
+    assert PROJECTION_VERSION == "92"
 
 
 def test_an_agent_cannot_raise_the_test_access_limit_by_amending_the_protocol(

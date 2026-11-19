@@ -27,6 +27,11 @@ Invariants:
   It uses the miner stage's declared model and tools (`mine_next`, `mine_record`, `document_read`
   and the two reads) and the same cap on units; refused when no miner has a need. The runner
   records no human act: requests and layer moves are the researcher's, made before the run.
+- The stages `spar` and `ask` (spar-night N3) answer chat requests (`services/chat_requests.py`):
+  skill `rf-chat`, one request per run (`StageSpec.fixed_cap`; a cap asked for is overridden),
+  pending units are the open requests of the kind, and the run takes its request with
+  `chat_request_next`. They are not pipeline stages. The runner records no human act: the request
+  is the researcher's, made before the run.
 - Stages: `screen`, `extract`, `appraise`, `contributions`, `intuition` and `mine:<miner id>`; the
   derivation of which apply and the pipeline over them are in `factory.services.pipeline`. The
   child's MCP config carries `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID`: the MCP server then refuses
@@ -113,6 +118,9 @@ class StageSpec:
     miner: str | None = None
     miner_version: int | None = None
     """For a `mine:<id>` stage: the miner and the version the protocol lists."""
+    fixed_cap: int | None = None
+    """When set, the stage's cap: a run serves exactly this many units whatever cap was asked
+    (the chat stages serve one request per run)."""
 
 
 STAGES: Final[dict[str, StageSpec]] = {
@@ -184,7 +192,58 @@ STAGES: Final[dict[str, StageSpec]] = {
         kinds=(),
         unit="target interpreted",
     ),
+    "spar": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-chat",
+        role="sparrer",
+        tools=(
+            "mcp__factory__selection_resolve",
+            "mcp__factory__claims_digest",
+            "mcp__factory__corpus_search",
+            "mcp__factory__chat_sections",
+            "mcp__factory__chat_verify",
+            "mcp__factory__paper_profiles",
+            "mcp__factory__chat_candidates",
+            "mcp__factory__chat_request_next",
+            "mcp__factory__chat_request_view",
+            "mcp__factory__document_read",
+            "mcp__factory__sheet_open",
+            "mcp__factory__sheet_argue",
+            "mcp__factory__sheet_close",
+            "mcp__factory__sheet_view",
+            "mcp__factory__answer_view",  # a follow-up reads its parent
+        ),
+        kinds=(),
+        unit="spar request answered",
+        fixed_cap=1,
+    ),
+    "ask": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-chat",
+        role="asker",
+        tools=(
+            "mcp__factory__selection_resolve",
+            "mcp__factory__claims_digest",
+            "mcp__factory__corpus_search",
+            "mcp__factory__chat_sections",
+            "mcp__factory__chat_verify",
+            "mcp__factory__paper_profiles",
+            "mcp__factory__chat_candidates",
+            "mcp__factory__chat_request_next",
+            "mcp__factory__chat_request_view",
+            "mcp__factory__document_read",
+            "mcp__factory__answer_record",
+            "mcp__factory__answer_view",
+            "mcp__factory__sheet_view",  # a follow-up reads its parent
+        ),
+        kinds=(),
+        unit="ask request answered",
+        fixed_cap=1,
+    ),
 }
+CHAT_STAGES: Final = ("spar", "ask")
+"""The stages that answer chat requests (`services/chat_requests.py`): one request per run; their
+pending units are the open requests of the stage's kind."""
 MINE_PREFIX: Final = "mine:"
 MINING_STAGE: Final = "mining"
 """The alias stage that runs the first miner with an open mining need (see the module docstring)."""
@@ -325,7 +384,71 @@ def _skill_text(project: Project, skill: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+_CHAT_PROMPT: Final = (
+    "You are an unattended headless run of stage `{stage}` for the Research Factory project "
+    "`{slug}`. Nobody answers questions during this run: ask the researcher nothing, wait for "
+    "nothing, and make no step of the skill depend on a reply. The researcher's order is a "
+    "recorded request; the steps of the skill that agree the wording, the selection and the mode "
+    "with the researcher are already done in it.\n\n"
+    "Parameters for every factory call: project `{slug}`, role `{role}`, model `{model}`, "
+    "skill `{skill}`.\n\n"
+    "Start by calling `chat_request_next`. It serves the oldest open request of kind `{stage}` "
+    "and marks it taken by this run: `request_id`, `{field}`, `selection` (`layers`, `include`, "
+    "`exclude`: pass them as they are to `selection_resolve`, `claims_digest`, `corpus_search` "
+    "and the other tools), `parent` and `note`. If `batch` is null, say so and stop. Then follow "
+    "exactly the skill's {mode_name} procedure below, as in its section `Unattended run`.\n\n"
+    "{extra}"
+    "Record the result with `request_id` set to the served `request_id` in `{record}`. "
+    "Rate nothing and write no balance or verdict: the researcher does. When you have recorded "
+    "the result, finish with a short summary: the request id, the {result} id, what the "
+    "{result} contains, the gaps and unread tiers, and any refusal or `blocked` text verbatim.\n\n"
+    "Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. A "
+    "unit is one {unit}. The server refuses further units with `cap-reached` once the limit is "
+    "served: then stop. Use no other tools.\n\n"
+    "=== SKILL {skill} ===\n{skill_text}"
+)
+_SPAR_EXTRA: Final = (
+    "Mode: Explore, unless the request's `mode` is `prepare`. In Explore one session writes both "
+    "cases: `sheet_open` (with `request_id`), `sheet_argue` against, `sheet_close` against, "
+    "`sheet_argue` for, `sheet_close` for. In Prepare, the case for must come from a session "
+    "that wrote no argument against, so a Prepare request is one of two kinds. With no `parent`: "
+    "open the sheet in mode `prepare` (with `request_id`), write only the case against, close "
+    "the section `against` and stop; the case for is a second request. With a `parent` that is "
+    "a sheet whose case against is closed: do not open a sheet; read the parent with "
+    "`sheet_view`, argue only the case for into it with `sheet_argue` (its `sheet_id` is the "
+    "parent), and close `for` with `sheet_close`, passing `request_id`. Outside Prepare a "
+    "`parent`, a sheet or an answer, is an earlier result you read first (`sheet_view` or "
+    "`answer_view`) and take into account; the new sheet stands on its own.\n\n"
+)
+_ASK_EXTRA: Final = (
+    "A `parent`, a sheet or an answer, is an earlier result you read first (`answer_view` or "
+    "`sheet_view`) and take into account: pass it as `parent` to `answer_record`. The request has "
+    "no mode.\n\n"
+)
+
+
+def _chat_prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
+    spar = stage == "spar"
+    return _CHAT_PROMPT.format(
+        stage=stage,
+        slug=project.paths.slug,
+        role=spec.role,
+        model=spec.model,
+        skill=spec.skill,
+        field="hypothesis` and `mode" if spar else "question",
+        mode_name="Spar" if spar else "Ask",
+        extra=_SPAR_EXTRA if spar else _ASK_EXTRA,
+        record="`sheet_open` or `sheet_close`" if spar else "`answer_record`",
+        result="sheet" if spar else "answer",
+        unit_cap=unit_cap,
+        unit=spec.unit,
+        skill_text=_skill_text(project, spec.skill),
+    )
+
+
 def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
+    if stage in CHAT_STAGES:
+        return _chat_prompt(project, stage, spec, unit_cap)
     slug = project.paths.slug
     parameters = f"project `{slug}`, pass_label `A`, role `{spec.role}`, model `{spec.model}`, "
     miner = ""
@@ -406,6 +529,8 @@ def build_command(
     """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing.
     `prompt_override` is used in place of the built prompt (a resumed run's recorded prompt)."""
     spec = stage_spec(project, stage)
+    if spec.fixed_cap is not None:
+        unit_cap = spec.fixed_cap
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     prompt = (
@@ -465,6 +590,10 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
     """The pending units of `stage` (pass A): per task kind for `screen` and `extract`; for the
     other stages (`factory.services.pipeline.pending_by_stage`) one count under the stage key."""
     stage = resolve_stage(project, stage)
+    if stage in CHAT_STAGES:
+        from factory.services.chat_requests import open_count
+
+        return {stage: open_count(project, stage)}
     spec = STAGES.get(stage)
     if spec is None or not spec.kinds:
         if not is_stage_key(stage):
@@ -872,6 +1001,8 @@ def start_run(
             raise _refuse("resumes", f"{resumes} is not a run of this project")
         if earlier.stage != stage:
             raise _refuse("resumes", f"{resumes} ran stage {earlier.stage!r}, not {stage!r}")
+        if spec.fixed_cap is not None:
+            raise _refuse("resumes", "a chat request is not resumed; order it again")
         if earlier.outcome == "complete":
             from factory.services.usage_limit import limit_stop
 
@@ -881,6 +1012,8 @@ def start_run(
     _require_calibrated_mine(project, spec)
     if unit_cap is None:
         unit_cap = DEFAULT_UNIT_CAP if earlier is None else earlier.unit_cap
+    if spec.fixed_cap is not None:
+        unit_cap = spec.fixed_cap  # a chat stage serves one request per run
     if earlier is not None and prompt_override is None:
         prompt_override = _resumed_prompt(project, earlier, spec, unit_cap)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
