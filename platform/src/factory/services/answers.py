@@ -33,7 +33,6 @@ from sqlalchemy import text
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.index.answers import WHOLE
-from factory.mining.spec import Population
 from factory.model.answers import (
     ANSWER_ID_RE,
     NOTE_MAX,
@@ -135,14 +134,6 @@ class AnswerView:
 def _issue(field_name: str, message: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field_name, message)])
 
-
-def _spec_of(raw: dict[str, Any]) -> SelectionSpec:
-    return SelectionSpec(
-        layers=list(raw.get("layers", [])),
-        include=list(raw.get("include", [])),
-        exclude=list(raw.get("exclude", [])),
-        population=Population(raw.get("population", Population.INCLUDED_FT.value)),
-    )
 
 
 def _parent_exists(project: Project, parent: str) -> bool:
