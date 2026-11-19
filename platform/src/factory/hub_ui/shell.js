@@ -94,7 +94,7 @@ const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
-  ['Findings','Findings','findings.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
+  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
   ['Design','Brand kit','kit.html'],
 ];
 
@@ -107,6 +107,7 @@ const ICON = {
   miners:'<path d="M4 20l6-6M14 4l6 6-8 8-6-6z"/><path d="M12 6l6 6"/>',
   data:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/>',
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
   kit:'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
   landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
@@ -151,6 +152,7 @@ const RAIL = [
   ['data','Data','data.html'],
   ['-'],
   ['findings','Findings','findings.html'],
+  ['contradictions','Contradictions','contradictions.html'],
   ['write','Write & export','write.html'],
   ['-'],
   ['living','Living','living.html'],

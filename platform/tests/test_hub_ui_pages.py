@@ -213,6 +213,7 @@ RAIL_ORDER = [
     "miners",
     "data",
     "findings",
+    "contradictions",
     "write",
     "living",
     "costs",
