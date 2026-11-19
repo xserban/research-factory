@@ -115,3 +115,23 @@ def _inline_text(tokens: Iterable[Token]) -> str:
         elif token.type in ("text", "code_inline"):
             out.append(token.content)
     return "".join(out)
+
+
+def quote_span(element_markdown: str, quote: str) -> tuple[str, tuple[int, int] | None]:
+    """The normalised plain text of an element and where `quote` sits in it.
+
+    The text is the element's blocks, each normalised as `quote_in_element` does, joined by one
+    newline; the span `(start, end)` indexes that text and is the first match inside one block,
+    None when `quote_in_element` would not accept the quote."""
+    needle = normalise_quote(_unescape(quote))
+    blocks = [normalise_quote(_unescape(b)) for b in element_blocks(element_markdown)]
+    shown = "\n".join(blocks)
+    if not needle:
+        return shown, None
+    offset = 0
+    for block in blocks:
+        at = block.find(needle)
+        if at >= 0:
+            return shown, (offset + at, offset + at + len(needle))
+        offset += len(block) + 1
+    return shown, None

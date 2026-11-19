@@ -24,7 +24,7 @@ HUB.load(['shell', 'contradictions']).then(d => {
 .ct-side{background:var(--surface);border-radius:var(--r);padding:12px 14px}
 .ct-side h4{margin:0 0 6px;font:500 var(--t-s) var(--f-ui);overflow-wrap:anywhere}
 .ct-quote{margin:6px 0;padding-left:10px;border-left:2px solid var(--acc);overflow-wrap:anywhere}
-.ct-para{margin:8px 0 0;font:400 var(--t-s) var(--f-ui);color:var(--mut);overflow-wrap:anywhere}
+.ct-para{white-space:pre-line;margin:8px 0 0;font:400 var(--t-s) var(--f-ui);color:var(--mut);overflow-wrap:anywhere}
 .ct-para mark{background:var(--acc-soft);color:var(--fg)}
 .ct-cmd{margin-top:10px;font:400 var(--t-xs) var(--f-mono);color:var(--mut);overflow-wrap:anywhere}
 .ct-empty{color:var(--dim);font:400 var(--t-m) var(--f-ui);padding:30px 8px;text-align:center}`;
@@ -43,13 +43,12 @@ HUB.load(['shell', 'contradictions']).then(d => {
   const panel = (what, how) => `<b>What it shows</b> ${what}${how ? `<p><span class=k>How it’s computed.</span> ${esc(how)}</p>` : ''}`;
   const PROPOSED_INFO = 'An agent found the two claims in different papers and quoted both exactly. The platform checked each quote against its paragraph. Nothing is settled until you decide.';
 
-  /* the quote is marked inside its paragraph; both are escaped, the mark wraps escaped text only */
+  /* the quote is marked inside its paragraph by the payload's span (computed as the platform matches quotes); both parts are escaped */
   function paragraph(side) {
-    const p = side.paragraph || '', q = side.quote || '';
+    const p = side.paragraph || '', m = side.mark;
     if (!p) return '<p class="ct-para meta">The paragraph is not available for this claim.</p>';
-    const at = q ? p.indexOf(q) : -1;
-    if (at < 0) return `<p class="ct-para">${esc(p)}</p>`;
-    return `<p class="ct-para">${esc(p.slice(0, at))}<mark>${esc(q)}</mark>${esc(p.slice(at + q.length))}</p>`;
+    if (!Array.isArray(m) || m.length !== 2) return `<p class="ct-para">${esc(p)}</p>`;
+    return `<p class="ct-para">${esc(p.slice(0, m[0]))}<mark>${esc(p.slice(m[0], m[1]))}</mark>${esc(p.slice(m[1]))}</p>`;
   }
   function sideCard(label, side) {
     const kind = [side.claim_type, side.direction].filter(Boolean).join(' · ');

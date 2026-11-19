@@ -69,6 +69,12 @@ class ContradictionProposed(StrictModel):
     anchor_a: str | None = None
     anchor_b: str | None = None
     """The anchor the quote of a row ref was verified in; None for older events and other refs."""
+    conversion_a: str | None = None
+    conversion_b: str | None = None
+    """The conversion the quote was verified against; None for older events and other refs."""
+    about_a: str | None = None
+    about_b: str | None = None
+    """The `about` value of a row ref's m-claims row when proposed; None when none or not a row."""
 
     @model_validator(mode="after")
     def _sorted_distinct(self) -> ContradictionProposed:
