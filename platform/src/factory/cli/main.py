@@ -168,6 +168,8 @@ from factory.services import notices as notices_service
 from factory.services import onion as onion_service
 from factory.services import organisation_export as organisation_export_service
 from factory.services import outline as outline_service
+from factory.services import passage_index as passage_index_service
+from factory.services import passage_vectors as passage_vectors_service
 from factory.services import performance as performance_service
 from factory.services import portfolio as portfolio_service
 from factory.services import prisma as prisma_service
@@ -187,6 +189,7 @@ from factory.services import relations as relations_service
 from factory.services import reproduction as reproduction_service
 from factory.services import screening as screening_service
 from factory.services import seeds as seeds_service
+from factory.services import selection as selection_service
 from factory.services import shared_mining as shared_mining_service
 from factory.services import snapshots as snapshot_service
 from factory.services import snowball as snowball_service
@@ -284,6 +287,11 @@ dedup_app = typer.Typer(
 rank_app = typer.Typer(
     name="rank",
     help="Order the records still to be screened by similarity to the development seeds.",
+    no_args_is_help=True,
+)
+passages_app = typer.Typer(
+    name="passages",
+    help="Passage vectors for meaning-based search: embed and status (IDEA-102).",
     no_args_is_help=True,
 )
 audit_app = typer.Typer(
@@ -552,6 +560,7 @@ app.add_typer(gate_app)
 app.add_typer(search_app)
 app.add_typer(dedup_app)
 app.add_typer(rank_app)
+app.add_typer(passages_app)
 app.add_typer(fulltext_app)
 app.add_typer(library_app)
 app.add_typer(feed_app)
@@ -1723,6 +1732,87 @@ def rank_show_cmd(
     )
     for item in view.ranked:
         typer.echo(f"{item.position:>5}  {item.score:.6f}  {item.work_id}")
+
+
+def _passage_selection(
+    layers: list[str] | None, include: list[str] | None, exclude: list[str] | None
+) -> selection_service.SelectionSpec:
+    def split(values: list[str] | None) -> list[str]:
+        return [part for v in values or [] for part in v.split(",") if part]
+
+    return selection_service.SelectionSpec(
+        layers=split(layers), include=split(include), exclude=split(exclude)
+    )
+
+
+_LAYERS = Annotated[
+    list[str] | None, typer.Option("--layers", help="Layer ids (repeat or comma-separate).")
+]
+_INCLUDE = Annotated[
+    list[str] | None, typer.Option("--include", help="Work ids to add to the selection.")
+]
+_EXCLUDE = Annotated[
+    list[str] | None, typer.Option("--exclude", help="Work ids to remove from the selection.")
+]
+
+
+@passages_app.command("embed")
+def passages_embed_cmd(
+    ctx: typer.Context,
+    layers: _LAYERS = None,
+    include: _INCLUDE = None,
+    exclude: _EXCLUDE = None,
+    prune: Annotated[
+        bool,
+        typer.Option("--prune", help="Also remove vectors made under any other model key."),
+    ] = False,
+) -> None:
+    """Embed the passages of a selection that lack a vector (SPECTER2, local, resumable).
+
+    Needs the `ranker` extra and FACTORY_RANKER_MODEL. Writes only the passage sidecar. Vectors of
+    other model keys are kept unless --prune is given."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        project.index.sync()
+        spec = _passage_selection(layers, include, exclude)
+        works = selection_service.resolve_selection_cached(project, spec).works
+        embedder = passage_vectors_service.default_embedder()
+        report = passage_vectors_service.ensure_embedded(
+            project,
+            works,
+            embedder,
+            progress=lambda done, total: typer.echo(f"embedded {done}/{total}"),
+        )
+        pruned = passage_vectors_service.prune_other_keys(project, report.model_key) if prune else 0
+    typer.echo(
+        f"embedded {report.embedded}, already held {report.reused}, removed {report.removed}, "
+        f"missing {report.missing}; key {report.model_key}"
+    )
+    if prune:
+        typer.echo(f"pruned {pruned} vectors of other keys")
+
+
+@passages_app.command("status")
+def passages_status_cmd(
+    ctx: typer.Context,
+    layers: _LAYERS = None,
+    include: _INCLUDE = None,
+    exclude: _EXCLUDE = None,
+) -> None:
+    """Passages of a selection, embedded under the current key, and missing."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        project.index.sync()
+        spec = _passage_selection(layers, include, exclude)
+        works = selection_service.resolve_selection_cached(project, spec).works
+        embedder = passage_vectors_service.default_embedder()
+        passage_index_service.ensure_indexed(project, works)
+        key = passage_vectors_service.model_key(embedder)
+        missing = passage_vectors_service.count_missing(project, works, key)
+        total = passage_vectors_service.count_passages(project, works)
+    typer.echo(f"passages {total}, embedded {total - missing}, missing {missing}; key {key}")
 
 
 @dedup_app.command("list")

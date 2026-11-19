@@ -10,9 +10,9 @@ Invariants:
   (`mode` and `tier1_cap` for the arguments, `spec.<field>` for a refused selection spec, whose
   issues come with those of the proposals) and, when any exists, nothing is returned.
   Refused: an unknown source, stance or mode; a work that is no work of the project or is not in
-  the selection (ids pass the IDEA-66 resolver); no quote for source `claims` or `keyword`; an
-  anchor without a quote or a quote without an anchor; a quote that is not in the anchor's
-  element of the work's pinned conversion (`chat_verify`'s check).
+  the selection (ids pass the IDEA-66 resolver); no quote for source `claims`, `keyword` or
+  `vector`; an anchor without a quote or a quote without an anchor; a quote that is not in the
+  anchor's element of the work's pinned conversion (`chat_verify`'s check).
 - Every work of the resolved selection appears exactly once, ordered by work id, with its sources
   and stances (sorted), its tier and `over_cap`. Tier 1: two or more distinct sources, or any
   `researcher` proposal; tier 2: exactly one source; tier 3: not proposed.
@@ -48,12 +48,13 @@ __all__ = [
 ]
 
 TIER1_CAP = 15
-QUOTED_SOURCES = frozenset({"claims", "keyword"})
+QUOTED_SOURCES = frozenset({"claims", "keyword", "vector"})
 
 
 class CandidateSource(StrEnum):
     CLAIMS = "claims"
     KEYWORD = "keyword"
+    VECTOR = "vector"
     MINER = "miner"
     GRAPH = "graph"
     RESEARCHER = "researcher"

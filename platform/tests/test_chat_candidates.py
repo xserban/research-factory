@@ -20,7 +20,7 @@ SPEC = SelectionSpec()
 
 
 def _p(work: str, source: str = "claims", stance: str = "against", **kw: str | None) -> C:
-    quote = {"anchor": ANCHOR, "quote": QUOTE} if source in ("claims", "keyword") else {}
+    quote = {"anchor": ANCHOR, "quote": QUOTE} if source in ("claims", "keyword", "vector") else {}
     return C(work, source, stance, **{**quote, **kw})
 
 
@@ -148,3 +148,22 @@ def test_proposals_count_distinct_work_source_pairs(project: Project, world: lis
         project, SPEC, [_p(world[0], "claims"), _p(world[0], "claims"), _p(world[0], "keyword")]
     )
     assert result.proposals == 2
+
+
+def test_vector_source_accepted_and_needs_quote(project: Project, world: list[str]) -> None:
+    result = chat_candidates(project, SPEC, [_p(world[0], "vector")])
+    assert result is not None
+    bad = [C(world[0], "vector", "against")]
+    assert _issues(project, bad)["proposals[0].quote"].startswith("a quote is required")
+
+
+def test_unknown_source_still_refused(project: Project, world: list[str]) -> None:
+    assert "proposals[0].source" in _issues(project, [C(world[0], "embedding", "against")])
+
+
+def test_keyword_plus_vector_is_tier_one(project: Project, world: list[str]) -> None:
+    a = world[0]
+    result = chat_candidates(project, SPEC, [_p(a, "keyword", "for"), _p(a, "vector", "for")])
+    by = {c.work_id: c for c in result.candidates}
+    assert by[a].tier == 1
+    assert by[a].sources == ("keyword", "vector")

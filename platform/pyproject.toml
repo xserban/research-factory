@@ -21,7 +21,7 @@ dependencies = [
 docling = ["docling>=2.147.0"]  # MIT; layout models must be supplied (FACTORY_DOCLING_MODELS)
 # Local embedding ranker (decision 116): SPECTER2 base, Apache-2.0; the weights must be supplied
 # (FACTORY_RANKER_MODEL), never downloaded by the platform. Lazy imports, like docling.
-ranker = ["transformers>=4.40", "torch>=2.2"]
+ranker = ["transformers>=4.40", "torch>=2.2", "numpy>=1.26"]
 server = ["uvicorn>=0.30"]  # `factory serve --http`
 pymupdf = ["pymupdf4llm>=2.1", "pymupdf>=1.24"]  # AGPL-3.0
 

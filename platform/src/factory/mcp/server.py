@@ -5970,15 +5970,25 @@ def build_server(
         limit: int = 20,
         per_work_limit: int = 3,
         kinds: list[str] | None = None,
+        method: str = "keyword",
     ) -> dict[str, JsonValue]:
-        """Keyword search over the passages of the pinned conversions of a selection (spec as in
-        `selection_resolve`). `queries` are plain words (OR) or "quoted phrases"; up to 10;
-        queries are fused by reciprocal rank. It ranks and never drops a work: there is no score
-        threshold. `kinds` restricts to section kinds. Returns `hits` (work_id, title, passage_id,
-        anchors, section_path, text, rank, ranks_per_query, conversion_id, section_kind), the
+        """Search the passages of the pinned conversions of a selection (spec as in
+        `selection_resolve`). `queries` are plain words or "quoted phrases"; up to 10; queries are
+        fused by reciprocal rank. It ranks and never drops a work: there is no score threshold.
+        `kinds` restricts to section kinds. `method` is `keyword` (default: words, OR, bm25),
+        `vector` (meaning: a local SPECTER2 embedding of each query against passage vectors,
+        exact cosine; write the query as a sentence or a claim, not as keywords) or `hybrid`
+        (reciprocal rank fusion of the keyword and vector orders; use it for most searches).
+        Passages lacking vectors are embedded on demand when at most 300 are missing; otherwise
+        `vector` is refused naming the CLI command (`factory passages embed`) and `hybrid`
+        answers by keyword and says so in `note`. If the local model is unavailable `vector` is
+        refused and `hybrid` answers by keyword with a `note`; tell the researcher when a `note`
+        is present. Returns `hits` (work_id, title, passage_id, anchors, section_path, text, rank,
+        ranks_per_query, conversion_id, section_kind, keyword_rank, vector_rank: each None when
+        the passage is absent from that order), `method` (the method actually used), `note`, the
         selection `digest` and the sidecar index report. Anchors are exact: quote only from
-        them, and verify with `chat_verify`. Read-only (it rebuilds the sidecar index, never an
-        event). Refused to a session that has joined a pass."""
+        them, and verify with `chat_verify`. Read-only (it rebuilds the sidecar index and the
+        vectors, never an event). Refused to a session that has joined a pass."""
 
         def search() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -5991,6 +6001,7 @@ def build_server(
                 limit=limit,
                 per_work_limit=per_work_limit,
                 kinds=wanted,
+                method=_search_method(method),
             )
             return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
 
@@ -6129,11 +6140,12 @@ def build_server(
         tier1_cap: int = chat_candidates_service.TIER1_CAP,
     ) -> dict[str, JsonValue]:
         """Check the candidates you propose after reading the claims digest, and compute tiers.
-        Each proposal is `{work_id, source, stance}` with `source` one of claims, keyword, miner,
-        graph, researcher and `stance` against or for; optional `anchor` and `quote` (required for
-        claims and keyword, checked against the pinned conversion) and `note`. Every work must be
-        in the selection (spec as in `selection_resolve`). Invalid input writes nothing and
-        returns located issues (`proposals[3].quote`). Returns every work of the selection once
+        Each proposal is `{work_id, source, stance}` with `source` one of claims, keyword, vector,
+        miner, graph, researcher and `stance` against or for; optional `anchor` and `quote`
+        (required for claims, keyword and vector, checked against the pinned conversion) and
+        `note`. Every work must be in the selection (spec as in `selection_resolve`). Invalid
+        input writes nothing and returns located issues (`proposals[3].quote`). Returns every
+        work of the selection once
         (`candidates`: sources, stances, tier, over_cap, quotes, notes), with computed counts per
         tier (1: two or more sources or a researcher pick; 2: one source; 3: not proposed) and
         stance, `over_cap` and `total`. In `explore` mode tier 1 is capped at `tier1_cap`
@@ -6329,6 +6341,18 @@ def _selection_spec(
 ) -> selection_service.SelectionSpec:
     return selection_service.SelectionSpec(
         layers=list(layers or []), include=list(include or []), exclude=list(exclude or [])
+    )
+
+
+def _search_method(value: str) -> corpus_search_service.Method:
+    if value == "keyword":
+        return "keyword"
+    if value == "vector":
+        return "vector"
+    if value == "hybrid":
+        return "hybrid"
+    raise FactoryValidationError(
+        [ValidationIssue("method", "must be one of: keyword, vector, hybrid")]
     )
 
 
