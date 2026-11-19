@@ -83,6 +83,7 @@ from factory.model.intuition import (
     ReviewState,
     SourceInput,
 )
+from factory.model.lead_engine import DEFAULT_ORDER, SOURCES
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage
@@ -208,6 +209,9 @@ from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
+from factory.services.lead_candidates import lead_candidates as lead_candidates_service
+from factory.services.lead_queue import lead_queue as lead_queue_service
+from factory.services.lead_stats import lead_stats as lead_stats_service
 from factory.services.living_hooks import DEFAULT_HOOKS, make_status_hook
 from factory.services.modules.listing import module_rows
 from factory.services.notices import NoticeCheckSummary
@@ -7065,6 +7069,116 @@ def leads_list_cmd(
         views = leads_service.list_leads(project, states=chosen)  # type: ignore[arg-type]
     for line in render.lead_lines(views):
         typer.echo(line)
+
+
+def _csv(value: str | None, option: str) -> list[str] | None:
+    if value is None:
+        return None
+    parts = [v.strip() for v in value.split(",") if v.strip()]
+    if not parts:
+        raise typer.BadParameter("give one or more names, comma-separated", param_hint=option)
+    return parts
+
+
+_SOURCES_OPT = typer.Option(
+    "--sources",
+    help="Comma list of technique-challenge, technique-combination, technique-gap, "
+    "claims-limitation (default all).",
+)
+_PER_SOURCE_OPT = typer.Option("--per-source", help="Candidates kept per source (default 20).")
+_TECH_MIN_OPT = typer.Option("--technique-min-works", help="Works each approach needs (3).")
+_CO_WORKS_OPT = typer.Option("--max-co-works", help="Works that may already use both (0).")
+
+
+@leads_app.command("candidates")
+def leads_candidates_cmd(
+    ctx: typer.Context,
+    sources: Annotated[str | None, _SOURCES_OPT] = None,
+    per_source: Annotated[int, _PER_SOURCE_OPT] = 20,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
+    max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Observations to check, with quotes and the triggers a lead would cite (exploratory,
+    read-only; records nothing)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        chosen = _csv(sources, "--sources")
+        result = lead_candidates_service(
+            project,
+            sources=tuple(chosen) if chosen else SOURCES,
+            per_source=per_source,
+            layer=layer,
+            technique_min_works=technique_min_works,
+            max_co_works=max_co_works,
+        )
+    _technique_out(result, render.lead_candidates_lines, format_)
+
+
+@leads_app.command("queue")
+def leads_queue_cmd(
+    ctx: typer.Context,
+    sources: Annotated[str | None, _SOURCES_OPT] = None,
+    per_source: Annotated[int, _PER_SOURCE_OPT] = 20,
+    layer: Annotated[str, _LAYER_OPT] = "core",
+    order_by: Annotated[
+        str | None,
+        typer.Option(
+            "--order-by",
+            help="Comma list of measures in turn: support, independence, verification, "
+            "supportive_share, overlap, diversity, prior_hits, score, basis.",
+        ),
+    ] = None,
+    top: Annotated[int, typer.Option("--top", help="Entries shown (default 50).")] = 50,
+    balance: Annotated[
+        bool,
+        typer.Option(
+            "--balance/--no-balance",
+            help="Share the top across the sources (default) or keep the global order.",
+        ),
+    ] = True,
+    per_source_top: Annotated[
+        int | None, typer.Option("--per-source-top", help="Entries per source when balanced.")
+    ] = None,
+    exclude_prior: Annotated[
+        bool, typer.Option("--exclude-prior", help="Leave out candidates with a prior hit.")
+    ] = False,
+    technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
+    max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    format_: Annotated[str, _FORMAT_OPT] = "table",
+) -> None:
+    """Candidates and open leads ordered by computed measures (exploratory, read-only)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        chosen = _csv(sources, "--sources")
+        order = _csv(order_by, "--order-by")
+        result = lead_queue_service(
+            project,
+            order_by=tuple(order) if order else DEFAULT_ORDER,
+            sources=tuple(chosen) if chosen else SOURCES,
+            top=top,
+            exclude_prior=exclude_prior,
+            per_source=per_source,
+            layer=layer,
+            technique_min_works=technique_min_works,
+            max_co_works=max_co_works,
+            balance=balance,
+            per_source_top=per_source_top,
+        )
+    _technique_out(result, render.lead_queue_lines, format_)
+
+
+@leads_app.command("stats")
+def leads_stats_cmd(ctx: typer.Context, format_: Annotated[str, _FORMAT_OPT] = "table") -> None:
+    """Counts of recorded leads, the hypotheses drafted from them and their outcomes."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        result = lead_stats_service(project)
+    _technique_out(result, render.lead_stats_lines, format_)
 
 
 def _decide_lead_cmd(

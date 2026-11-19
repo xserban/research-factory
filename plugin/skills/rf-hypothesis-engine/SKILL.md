@@ -181,9 +181,9 @@ verbatim, fall back to `work` triggers for the papers behind the row, and say in
 which row it came from. Do not invent a reference and do not retry with altered input to obtain
 a different answer. Every `work` or `item` you cite becomes a key of the lead, so two leads
 citing the same paper show up in each other's `prior`: read it, do not treat it as a duplicate
-by itself. The critic later sees a miner `item` as a bare id without its quote, so put the
-verified quote or its gist, with the anchor, in the hypothesis `statement` (the critic can read
-the statement, not the lead text).
+by itself. The critic sees the verbatim quote of an `item` row (a technique or m-claims row) but not the
+lead text, so put the exploratory label and the quote or its gist, with the anchor, in the
+hypothesis `statement`.
 
 ### Step 6. Specify and design (HUMAN DECISION POINT H6: test kind, decision rule, margin)
 
@@ -245,34 +245,50 @@ were used.
 | Gate policy per step (human, or off where the protocol allows) | all | the project's recorded policy; in pilot and systematic mode human |
 | Loop bound (rounds, stop rule) | 3, 10 | one round, set by the researcher |
 
-## When lead_candidates, lead_queue and lead_stats exist
+## The engine tools: lead_candidates, lead_queue, lead_stats
 
-These services are being built; the tools may not exist in the connected server yet. Check the
-tool list first. If they are absent, use the fallback, which gives the same result by hand and
-needs only today's tools.
+Three read-only tools do the bookkeeping of steps 1, 2, 4, 5 and 10 (the platform computes; you
+judge). Each reply starts with the exploratory notice, is refused to a session that has joined a
+pass, and shows at most 40 candidates (30 queue entries) with at most 6 quotes each; `reply_cap`
+says what was left out. None of them records anything.
 
-Intended use:
+1. Ask the researcher for the knobs and state the defaults: `sources` (any of
+   `technique-challenge`, `technique-combination`, `technique-gap`, `claims-limitation`; default
+   all), `layer` (default `core`), `technique_min_works` (3) and `max_co_works` (0) for
+   combinations and gaps, `order_by` (a list of measures: `support`, `independence`,
+   `verification`, `supportive_share`, `overlap`, `diversity`, `prior_hits`, `score`, `basis`;
+   default `prior_hits`, `independence`, `support`, `verification`, `diversity`, `score`), `top`,
+   `exclude_prior`, and `balance` (default true: the top is shared across the sources in play, so
+   the many combinations do not crowd out challenges, gaps and limitations; `per_source_top` sets
+   the share; `balance=false` is the plain global order).
+2. Call `lead_queue` with those knobs (`lead_candidates` shows the same candidates unordered, to
+   see everything one source produced). Show the researcher the ordered list as the tool returned
+   it: for each entry the source, the observation, the measures (support, independence, verified
+   quotes over total, diversity, overlap, score and its flag), every prior hit with what it shares
+   (an `item` shared is narrow; a shared work only is broad), the flags (`basis-stale` and the
+   like sort last and are reported, never hidden), and the quotes with anchors. Say that the order
+   is a printed rule over computed measures, comparable only within this call, and not a verdict.
+3. The researcher picks (HUMAN DECISION POINT H5). Read each picked quote yourself (`chat_verify`
+   and `document_read`) before you rely on it.
+4. For each pick call `lead_record` with the candidate's `triggers` exactly as returned (`item` and
+   `work`, at most 20; never edit, add or retype one, and never use `row` for a miner row), a
+   `text` of at most 600 characters that names the source and says it is exploratory, and the
+   knobs used in `framework`. Read `prior` in the answer and say how the lead differs from each
+   item, or withdraw it.
+5. The critic sees the hypothesis statement and, for each trigger, the verbatim quote of an
+   `item` row (a technique or m-claims row), but never the lead text (R-51). Put the exploratory
+   label and the quote with its anchor in the hypothesis `statement` all the same, so the critic
+   reads them whichever trigger kinds the lead has.
+6. Never call `lead_decide` or `hypothesis_register`: the researcher promotes, parks or discards
+   with `factory leads` and registers with `factory hypotheses`.
+7. At the end (step 10) call `lead_stats` and report its figures with their denominators (leads
+   recorded and decided, promotion share as a use figure, discard reasons, hypotheses drafted,
+   reviews, registrations, oldest undecided).
 
-- `lead_candidates` (read-only): the candidate observations of steps 1 and 2 from the technique
-  builders and the claims digest, each with the exact `triggers` list to pass to `lead_record`,
-  the source name, the miner version and the exploratory label. It replaces the hand assembly in
-  steps 1 and 2. Candidates whose triggers do not resolve are listed as omitted. Read it, tick
-  with the researcher, and word the leads yourself.
-- `lead_queue` (read-only): the open leads, and the candidates not yet recorded, in a fixed order
-  with the measures behind it (support, independence, quote verification, evidence share,
-  corpus overlap, diversity against promoted leads, prior hits, basis state). It replaces the
-  hand order of step 5 and the overlap part of step 4. The order rule is printed with it; it is
-  an order, not a verdict. A lead shown as "candidate no longer produced" is reported, never
-  deleted.
-- `lead_stats` (read-only): counts of leads recorded, promoted, parked and discarded by reason,
-  drafts, registered and refused, computed from events. It replaces the hand tally of step 10;
-  quote its figures with their denominators.
-
-Fallback with today's tools: steps 1 and 2 as written above (`technique_*`, `claims_digest`,
-`corpus_search`, `chat_verify`); step 4 with `lead_list`, `hypothesis_list` and two
-`corpus_search` calls; step 5 with the hand order; step 10 with `lead_list` and `hypothesis_list`
-counted by you and checked against the researcher's own command-line view (`factory leads`,
-`factory hypotheses`). Say in the report that the figures were counted by hand from tool results.
+If a tool is refused or absent, report that verbatim. The by-hand route is: steps 1 and 2 with
+`technique_*`, `claims_digest`, `corpus_search` and `chat_verify`; step 4 with `lead_list`,
+`hypothesis_list` and two `corpus_search` calls; step 5 with a hand order; step 10 counted from
+`lead_list` and `hypothesis_list` and said to be counted by hand.
 
 ## Stopping
 

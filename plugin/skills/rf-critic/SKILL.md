@@ -26,7 +26,9 @@ is not yours to decide.
 
 1. Call `hypothesis_review_next`. The task holds the spec without prose, the statement, the
    lead's triggers (references, builder rows and verified quotes) and the prior failures. When
-   none waits, report that and stop.
+   none waits, report that and stop. A trigger that cites a miner row (technique or claims
+   row from the hypothesis engine) arrives with its verbatim quote and anchor; such rows are
+   pass-A, exploratory readings, so judge the statement against the quote, not the other way.
 2. Judge each checklist item from the task alone, as `pass`, `fail` or `n/a`:
    - `falsifiable`: the rule and margin can refute it, and the falsifier is not vacuous;
    - `measurable`: the metric, its direction and unit are defined and obtainable;

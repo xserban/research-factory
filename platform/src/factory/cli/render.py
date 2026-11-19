@@ -2204,3 +2204,100 @@ def technique_candidate_list_lines(result: Any) -> list[str]:
             f"    supported: {u.work_id} {u.anchor or '-'} {u.quote or ''}" for u in h.supported
         ]
     return lines
+
+
+# --- The lead engine (hypothesis engine v1): every output starts with the exploratory notice ---
+
+
+def _engine_head(result: Any) -> list[str]:
+    from factory.model.lead_engine import NOTICE
+
+    return [f"EXPLORATORY: {NOTICE}"]
+
+
+def _candidate_lines(c: Any, indent: str = "  ") -> list[str]:
+    lines = [f"{indent}{c.candidate_id}  [{c.source}]  {c.observation}"]
+    works = ", ".join(w.work_id for w in c.works)
+    lines.append(f"{indent}  works ({c.works_total}): {works}")
+    for q in c.quotes:
+        lines.append(f"{indent}  quote {q.role} {q.work_id} {q.anchor or '-'}: {q.quote}")
+    lines.append(
+        f"{indent}  triggers: "
+        + ", ".join(f"{t.kind} {t.ref}" for t in c.triggers)
+        + (f"  ({c.trigger_note})" if c.trigger_note else "")
+    )
+    return lines
+
+
+def lead_candidates_lines(result: Any) -> list[str]:
+    lines = _engine_head(result)
+    lines.append("parameters: " + ", ".join(f"{k}={v}" for k, v in result.parameters.items()))
+    lines.append(
+        "totals before the per-source cap: "
+        + ", ".join(f"{k}={v}" for k, v in result.totals.items())
+    )
+    lines.append(f"{len(result.candidates)} candidates")
+    for c in result.candidates:
+        lines += _candidate_lines(c)
+    lines += [f"skipped {s.candidate_id}: {s.reason}" for s in result.skipped]
+    return lines
+
+
+def _measure_text(m: Any) -> str:
+    v = m.verification
+    overlap = "-" if m.overlap is None else m.overlap
+    share = "-" if v.share is None else f"{v.share:.2f}"
+    return (
+        f"support={m.support} independence={m.independence} verified={v.verified}/{v.total} "
+        f"({share}) diversity={m.diversity:.2f} overlap={overlap} "
+        f"prior_hits={m.prior_hits} (narrow {m.narrow_prior_hits}) score={m.score:.3f} "
+        f"basis={m.basis}"
+    )
+
+
+def lead_queue_lines(result: Any) -> list[str]:
+    lines = _engine_head(result)
+    lines.append("order: " + result.order_rule)
+    lines.append("parameters: " + ", ".join(f"{k}={v}" for k, v in result.parameters.items()))
+    lines.append(f"{len(result.items)} of {result.total_candidates} candidates shown")
+    for i in result.items:
+        lines.append(
+            f"{i.rank}. {i.entry_id}  [{i.source}]"
+            + (f"  flags: {', '.join(i.flags)}" if i.flags else "")
+        )
+        lines.append("    " + _measure_text(i.measures))
+        for h in i.prior:
+            lines.append(
+                f"    prior {h.kind} {h.id}: items {', '.join(h.shared_items) or '-'}; "
+                f"works {', '.join(h.shared_works) or '-'}"
+            )
+        if i.candidate is not None:
+            lines += _candidate_lines(i.candidate, "    ")
+    for i in result.leads:
+        lines.append(f"open lead {i.rank}. {i.entry_id}  [{i.source}]")
+        lines.append("    " + _measure_text(i.measures))
+    lines += [f"excluded {s.candidate_id}: {s.reason}" for s in result.excluded]
+    lines.append(result.comparability)
+    return lines
+
+
+def lead_stats_lines(result: Any) -> list[str]:
+    lines = _engine_head(result)
+    lines.append(f"{result.notice}")
+    lines.append(f"leads recorded: {result.recorded}; by state: {result.by_state}")
+    lines.append(
+        f"decided: {result.decided}; promotion rate {result.promotion_rate}; "
+        f"of decided {result.decided_promotion_rate}"
+    )
+    lines.append(f"discard reasons: {result.discard_reasons}")
+    lines.append(f"by trigger kind: {result.by_trigger_kind}; by source: {result.by_source}")
+    lines.append(
+        f"hypotheses drafted: {result.hypotheses_drafted} {result.hypotheses_by_state}; "
+        f"registered: {result.hypotheses_registered}; closed: {result.hypotheses_closed}"
+    )
+    lines.append(
+        f"reviews: {result.reviews} {result.reviews_by_recommendation}; outcomes: {result.outcomes}"
+    )
+    for o in result.oldest_undecided:
+        lines.append(f"oldest undecided {o.lead_id} [{o.source}] triggers={o.triggers}")
+    return lines

@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import datetime
-from typing import Annotated, Literal, TypeVar, cast, get_args
+from typing import Annotated, Any, Literal, TypeVar, cast, get_args
 
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.settings import AuthSettings
@@ -36,6 +36,7 @@ from factory.mcp.conventions import (
     withhold,
 )
 from factory.mcp.elicit import confirm_human_act, elicit_human_selection
+from factory.mcp.lead_engine_reply import bound_candidates, bound_queue
 from factory.mcp.sessions import (
     THIS_SESSION,
     CallContext,
@@ -74,6 +75,8 @@ from factory.model.intuition import (
     ReviewState,
     UseBasisInput,
 )
+from factory.model.lead_engine import DEFAULT_ORDER, SOURCES
+from factory.model.lead_engine import NOTICE as LEAD_ENGINE_NOTICE
 from factory.model.lineage import DEFAULT_STATUSES, EdgeStatus, RelationProposal
 from factory.model.notices import AssessmentDecision
 from factory.model.project import RigorMode
@@ -205,6 +208,9 @@ from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
 from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.lab import Lab, lab_exists, open_lab
+from factory.services.lead_candidates import lead_candidates as lead_candidates_service
+from factory.services.lead_queue import lead_queue as lead_queue_service
+from factory.services.lead_stats import lead_stats as lead_stats_service
 from factory.services.living_hooks import default_hooks
 from factory.services.members import roles_of
 from factory.services.rate_limit import RateLimiter
@@ -3267,6 +3273,111 @@ def build_server(
         return _technique_reply(
             project, lambda p: technique_service.technique_challenges(p, layer=layer, limit=limit)
         )
+
+    def _lead_engine_reply(
+        project: str,
+        build: Callable[[Project], BaseModel],
+        bound: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> dict[str, JsonValue]:
+        """A read-only lead engine tool: refused to a pass session and to the blind reader,
+        labelled exploratory on success and on refusal, bounded (`mcp.lead_engine_reply`) and
+        scrubbed of held-out identifiers like the technique tools."""
+
+        def run() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            _require_pass_opened(opened, "lead_engine")
+            data = build(opened).model_dump(mode="json", by_alias=True)
+            data["notice"] = LEAD_ENGINE_NOTICE
+            if bound is not None:
+                data = bound(data)
+            return _withheld(opened, data, include_work_ids=False)
+
+        reply = _reply(project, run, include_work_ids=False)
+        reply["notice"] = LEAD_ENGINE_NOTICE
+        return reply
+
+    @server.tool()
+    def lead_candidates(
+        project: str,
+        sources: list[str] | None = None,
+        per_source: int = 20,
+        layer: str = "core",
+        technique_min_works: int = 3,
+        max_co_works: int = 0,
+    ) -> dict[str, JsonValue]:
+        """Observations to check, not leads and not claims of novelty: technique challenges,
+        combinations and gaps, and limitation rows of m-claims, each with its works, verbatim
+        quotes and anchors, and the exact `triggers` (item/work, at most 20) a `lead_record` call
+        accepts. `sources` is any of technique-challenge, technique-combination, technique-gap,
+        claims-limitation (default all); `per_source` caps each source; `layer` is core (default),
+        all or a layer id; `technique_min_works` and `max_co_works` narrow combinations and gaps.
+        EXPLORATORY. Read-only (it records nothing); the reply shows at most 40 candidates and 6
+        quotes each (see `reply_cap`). Refused to a session that has joined a pass."""
+        return _lead_engine_reply(
+            project,
+            lambda p: lead_candidates_service(
+                p,
+                sources=tuple(sources) if sources is not None else SOURCES,
+                per_source=per_source,
+                layer=layer,
+                technique_min_works=technique_min_works,
+                max_co_works=max_co_works,
+            ),
+            bound_candidates,
+        )
+
+    @server.tool()
+    def lead_queue(
+        project: str,
+        sources: list[str] | None = None,
+        order_by: list[str] | None = None,
+        top: int = 20,
+        balance: bool = True,
+        per_source_top: int | None = None,
+        exclude_prior: bool = False,
+        per_source: int = 20,
+        layer: str = "core",
+        technique_min_works: int = 3,
+        max_co_works: int = 0,
+        include_leads: bool = True,
+    ) -> dict[str, JsonValue]:
+        """The candidates (and the open leads) ordered by computed measures: support,
+        independence, verification, supportive_share, overlap, diversity, prior_hits, score,
+        basis; `order_by` lists the measures in turn (default: prior_hits, independence, support,
+        verification, diversity, score). `top` caps the list; with `balance` (default) the top is
+        shared across the sources in play (`per_source_top` each, default top divided by the
+        number of sources) and merged by the global order; `balance=false` keeps the global
+        order. `exclude_prior` leaves out candidates with a prior hit (parked or discarded lead,
+        hypothesis, closed direction). Prior hits name what they share. Measures are comparable
+        only within one call. EXPLORATORY. Read-only; the reply shows at most 30 entries and 6
+        quotes each (see `reply_cap`). Refused to a session that has joined a pass."""
+        return _lead_engine_reply(
+            project,
+            lambda p: lead_queue_service(
+                p,
+                order_by=tuple(order_by) if order_by is not None else DEFAULT_ORDER,
+                sources=tuple(sources) if sources is not None else SOURCES,
+                top=top,
+                exclude_prior=exclude_prior,
+                per_source=per_source,
+                layer=layer,
+                technique_min_works=technique_min_works,
+                max_co_works=max_co_works,
+                include_leads=include_leads,
+                balance=balance,
+                per_source_top=per_source_top,
+            ),
+            bound_queue,
+        )
+
+    @server.tool()
+    def lead_stats(project: str) -> dict[str, JsonValue]:
+        """Counts of recorded leads by state and source, the share promoted, discard reasons,
+        the hypotheses drafted from them and their reviews and outcomes, and the oldest
+        undecided leads (id, source and trigger count; never the lead text). A use figure, not a
+        quality figure. Read-only; refused to a session that has joined a pass."""
+        return _lead_engine_reply(project, lambda p: lead_stats_service(p))
 
     @server.tool()
     def vocabulary_propose(

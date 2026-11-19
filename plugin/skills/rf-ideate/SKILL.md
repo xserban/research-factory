@@ -26,6 +26,10 @@ falsifier sentence from the rule you choose.
    fit a problem description, `finder_contradictions` and `finder_gaps` for numeric conflicts
    and empty cells, the lineage and interpretation views for ideas. Note which output you are
    reading; it will be a trigger.
+   For technique challenges, combinations and gaps and for limitation rows of m-claims, the
+   read-only tools `lead_candidates`, `lead_queue` (ordered by computed measures, balanced across
+   sources) and `lead_stats` give candidates with the exact triggers to cite; `rf-hypothesis-engine`
+   describes the procedure. A lead is still yours to word and the researcher's to decide.
    Where two live claims or contribution items of different works contradict each other, propose
    the pair with `contradiction_propose` and a note of at most 500 characters. It stays inferred
    until the researcher confirms it.

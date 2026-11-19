@@ -347,7 +347,12 @@ def test_hypothesis_engine_names_its_tools_and_gates() -> None:
         "hypothesis_register",
         "HUMAN DECISION POINT",
         "## Runtime knobs",
-        "When lead_candidates, lead_queue and lead_stats exist",
+        "The engine tools: lead_candidates, lead_queue, lead_stats",
+        "lead_queue",
+        "lead_stats",
+        "balance",
+        "exactly as returned",
+        "Never call `lead_decide`",
         "found / not found in this corpus",
     ):
         assert needed in text, needed
