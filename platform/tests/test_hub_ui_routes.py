@@ -636,3 +636,162 @@ def test_the_static_build_page_carries_no_served_marker_so_no_switcher() -> None
         "protocol", "Protocol", ["pages/protocol.js"], ("shell", "protocol"), "v"
     )
     assert "factory-served" not in html and "factory-hub-token" not in html
+
+
+# ---------------------------------------------------------------- read-only file routes (port)
+
+DOC = "doc_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+WORK = "rf:test-0123abcd"
+
+
+@pytest.fixture
+def one_document(project: Project, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A converted document (an HTML original and its Markdown) known to the inspector."""
+    from factory.services import hub_sources
+    from factory.services.site_inspector import Doc
+
+    raw = project.library.put(
+        b"<html><body><p>alpha beta gamma delta epsilon zeta eta</p></body></html>"
+    )
+    md = project.library.put(b"alpha beta gamma delta epsilon zeta eta")
+    doc = Doc(DOC, WORK, "latexml-html", "text/html", raw, md, "T", None, None, None, None)
+    monkeypatch.setattr(hub_sources, "inspector_documents", lambda p, r: [doc])
+    return DOC
+
+
+def test_status_json_reports_each_payload_and_writes_nothing(served: tuple[int, Project]) -> None:
+    port, project = served
+    before = _events(project)
+    status, head, body = _req(port, "GET", f"{UI}/status.json")
+    assert status == 200 and "no-store" in head["cache-control"]
+    rows = json.loads(body)
+    assert set(rows) == set(hb.BUILDERS)
+    assert all({"fresh", "built_at"} <= set(r) for r in rows.values())
+    _payload(port, "overview")
+    assert json.loads(_req(port, "GET", f"{UI}/status.json")[2])["overview"]["fresh"] is True
+    assert _events(project) == before
+
+
+def test_screening_api_answers_the_live_panel(served: tuple[int, Project]) -> None:
+    port, project = served
+    before = _events(project)
+    status, _, body = _req(port, "GET", "/p/demo/api/screening")
+    assert status == 200 and isinstance(json.loads(body), dict)
+    assert _events(project) == before
+
+
+def test_source_document_payload_and_files(served: tuple[int, Project], one_document: str) -> None:
+    port, project = served
+    before = _events(project)
+    status, _, body = _req(port, "GET", f"{UI}/data/sources-doc-{one_document}.json")
+    detail = json.loads(body)
+    assert status == 200 and detail["document_id"] == DOC
+    assert detail["markdown"].startswith("alpha beta")
+    assert detail["files"]["original"] == f"file/original/{DOC}"
+    s1, h1, b1 = _req(port, "GET", f"{UI}/file/original/{DOC}")
+    assert s1 == 200 and h1["content-type"].startswith("text/plain") and b"<html>" in b1
+    s2, h2, b2 = _req(port, "GET", f"{UI}/file/markdown/{DOC}")
+    assert s2 == 200 and h2["content-type"].startswith("text/markdown") and b2.startswith(b"alpha")
+    by_work = _req(port, "GET", f"{UI}/file/original/{WORK}")  # a work id finds its document
+    assert by_work[0] == 200 and by_work[2] == b1
+    assert _events(project) == before
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "data/sources-doc-doc_01ARZ3NDEKTSV4RRFFQ69G5FAW.json",
+        "data/sources-doc-..%2f..%2fetc.json",
+        "data/sources-doc-.json",
+        "file/original/doc_01ARZ3NDEKTSV4RRFFQ69G5FAW",
+        "file/original/..%2f..%2fevents",
+        "file/original/",
+        "file/other/doc_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    ],
+)
+def test_unknown_documents_are_404(
+    served: tuple[int, Project], one_document: str, path: str
+) -> None:
+    assert _req(served[0], "GET", f"{UI}/{path}")[0] == 404
+
+
+def test_ops_files_are_read_only_and_contained(served: tuple[int, Project], tmp_path: Any) -> None:
+    port, project = served
+    ops = project.paths.dir / "ops"
+    (ops / "logs").mkdir(parents=True, exist_ok=True)
+    (ops / "logs" / "a.log").write_text("line one\n", encoding="utf-8")
+    (ops / "data.json").write_text("{}", encoding="utf-8")
+    (ops / "big.txt").write_text("x" * 10, encoding="utf-8")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret", encoding="utf-8")
+    (ops / "link.txt").symlink_to(secret)
+    (ops / "linkdir").symlink_to(tmp_path, target_is_directory=True)
+    (project.paths.dir / "outside.txt").write_text("no", encoding="utf-8")
+    before = _events(project)
+    ok = _req(port, "GET", f"{UI}/ops/logs/a.log")
+    assert (
+        ok[0] == 200 and ok[1]["content-type"].startswith("text/plain") and ok[2] == b"line one\n"
+    )
+    assert _req(port, "GET", f"{UI}/ops/data.json")[1]["content-type"].startswith(
+        "application/json"
+    )
+    for bad in (
+        "ops/../outside.txt",
+        "ops/%2e%2e/outside.txt",
+        "ops/..%2foutside.txt",
+        "ops//etc/passwd",
+        "ops/logs",  # a directory
+        "ops/",
+        "ops/missing.txt",
+        "ops/link.txt",  # a symlink
+        "ops/linkdir/secret.txt",  # through a symlinked folder
+        "ops/logs/../../outside.txt",
+        "ops/%00",
+    ):
+        assert _req(port, "GET", f"{UI}/{bad}")[0] == 404, bad
+    assert _events(project) == before
+
+
+def test_ops_file_cap_refuses_a_large_file(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hub_costs
+
+    port, project = served
+    (project.paths.dir / "ops").mkdir(exist_ok=True)
+    (project.paths.dir / "ops" / "big.txt").write_text("x" * 50, encoding="utf-8")
+    monkeypatch.setattr(hub_costs, "OPS_FILE_CAP", 10)
+    assert _req(port, "GET", f"{UI}/ops/big.txt")[0] == 404
+
+
+def test_wiki_zip_is_built_once_per_fingerprint(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import zipfile
+
+    from factory.services import site as site_service
+
+    port, project = served
+    built: list[int] = []
+
+    def fake(p: Project, out: Any) -> None:
+        built.append(1)
+        (out / "index.md").write_text("# vault", encoding="utf-8")
+
+    monkeypatch.setattr(site_service, "_build_wiki", fake)
+    before = _events(project)
+    status, head, body = _req(port, "GET", f"{UI}/download/wiki.zip")
+    assert status == 200 and head["content-type"] == "application/zip"
+    assert "attachment" in head["content-disposition"]
+    assert zipfile.ZipFile(io.BytesIO(body)).namelist() == ["index.md"]
+    assert _req(port, "GET", f"{UI}/download/wiki.zip")[2] == body
+    assert len(built) == 1
+    assert _events(project) == before
+
+
+def test_new_ui_routes_refuse_a_non_loopback_host(served: tuple[int, Project]) -> None:
+    port, _ = served
+    for path in ("status.json", "ops/x", f"file/original/{DOC}", "download/wiki.zip"):
+        status, _, _ = _req(port, "GET", f"{UI}/{path}", headers={"Host": "evil.example"})
+        assert status == 403

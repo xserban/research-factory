@@ -176,8 +176,8 @@ function wiki() {
   return head + `<div class="card"><p>Open the folder as a vault, start at <code>${esc(K.start)}</code> and use the graph view (Ctrl+G). Every placement in a note shows the quote behind it.</p>
     <div class="wpath"><code id="wpath">${esc(K.path)}</code><button type="button" class="btn" id="wcopy">Copy path</button></div>
     <p class="meta">${esc(K.works)} papers, coded in pass A. ${K.built ? 'The vault is built.' : 'The vault is not built yet; the classic hub builds it on demand.'}</p>
-    <div class="wbar"><a class="btn" href="../#wiki">Open the classic wiki</a><button type="button" class="btn" disabled>Download vault (zip)</button>
-    ${H.info('A zip download needs a server route that packs the vault; it is not wired yet. Until then open the folder directly or use the classic wiki.', 'Why the download is off')}</div></div>`;
+    <div class="wbar"><a class="btn" href="../#wiki">Open the classic wiki</a>${HUB.served ? '<a class="btn" href="download/wiki.zip" download>Download vault (zip)</a>' : '<button type="button" class="btn" disabled>Download vault (zip)</button>'}
+    ${H.info(HUB.served ? 'The vault is packed on the server and kept until the project changes; the first download after a change takes a while.' : 'The zip download needs the served hub.', 'About the download')}</div></div>`;
 }
 
 /* ---------- shell of the page ---------- */

@@ -615,12 +615,8 @@ def _layer_map(project: Project) -> dict[str, str | None]:
 def build(ctx: HubContext) -> dict[str, Any]:
     """The `method` payload: `lifecycle` (m-stages view and the overall sequences), `steps`,
     `taxonomy` (registered versions and the legacy list) and `methods`."""
-    from factory.services.site_corpus import corpus_payload
-
     project = ctx.project
-    works: list[dict[str, Any]] = ctx._once("corpus_payload", lambda: corpus_payload(project))[
-        "works"
-    ]
+    works: list[dict[str, Any]] = ctx.corpus_raw["works"]
     lifecycle = lifecycle_view(works, _layer_map(project))
     lifecycle["sequences"] = sequence_analysis(own_stage_sequences(project))
     lifecycle["stage_rules"] = [{"stage": s, "keywords": list(k)} for s, k in STAGE_RULES]

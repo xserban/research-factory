@@ -176,6 +176,12 @@ class HubContext:
             lambda: hub_landscape.landscape_payloads(hub_landscape.load_inputs(self.project)),
         )
 
+    @property
+    def corpus_raw(self) -> dict[str, Any]:
+        """`site_corpus.corpus_payload` for the whole project, read once and shared (the method,
+        write and corpus payloads each used to read it again). Callers must not mutate it."""
+        return self._once("corpus_payload", lambda: site_corpus.corpus_payload(self.project))
+
     def year_month(self, work_id: str) -> tuple[int | None, int | None]:
         date = self.publication.get(work_id, ("", ""))[1]
         year = int(date[:4]) if len(date) >= 4 and date[:4].isdigit() else None

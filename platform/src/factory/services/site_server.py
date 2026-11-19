@@ -30,7 +30,13 @@ Invariants:
 - Hub v2 (plan hub-ui, `services/hub_serve.py`) is served at `<prefix>/ui/`: pages, versioned
   assets, cached payloads (`data/<name>.json`, ETag, 503 while building) and `trace`, all read-only,
   plus one act, `POST <prefix>/ui/act/snowball-add` (`work_id`: puts an outside work in the inbox as
-  the local human, `cli:inbox add`). The pages' other acts are the routes above.
+  the local human, `cli:inbox add`). The pages' other acts are the routes above. Further read-only
+  routes: `ui/data/sources-doc-<document_id>.json` (one converted document: texts, lost and added
+  runs), `ui/file/original|markdown/<document_id>` (the stored files, by registered id only),
+  `ui/ops/<path>` (a file of the project's `ops/` folder: no `..`, absolute path, symlink or
+  directory, size capped), `ui/download/wiki.zip` (the vault, built once per fingerprint),
+  `ui/status.json` (per payload: fresh, built_at, error) and `GET /api/screening`
+  (`dashboard.screening_live`). None of them writes an event.
 - `POST /api/queue/resume` with `dry_run` plans in the request and writes nothing. A real resume
   runs `services.resume.resume` in a daemon thread, one at a time (`ResumeRunner`), because its
   deterministic steps look papers up and convert them and must not run in a request; the reply is
@@ -83,6 +89,7 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
 from factory.services import activity as activity_service
+from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
@@ -119,6 +126,8 @@ MAX_EXPORT_BODY: Final = 256 * 1024
 hundred characters), which the usual 16 KiB body limit would cut."""
 EXPORT_ROUTE: Final = "/api/export/works"
 UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
+UI_DOC_PREFIX: Final = "data/sources-doc-"
+"""The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
 """Hub v2 (plan hub-ui): `<prefix>/ui/` pages, `assets/`, `data/<payload>.json` and `trace`; the
 only write is the snowball act."""
@@ -1116,7 +1125,7 @@ def _handler_class(
             self._deny(403, "forbidden")
             return False
 
-        def _json(self, code: int, payload: dict[str, object]) -> None:
+        def _json(self, code: int, payload: Mapping[str, object]) -> None:
             body = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1136,6 +1145,16 @@ def _handler_class(
                     shutil.copyfileobj(handle, self.wfile, 1024 * 1024)
             finally:
                 shutil.rmtree(path.parent, ignore_errors=True)
+
+        def _send_file(self, path: Path, name: str) -> None:
+            """Stream the cached file `path` as a download (it stays in the cache)."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as handle:
+                shutil.copyfileobj(handle, self.wfile, 1024 * 1024)
 
         def _html(self, text: str) -> None:
             body = text.encode()
@@ -1252,6 +1271,12 @@ def _handler_class(
                     return
                 self._json(200, found.model_dump(mode="json"))
                 return
+            if url == "/api/screening":
+                try:
+                    self._json(200, dashboard_service.screening_live(slot.project))
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("screening", str(exc))))
+                return
             if url == "/api/queue/runs":
                 runs = runner_service.run_status(slot.project, reconcile=False)
                 pipelines = pipeline_service.pipeline_status(slot.project)
@@ -1298,7 +1323,11 @@ def _handler_class(
                     return
                 text = _with_meta(text, auth.page_credential(site_auth.Scope(slot.slug)), prefix)
                 text = text.replace("<head>", "<head><meta name='factory-served' content='1'>", 1)
-                # the shell's project switcher creates projects: a hub-level act with the hub token
+                # The hub token (scope: the hub, not this project) is only on pages sent by this
+                # handler, which `_allowed` has already limited to a loopback Host, and the only
+                # code that reads it is the shell's project switcher (`HUB.post` with `hub: true`,
+                # `POST /api/projects/create`). It opens no other write: act routes check the
+                # project token, and the hub token fits no project scope.
                 text = text.replace(
                     "<head>",
                     "<head><meta name='factory-hub-token' content='"
@@ -1318,8 +1347,35 @@ def _handler_class(
                     "public, max-age=31536000, immutable" if found.immutable else "no-cache"
                 )
                 self._send(200, found.body, found.content_type, {})
+            elif rest.startswith(UI_DOC_PREFIX) and rest.endswith(".json"):
+                self._ui_document(slot, rest[len(UI_DOC_PREFIX) : -len(".json")], None)
             elif rest.startswith("data/") and rest.endswith(".json"):
                 self._payload(rest[len("data/") : -len(".json")], slot)
+            elif rest.startswith("file/"):
+                kind, _, doc_id = rest[len("file/") :].partition("/")
+                self._ui_document(slot, doc_id, kind)
+            elif rest.startswith("ops/"):
+                found_ops = hub_serve.ops_file(slot.project, rest[len("ops/") :])
+                if found_ops is None:
+                    self._deny(404, "not found")
+                    return
+                self._cache = "no-store"
+                self._send(
+                    200,
+                    found_ops.body,
+                    found_ops.content_type,
+                    {"X-Content-Type-Options": "nosniff"},
+                )
+            elif rest == "download/wiki.zip":
+                try:
+                    archive = hub_serve.wiki_zip(slot.project)
+                except (FactoryError, OSError) as exc:
+                    self._json(500, _issues(ValidationIssue("wiki", str(exc))))
+                    return
+                self._send_file(archive, f"{slot.slug}-wiki.zip")
+            elif rest == "status.json":
+                self._cache = "no-store"
+                self._json(200, slot.ui.status())
             elif rest == "fresh":
                 name = dict(parse_qsl(query)).get("name", "")
                 self._cache = "no-store"
@@ -1337,6 +1393,33 @@ def _handler_class(
                 self._json(200, payload)
             else:
                 self._deny(404, "not found")
+
+        def _ui_document(self, slot: Slot, document_id: str, kind: str | None) -> None:
+            """One converted document: its payload (`kind` None) or its original or Markdown
+            file. The id is looked up in the index (`hub_sources`); anything unknown is a 404."""
+            try:
+                if kind is None:
+                    detail = hub_serve.source_document(slot.project, document_id)
+                    if detail is None:
+                        self._deny(404, "not found")
+                        return
+                    self._cache = "no-cache"
+                    self._json(200, detail)
+                    return
+                found_file = hub_serve.source_file(slot.project, document_id, kind)
+            except (FactoryError, OSError):  # the stored file is gone
+                self._deny(404, "not found")
+                return
+            if found_file is None:
+                self._deny(404, "not found")
+                return
+            self._cache = "no-cache"
+            self._send(
+                200,
+                found_file[0],
+                found_file[1],
+                {"X-Content-Type-Options": "nosniff"},
+            )
 
         def _payload(self, name: str, slot: Slot) -> None:
             """A cached payload with its ETag (304 when the browser has it), or why not yet."""

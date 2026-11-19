@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from factory.services.pages import PageInfo, list_pages, read_page, subset
 from factory.services.site_bibliography import parse_entries
-from factory.services.site_corpus import corpus_payload, slug_of
+from factory.services.site_corpus import slug_of
 from factory.services.site_synthesis import scopes_of
 
 if TYPE_CHECKING:  # hub_build imports this module to register its builder
@@ -277,7 +277,7 @@ def build(ctx: HubContext) -> dict[str, Any]:
         errors["links"] = str(exc)
     payload: dict[str, Any] = {"works": []}
     try:
-        payload = corpus_payload(ctx.project)
+        payload = ctx.corpus_raw
         infos = list_pages(ctx.project)
         out["pages"] = _pages_section(ctx, infos, slug_ids)
         out["scopes"], out["coverage"] = _scopes_section(payload, infos)
