@@ -189,12 +189,13 @@ def test_cli_hub_build_smoke(world: Project, settings: Settings, tmp_path: Path)
 
 
 def test_every_page_has_a_script_and_only_registered_payloads() -> None:
+    # registry order (by likely use, as the prewarm order); the rail in shell.js reads differently
     assert list(hub_ui.PAGES) == [
         "protocol",
         "overview",
         "pipeline",
-        "flow",
         "corpus",
+        "flow",
         "lenses",
         "explore",
         "graph",

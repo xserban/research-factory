@@ -191,7 +191,7 @@ function render() {
   main.querySelectorAll('.cite[data-open]').forEach(b => b.onclick = () => H.openDrawer(b.dataset.open));
   const back = $q('#wback'); if (back) back.onclick = e => { e.preventDefault(); ST.page = ''; writeHash(); render(); };
   if (ST.tab === 'bibliography') bindBib();
-  if (ST.tab === 'prisma' && W.prisma) $q('#pdl').onclick = () => save(W.prisma.svg, W.prisma.filename, 'image/svg+xml');
+  if (ST.tab === 'prisma' && W.prisma) $q('#pdl').onclick = () => save(W.prisma.svg_file || W.prisma.svg, W.prisma.filename, 'image/svg+xml');
   if (ST.tab === 'wiki' && W.wiki) { const c = $q('#wcopy'); c.onclick = () => copy(c, W.wiki.path, 'Copy path'); }
 }
 readHash(); render();

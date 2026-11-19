@@ -66,8 +66,10 @@ def test_prisma_svg_is_the_export_of_the_flow(world: Project) -> None:  # noqa: 
     from factory.services.exports import export_prisma_svg
 
     prisma = hw.build(hb.HubContext(world))["prisma"]
-    assert prisma["svg"] == export_prisma_svg(world)
-    assert prisma["svg"].lstrip().startswith("<svg") and prisma["filename"] == "prisma.svg"
+    export = export_prisma_svg(world)
+    assert prisma["svg_file"] == export  # the download is the export, byte for byte
+    assert prisma["svg"] == export.split("?>", 1)[1].lstrip()  # inline: no XML prolog
+    assert prisma["svg"].startswith("<svg") and prisma["filename"] == "prisma.svg"
 
 
 def test_wiki_pointer_names_the_vault_and_its_state(world: Project) -> None:  # noqa: F811

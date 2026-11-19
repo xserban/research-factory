@@ -224,7 +224,8 @@ def test_superseded_decisions_are_ignored(
     assert pair["disagreements"][0]["a_verdict"] == "exclude"
     wall = payload["reasons_wall"]
     assert wall and wall[0]["criterion"] == "EX01" and wall[0]["count"] == 3
-    assert set(payload["methods"]) == {"ranked_curve", "two_screeners", "reasons_wall"}
+    assert {"ranked_curve", "two_screeners", "reasons_wall"} <= set(payload["methods"])
+    assert {"ranking", "passes", "stops", "calibration", "criteria"} <= set(payload["methods"])
     assert PassLabel.A.value == "A"
 
 
@@ -337,7 +338,7 @@ def test_screening_panel_reads_the_services_and_is_json_safe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     progress = SimpleNamespace(
-        model_dump=lambda mode="json": {"queued": 4, "decided": 3, "remaining": 1}
+        remaining=1, model_dump=lambda mode="json": {"queued": 4, "decided": 3, "remaining": 1}
     )
     status = SimpleNamespace(
         passes={"A": progress},

@@ -130,11 +130,14 @@ def test_shell_palette_points_at_hub_pages() -> None:
 def test_rail_and_palette_list_exactly_the_registered_pages() -> None:
     shell = _read("shell.js")
     ids = list(hub_ui.PAGES)
-    rail = re.search(r"const nav = \[(.*?)\];", shell, re.S)
+    rail = re.search(r"const RAIL = \[(.*?)\n\];", shell, re.S)
     assert rail is not None
     rail_ids = re.findall(r"\['(\w+)','[^']*','(\w+)\.html'\]", rail.group(1))
     assert all(a == b for a, b in rail_ids)
-    assert [a for a, _ in rail_ids] == [i for i in ids if i != "kit"]  # kit is design, off the rail
+    listed = [a for a, _ in rail_ids]
+    assert len(listed) == len(set(listed))  # one entry per page
+    # the rail has its own reading order, not the registry's; kit is design, off the rail
+    assert sorted(listed) == sorted(i for i in ids if i != "kit")
     pal = re.search(r"const PAGES = \[(.*?)\n\];", shell, re.S)
     assert pal is not None
     assert sorted(re.findall(r"'(\w+)\.html'", pal.group(1))) == sorted(ids)

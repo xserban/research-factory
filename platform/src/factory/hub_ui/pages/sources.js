@@ -238,9 +238,7 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
       const q = encodeURIComponent(w.title);
       const links = [w.doi ? ['https://doi.org/' + w.doi, 'The publisher page (DOI)'] : null,
         w.openalex ? ['https://openalex.org/' + w.openalex, 'The OpenAlex record'] : null,
-        ['https://scholar.google.com/scholar?q=' + q, 'Search the title on Google Scholar'],
-        ['https://arxiv.org/search/?query=' + q + '&searchtype=title', 'Search the title on arXiv'],
-        ['https://www.semanticscholar.org/search?q=' + q, 'Search the title on Semantic Scholar']].filter(Boolean);
+        ['https://arxiv.org/search/?query=' + q + '&searchtype=title', 'Search the title on arXiv']].filter(Boolean);
       const det = document.createElement('tr'); det.className = 'sx-det';
       det.innerHTML = `<td colspan="5"><p class="meta">${esc([w.authors, (w.published || '').slice(0, 10), w.venue].filter(Boolean).join(' · '))}
         · ${w.declared_by ? `<span class="sx-ok">declared by ${esc(w.declared_by)}</span>` : '<span class="sx-warn">not declared by any deviation</span>'} · ${openPaper(w.id)}

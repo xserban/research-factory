@@ -242,7 +242,11 @@ def _bibliography_section(ctx: HubContext, slug_ids: dict[str, str]) -> dict[str
 def _prisma_section(ctx: HubContext) -> dict[str, Any]:
     from factory.exports.prisma_svg import prisma_svg
 
-    return {"svg": prisma_svg(ctx.flow_data.prisma), "filename": "prisma.svg"}
+    file = prisma_svg(ctx.flow_data.prisma)
+    # ``svg_file`` is the download (identical to the export); ``svg`` drops the XML
+    # prolog, which is not valid inside an HTML element.
+    inline = file.split("?>", 1)[1].lstrip() if file.lstrip().startswith("<?xml") else file
+    return {"svg": inline, "svg_file": file, "filename": "prisma.svg"}
 
 
 def _wiki_section(ctx: HubContext, works: int) -> dict[str, Any]:

@@ -178,7 +178,11 @@ def test_orders_are_cut_to_ten() -> None:
         "Peer review",
         "Wet lab robot",
     ]
-    seqs = [paper(f"w{i}", entry(1, names[i % 8]), entry(2, names[(i + 3) % 8])) for i in range(12)]
+    # 8 x 3 = 24 distinct ordered pairs, more than the cut
+    seqs = [
+        paper(f"w{i}", entry(1, names[i % 8]), entry(2, names[(i % 8 + 1 + i // 8) % 8]))
+        for i in range(24)
+    ]
     assert len(hm.sequence_analysis(seqs)["orders"]) == hm.TOP_ORDERS
 
 

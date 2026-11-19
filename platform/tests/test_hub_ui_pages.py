@@ -21,7 +21,12 @@ URL_ALLOW = (
     "https://doi.org/",
     "http://arxiv.org/abs/",
     "http://doi.org/",
+    "https://arxiv.org/pdf/",  # the paper itself
+    "https://arxiv.org/search/",  # find a paper by title
+    "https://openalex.org/",  # the paper's record
 )
+# payloads a page loads lazily after mount, besides those its spec declares (must be builders)
+LAZY: dict[str, set[str]] = {"explore": {"corpus"}, "lenses": {"corpus"}}
 BANNED = (
     "from the brief",
     "not in prototype",
@@ -82,7 +87,7 @@ def test_scripts_reference_only_registered_payloads(page: str) -> None:
             n,
         )
     # a page may load only payloads its spec declares (grid payloads excepted)
-    declared = set(hub_ui.PAGES[page].payloads)
+    declared = set(hub_ui.PAGES[page].payloads) | LAZY.get(page, set())
     assert {n for n in names if not n.startswith("grid-")} <= declared, (page, names, declared)
 
 
@@ -237,11 +242,11 @@ def test_the_palette_lists_the_new_pages() -> None:
 
 
 @pytest.mark.parametrize("page", NEW_PAGES)
-def test_a_stub_page_says_it_is_being_ported_and_links_the_classic_hub(page: str) -> None:
+def test_a_ported_page_is_no_stub_and_mounts_its_own_payload(page: str) -> None:
     text = source(page)
-    assert "This page is being ported" in text
-    assert "'../" in text  # a link into the old hub, until the port completes
+    assert "This page is being ported" not in text
     assert f"HUB.load(['shell', '{page}'])" in text
+    assert ".mount(" in text
 
 
 def test_one_acts_helper_is_documented_and_the_switcher_is_served_only() -> None:
