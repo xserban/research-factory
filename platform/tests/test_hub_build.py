@@ -554,3 +554,18 @@ def test_the_seven_ported_pages_have_registered_stub_builders(world: Project) ->
         assert name in hub_ui.PAGES and hub_ui.PAGES[name].payloads == ("shell", name)
         assert hb.BUILDERS[name].__module__ == f"factory.services.hub_{name}"
         assert hb.BUILDERS[name](hb.HubContext(world)) == {"methods": {}, "ready": False}
+
+
+def test_corpus_payload_has_citation_rate_results_and_no_absolute_paths(
+    world: Project, tmp_path: Path
+) -> None:
+    payload = _payload(world, tmp_path, "corpus")
+    cit = payload["citation"]
+    assert cit["works_total"] >= cit["included"] > 0 and isinstance(cit["rows"], list)
+    assert set(payload["results"]) >= {"rows", "own", "cells", "bars", "left_out", "cap_per_work"}
+    for w in payload["works"]:
+        doc = w.get("doc")
+        assert doc is None or (
+            "file" not in doc and doc["inspector"].startswith("../conversion/doc/")
+        )
+    assert "/home/" not in json.dumps(payload["works"])

@@ -153,11 +153,14 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
     wall: '<svg viewBox="0 0 56 34"><rect x="2" y="2" width="16" height="14" rx="2" opacity=".6"/><rect x="2" y="19" width="16" height="13" rx="2" opacity=".35"/><rect x="21" y="2" width="16" height="20" rx="2" opacity=".35"/><rect x="21" y="25" width="16" height="7" rx="2" opacity=".6"/><rect x="40" y="2" width="14" height="10" rx="2" opacity=".6"/><rect x="40" y="15" width="14" height="17" rx="2" opacity=".35"/></svg>',
     swarm: '<svg viewBox="0 0 56 34"><g><circle cx="6" cy="9" r="2"/><circle cx="6" cy="14" r="2"/><circle cx="6" cy="4" r="2"/><circle cx="12" cy="9" r="2"/><circle cx="12" cy="13" r="2"/><circle cx="19" cy="9" r="2"/><circle cx="29" cy="8" r="2"/><circle cx="46" cy="9" r="2.4"/><circle cx="6" cy="24" r="2"/><circle cx="6" cy="29" r="2"/><circle cx="12" cy="26" r="2"/><circle cx="22" cy="26" r="2"/><circle cx="36" cy="25" r="2"/></g></svg>',
     assoc: '<svg viewBox="0 0 56 34"><g>' + [0, 1, 2, 3].flatMap(r => [0, 1, 2, 3].map(c => `<rect x="${6 + c * 11}" y="${1 + r * 8}" width="9" height="7" opacity="${r === c ? .12 : (.25 + ((r * 3 + c * 5) % 7) / 10).toFixed(2)}"/>`)).join('') + '</g></svg>',
+    results: '<svg viewBox="0 0 56 34"><g>' + [0, 1, 2].flatMap(r => [0, 1, 2, 3].map(c => `<rect x="${5 + c * 12}" y="${2 + r * 10.4}" width="10" height="9" opacity="${(.2 + ((r * 5 + c * 3) % 6) / 8).toFixed(2)}"/>`)).join('') + '</g></svg>',
+    rate: '<svg viewBox="0 0 56 34"><rect x="4" y="6" width="44" height="5" opacity=".8"/><rect x="4" y="15" width="30" height="5" opacity=".6"/><rect x="4" y="24" width="16" height="5" opacity=".4"/></svg>',
     adopt: '<svg viewBox="0 0 56 34"><g>' + [0, 1, 2].flatMap(r => [0, 1, 2, 3, 4].map(c => `<rect x="${3 + c * 10.4}" y="${2 + r * 10.4}" width="9" height="9" opacity="${c < r ? .1 : (.3 + c * .12).toFixed(2)}"/>`)).join('') + '</g></svg>',
   };
   const LENSES = [
     ['matrix', 'Design space'], ['assoc', 'What goes together'], ['chains', 'How systems are built'], ['constellation', 'Lineage'],
     ['time', 'Trends'], ['adopt', 'Technique adoption'], ['icicle', 'Taxonomy'], ['wall', 'Evidence'], ['swarm', 'Influence'],
+    ['results', 'Results by stage'], ['rate', 'Citation rate'],
   ];
   const build = {};
   const methodsText = k => esc((LZ.methods && LZ.methods[k]) || '');
@@ -650,6 +653,55 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       },
     };
   };
+
+  /* ================= 10. results by stage and approach (RS-11, RS-12) and 11. citation rate (CT-4, CT-7) ================= */
+  /* Both read the corpus payload (`results`, `citation`), loaded when the lens is opened. */
+  let corpusP = null;
+  const loadCorpus = () => corpusP || (corpusP = HUB.load(['corpus']).then(x => x.corpus));
+  const pr = v => H.pretty(v);
+  build.results = () => ({
+    title: 'Results by stage and approach',
+    noList: true,
+    info: infoPanel('What the papers report, by lifecycle stage and approach, for the paper’s own system.',
+      'Each cell counts result rows of the paper’s own system for one stage and one approach; darker is more. Click a cell to list its papers. The bars count every row by who the result is about, how strong the evidence is and what kind of value it is.',
+      esc((LZ.methods && LZ.methods.results) || '')),
+    lead: '', controls: '',
+    draw(host) {
+      host.innerHTML = '<p class="meta">Loading the result rows…</p>';
+      loadCorpus().then(C => {
+        if (H.hash.get().get('lens') !== 'results') return;
+        const R = C.results; if (!R || !R.rows) { host.innerHTML = emptyView('No result rows are recorded yet.'); return; }
+        const cell = new Map(R.cells.map(c => [c.stage + '|' + c.approach, c])), mx = Math.max(1, ...R.cells.map(c => c.n));
+        const grid = `<div class="scrollx"><table class="t"><thead><tr><th>Stage</th>${R.approaches.map(a => `<th class="r">${esc(pr(a))}</th>`).join('')}</tr></thead><tbody>${R.stages.map(st => `<tr><th scope="row" style="text-align:left">${esc(pr(st))}</th>${R.approaches.map(a => { const c = cell.get(st + '|' + a); return c ? `<td class="r"><button type="button" class="chip" data-cell="${esc(st + '|' + a)}" style="background:color-mix(in srgb,var(--acc) ${Math.round(15 + 70 * c.n / mx)}%,var(--raised))" aria-label="${esc(pr(st) + ', ' + pr(a) + ': ' + c.n + ' rows over ' + c.works.length + ' papers')}">${fmt(c.n)}</button></td>` : '<td class="r meta">–</td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+        const bars = Object.entries(R.bars).map(([f, rows]) => { const tot = rows.reduce((a, x) => a + x[1], 0) || 1; return `<div style="min-width:220px;flex:1"><h3 class="h3">${esc(pr(f))}</h3>${rows.map(([v, n]) => `<div style="display:grid;grid-template-columns:minmax(80px,140px) 1fr 40px;gap:8px;align-items:center;font-size:var(--t-xs);padding:2px 0"><span>${esc(pr(v))}</span><span style="background:var(--raised);height:8px;border-radius:4px"><i style="display:block;height:8px;border-radius:4px;background:var(--acc);width:${(100 * n / tot).toFixed(1)}%"></i></span><span class="tnum">${fmt(n)}</span></div>`).join('')}</div>`; }).join('');
+        host.innerHTML = `<p class="lead">${fmt(R.rows)} result rows over ${fmt(R.works_with_rows)} papers (at most ${fmt(R.cap_per_work)} rows per paper are read${R.left_out ? `; ${fmt(R.left_out)} rows are left out by that cap` : ''}); ${fmt(R.own)} describe the paper’s own system.</p>${grid}<div id="rescell"></div><div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:18px">${bars}</div>`;
+        host.querySelectorAll('[data-cell]').forEach(b => b.onclick = () => {
+          const c = cell.get(b.dataset.cell), box = host.querySelector('#rescell');
+          box.innerHTML = `<p class="meta" style="margin-top:12px">${fmt(c.works.length)} paper${c.works.length === 1 ? '' : 's'} with own-system results for ${esc(pr(c.stage))} and ${esc(pr(c.approach))}</p>` + c.works.map(id => `<div><button type="button" class="lnk" data-w="${esc(id)}">${esc(short(((SHELL.get(id) || {}).title) || id, 110))}</button></div>`).join('');
+          box.querySelectorAll('[data-w]').forEach(x => x.onclick = () => H.openDrawer(x.dataset.w));
+        });
+      }).catch(e => { host.innerHTML = `<p class="empty">The result rows could not be loaded: ${esc(e.message || e)}</p>`; });
+    },
+  });
+  build.rate = () => ({
+    title: 'Citation rate',
+    noList: true,
+    info: infoPanel('Which papers are cited most per year since they appeared.',
+      'Each row is one paper: how many works of the project cite it, that count per year since publication, and the worldwide count stored with the paper. The two counts measure different things and are never combined.',
+      esc((LZ.methods && LZ.methods.citation_rate) || '')),
+    lead: '', controls: '',
+    draw(host) {
+      host.innerHTML = '<p class="meta">Loading the citation counts…</p>';
+      loadCorpus().then(C => {
+        if (H.hash.get().get('lens') !== 'rate') return;
+        const c = C.citation; if (!c) { host.innerHTML = emptyView('No citation data in this page.'); return; }
+        if (!c.extractions) { host.innerHTML = '<p class="empty">No reference list has been extracted: every in-corpus citation count is unknown.</p>'; return; }
+        host.innerHTML = `<p class="lead">Counts come from the ${fmt(c.extractions)} works whose reference list was extracted (${fmt(c.entries)} entries, ${fmt(c.resolved_links)} resolved to a work of the project) out of ${fmt(c.works_total)} works; a count is a lower bound. ${c.unknown ? `${fmt(c.unknown)} included papers have no rate (no year or no counted citation source) and are not listed.` : ''}</p>
+        <div class="scrollx"><table class="t"><thead><tr><th>Paper</th><th class="r">Year</th><th class="r">Per year</th><th class="r">Cited by (in project)</th><th class="r">of which self</th><th class="r">External count (OpenAlex)</th></tr></thead><tbody>${c.rows.map(r => `<tr><td><button type="button" class="lnk" data-w="${esc(r.id)}">${esc(short(((SHELL.get(r.id) || {}).title) || r.id, 100))}</button></td><td class="r">${esc(r.year ?? '–')}</td><td class="r">${r.per_year.toFixed(2)}</td><td class="r">${fmt(r.cited_by ?? 0)}</td><td class="r">${r.self_cited_by == null ? '–' : fmt(r.self_cited_by)}</td><td class="r">${r.external == null ? 'unknown' : fmt(r.external)}</td></tr>`).join('')}</tbody></table></div><p class="meta">Top ${fmt(c.rows.length)} by rate. The as-of year ${esc(c.as_of_year)} counts the publication year as one.</p>`;
+        host.querySelectorAll('[data-w]').forEach(x => x.onclick = () => H.openDrawer(x.dataset.w));
+      }).catch(e => { host.innerHTML = `<p class="empty">The citation counts could not be loaded: ${esc(e.message || e)}</p>`; });
+    },
+  });
 
   /* ================= page shell ================= */
   let listAll = false, lastSel = null;

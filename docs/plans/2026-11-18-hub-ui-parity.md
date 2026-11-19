@@ -744,3 +744,34 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+### Gaps in existing pages: Miners, Corpus, Lenses, Explore, Graph (branch hub-port-gaps2)
+
+- DB-31 — done (Miners, "All miners at a glance" table and column glossary)
+- DB-32 — done (Miners detail: digest, status, how it reads, quality and use, versions, commands)
+- MN-2 — done (Miners, glossary table from `site_miners.COLUMNS`)
+- MN-3 — done (Miners, at-a-glance table: units, closed, open, rows, stale, second pass, fairer, platform)
+- MN-4 — done (Miners detail header: version and digest)
+- MN-5 — done (Miners detail, Status tiles)
+- MN-6 — done (Miners detail, How it reads)
+- MN-9 — done (Miners detail, Quality and use)
+- MN-12 — done (Miners detail, Versions table)
+- MN-13 — done (Miners detail, What you can do, with Copy)
+- MN-14 — done (field card links to `#m=<miner>&d=<field>`, the disagreement block)
+- AG-4 — done (Miners, "Two readings, per miner" table: rows A, B, matched, disagreements)
+- AG-7 — done (Two readings per-field line: disagreements and one-sided counts)
+- AG-8 — done (Miners detail, Disagreements by field; lazy via `grid-<miner>`, at most 40 pairs per field, exact counts)
+- AG-11 — done (one-sided labels in the per-miner table and per field)
+- EX-12 — done (Corpus Chronology card links to the conversion inspector `../conversion/doc/<slug>.html`)
+- EX-18 — open (inspector link done; link to the original file needs a document-file route, see report)
+- EX-27 — done (Corpus detail, What you can do: inspector link)
+- LY-5 — done (Corpus list rows: "moved by the researcher")
+- CT-1 — done (Corpus citations ⓘ: extractions, entries, resolved, works total)
+- RS-11 — done (Lenses, Results by stage: heat grid, click lists papers)
+- RS-12 — done (Lenses, Results by stage: bars for system role, evidence grade, value kind)
+- CT-4 — done (Lenses, Citation rate: per year, in-project count, OpenAlex count kept apart)
+- LY-2 — done (Explore: seven rings; dashed halo for researcher-moved works, from the corpus payload)
+- LY-1 — done (Corpus layer facet ⓘ states the layer pass is not calibrated)
+- CT-5 — done (Graph, Foundations: year and identifier links; new table of cited items that are not works yet, from `citations.py`). The two lists are different populations by design (works the project holds against unresolved cited items), so their top rows are not expected to match.
