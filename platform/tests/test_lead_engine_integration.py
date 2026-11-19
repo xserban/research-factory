@@ -226,3 +226,17 @@ def test_a_stale_basis_is_flagged_sorted_last_and_kept(
     assert last.entry_id == victim.candidate_id and last.measures.basis == "stale"
     assert last.stale_refs == (ext,) and "basis-stale" in last.flags
     assert len(queue.items) == len(fresh.candidates)
+
+
+def test_recording_a_lead_emits_no_warning(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    """J4 friction 9: `_works_as_stored` once put a list where the model holds a tuple, so every
+    `record_lead` raised a Pydantic serialisation UserWarning."""
+    import warnings
+
+    engine_world(project, agent, human, world)
+    first = _first_of_each(project)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _record(project, first["technique-combination"])

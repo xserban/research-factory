@@ -290,12 +290,12 @@ def prior_for(
 def _works_as_stored(project: Project, item: LeadInput) -> LeadInput:
     """`item` with each work trigger's ref spelled as stored (IDEA-66; an id matching several
     works by NFC form is refused on `triggers.<i>`)."""
-    triggers = [
+    triggers = tuple(
         t.model_copy(update={"ref": resolve_work_id(project, t.ref, field=f"triggers.{i}")})
         if t.kind is TriggerKind.WORK
         else t
         for i, t in enumerate(item.triggers)
-    ]
+    )
     return item.model_copy(update={"triggers": triggers})
 
 
