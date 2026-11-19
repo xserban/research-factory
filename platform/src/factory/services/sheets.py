@@ -221,6 +221,7 @@ def _spec_of(raw: dict[str, Any]) -> SelectionSpec:
         layers=list(raw.get("layers", [])),
         include=list(raw.get("include", [])),
         exclude=list(raw.get("exclude", [])),
+        closed=raw.get("closed", False) is True,
         population=Population(raw.get("population", Population.INCLUDED_FT.value)),
     )
 

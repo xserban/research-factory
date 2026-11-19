@@ -30,6 +30,7 @@ from sqlalchemy import text as sql_text
 from factory.services import (
     call_memo,
     citations,
+    hub_chat,
     hub_contradictions,
     hub_costs,
     hub_findings,
@@ -645,6 +646,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "mining": build_mining,
     "findings": build_findings,
     "contradictions": hub_contradictions.build,
+    "chat": hub_chat.build,
     "explore": build_explore,
     "corpus": build_corpus,
     "journeys": build_journeys,

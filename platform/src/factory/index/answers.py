@@ -89,9 +89,12 @@ def answer_tables(metadata: MetaData) -> AnswerTables:
     return AnswerTables(answers, sentences, ratings)
 
 
-def selection_digest_of(pairs: list[JsonValue]) -> str:
-    """The digest `services/selection.py` gives a selection of these (work, conversion) pairs."""
-    return hashlib.sha256(canonical_json(pairs)).hexdigest()
+def selection_digest_of(pairs: list[JsonValue], closed: bool = False) -> str:
+    """The digest `services/selection.py` gives a selection of these (work, conversion) pairs. A
+    closed selection (`closed` true in its spec) hashes `{"closed": true, "works": pairs}`, so it
+    differs from an open selection that resolves to the same pairs."""
+    body: JsonValue = {"closed": True, "works": pairs} if closed else pairs
+    return hashlib.sha256(canonical_json(body)).hexdigest()
 
 
 def answer_handlers(tables: AnswerTables) -> dict[str, Handler]:
@@ -100,7 +103,10 @@ def answer_handlers(tables: AnswerTables) -> dict[str, Handler]:
         if event.actor.kind != "agent":
             return
         pairs: list[JsonValue] = [[w.work_id, w.conversion_id] for w in payload.selection_works]
-        if selection_digest_of(pairs) != payload.selection_digest:
+        if (
+            selection_digest_of(pairs, payload.selection.get("closed") is True)
+            != payload.selection_digest
+        ):
             return
         if not payload.sentences and not (payload.unanswered or "").strip():
             return

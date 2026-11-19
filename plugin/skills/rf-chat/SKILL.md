@@ -13,7 +13,7 @@ argument are yours. Before each step, tell the researcher what you are about to 
 ## Procedure
 
 1. Agree three things with the researcher, and wait for the answer: the hypothesis wording; the
-   selection (`layers`, `include`, `exclude`); the mode. Explore is the default (tier 1 capped at 15
+   selection (`layers`, `include`, `exclude`; `closed: true` reads the `include` works alone); the mode. Explore is the default (tier 1 capped at 15
    papers, one session writes both sides). Prepare is for a result that may feed a lead: no cap, and
    the case for is written by a separate session.
 2. Call `selection_resolve` and report the works, the exclusions and `est_tokens`. Call
@@ -58,7 +58,7 @@ Use this mode when the researcher asks a question of the papers rather than test
 answer is a proposal: the researcher rates it, you never do. The platform checks every quote and
 the selection; what each sentence says, and what the papers leave open, is your reading.
 
-1. Agree the question wording and the selection (`layers`, `include`, `exclude`), and wait for the
+1. Agree the question wording and the selection (`layers`, `include`, `exclude`; `closed: true` reads the `include` works alone), and wait for the
    answer. If the researcher is following up an earlier answer or sheet, note its id for `parent`.
 2. Call `selection_resolve`; report the works, the exclusions and `est_tokens`, and keep its
    `digest`. Call `claims_digest` and read `markdown` whole, never skimmed. Name the `gaps`.
@@ -87,7 +87,7 @@ pairs; the researcher decides, from the Contradictions page of the hub or with
 `factory contradictions confirm|reject <ctr_id> --rationale "..."`. You never decide, and a pair you
 propose stays "proposed" until then.
 
-1. Agree the selection (`layers`, `include`, `exclude`) and wait for the answer. Call
+1. Agree the selection (`layers`, `include`, `exclude`; `closed: true` reads the `include` works alone) and wait for the answer. Call
    `selection_resolve`; report the works and `est_tokens`. Call `claims_digest` and read `markdown`
    whole, never skimmed. Name the `gaps`.
 2. Look for pairs of claims from different papers that conflict on the same topic: the same
@@ -112,7 +112,7 @@ researcher ordered the work beforehand as a recorded request, and one run answer
 1. Call `chat_request_next`. It serves the oldest open request of your kind and marks it taken.
    If `batch` is null, say so and stop. Never ask the researcher anything and never wait for a
    reply: the request holds what the agreeing steps would have settled: the hypothesis or the
-   question, the selection (`layers`, `include`, `exclude`), the mode and a note.
+   question, the selection (`layers`, `include`, `exclude`; `closed: true` reads the `include` works alone), the mode and a note.
 2. Follow the Procedure (spar) or Ask with the request's own selection, hypothesis or question.
    Skip the steps that show a list to the researcher for additions; the researcher rates the
    result afterwards. Explore unless the request says `prepare`.

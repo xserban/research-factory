@@ -94,7 +94,7 @@ const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
-  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
+  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Chat with papers','chat.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
   ['Design','Brand kit','kit.html'],
 ];
 
@@ -108,6 +108,7 @@ const ICON = {
   data:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/>',
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
+  chat:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
   kit:'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
   landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
@@ -153,6 +154,7 @@ const RAIL = [
   ['-'],
   ['findings','Findings','findings.html'],
   ['contradictions','Contradictions','contradictions.html'],
+  ['chat','Chat','chat.html'],
   ['write','Write & export','write.html'],
   ['-'],
   ['living','Living','living.html'],
@@ -258,7 +260,7 @@ function openDrawer(id){
     <h2 class="display" style="font-size:30px;margin-top:14px">${esc(w.title)}</h2>
     <p class="meta">${esc(authors?authors+more:'No author recorded')} · ${esc(w.year||'')}${w.venue?' · '+esc(w.venue):''}</p>
     <p class="meta">${term('cic','Cited here')} <b class="num">${w.cited_here??0}</b> times; cites <b class="num">${out.length}</b> works inside the corpus.${links?' '+links:''}</p>
-    <p class="meta"><a href="flow.html#lanes=${encodeURIComponent(id)}">See its path</a> · <a href="corpus.html#id=${encodeURIComponent(id)}">Open in Corpus</a></p>
+    <p class="meta"><a href="flow.html#lanes=${encodeURIComponent(id)}">See its path</a> · <a href="corpus.html#id=${encodeURIComponent(id)}">Open in Corpus</a> · <a href="${esc(HUB.chatHref({include:[id], only:true}))}">Spar with this paper</a></p>
     <div class="field"><div class="k">Abstract</div><p style="margin:4px 0">${w.abstract?esc(w.abstract):'<span class="meta">No abstract recorded.</span>'}</p></div>
     <h3 class="h3" style="margin-top:22px">What the paper says, field by field</h3>
     ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${l}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
@@ -413,6 +415,13 @@ HUB.served = !!meta('factory-served');
    Origin header; the server refuses any origin but its own loopback address. */
 HUB.act = (path, body) => fetch(meta('factory-api') + path, {method: 'POST', body: JSON.stringify(body),
   headers: {'Content-Type': 'application/json', 'X-Factory-Token': meta('factory-token')}});
+/* A link to the Chat page with a basket set in its address (no server write): spec = {layers, include, exclude, only, hyp, mode, kind}; only: true means just the listed papers
+   (lists of ids or layer names; hyp is prefilled text). Long lists are cut at 60 ids, the page says so. */
+HUB.chatHref = spec => { const p = new URLSearchParams(), s = spec || {};
+  for (const k of ['layers', 'include', 'exclude']) if (s[k] && s[k].length) p.set(k, s[k].slice(0, 60).join(','));
+  for (const k of ['hyp', 'mode', 'kind']) if (s[k]) p.set(k, s[k]);
+  if (s.only) p.set('only', '1');
+  return 'chat.html#' + p.toString(); };
 HUB.get = path => fetch(meta('factory-api') + path);
 /* The server's refusals are {issues: [{field, message|reason}]}; both spellings are read. */
 HUB.issues = j => ((j && j.issues) || []).map(i => i.field + ' ' + (i.message || i.reason || '')).join('; ') || 'refused';

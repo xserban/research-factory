@@ -96,6 +96,7 @@ from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
+    hub_chat,
     hub_serve,
     site_auth,
     site_backlog,
@@ -129,6 +130,14 @@ MAX_EXPORT_BODY: Final = 256 * 1024
 hundred characters), which the usual 16 KiB body limit would cut."""
 EXPORT_ROUTE: Final = "/api/export/works"
 UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
+UI_CHAT_ROUTES: Final = {
+    "/ui/act/chat-request": ("cli:chat request", hub_chat.order_chat),
+    "/ui/act/chat-rate-argument": ("cli:sheets rate", hub_chat.rate_argument_act),
+    "/ui/act/chat-rate-sentence": ("cli:answers rate", hub_chat.rate_sentence_act),
+    "/ui/act/chat-balance": ("cli:sheets balance", hub_chat.balance_act),
+}
+"""The hub Chat page's researcher acts (night feature N5): route, the command it is authorised
+as, and the service act. Each is the local human's; nothing else on `/ui/` writes."""
 UI_DOC_PREFIX: Final = "data/sources-doc-"
 """The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
@@ -504,6 +513,22 @@ def ui_snowball_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[s
     )
 
 
+def _chat_route(
+    command: str, act: Callable[[Project, Any, dict[str, Any]], dict[str, object]]
+) -> Callable[[Project, dict[str, Any]], tuple[int, dict[str, object]]]:
+    def route(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        # a request is authorised as the CLI command of its kind
+        name = command
+        if command == "cli:chat request":
+            kind = body.get("kind")
+            if kind not in ("ask", "spar"):  # no access row is chosen for an unknown kind
+                return 400, _issues(ValidationIssue("kind", "must be spar or ask"))
+            name = f"cli:chat request {kind}"
+        return _layer_act(project, name, [], lambda actor: act(project, actor, body))
+
+    return route
+
+
 def layers_payload(project: Project) -> dict[str, object]:
     """The latest scheme's layer ids and each known work's layer (read-only; the page's selects)."""
     from factory.services.reference_layers import current_scheme
@@ -639,11 +664,14 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/layers/move": move_layer,
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
+    **{path: _chat_route(command, act) for path, (command, act) in UI_CHAT_ROUTES.items()},
     "/api/inbox/add": project_inbox_add,
     "/api/feed/run": feed_run_here,
     "/api/feed/refetch": feed_refetch_here,
 }
 
+
+_CHAT_ACTS: Final = tuple(_ROUTES[path] for path in UI_CHAT_ROUTES)
 
 Freshness = Literal["fresh", "stale", "queued", "building", "failed"]
 """What `Rebuilder.ensure` answers for a product: `fresh` (serve it), `stale` (serve the previous
@@ -1428,6 +1456,17 @@ def _handler_class(
                 name = dict(parse_qsl(query)).get("name", "")
                 self._cache = "no-store"
                 self._json(200, {"fresh": slot.ui.is_fresh(name)})
+            elif rest == "chat":
+                try:
+                    chat = hub_chat.live(slot.project, dict(parse_qsl(query)))
+                except FactoryValidationError as exc:
+                    self._json(400, _issues(*exc.issues))
+                    return
+                except FactoryError as exc:
+                    self._json(500, _issues(ValidationIssue("chat", str(exc))))
+                    return
+                self._cache = "no-store"
+                self._json(200, chat)
             elif rest == "trace":
                 try:
                     payload = hub_serve.trace(slot.project, dict(parse_qsl(query)))
@@ -1636,6 +1675,7 @@ def _handler_class(
                 mine_layer,
                 move_layer,
                 ui_snowball_add,
+                *_CHAT_ACTS,
             ):
                 with slot.write_lock:
                     code, payload = route(project, body)

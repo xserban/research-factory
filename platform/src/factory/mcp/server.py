@@ -5946,11 +5946,14 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
     ) -> dict[str, JsonValue]:
         """Resolve a selection of papers for the chat: the works of the full-text-included
         population, restricted to `layers` when given (layer ids of the current scheme), plus
-        `include` work ids, minus `exclude` work ids. Returns `works` (work_id, conversion_id,
-        chars of the pinned conversion), `excluded` (work, reason: no-conversion, excluded,
+        `include` work ids, minus `exclude` work ids. With `closed` true the selection is the
+        `include` works alone (minus `exclude`): a work that joins the population later never
+        enters. Returns `works` (work_id, conversion_id, chars of the pinned conversion), `excluded`
+        (work, reason: no-conversion, excluded,
         unknown-work), total `chars`, `est_tokens` (4 characters per token) and the `digest`
         that names this selection. The result is cached while the event log is unchanged. A held
         out seed's work is a work like any other. Read-only. Refused to a session that has joined
@@ -5960,7 +5963,7 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             result = selection_service.resolve_selection_cached(
-                opened, _selection_spec(layers, include, exclude)
+                opened, _selection_spec(layers, include, exclude, closed)
             )
             return _withheld(opened, _plain(asdict(result)), include_work_ids=False)
 
@@ -5973,6 +5976,7 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
         limit: int = 20,
         per_work_limit: int = 3,
         kinds: list[str] | None = None,
@@ -6005,7 +6009,7 @@ def build_server(
             result = corpus_search_service.corpus_search(
                 opened,
                 queries,
-                _selection_spec(layers, include, exclude),
+                _selection_spec(layers, include, exclude, closed),
                 limit=limit,
                 per_work_limit=per_work_limit,
                 kinds=wanted,
@@ -6101,6 +6105,7 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
         miner: str = "m-claims",
     ) -> dict[str, JsonValue]:
         """The claims digest of a selection (spec as in `selection_resolve`): every paper of the
@@ -6118,7 +6123,7 @@ def build_server(
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
             built = claims_digest_service.claims_digest(
-                opened, _selection_spec(layers, include, exclude), miner=miner
+                opened, _selection_spec(layers, include, exclude, closed), miner=miner
             )
             by_code = {p.code: p.work_id for p in built.papers}
             data: dict[str, JsonValue] = {
@@ -6144,6 +6149,7 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
         mode: str = "explore",
         tier1_cap: int = chat_candidates_service.TIER1_CAP,
     ) -> dict[str, JsonValue]:
@@ -6182,7 +6188,7 @@ def build_server(
             ]
             result = chat_candidates_service.chat_candidates(
                 opened,
-                _selection_spec(layers, include, exclude),
+                _selection_spec(layers, include, exclude, closed),
                 parsed,
                 mode=cast(Literal["explore", "prepare"], mode),
                 tier1_cap=tier1_cap,
@@ -6202,6 +6208,7 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
         mode: str = "explore",
         tier1_cap: int = chat_candidates_service.TIER1_CAP,
         supersedes: str | None = None,
@@ -6239,7 +6246,7 @@ def build_server(
                 opened,
                 actor,
                 hypothesis,
-                _selection_spec(layers, include, exclude),
+                _selection_spec(layers, include, exclude, closed),
                 parsed,
                 mode=cast(Literal["explore", "prepare"], mode),
                 tier1_cap=tier1_cap,
@@ -6370,6 +6377,7 @@ def build_server(
         layers: list[str] | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        closed: bool = False,
         unanswered: str | None = None,
         parent: str | None = None,
         request_id: str | None = None,
@@ -6402,7 +6410,7 @@ def build_server(
                 opened,
                 actor,
                 question,
-                _selection_spec(layers, include, exclude),
+                _selection_spec(layers, include, exclude, closed),
                 selection_digest,
                 parsed,
                 unanswered=unanswered,
@@ -6485,10 +6493,16 @@ def build_server(
 
 
 def _selection_spec(
-    layers: list[str] | None, include: list[str] | None, exclude: list[str] | None
+    layers: list[str] | None,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    closed: bool = False,
 ) -> selection_service.SelectionSpec:
     return selection_service.SelectionSpec(
-        layers=list(layers or []), include=list(include or []), exclude=list(exclude or [])
+        layers=list(layers or []),
+        include=list(include or []),
+        exclude=list(exclude or []),
+        closed=closed,
     )
 
 

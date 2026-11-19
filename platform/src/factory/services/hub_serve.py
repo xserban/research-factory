@@ -86,6 +86,7 @@ PREWARM_ORDER: Final = (
     "lenses",
     "findings",
     "contradictions",
+    "chat",
     "mining",
     "graph",
     "screening",
