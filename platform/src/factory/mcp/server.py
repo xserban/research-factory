@@ -5978,7 +5978,9 @@ def build_server(
         `kinds` restricts to section kinds. `method` is `keyword` (default: words, OR, bm25),
         `vector` (meaning: a local SPECTER2 embedding of each query against passage vectors,
         exact cosine; write the query as a sentence or a claim, not as keywords) or `hybrid`
-        (reciprocal rank fusion of the keyword and vector orders; use it for most searches).
+        (reciprocal rank fusion of the keyword and vector orders). To find papers that argue for or
+        against a claim, run `keyword` and `vector` as two separate searches and use both lists
+        (decision 140; fusion drops what only one method finds).
         Passages lacking vectors are embedded on demand when at most 300 are missing; otherwise
         `vector` is refused naming the CLI command (`factory passages embed`) and `hybrid`
         answers by keyword and says so in `note`. If the local model is unavailable `vector` is
