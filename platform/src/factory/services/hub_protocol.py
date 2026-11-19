@@ -24,11 +24,16 @@ from sqlalchemy import text
 from factory.model.protocol import ProtocolSpec
 from factory.services import dashboard, hub_screening, protocol
 from factory.services.context import Project
+from factory.services.hub_tab_help import TAB_HELP
 
 if TYPE_CHECKING:  # hub_build imports this module to register its builder
     from factory.services.hub_build import HubContext
 
 METHODS: dict[str, str] = {
+    "tab_protocol": TAB_HELP["protocol"],
+    "tab_decisions": TAB_HELP["decisions"],
+    "tab_press": TAB_HELP["press"],
+    "tab_probes": TAB_HELP["probes"],
     "plan": (
         "The current protocol as the platform records it: its id is a hash of the semantic parts "
         "of the plan, so any change that matters gives a new id. Each section lists what the "

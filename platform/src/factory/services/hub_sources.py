@@ -29,6 +29,7 @@ from factory.services import dashboard, site_inspector, site_search
 from factory.services.context import Project
 from factory.services.flow_skipped import skipped_records
 from factory.services.fulltext_status import fulltext_status
+from factory.services.hub_tab_help import TAB_HELP
 from factory.services.protocol import list_deviations
 from factory.services.site_corpus import slug_of
 from factory.services.site_documents import KIND_TITLES, _slug
@@ -46,6 +47,8 @@ BINS = 10
 """Recall histogram bins over 0 to 1."""
 
 METHODS: dict[str, str] = {
+    "tab_search": TAB_HELP["search"],
+    "tab_conversion": TAB_HELP["conversion"],
     "search": (
         "<b>What it shows</b> Each registered query with what its source said it had and what was "
         "retrieved.<p><span class=k>How to read it.</span> The gap is the total the source "

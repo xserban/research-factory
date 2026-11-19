@@ -87,7 +87,7 @@ HUB.load(['shell', 'protocol']).then(d => {
     kicker: 'Living review · ' + HUB.term('protocol') + (PV.protocol_id ? ' <span class="meta">' + esc(PV.protocol_id) + '</span>' : ''),
     title: 'Protocol',
     sub: 'The registered plan, how it changed, and the decisions behind it.', level: 1,
-    infoHtml: '<b>What it shows</b> The plan the review follows, its versions, the decisions taken, the search critique and the trial queries.' +
+    infoHtml: (M.tab_protocol || '') + '<p><b>What it shows</b> The plan the review follows, its versions, the decisions taken, the search critique and the trial queries.' +
       '<p><span class=k>How it\'s computed.</span> ' + esc(M.plan || '') + '</p>' }) +
     (PV.protocol_id ? '<div class="pr-stats">' +
       [['Protocol', PV.protocol_id], ['Status', PV.status], ['Review', pressWord[PV.press] || PV.press], ['Amendments', fmt(nAm)], ['Deviations', fmt((P.deviations || []).length)]]
@@ -216,7 +216,7 @@ HUB.load(['shell', 'protocol']).then(d => {
     const fillOf = s => s === 'selected' ? 'var(--inc)' : s === 'open' ? 'var(--acc)' : 'var(--dim)';
     const dots = DEC.map(x => '<circle class="dotp" tabindex="0" role="button" data-jump="' + esc(x.decision_id) + '" aria-label="' + esc(x.subject + ', ' + x.state) + '" cx="' + pos[x.decision_id][0] + '" cy="' + pos[x.decision_id][1] + '" r="' + (x.decision_id === state.dec ? 8 : 5.5) + '" fill="' + fillOf(x.state) + '"><title>' + esc(x.subject + ' · ' + x.state) + '</title></circle>').join('');
     const lab = lv.map((l, i) => '<text class="axis" x="4" y="' + (22 + i * H0) + '">' + esc(l) + '</text>').join('');
-    return '<section class="card pr-card">' + H.header({ title: 'Decision map', infoHtml: '<b>What it shows</b> Every decision by level, in the order it was suggested. Lines join a decision to the one that replaced it.' +
+    return '<section class="card pr-card">' + H.header({ title: 'Decision map', infoHtml: (M.tab_decisions || '') + '<p><b>What it shows</b> Every decision by level, in the order it was suggested. Lines join a decision to the one that replaced it.' +
       '<p><span class=k>How to read it.</span> Green is selected, blue open, grey superseded. Click a dot to open its card.</p><p><span class=k>How it\'s computed.</span> ' + esc(M.decisions || '') + '</p>' }) +
       '<div class="pr-scroll"><svg class="pr-svg" style="min-width:' + Math.min(svgW, 900) + 'px" viewBox="0 0 ' + svgW + ' ' + svgH + '" role="img" aria-label="Decision map">' + lab + lines + dots + '</svg></div></section>';
   };
@@ -228,7 +228,7 @@ HUB.load(['shell', 'protocol']).then(d => {
     return R.map(r => card('Review ' + r.review_id, '<p class="meta">Protocol ' + esc(r.protocol_id) + ' · ' + fmt((r.findings || []).length) + ' findings ' + badge(r.confirmed ? 'confirmed' : 'not confirmed', r.confirmed ? 'ok' : 'act') + '</p>' +
       table([['#', f => fmt(f.n), 1], ['Severity', f => badge(f.severity, f.severity === 'major' ? 'bad' : '')], ['Element', f => esc(label(f.element))], ['Finding', f => esc(f.finding)], ['Response', f => esc(f.response || '')]],
         (r.findings || []).map((f, i) => Object.assign({ n: i + 1, response: (r.responses || [])[i] }, f))),
-      '<b>What it shows</b> An independent critique of the search strategy.<p><span class=k>How it\'s computed.</span> ' + esc(M.press || '') + '</p>')).join('');
+      (M.tab_press || '') + '<p><b>What it shows</b> An independent critique of the search strategy.</p><p><span class=k>How it\'s computed.</span> ' + esc(M.press || '') + '</p>')).join('');
   };
   const probesTab = () => {
     const R = P.probes || [];
@@ -236,7 +236,7 @@ HUB.load(['shell', 'protocol']).then(d => {
     return R.map(r => card('Round ' + r.round, '<p class="meta">Probe ' + esc(r.probe_id) + ' · ' + fmt((r.queries || []).length) + ' queries</p>' +
       table([['Source', q => esc(q.source)], ['Reported', q => q.reported_count == null ? '' : fmt(q.reported_count), 1], ['Seeds retrieved', q => q.failed ? '' : fmt(q.development_retrieved) + ' of ' + fmt(q.development_tested), 1],
         ['Negatives retrieved', q => q.failed ? '' : fmt(q.negatives_retrieved), 1], ['Query', q => esc(q.text) + (q.failed ? '<div class="meta">' + badge('failed', 'bad') + ' ' + esc(q.reason || '') + '</div>' : '')]], r.queries || []),
-      '<b>What it shows</b> What each planned query retrieved in a trial run.<p><span class=k>How it\'s computed.</span> ' + esc(M.probes || '') + '</p>')).join('');
+      (M.tab_probes || '') + '<p><b>What it shows</b> What each planned query retrieved in a trial run.</p><p><span class=k>How it\'s computed.</span> ' + esc(M.probes || '') + '</p>')).join('');
   };
 
   /* ---------- draw ---------- */

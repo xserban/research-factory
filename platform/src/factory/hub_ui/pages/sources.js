@@ -120,7 +120,7 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
     const maxRule = Math.max(1, ...rules.map(r => sum(SE.rule_counts[r])));
     body.innerHTML = `
     ${SE.error ? `<p class="sx-bad" role="alert">The archived search pages could not be read: ${esc(SE.error)}</p>` : ''}
-    <section>${header({ title: 'Searches', infoHtml: M.search, sub: 'What each source reported and what was retrieved.' })}
+    <section>${header({ title: 'Searches', infoHtml: (M.tab_search ? M.tab_search + '<br><br>' : '') + M.search, sub: 'What each source reported and what was retrieved.' })}
       <div class="sx-kpis">${kpi(qs.length, 'queries run')}${kpi(SE.runs_complete, 'runs complete')}${kpi(SE.runs_partial, 'runs partial', SE.runs_partial ? 'warn' : '')}
         ${kpi(nIdent, 'records identified')}${kpi(ident.duplicates_removed, term('duplicates', 'duplicates') + ' removed')}${kpi(tiles.active, 'merges active')}${kpi(tiles.reverted, 'merges reverted')}</div>
     </section>
@@ -263,10 +263,10 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
   const cs = { q: '', conv: '', low: false, sort: 'recall', dir: 1, bin: null, binConv: null };
   function renderConv() {
     const docs = CV.documents || [], conv = Object.keys(CV.summary || {});
-    if (!docs.length) { body.innerHTML = header({ title: 'Conversion', infoHtml: M.conversion }) + empty('No document has been converted yet.'); return; }
+    if (!docs.length) { body.innerHTML = header({ title: 'Conversion', infoHtml: (M.tab_conversion ? M.tab_conversion + '<br><br>' : '') + M.conversion }) + empty('No document has been converted yet.'); return; }
     const p = hp(); cs.q = p.get('cq') || cs.q;
     body.innerHTML = `
-    <section>${header({ title: 'Conversion coverage', infoHtml: M.conversion, sub: CV.computed ? 'Computed ' + esc(String(CV.computed_at || '').replace('T', ' ').slice(0, 16)) + '. Low is below ' + CV.low + '.' : '' })}
+    <section>${header({ title: 'Conversion coverage', infoHtml: (M.tab_conversion ? M.tab_conversion + '<br><br>' : '') + M.conversion, sub: CV.computed ? 'Computed ' + esc(String(CV.computed_at || '').replace('T', ' ').slice(0, 16)) + '. Low is below ' + CV.low + '.' : '' })}
       ${CV.computed ? '' : `<p class="meta">Coverage has not been computed yet. Run it, then rebuild:</p>${copyCmd(CV.commands.coverage)}`}
       ${conv.length ? `<table class="t sx-plain" style="max-width:760px"><thead><tr><th class="l">Converter</th><th class="r">Documents</th><th class="r">Median recall</th><th class="r">Median precision</th><th class="r">Low recall</th><th class="r">Low precision</th></tr></thead><tbody>
       ${conv.map(c => { const s = CV.summary[c]; return `<tr><td><span class="dot" style="background:${convColour[c]}"></span> ${esc(c)}</td><td class="r">${fmt(s.documents)}</td><td class="r">${f3(s.median_recall)}</td><td class="r">${f3(s.median_precision)}</td><td class="r">${fmt(s.low_recall)}</td><td class="r">${fmt(s.low_precision)}</td></tr>`; }).join('')}</tbody></table>` : ''}

@@ -33,6 +33,7 @@ from factory.services import mining as mining_service
 from factory.services import site_corpus, site_miners
 from factory.services.context import Project
 from factory.services.hub_payloads import Sets, load_flow_data, reconcile_sets, sets_payload
+from factory.services.hub_tab_help import TAB_HELP
 from factory.services.miner_info import miner_detail
 from factory.services.site_agreement import (
     ANCHOR_SUFFIX,
@@ -59,6 +60,7 @@ GRID_PREFIX = "grid-"
 HOLES_SKIP = frozenset({"m-release.artefact_scope"})
 
 METHODS: dict[str, str] = {
+    "tab_miners": TAB_HELP["miners"],
     "miners": (
         "Each miner is shown at its listed version, else its latest registered version. Pass A "
         "and pass B are the two independent readings. Counts are over the included works: rows "
