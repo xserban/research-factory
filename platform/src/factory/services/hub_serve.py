@@ -282,6 +282,15 @@ def child_command(project: Project, names: Sequence[str], out: Path) -> list[str
     ]
 
 
+_LIVE: set[subprocess.Popen[bytes]] = set()
+"""Children running now; `PayloadService.stop` ends them so none outlives the server."""
+
+
+def stop_children() -> None:
+    for proc in list(_LIVE):
+        proc.terminate()
+
+
 def _spawn_subprocess(
     project: Project, names: Sequence[str], out: Path, poll: Callable[[], None]
 ) -> tuple[int, str]:
@@ -297,6 +306,7 @@ def _spawn_subprocess(
                 stdout=subprocess.DEVNULL,
                 stderr=sink,
             )
+            _LIVE.add(proc)
             code: int | None = None
             while code is None:
                 try:
@@ -306,7 +316,9 @@ def _spawn_subprocess(
                     if time.monotonic() - started > CHILD_TIMEOUT:
                         proc.kill()
                         proc.wait()
+                        _LIVE.discard(proc)
                         return -1, f"stopped after {CHILD_TIMEOUT:.0f} s"
+            _LIVE.discard(proc)
     except OSError as exc:
         return -1, f"could not start: {exc}"
     lines = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
@@ -471,8 +483,9 @@ class PayloadService:
             self._watcher.start()
 
     def stop(self) -> None:
-        """Stop the fingerprint watch (a build in progress finishes)."""
+        """Stop the fingerprint watch and end the build child, if one is running."""
         self._stop.set()
+        stop_children()
 
     def _watch(self) -> None:
         while not self._stop.wait(WATCH_SECONDS):

@@ -2022,6 +2022,7 @@ class MainHub:
             self._timer.stop()
         for found in list(self._slots.values()):
             found.rebuilder.stop()
+            found.ui.stop()
 
 
 def make_main_server(
