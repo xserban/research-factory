@@ -165,6 +165,7 @@ FAMILY_OF_PREFIX: dict[str, str] = {
     # explicit other: project set-up, decisions, writing, lab, lineage, regions
     "baseline": OTHER,
     "credential": OTHER,
+    "sheet": OTHER,
     "user": OTHER,
     "briefing": OTHER,
     "budget": OTHER,
