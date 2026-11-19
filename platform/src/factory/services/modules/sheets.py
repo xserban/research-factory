@@ -19,8 +19,9 @@ SPEC = ModuleSpec(
             "sheet.argument_recorded",
             "sheet.section_closed",
             "sheet.argument_rated",
+            "sheet.balance_recorded",
         ),
-        tables=("sheets", "sheet_candidates", "sheet_arguments", "sheet_ratings"),
+        tables=("sheets", "sheet_candidates", "sheet_arguments", "sheet_ratings", "sheet_balances"),
     ),
 )
 

@@ -28,6 +28,7 @@ from sqlalchemy.engine import Connection
 from factory.canonical import canonical_json
 from factory.events.envelope import Event
 from factory.index.projection import Handler
+from factory.index.sheets import sheet_lead_problem
 from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
@@ -40,6 +41,7 @@ from factory.model.hypotheses import (
     Level,
     LiteratureTest,
     ModelCutoffDeclared,
+    TriggerKind,
 )
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
@@ -262,6 +264,11 @@ def act_is_consistent(
 def _lead_recorded(t: HypothesisTables) -> Handler:
     def recorded(conn: Connection, event: Event) -> None:
         p = LeadRecorded.model_validate(event.payload)
+        if any(
+            x.kind is TriggerKind.SHEET and sheet_lead_problem(conn, x.ref) is not None
+            for x in p.triggers
+        ):
+            return  # a sheet that breaks the lead guard (decision N-4); no service writes it
         inserted = conn.execute(
             sqlite_insert(t.leads)
             .values(

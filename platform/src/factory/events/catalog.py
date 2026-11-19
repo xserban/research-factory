@@ -217,6 +217,7 @@ from factory.model.seed import (
 from factory.model.sheets import (
     SheetArgumentRated,
     SheetArgumentRecorded,
+    SheetBalanceRecorded,
     SheetOpened,
     SheetSectionClosed,
 )
@@ -326,6 +327,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("sheet.argument_rated", SheetArgumentRated, 1))
     catalog.register(EventType("chat.answer_recorded", AnswerRecorded, 1))
     catalog.register(EventType("chat.answer_rated", AnswerRated, 1))
+    catalog.register(EventType("sheet.balance_recorded", SheetBalanceRecorded, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

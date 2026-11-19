@@ -2,8 +2,9 @@
 
 Business logic stays in `services/sheets.py`. Agents open sheets and record arguments through the
 MCP tools; here the researcher reads a sheet and rates its arguments (`rate` writes one
-`sheet.argument_rated` event as the human). The shared helpers of `factory.cli.main` are imported
-inside the commands, because that module imports this one.
+`sheet.argument_rated` event as the human) and writes the balance (`balance`, one
+`sheet.balance_recorded` event as the human; no MCP tool writes it). The shared helpers of
+`factory.cli.main` are imported inside the commands, because that module imports this one.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from factory.services import sheets as sheets_service
 
 sheets_app = typer.Typer(
     name="sheets",
-    help="Argument sheets: list, show, and rate an argument (human).",
+    help="Argument sheets: list, show, rate an argument and write the balance (human).",
     no_args_is_help=True,
 )
 
@@ -48,6 +49,14 @@ def sheets_show_cmd(
         project = _resolve_project(state)
         view = sheets_service.view_sheet(project, sheet)
     typer.echo(f"{view.info.sheet_id} {view.info.mode}: {view.info.hypothesis}")
+    if view.balance is not None:
+        b = view.balance
+        lean = f" [{b.lean}]" if b.lean else ""
+        typer.echo(f"\nbalance (researcher's, {view.balance_history} recorded){lean}: {b.text}")
+        if b.note:
+            typer.echo(f"  further evidence needed: {b.note}")
+    else:
+        typer.echo("\nbalance: none recorded (the researcher writes it: factory sheets balance)")
     for a in view.arguments:
         rated = f" [{a.rating}]" if a.rating else " [unrated]"
         typer.echo(
@@ -82,3 +91,26 @@ def sheets_rate_cmd(
         project = _resolve_project(state)
         sheets_service.rate_argument(project, project.human_actor(), argument, rating, note)
     typer.echo(f"{argument} rated {rating}")
+
+
+@sheets_app.command("balance")
+def sheets_balance_cmd(
+    ctx: typer.Context,
+    sheet: Annotated[str, typer.Argument(help="A sht_ id.")],
+    text: Annotated[str, typer.Option("--text", help="Your balance of the evidence.")],
+    lean: Annotated[
+        str | None, typer.Option("--lean", help="against, mixed, for or undecided.")
+    ] = None,
+    note: Annotated[
+        str | None, typer.Option("--note", help="What further evidence is needed.")
+    ] = None,
+) -> None:
+    """Write the balance of a sheet as the researcher; both sections must be closed; the latest
+    stands."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        sheets_service.record_balance(project, project.human_actor(), sheet, text, lean, note)
+    typer.echo(f"{sheet} balance recorded")

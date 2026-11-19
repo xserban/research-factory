@@ -13,6 +13,9 @@ Invariants:
   after the section against is closed (`SheetSectionClosed`). In `prepare` mode a session that
   recorded an argument against records none for.
 - A rating is a human act (`SheetArgumentRated`); the latest rating of an argument stands.
+- The balance of a sheet is the researcher's (`SheetBalanceRecorded`, human actor only), written
+  once both sections are closed; the latest stands and earlier ones are history. No agent writes,
+  computes or suggests it.
 """
 
 from __future__ import annotations
@@ -30,11 +33,14 @@ SHA256_HEX_RE = r"^[0-9a-f]{64}$"
 HYPOTHESIS_MAX = 2000
 CLAIM_MAX = 600
 NOTE_MAX = 600
+BALANCE_MAX = 4000
+BALANCE_NOTE_MAX = 1000
 
 Mode = Literal["explore", "prepare"]
 Section = Literal["against", "for"]
 Strength = Literal["strong", "moderate", "weak"]
 Rating = Literal["sound", "weak", "wrong"]
+Lean = Literal["against", "mixed", "for", "undecided"]
 
 
 class SheetCandidate(StrictModel):
@@ -88,3 +94,13 @@ class SheetArgumentRated(StrictModel):
     sheet_id: str = Field(pattern=SHEET_ID_RE)
     rating: Rating
     note: str = Field(default="", max_length=NOTE_MAX)
+
+
+class SheetBalanceRecorded(StrictModel):
+    """The researcher's own weighing of a sheet whose two sections are closed."""
+
+    sheet_id: str = Field(pattern=SHEET_ID_RE)
+    text: str = Field(min_length=1, max_length=BALANCE_MAX)
+    lean: Lean | None = None
+    note: str | None = Field(default=None, max_length=BALANCE_NOTE_MAX)
+    """What further evidence would be needed, in the researcher's words."""

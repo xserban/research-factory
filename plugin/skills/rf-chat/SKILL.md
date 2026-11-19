@@ -45,6 +45,12 @@ argument are yours. Before each step, tell the researcher what you are about to 
 6. Call `sheet_view` and present it briefly: each argument with paper, quote and why; the coverage
    (tier-1 papers without an argument, gaps, unavailable sources). Tell the researcher how to rate:
    `factory sheets rate <arg_id> sound|weak|wrong --note "..."`. You never rate.
+7. At the end of a spar (both sections closed), tell the researcher to write the balance of the
+   evidence themselves: `factory sheets balance <sht_id> --text "..." [--lean
+   against|mixed|for|undecided] [--note "what further evidence is needed"]` (or, later, on the
+   hub page). Say no more about it: you do not write, draft, compute or suggest the balance or a
+   lean. Only a Prepare sheet with both sections closed and the researcher's balance may be cited
+   by a lead (a `sheet` trigger of `lead_record`).
 
 ## Ask
 
@@ -82,7 +88,8 @@ model id) and `skill`, the bare name `rf-chat`; the platform computes the skill 
 ## Never
 
 - Never invent or paraphrase a quote; an argument rests only on text you have read.
-- Never judge the balance of the evidence or give a verdict: that is not built.
+- Never judge the balance of the evidence, give a verdict or suggest a lean: the balance is the
+  researcher's (`factory sheets balance`); no tool lets you write it.
 - Never assert absence beyond the computed coverage.
 - Never name a work as held-out; held-out works are read as corpus (decision 37.9).
 - Never rate your own arguments or answers; strengths are your judgement and are labelled so.

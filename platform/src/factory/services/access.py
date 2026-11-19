@@ -479,6 +479,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:interpretations review": Permission.HUMAN_CONFIRM,
     "cli:sheets rate": Permission.HUMAN_CONFIRM,
     "cli:answers rate": Permission.HUMAN_CONFIRM,
+    "cli:sheets balance": Permission.HUMAN_CONFIRM,
     "cli:interpretations supersede": Permission.HUMAN_CONFIRM,
     "cli:concepts define": Permission.HUMAN_CONFIRM,
     "cli:concepts source": Permission.HUMAN_CONFIRM,
