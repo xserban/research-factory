@@ -23,6 +23,8 @@ URL_ALLOW = (
     "http://doi.org/",
     "https://arxiv.org/pdf/",  # the paper itself
     "https://arxiv.org/search/",  # find a paper by title
+    "https://scholar.google.com/scholar?q=",  # title search (old hub parity)
+    "https://www.semanticscholar.org/search?q=",  # title search (old hub parity)
     "https://openalex.org/",  # the paper's record
 )
 # payloads a page loads lazily after mount, besides those its spec declares (must be builders)
