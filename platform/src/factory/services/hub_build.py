@@ -834,7 +834,8 @@ def build_static(
     for name in names:
         started = time.perf_counter()
         try:
-            with call_memo.entering():  # one reading of each shared derivation per payload
+            # one reading of each shared derivation per payload, and one index sync
+            with ctx.project.index.frozen_sync(), call_memo.entering():
                 text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"

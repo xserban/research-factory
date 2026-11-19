@@ -69,6 +69,7 @@ from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningStage
 from factory.model.runner import RunnerFinished, RunnerOutcome, RunnerStage, RunnerStarted
 from factory.model.screening import PassLabel
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.stages import EXTRACT_KINDS, task_kind
 from factory.services.work_queue import advance, mining_needs, pending_work
@@ -433,6 +434,7 @@ def build_command(
     return argv, mcp_config(project, unit_cap, run_id), prompt
 
 
+@memoised
 def _screen_servable(project: Project, stage: ScreeningStage) -> tuple[int, bool]:
     """`(records, blocked)`: the records `screen_next` would serve a pass A agent at `stage` now,
     and whether a gate limits it. Undecided works of the stage's population, but none while the

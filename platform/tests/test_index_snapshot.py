@@ -40,3 +40,14 @@ def test_snapshot_is_reentrant_and_sync_works_after_it(tmp_path: Path) -> None:
         pass
     create_tasks(project, project.human_actor(), [TaskSpec("k", {"i": 2})])
     assert project.index.sync().applied >= 0
+
+
+def test_frozen_sync_syncs_once_then_ignores_new_events_until_it_exits(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    create_tasks(project, project.human_actor(), [TaskSpec("k", {"i": 1})])
+    with project.index.frozen_sync(), project.index.frozen_sync():
+        before = project.index.last_event_id()
+        create_tasks(project, project.human_actor(), [TaskSpec("k", {"i": 2})])
+        assert project.index.sync().applied == 0  # frozen: the new event is not applied
+        assert project.index.last_event_id() == before
+    assert project.index.sync().applied > 0  # thawed on exit

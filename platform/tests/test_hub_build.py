@@ -316,6 +316,17 @@ def test_corpus_payload_is_identical_to_the_one_the_full_citation_report_gave(
     assert text == GOLDEN_CORPUS.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("name", ["pipeline", "findings", "mining", "screening", "flow"])
+def test_payload_built_with_one_sync_and_memo_equals_the_plain_build(
+    world: Project, tmp_path: Path, name: str
+) -> None:
+    """The build runs each payload inside `frozen_sync` and a call memo; the same builder called
+    outside both (the old behaviour: a sync and a recomputation per read) gives the same payload."""
+    built = _payload(world, tmp_path, name)
+    plain = json.loads(hb.dumps(hb.BUILDERS[name](hb.HubContext(world))))
+    assert built == plain
+
+
 def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_path: Path) -> None:
     payload = _payload(world, tmp_path, "corpus")
     ctx = hb.HubContext(world)

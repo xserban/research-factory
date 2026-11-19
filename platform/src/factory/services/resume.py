@@ -77,6 +77,7 @@ from factory.model.protocol import ScreeningStage
 from factory.model.screening import PassLabel
 from factory.model.task import TASK_LEASE, TaskStatus
 from factory.services import pipeline, runner, usage_limit
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.extraction import abandoned_task_ids
 from factory.services.stages import kinds_for, task_kind
@@ -359,6 +360,7 @@ def _leases(project: Project, now: datetime) -> list[ExpiredLeases]:
     return [ExpiredLeases(kind=k, count=len(ids), task_ids=ids) for k, ids in by_kind.items()]
 
 
+@memoised
 def _last_activity(project: Project, session: str) -> str | None:
     with project.index.connect() as conn:
         value = conn.execute(
