@@ -123,7 +123,10 @@ def cached_reads() -> Iterator[None]:
     called, and re-reads only what was appended since (a file whose size changed is read on from
     where the scope stopped; a file that shrank is read again from the start). Nothing outlives the
     scope, so no answer is kept across calls. A nested scope reuses the open one. Events are shared
-    between callers; each call gets a list of its own."""
+    between callers; each call gets a list of its own.
+
+    Invariant: a shared `Event` is frozen but its `payload` dict is not; no caller may mutate it
+    (a test scans the sources for such writes). Copy first (`dict(event.payload)`) to edit."""
     if _scope.get() is not None:
         yield
         return
@@ -142,20 +145,25 @@ def _read_scoped(
 ) -> list[Event]:
     entry = held.setdefault((events_dir, id(catalog), types), _DirRead())
     stamp: list[tuple[Path, int]] = []
+    changed = False
     for path in event_files(events_dir):
         size = path.stat().st_size
         stamp.append((path, size))
         seen = entry.files.setdefault(path, _FileRead())
-        if size == seen.size:
+        # Unchanged only when the whole file was consumed: while an unterminated tail waits
+        # (`end_offset != size`) the writer may truncate it and append up to the same size.
+        if size == seen.size and seen.end_offset == size:
             continue
         if size < seen.end_offset:  # shrank: not an append, read it afresh
             seen.events, seen.end_offset = [], 0
+            changed = True
         result = read_file(path, catalog, seen.end_offset, types)
+        changed = changed or bool(result.events)
         seen.events.extend(result.events)
         seen.end_offset = result.end_offset
         seen.size = size
     fingerprint = tuple(stamp)
-    if fingerprint != entry.stamp:
+    if changed or fingerprint != entry.stamp:
         entry.stamp = fingerprint
         entry.merged = sorted(
             (e for path, _ in fingerprint for e in entry.files[path].events), key=lambda e: e.id

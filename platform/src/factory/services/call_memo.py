@@ -7,6 +7,11 @@ caller that mutates its result cannot corrupt another caller's. The scope assume
 not change while it is open, which holds for read-only checks; a call that does write (a service
 under `exclusive()`) is safe too, because `Project.record` calls `invalidate`, which drops every
 entry: a read after the write recomputes.
+
+The rule for write paths: the outermost `index.exclusive()` hold drops the memo as soon as it has
+the lock and has synced (`Index` `on_write_lock`), since the wait may have lasted minutes and
+another process may have changed the project meanwhile. Every decision made under the lock
+therefore reads fresh values; only reads made before the lock are discarded.
 """
 
 from __future__ import annotations

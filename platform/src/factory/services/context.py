@@ -194,6 +194,7 @@ def build_project(
         catalog,
         default_projection(blobs),
         on_exclusive=floor_ids,
+        on_write_lock=invalidate,  # a decision under the lock never uses a pre-lock memo value
         hold_window=settings.index_hold,
     )
     return Project(

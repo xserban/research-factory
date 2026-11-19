@@ -331,6 +331,7 @@ class Index:
         projection: Projection,
         *,
         on_exclusive: Callable[[str | None], None] | None = None,
+        on_write_lock: Callable[[], None] | None = None,
         hold_window: timedelta = DEFAULT_HOLD_WINDOW,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -353,6 +354,7 @@ class Index:
         self._snapshot = False  # set and read only by the owner
         self._clean = False  # owner only: the index holds the whole log, for this hold
         self._on_exclusive = on_exclusive
+        self._on_write_lock = on_write_lock
 
     def sync(self) -> SyncResult:
         """Apply new events incrementally, or rebuild when the index can't be trusted.
@@ -400,15 +402,20 @@ class Index:
 
         Re-entrant: the sync and reads made inside the block do not wait on the lock they hold.
         With `on_exclusive`, the outermost hold syncs first and hands it the last applied event id
-        (the ID floor of a hosted project, slice 5 ruling 3).
+        (the ID floor of a hosted project, slice 5 ruling 3). `on_write_lock` then runs, once per
+        outermost hold, after the lock is won (`build_project` wires it to `call_memo.invalidate`).
         """
         if self._in_snapshot():
             raise RuntimeError("exclusive() inside a read-only snapshot")
         outermost = not self._holding
         with self._locked():
-            if outermost and self._on_exclusive is not None:
-                self._sync()
-                self._on_exclusive(self.last_event_id())
+            if outermost:
+                if self._on_exclusive is not None:
+                    self._sync()
+                    self._on_exclusive(self.last_event_id())
+                if self._on_write_lock is not None:
+                    # After a possible wait: values derived before the lock may be stale.
+                    self._on_write_lock()
             yield
 
     def rebuild(self) -> str:
