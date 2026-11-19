@@ -744,3 +744,39 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+## 35. Port status
+
+Method page (hub-port-method):
+
+- TX-1 — done (Method > Taxonomy, index table)
+- TX-2 — done (version header, versions, rationale; open proposals in index)
+- TX-3 — done (derived miner line, link to Miners)
+- TX-4 — done (changes table, computed by diff)
+- TX-5 — done (dimension table)
+- TX-6 — done (category cards with counts, cues, examples)
+- TX-7 — done (category ids as anchors, hash cat=)
+- TX-8 — done (collapsed earlier list)
+- TX-9 — done (covered by counts in Taxonomy and existing Lenses/Miners)
+- TX-10 — done (taxonomy info panel)
+- TX-11 — done (link to Miners codebook)
+- LC-1 — done (flow info panel and visible layout warning)
+- LC-2 — done (stage coverage arc diagram)
+- LC-3 — done (layer chips)
+- LC-4 — done (mode chips)
+- LC-5 — done (selected list, drawer links)
+- LC-6 — done (hash layer, mode, stage)
+- LC-7 — done (matrix with Steps links)
+- LC-8 — done (per-paper sequences, calibration warning)
+- LC-9 — done (empty state)
+- LC-10 — done (stage sequences: name map, transition diagram, orders, loops, entry/exit)
+- LC-11 — done (links; next-step text left out as stale)
+- RS-8 — done (Method > Lifecycle, stage by mode)
+- RS-9 — done (stages per paper bars)
+- RS-10 — done (stage by technique)
+- ST-1 — done (exploratory banner)
+- ST-2 — done (count strip)
+- ST-3 — done (stage selection in strip and All stages)
+- ST-4 — done (actor, check, limits, search)
+- ST-5 — done (per-stage sections)
+- ST-6 — done (step details with quotes)
+- ST-7 — done (stage anchors, hash sstage)
