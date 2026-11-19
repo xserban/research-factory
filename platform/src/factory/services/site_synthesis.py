@@ -77,11 +77,9 @@ _CSS = (
 )
 
 
-def _scope_table(payload: dict[str, Any], infos: list[Any]) -> str:
-    """Every scope a page can be written for, with its works and whether a page exists."""
-    from factory.services.pages import subset
-
-    have = {i.scope: i for i in infos}
+def scopes_of(payload: dict[str, Any]) -> list[str]:
+    """Every scope a page can be written for: overview, then each technique, stage and field value
+    of the works that is a valid scope name."""
     values: dict[str, set[str]] = {"technique": set(), "stage": set(), "field": set()}
     for w in payload["works"]:
         for f, key in (
@@ -94,12 +92,20 @@ def _scope_table(payload: dict[str, Any], infos: list[Any]) -> str:
                 values[key].add(v)
         for s in w["stages"]:
             values["stage"].add(s["stage"])
-    scopes = ["overview"] + [
+    return ["overview"] + [
         f"{k}={v}"
         for k in ("technique", "stage", "field")
         for v in sorted(values[k])
         if re.match(r"^[a-z0-9][a-z0-9-]*$", v)
     ]
+
+
+def _scope_table(payload: dict[str, Any], infos: list[Any]) -> str:
+    """Every scope a page can be written for, with its works and whether a page exists."""
+    from factory.services.pages import subset
+
+    have = {i.scope: i for i in infos}
+    scopes = scopes_of(payload)
     rows = ""
     for scope in scopes:
         try:
