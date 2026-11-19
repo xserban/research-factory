@@ -155,10 +155,14 @@ A trigger is `{kind, ref}`. The kinds that exist and that this engine uses today
 
 - `work` (a work id `rf:...`): the paper the observation comes from. Use one `work` trigger per
   paper behind the lead; two works from two papers beat one.
-- `item` (an extraction id `ext_...`): a recorded row, such as the limitation row of a work or a
-  technique use row (the failed and the supported row of a challenge; the rows of a combination).
-- `row` (an evidence row key `rk_...`) and `claim` (`clm_...`, a claim of the extraction pack, not
-  an m-claims row): only when you hold such an id from a tool result.
+- `item` (an extraction id `ext_...`): a recorded row. This is the only trigger kind that cites a
+  miner row (a technique use row: the failed and the supported row of a challenge, the quote rows
+  of a combination or gap; an m-claims row). Take the id from a technique tool result
+  (`extraction_id` of the use row). `claims_digest` shows `rk_` row keys, not `ext_` ids, so a
+  digest row cannot be cited as `item`: cite the work (`work`) and name the row in the lead text.
+- `row` (`rk_...`) resolves only for an evidence-scope row; a miner row given as `row` is
+  refused `triggers.N: unknown`. Never use `row` for a miner row. `claim` (`clm_...`) is a claim of
+  the extraction pack, not an m-claims row.
 
 Other kinds exist in the model (`idea`, `interpretation`, `concept`, `card`, `contradiction`,
 `lead`, `hypothesis`, `direction`, and builder rows `match`, `conflict`, `gap`) and are used when
@@ -168,12 +172,18 @@ technique candidate or a claims row as such in v1: cite what it rests on (the wo
 and say in the lead text which candidate it is ("technique challenge, exploratory,
 `technique_challenges` lens core").
 
-To confirm against the code check (`docs/plans/2026-11-19-hypothesis-engine-code-check.md` did
-not exist when this was written): whether an `item` or `row` trigger citing a miner row (not an
-extraction-pack row) resolves. If `lead_record` refuses a trigger with `triggers.N: unknown`,
-report the refusal verbatim, fall back to `work` triggers for the papers behind the row, and say
-in the lead text which row it came from. Do not invent a reference and do not retry with altered
-input to obtain a different answer. A builder trigger gone stale is refused as `trigger-stale`.
+Code check (`docs/plans/2026-11-19-hypothesis-engine-code-check.md`): a lead holds at most 20
+triggers, so for a candidate with many rows keep one quote row per work and then the works, and
+say in the lead text that the list was cut. `item` also resolves a row the miner has since
+replaced; use only rows that a technique tool returned in this session. If `lead_record` refuses
+a trigger (`triggers.N: unknown`, or `trigger-stale` for a builder row), report the refusal
+verbatim, fall back to `work` triggers for the papers behind the row, and say in the lead text
+which row it came from. Do not invent a reference and do not retry with altered input to obtain
+a different answer. Every `work` or `item` you cite becomes a key of the lead, so two leads
+citing the same paper show up in each other's `prior`: read it, do not treat it as a duplicate
+by itself. The critic later sees a miner `item` as a bare id without its quote, so put the
+verified quote or its gist, with the anchor, in the hypothesis `statement` (the critic can read
+the statement, not the lead text).
 
 ### Step 6. Specify and design (HUMAN DECISION POINT H6: test kind, decision rule, margin)
 
@@ -189,8 +199,12 @@ From each promoted lead, and only from a promoted lead, call `hypothesis_draft` 
   (`superiority`, `non-inferiority`, `literature-direction`), `lead` (the promoted lead id),
   `rationale`, and `supersedes` only for a draft of your own.
 - Read the falsifier sentence in the answer. If it does not say what you meant to risk, supersede
-  the draft; do not argue it away. Tell the researcher plainly that a literature-window test
-  returns `insufficient-evidence` until later papers report both methods on a comparable key.
+  the draft; do not argue it away. Tell the researcher plainly that, in a project with no evidence-scope rows
+  naming the methods, a registered literature hypothesis cannot be evaluated: its evaluation is
+  `incomplete` (`method-unresolved`) until an evidence schema with a method name and comparability
+  keys exists. Where the evidence schema is missing, `conditions` must be `{}` and the methods are
+  given by `name`; a method given as a card must be a method card, and a `row_key` a final
+  evidence row.
 - Technique counts are never the evidence of a hypothesis.
 
 Then stop. The independent review is not yours: tell the researcher to start a fresh session
