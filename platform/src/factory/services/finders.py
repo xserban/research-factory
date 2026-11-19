@@ -215,33 +215,86 @@ class _Ref(StrictModel):
     work_id: str
     quote: str
     live: bool
+    anchor: str | None = None
+
+
+_MINER_QUOTE_FIELDS = ("quote", "claim_quote")
+"""The field a miner row keeps its verbatim quote in, in order of preference (technique miners:
+`quote`; `m-claims`: `claim_quote`); any other field with a quote and an anchor follows."""
+
+
+def _miner_row(project: Project, ref: str) -> _Ref | None:
+    """The work, quote, anchor and liveness of a row of any scope that is not a contribution
+    item (a technique or `m-claims` miner row, an evidence row): the stored quote of its
+    preferred quote field, else of the first field by name that has a quote. None for an unknown
+    id or a row with no quoted field."""
+    with project.index.connect() as conn:
+        head = conn.execute(
+            text("SELECT work_id, superseded_by FROM extraction_rows WHERE extraction_id = :e"),
+            {"e": ref},
+        ).first()
+        if head is None:
+            return None
+        cells = conn.execute(
+            text(
+                "SELECT field, value, quote, anchor FROM extraction_fields "
+                "WHERE extraction_id = :e AND (quote IS NOT NULL AND quote != '' "
+                "OR field IN ('quote', 'claim_quote')) ORDER BY field"
+            ),
+            {"e": ref},
+        ).all()
+    quoted = {str(c[0]): c for c in cells}
+    chosen = next((quoted[f] for f in _MINER_QUOTE_FIELDS if f in quoted), None)
+    if chosen is None:
+        chosen = next((c for c in cells if c[2]), None)
+    if chosen is None:
+        return None
+    text_ = str(chosen[2] or chosen[1]).strip()
+    if not text_:
+        return None
+    anchor = None if chosen[3] is None else str(chosen[3])
+    return _Ref(work_id=str(head[0]), quote=text_, live=head[1] is None, anchor=anchor)
 
 
 def _lookup(project: Project, ref: str) -> _Ref | None:
     """The work, stored quote and liveness of a claim or contribution item; None when `ref` names
-    no such row or the row carries no quote."""
+    no such row or the row carries no quote. Contradiction proposals use this lookup only: a miner
+    row is not a claim."""
     if ref.startswith("clm_"):
         with project.index.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT work_id, quote, superseded_by FROM extraction_claims "
+                    "SELECT work_id, quote, anchor, superseded_by FROM extraction_claims "
                     "WHERE claim_id = :c"
                 ),
                 {"c": ref},
             ).first()
         if row is None:
             return None
-        return _Ref(work_id=str(row[0]), quote=str(row[1]), live=row[2] is None)
+        return _Ref(work_id=str(row[0]), quote=str(row[1]), live=row[3] is None, anchor=str(row[2]))
     item = contribution_item(project, ref)
     if item is None or not item.quote:
         return None
     return _Ref(work_id=item.work_id, quote=item.quote, live=item.live)
 
 
-def ref_quote(project: Project, ref: str) -> str | None:
-    """The stored, verified quote of a claim or contribution item; None for any other ref."""
+def ref_source(project: Project, ref: str) -> tuple[str, str | None] | None:
+    """`(quote, anchor)` the platform holds for a lead trigger `ref`: a claim, a contribution item
+    or, as a fall-back after both (hypothesis engine, B1), any other extraction row by its
+    `ext_` id, that is a technique or `m-claims` miner row (`_miner_row`: the `quote` or
+    `claim_quote` field, else the first field with a quote). The anchor is None where the row
+    kind keeps none here (a contribution item). None for any other ref, or a row without a
+    quote. Held-out handling is unchanged: nothing is masked here, the tool layer scrubs."""
     found = _lookup(project, ref)
-    return None if found is None else found.quote
+    if found is None and ref.startswith("ext_"):
+        found = _miner_row(project, ref)
+    return None if found is None else (found.quote, found.anchor)
+
+
+def ref_quote(project: Project, ref: str) -> str | None:
+    """The stored, verified quote of `ref` as `ref_source` finds it; None for any other ref."""
+    found = ref_source(project, ref)
+    return None if found is None else found[0]
 
 
 def propose_contradiction(

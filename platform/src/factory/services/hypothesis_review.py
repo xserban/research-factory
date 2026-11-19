@@ -36,7 +36,7 @@ from factory.model.hypotheses import (
 from factory.model.task import HYPOTHESIS_REVIEW_TASK_KIND, Task, TaskStatus
 from factory.services.budgets import require_for, task_unit
 from factory.services.context import Project
-from factory.services.finders import ref_quote
+from factory.services.finders import ref_source
 from factory.services.hypotheses import (
     HypothesisView,
     hypothesis_keys,
@@ -91,15 +91,19 @@ def _triggers(project: Project, view: HypothesisView) -> list[ReviewTrigger]:
     lead = None if view.spec.lead is None else lead_view(project, view.spec.lead)
     if lead is None:
         return []
-    return [
-        ReviewTrigger(
-            kind=t.kind,
-            ref=t.ref,
-            row=t.row if t.kind in BUILDER_KINDS else None,
-            quote=ref_quote(project, t.ref) if t.kind.value in _QUOTED else None,
+    out: list[ReviewTrigger] = []
+    for t in lead.triggers:
+        found = ref_source(project, t.ref) if t.kind.value in _QUOTED else None
+        out.append(
+            ReviewTrigger(
+                kind=t.kind,
+                ref=t.ref,
+                row=t.row if t.kind in BUILDER_KINDS else None,
+                quote=None if found is None else found[0],
+                anchor=None if found is None else found[1],
+            )
         )
-        for t in lead.triggers
-    ]
+    return out
 
 
 def build_review_task(project: Project, view: HypothesisView) -> ReviewTask:

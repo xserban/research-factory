@@ -402,12 +402,14 @@ ReviewNote = Annotated[str, Field(max_length=MAX_NOTE)]
 
 class ReviewTrigger(StrictModel):
     """A lead trigger as the critic sees it: the reference, the builder row stored with it and,
-    for a claim or a contribution item, the verified quote the platform holds."""
+    for a claim, a contribution item or a miner row (technique, `m-claims`), the verified quote the
+    platform holds and, where the row keeps one, its anchor."""
 
     kind: TriggerKind
     ref: str
     row: dict[str, JsonValue] | None = None
     quote: str | None = None
+    anchor: str | None = None
 
 
 class ReviewTask(StrictModel):
