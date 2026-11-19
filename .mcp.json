@@ -1,1 +1,1 @@
-{"mcpServers": {"factory": {"command": "uv", "args": ["run", "--project", "platform", "factory", "serve"]}}}
+{"mcpServers": {"factory": {"command": "/home/obd/Documents/Projects/research-factory/platform/.venv/bin/factory", "args": ["serve"], "env": {"PYTHONPATH": "/home/obd/Documents/Projects/research-factory/.claude/worktrees/runtime/platform/src", "FACTORY_RANKER_MODEL": "/home/obd/.local/share/research-factory/specter2", "FACTORY_PLUGIN_DIR": "/home/obd/Documents/Projects/research-factory/.claude/worktrees/runtime/plugin"}}}}
