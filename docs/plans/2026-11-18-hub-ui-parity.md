@@ -744,3 +744,21 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+Costs & runs (`costs`, branch hub-port-costs):
+- CO-1 — done (Costs: visible caveat line and ⓘ on the cost figure)
+- CO-2 — done (Costs: KPI strip)
+- CO-3 — done (Costs: Stages in detail, sortable, all 13 columns plus miner)
+- CO-4 — done (ⓘ panels of each view)
+- CO-5 — done (Costs: Token growth, one line chart per stage)
+- CO-6 — done (Costs: empty state)
+- CO-7 — done (Costs: Budgets with gauge, reported usage, Events per model labelled as not cost)
+- DB-36, RS-5 (cost parts) — done (Costs: Budgets, Events per model)
+- RN-1 — done (Runs: KPI strip)
+- RN-2 — done (Runs: group table with folder and status filters, unlinked first)
+- RN-3 — open (file paths are listed but not links: needs a read-only `ops/` file route in the server)
+- RN-4 — done (Runs: empty state)
+- RN-5 — done (Runs: ⓘ warning)
+- RN-6 — done (Runs: linked run id opens the run in Costs, highlighted)
