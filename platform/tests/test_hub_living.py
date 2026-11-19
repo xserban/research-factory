@@ -187,9 +187,20 @@ def test_living_payload_is_json_safe(project: Project) -> None:
     _world(project)
     payload = hl.living_payload(project, top_k=1)
     json.dumps(payload)
-    assert set(payload) == {"methods", "families", "feed_river", "horizon", "heartbeat"}
+    assert set(payload) == {
+        "methods",
+        "families",
+        "feed_river",
+        "horizon",
+        "heartbeat",
+        "feed",
+        "updates",
+    }
     assert payload["feed_river"]["total"] == 2
-    assert set(payload["methods"]) == {"feed_river", "horizon", "heartbeat"}
+    assert set(payload["methods"]) == set(hl.METHODS)
+    assert {"feed_river", "horizon", "heartbeat", "feed_status", "feed_cards"} <= set(
+        payload["methods"]
+    )
 
 
 @pytest.mark.parametrize("kind", sorted(hl.METHODS))
@@ -200,3 +211,83 @@ def test_methods_are_plain_sentences(kind: str) -> None:
 def test_horizon_method_says_years_stay_empty_until_ideas_or_edges_exist() -> None:
     text = hl.METHODS["horizon"]
     assert "empty" in text and "idea" in text
+
+
+def test_reactions_by_category_counts_latest_and_rates() -> None:
+    latest = {"a": "like", "b": "dislike", "c": "save", "d": "dismiss", "e": "like", "f": "like"}
+    cats = {"a": "cs.AI", "b": "cs.AI", "c": "cs.AI", "d": "cs.LG", "e": "cs.LG", "f": None}
+    rows = hl.reactions_by_category(latest, cats)
+    by = {r["category"]: r for r in rows}
+    assert [r["category"] for r in rows] == ["cs.AI", "cs.LG", "none"]
+    assert (by["cs.AI"]["reacted"], by["cs.AI"]["accepted"], by["cs.AI"]["rejected"]) == (3, 2, 1)
+    assert by["cs.AI"]["accept_rate"] == pytest.approx(2 / 3)
+    assert by["cs.LG"]["reject_rate"] == pytest.approx(0.5)
+    assert by["none"]["accept_rate"] == 1.0
+    assert hl.reactions_by_category({}, {}) == []
+
+
+def test_reactions_over_time_cumulates_by_day() -> None:
+    rows = hl.reactions_over_time(
+        [("2026-11-12", "like"), ("2026-11-11", "dislike"), ("2026-11-12", "save")]
+    )
+    assert [(r["day"], r["total"], r["cumulative"]) for r in rows] == [
+        ("2026-11-11", 1, 1),
+        ("2026-11-12", 2, 3),
+    ]
+    assert rows[1]["kinds"] == {"like": 1, "save": 1}
+    assert hl.reactions_over_time([]) == []
+
+
+def test_category_of_record() -> None:
+    assert hl.category_of_record({"categories": ["foo bar", "cs.AI", "cs.LG"]}) == "cs.AI"
+    assert hl.category_of_record({"categories": "cs.AI"}) is None
+    assert hl.category_of_record(None) is None
+
+
+def test_feed_view_cards_status_and_reactions(project: Project) -> None:
+    import json
+
+    _world(project)
+    _record(project, "feed.reacted", _reaction())
+    view = hl.feed_view(project)
+    json.dumps(view)
+    assert view["error"] is None and view["configured"] is True
+    assert view["status"]["entries"] >= 1
+    assert view["ranking_id"] is not None
+    assert view["total_shown"] == len(view["cards"]) >= 1
+    first = view["cards"][0]
+    assert first["rank"] == 1 and first["beyond"] is False
+    assert first["reaction"] == "like"
+    assert all(f["beyond"] for f in view["further"])
+    assert view["reactions"]["total"] == 1
+    assert view["reactions"]["over_time"][0]["total"] == 1
+
+
+def test_feed_view_without_feed_is_not_configured(project: Project) -> None:
+    view = hl.feed_view(project)
+    assert view["configured"] is False
+    assert view["cards"] == [] and view["further"] == []
+    assert view["ranking_id"] is None
+
+
+def test_updates_block_on_an_empty_project(project: Project) -> None:
+    import json
+
+    block = hl.updates_block(project)
+    json.dumps(block)
+    assert block["additions"] == []
+    assert block["routes"] == {
+        "inbox": 0,
+        "feed": 0,
+        "watch": 0,
+        "chase": 0,
+        "search": 0,
+        "other": 0,
+    }
+    assert isinstance(block["included_sources"], list)
+    assert block["watch"]["has_plan"] is False
+
+
+def test_new_methods_are_plain_sentences() -> None:
+    for key in ("feed_status", "feed_cards", "reactions", "updates", "watch", "growth"):
+        assert hl.METHODS[key].endswith(".")
