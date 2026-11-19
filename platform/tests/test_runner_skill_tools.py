@@ -20,6 +20,10 @@ NOT_ALLOWED: dict[str, dict[str, str]] = {
         "concept_propose": "proposing concepts is out of scope for a headless run",
         "concept_link": "linking concepts is out of scope for a headless run",
     },
+    "rf-chat": {
+        "contradiction_propose": "the Contradictions mode is attended; no runner stage serves it",
+        "lead_record": "a lead needs the researcher's balance; no headless run records one",
+    },
 }
 """Per skill, the tool names the skill mentions that the run does not allow, with the reason."""
 
