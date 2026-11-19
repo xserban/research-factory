@@ -744,3 +744,38 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+### Living (hub-port-living)
+
+- UP-1 — done (Updates, KPI cards)
+- UP-2 — done (Updates, additions table; title opens the drawer when the work is in the shell)
+- UP-3 — done (Updates, route chips, hash `route`)
+- UP-4 — done (Updates, empty text)
+- UP-5 — done (add a link box, `/api/inbox/add`, hub token)
+- UP-6 — done (Updates, growth line chart)
+- UP-7 — done (Updates, update-flow table)
+- UP-8 — done (Updates, weekly watch table)
+- UP-9 — done (Updates, watch settings act)
+- UP-10 — done (Updates, close week act)
+- UP-11 — done (Updates, watch note)
+- UP-12 — done (acts disabled unless `HUB.served`)
+- HM-16 — done (add a link box on Feed and Updates)
+- HM-17 — done (Feed cards with Like, Dislike, Add)
+- FD-1 — dropped (pointer page)
+- FD-2 — done (Feed lead and ⓘ)
+- FD-3 — done (Feed run bar, bounded runner poll)
+- FD-4 — done (covered by the shell project switcher)
+- FD-5 — done (Feed layout toggle and order select)
+- FD-6 — done (Feed status cards)
+- FD-7 — done (Feed lead and status cards)
+- FD-8 — done (Feed cards with abstract, authors, nearest core work, links, date)
+- FD-9 — done (card acts with inline confirm)
+- FD-10 — done (ranked-beyond cards, Show next 30, cut note)
+- FD-11 — done (Feed cards; cross-project panel not in a per-project hub)
+- FD-12 — done (Feed settings table)
+- FD-13 — done (category proposal and Accept act)
+- FD-14 — open (Reactions 7d and Adds 7d per title not shown; reaction chart per day and category added instead)
+- FD-15 — done (Horizon and Heartbeat tabs kept)
+- FD-16 — done (add message and link note point to Pipeline work queue)

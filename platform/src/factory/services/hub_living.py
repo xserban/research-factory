@@ -20,8 +20,12 @@ from sqlalchemy import text
 
 from factory.model.views import HorizonView
 from factory.services.context import Project
+from factory.services.feed_categories import primary_category, propose_categories
 from factory.services.feed_read import feed_list
 from factory.services.horizon import horizon_view
+from factory.services.protocol import current_protocol
+from factory.services.site_hub_feed import collect as collect_feed
+from factory.services.updates import updates_view
 
 METHODS: dict[str, str] = {
     "feed_river": (
@@ -51,6 +55,51 @@ METHODS: dict[str, str] = {
         "the agent records (`page.recorded`)."
     ),
 }
+
+METHODS.update(
+    {
+        "feed_status": (
+            "Read from the feed events of this project: the configuration last recorded, the "
+            "window of the latest fetch (incomplete when the source did not return everything), "
+            "the reference set the latest ranking was computed against and how many references "
+            "it held, the entries held back (works of held-out seeds, never shown), and whether "
+            "a fetch is due today. Due is computed from the date of the last complete window and "
+            "the configured interval; nothing here starts a run."
+        ),
+        "feed_cards": (
+            "The cards are the shown items of the latest ranking, in shown order, with the "
+            "abstract, authors and submission date the fetch recorded. Rank and score are the "
+            "ranker's own and nothing is re-ranked here. The nearest core work is the reference "
+            "the entry scored highest against. Ranked entries beyond the shown ones come after, "
+            "at most the listed cap; the rest are counted, not listed. A reaction or an add on "
+            "such a card is recorded as beyond the shown list."
+        ),
+        "reactions": (
+            "Reactions are the ones recorded on feed entries. Over time: reactions per day of the "
+            "event that recorded them, by kind. Per category: each reacted entry counts once, by "
+            "its latest reaction, under the first arXiv category of its record; accepted is "
+            "like or save, rejected is dislike or dismiss, and the rate is the share of the "
+            "category's reacted entries. Entries without a category are counted under none."
+        ),
+        "updates": (
+            "What entered the corpus since the last snapshot, and how each snapshot counted: "
+            "read from the snapshot events and the corpus, as the updates view computes it. "
+            "Every addition carries the route that brought it in (inbox, feed, watch, chase, "
+            "search, other) as recorded on its first provenance event."
+        ),
+        "watch": (
+            "The weekly watch plan as the current protocol records it: per source the mode, the "
+            "interval, the last finished cycle, when the next is due, and the weekly windows run "
+            "since the last full replay. Sources run in window mode; a full re-run never happens "
+            "automatically."
+        ),
+        "growth": (
+            "Included works per snapshot, and the counts each snapshot froze (identified, "
+            "screened, included, identified by route). They are the snapshot's own numbers; "
+            "none is recomputed here."
+        ),
+    }
+)
 
 TOP_K = 5
 OTHER = "other"
@@ -356,6 +405,225 @@ def load_event_counts(project: Project) -> list[tuple[str, str, int]]:
     return [(str(d), str(t), int(n)) for d, t, n in rows]
 
 
+# feed view: status, cards, further, categories ---------------------------------------------
+
+
+def _iso(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _record_str(record: Mapping[str, Any] | None, key: str) -> str:
+    value = None if record is None else record.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _record_authors(record: Mapping[str, Any] | None) -> list[str]:
+    value = None if record is None else record.get("authors")
+    if not isinstance(value, list):
+        return []
+    return [a for a in value if isinstance(a, str) and a.strip()]
+
+
+def category_of_record(record: Mapping[str, Any] | None) -> str | None:
+    """The first arXiv category of a fetched record, or None."""
+    value = None if record is None else record.get("categories")
+    if not isinstance(value, list):
+        return None
+    return primary_category(str(c) for c in value)
+
+
+def reactions_by_category(
+    latest: Mapping[str, str], category_of: Mapping[str, str | None]
+) -> list[dict[str, Any]]:
+    """Per category (`none` for an entry without one), the reacted entries by their latest
+    reaction, with the accepted (like, save) and rejected (dislike, dismiss) shares of that
+    category. Largest category first, then by name."""
+    per: dict[str, Counter[str]] = defaultdict(Counter)
+    for entry, reaction in latest.items():
+        per[category_of.get(entry) or "none"][reaction] += 1
+    rows: list[dict[str, Any]] = []
+    for category, counts in per.items():
+        n = sum(counts.values())
+        accepted = counts["like"] + counts["save"]
+        rejected = counts["dislike"] + counts["dismiss"]
+        rows.append(
+            {
+                "category": category,
+                "reacted": n,
+                "like": counts["like"],
+                "dislike": counts["dislike"],
+                "save": counts["save"],
+                "dismiss": counts["dismiss"],
+                "accepted": accepted,
+                "rejected": rejected,
+                "accept_rate": accepted / n if n else 0.0,
+                "reject_rate": rejected / n if n else 0.0,
+            }
+        )
+    return sorted(rows, key=lambda r: (-r["reacted"], r["category"]))
+
+
+def reactions_over_time(pairs: Iterable[tuple[str, str]]) -> list[dict[str, Any]]:
+    """`(UTC day, reaction)` pairs as one row per day, oldest first: the counts by kind, the day's
+    total and the running total."""
+    per: dict[str, Counter[str]] = defaultdict(Counter)
+    for day, reaction in pairs:
+        per[day][reaction] += 1
+    out: list[dict[str, Any]] = []
+    running = 0
+    for day in sorted(per):
+        total = sum(per[day].values())
+        running += total
+        out.append({"day": day, "total": total, "cumulative": running, "kinds": dict(per[day])})
+    return out
+
+
+def reaction_stats(
+    project: Project, records: Mapping[str, Mapping[str, Any]] | None
+) -> dict[str, Any]:
+    """Reactions over time and per category, from the feed projection (read-only)."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        timed = [
+            (str(d), str(r))
+            for d, r in conn.execute(
+                text(
+                    "SELECT substr(e.ts, 1, 10), r.reaction FROM feed_reactions r "
+                    "JOIN events e ON e.id = r.event_id ORDER BY r.event_id"
+                )
+            ).all()
+        ]
+        latest = {
+            str(e): str(r)
+            for e, r in conn.execute(
+                text("SELECT entry_id, reaction FROM feed_reactions ORDER BY event_id")
+            ).all()
+        }
+    cats = {e: category_of_record((records or {}).get(e)) for e in latest}
+    return {
+        "total": len(timed),
+        "entries": len(latest),
+        "over_time": reactions_over_time(timed),
+        "by_category": reactions_by_category(latest, cats),
+    }
+
+
+def _card(item: Any, record: Mapping[str, Any] | None, *, beyond: bool) -> dict[str, Any]:
+    return {
+        "entry_id": item.entry_id,
+        "title": item.title or item.entry_id,
+        "rank": item.rank,
+        "score": item.score,
+        "explore": bool(getattr(item, "explore", False)),
+        "nearest": getattr(item, "nearest_reference_title", None)
+        or getattr(item, "nearest_reference", None),
+        "reaction": None if item.reaction is None else str(item.reaction),
+        "sent": bool(item.sent),
+        "abstract": _record_str(record, "abstract") or (getattr(item, "abstract", None) or ""),
+        "authors": _record_authors(record) or list(getattr(item, "authors", ()) or ()),
+        "submitted": (_record_str(record, "submitted") or (getattr(item, "submitted", None) or ""))[
+            :10
+        ],
+        "category": category_of_record(record),
+        "beyond": beyond,
+    }
+
+
+def feed_view(project: Project) -> dict[str, Any]:
+    """The Feed tab as data: status line, cards of the latest ranking, ranked-beyond list, the
+    configuration and the category proposal. A failure reading the feed becomes `error`."""
+    view = collect_feed(project, "", "", "")
+    out: dict[str, Any] = {
+        "error": view.error,
+        "configured": False,
+        "config": None,
+        "status": None,
+        "last_fetch": None,
+        "references": view.references,
+        "reference_count": view.reference_count,
+        "ranking_id": None,
+        "total_ranked": 0,
+        "total_shown": 0,
+        "cap": 0,
+        "cut": 0,
+        "cards": [],
+        "further": [],
+        "proposal": None,
+        "reactions": {"total": 0, "entries": 0, "over_time": [], "by_category": []},
+    }
+    try:
+        proposal = propose_categories(project)
+        out["proposal"] = {
+            "categories": list(proposal.categories),
+            "shares": [
+                {
+                    "category": s.category,
+                    "works": s.works,
+                    "share": s.share,
+                    "proposed": s.category in proposal.categories,
+                }
+                for s in proposal.shares
+            ],
+            "core_works": proposal.core_works,
+            "with_category": proposal.with_category,
+            "covered": proposal.covered,
+            "coverage": proposal.coverage,
+        }
+    except Exception as exc:  # the proposal is a convenience; the tab renders without it
+        out["proposal_error"] = f"{type(exc).__name__}: {exc}"
+    status = view.status
+    if view.error is not None or status is None:
+        return out
+    out["configured"] = status.configured
+    out["config"] = None if status.config is None else status.config.model_dump(mode="json")
+    out["status"] = {
+        "last_complete_window_to": _iso(status.last_complete_window_to),
+        "next_window_from": _iso(status.next_window_from),
+        "due": status.due,
+        "entries": status.entries,
+        "held_entries": status.held_entries,
+        "fetches": status.fetches,
+        "rankings": status.rankings,
+        "reactions": status.reactions,
+        "sends": status.sends,
+        "last_ranking_id": status.last_ranking_id,
+    }
+    if view.last_fetch is not None:
+        out["last_fetch"] = asdict(view.last_fetch)
+    if not status.configured:
+        return out
+    records = view.records or {}
+    out["reactions"] = reaction_stats(project, records)
+    listing = view.listing
+    if listing is not None and listing.ranking_id is not None:
+        out["ranking_id"] = listing.ranking_id
+        out["total_shown"] = len(listing.items)
+        out["cards"] = [_card(i, records.get(i.entry_id), beyond=False) for i in listing.items]
+    page = view.ranked
+    if page is not None and page.ranking_id is not None:
+        out["total_ranked"] = page.total_ranked
+        out["cap"] = page.cap
+        out["cut"] = page.cut
+        out["further"] = [_card(i, records.get(i.entry_id), beyond=True) for i in page.further]
+    return out
+
+
+# updates --------------------------------------------------------------------------------------
+
+
+def updates_block(project: Project) -> dict[str, Any]:
+    """The Updates tab as data: the updates view as JSON, the route counts of the additions and the
+    sources the protocol includes (the watch form's choices)."""
+    data: dict[str, Any] = updates_view(project).model_dump(mode="json")
+    routes = Counter(a["route"] for a in data["additions"])
+    current = current_protocol(project)
+    data["routes"] = {r: routes[r] for r in ("inbox", "feed", "watch", "chase", "search", "other")}
+    data["included_sources"] = (
+        [] if current is None else [s.name for s in current.spec.sources if s.included]
+    )
+    return data
+
+
 # payload --------------------------------------------------------------------------------------
 
 
@@ -369,12 +637,15 @@ def living_payload(project: Project, *, top_k: int = TOP_K) -> dict[str, Any]:
     river = feed_river(load_feed_rows(project), top_k)
     horizon = horizon_summary(horizon_view(project), today)
     beat = heartbeat(load_event_counts(project))
+    feed = feed_view(project)
     return {
         "methods": dict(METHODS),
         "families": list(FAMILIES),
         "feed_river": _plain(river),
         "horizon": _plain(horizon),
         "heartbeat": _plain(beat),
+        "feed": feed,
+        "updates": updates_block(project),
     }
 
 
@@ -388,7 +659,12 @@ __all__ = [
     "FeedRow",
     "family_of",
     "feed_river",
+    "feed_view",
     "heartbeat",
     "horizon_summary",
     "living_payload",
+    "reaction_stats",
+    "reactions_by_category",
+    "reactions_over_time",
+    "updates_block",
 ]
