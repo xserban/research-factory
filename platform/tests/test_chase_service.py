@@ -114,7 +114,7 @@ def test_chase_within_pending_tolerance_records_the_tolerated_work(
     mock_sources: SourcesFor,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import factory.services.chase as chase_module
+    import factory.services.tolerance as chase_module
     from factory.model.protocol import UnscreenedTolerance
 
     protocol_id = _corpus(project, agent, human, mock_sources)

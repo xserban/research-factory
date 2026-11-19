@@ -30,6 +30,7 @@ from factory.model.work_ids import work_id
 from factory.services import chase as chase_service
 from factory.services import references as references_service
 from factory.services import snowball
+from factory.services import tolerance as tolerance_service
 from factory.services.agreement import Outcome, final_outcomes
 from factory.services.chase import chase_rounds, search_chase
 from factory.services.context import Project
@@ -331,7 +332,7 @@ def test_refused_while_pending(project: Project, agent: Actor, planned: tuple[st
 def _tolerate(monkeypatch: pytest.MonkeyPatch, fewer_than: int, fraction: float = 0.0) -> None:
     """Declare a `pending_tolerance` as the protocol would (decision 138)."""
     monkeypatch.setattr(
-        chase_service,
+        tolerance_service,
         "pending_tolerance",
         lambda _project: UnscreenedTolerance(fewer_than=fewer_than, fraction=fraction),
     )

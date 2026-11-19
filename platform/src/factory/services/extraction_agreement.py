@@ -40,7 +40,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import SerializerFunctionWrapHandler, ValidationError, model_serializer
+from pydantic import Field, SerializerFunctionWrapHandler, ValidationError, model_serializer
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -90,6 +90,7 @@ from factory.services.extraction import (
 from factory.services.extraction_verify import VALUE_FIELD
 from factory.services.gates import gate_issues
 from factory.services.passes import shared_refusal
+from factory.services.tolerance import tolerated_within
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
@@ -201,6 +202,10 @@ class ExtractionAgreement(StrictModel):
     resolved: int
     dropped: list[DroppedItem]
     single_extraction: list[str]
+    tolerated_pending: list[str] = Field(default_factory=list)
+    """Works with a stale or queued unit that the protocol's `pending_tolerance` lets through
+    (decision 138); their rows are not in the agreement. Agreement writes no event, so this is
+    the record."""
 
 
 class AgreementOverall(StrictModel):
@@ -541,7 +546,9 @@ class _State:
 
     `known` is False until pass B has opened (the dual sample is unknown); `dual` and `single`
     are then empty and no work is final. `blocking` is True while a unit of the population is
-    open, stale, or queued with a document to extract from."""
+    open (claimed: work in progress), or stale or queued with a document to extract from beyond
+    the protocol's `pending_tolerance`. `tolerated` lists, sorted, the works of the stale or
+    queued units that tolerance lets through (decision 138); a claimed unit is never tolerated."""
 
     scope: ScopeKey
     schema: ExtractionSchema
@@ -553,6 +560,7 @@ class _State:
     blocking: bool
     pairs: list[_Pair]
     imported: list[FinalRow] = field(default_factory=list)
+    tolerated: tuple[str, ...] = ()
     """The final rows of the units an import fills, by work then row key; no pair holds them."""
 
 
@@ -620,11 +628,15 @@ def _read_state(
     single = frozenset(population) - dual if b_config is not None else frozenset()
     states = unit_states(project, scope=scope, ledger=ledger)
     current = {(s.work_id, s.pass_label) for s in states if s.state == "current"}
-    blocking = any(
-        s.state in ("open", "stale")
-        or (s.state == "queued" and default_conversion(project, s.work_id) is not None)
+    claimed = any(s.state == "open" for s in states)
+    leftover = {
+        s.work_id
         for s in states
-    )
+        if s.state == "stale"
+        or (s.state == "queued" and default_conversion(project, s.work_id) is not None)
+    }
+    tolerated = tolerated_within(project, leftover, len(population)) if not claimed else ()
+    blocking = claimed or (bool(leftover) and not tolerated)
     ready = (
         {w for w in dual if (w, PassLabel.A) in current and (w, PassLabel.B) in current}
         | {w for w in single if (w, PassLabel.A) in current}
@@ -654,7 +666,9 @@ def _read_state(
         if pair.aligned:
             pair.compared = _compare(pack, _compared_fields(schema, pack), pair.a[0], pair.b[0])
         _settle(pair, schema, pack, resolutions)
-    return _State(scope, schema, pack, configs, known, dual, single, blocking, pairs, imported)
+    return _State(
+        scope, schema, pack, configs, known, dual, single, blocking, pairs, imported, tolerated
+    )
 
 
 def _imported_finals(
@@ -979,7 +993,9 @@ def extraction_agreement(
     Refused, with nothing written: to a session that joined an extraction pass (`session`);
     without a ready schema (as `require_schema`); and on `passes` while either pass is unopened,
     when one session joined both passes or the passes share a model, or while any unit is open,
-    stale, or queued with a document to extract from (decision 37 items 1, 7, 15)."""
+    a unit is claimed, or stale or queued with a document to extract from beyond the protocol's
+    `pending_tolerance` (decision 37 items 1, 7, 15; 138). Within it the agreement is of the
+    works that finished, and `tolerated_pending` lists the others."""
     project.index.sync()
     if is_extraction_session(project, actor.session):
         raise FactoryValidationError(
@@ -1014,6 +1030,7 @@ def extraction_agreement(
         resolved=sum(p.resolved for p in state.pairs),
         dropped=[d for p in state.pairs for d in p.dropped],
         single_extraction=sorted(state.single),
+        tolerated_pending=list(state.tolerated),
     )
 
 

@@ -1977,6 +1977,7 @@ def build_server(
                 "items": [item.model_dump(mode="json") for item in evidence],
                 "population": drawn.population,
                 "sample_size": len(drawn.items),
+                "tolerated_pending": list(drawn.tolerated_pending),
             }
             return _withheld(opened, data, include_work_ids=False)
 

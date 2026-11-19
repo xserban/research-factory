@@ -2464,6 +2464,8 @@ def screen_disagreements(
     if agreement is None:
         typer.echo(f"disagreements: not available until both passes finish ({waiting})")
         return
+    for line in render.tolerated_pending_lines(agreement.tolerated_pending, "not in the agreement"):
+        typer.echo(line)
     if not agreement.disagreements:
         typer.echo("no unresolved disagreements")
         return
@@ -2939,6 +2941,8 @@ def mine_audit_sample_cmd(
             project, human, drawn.audit_id, Channel.CLI
         )
     typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for line in render.tolerated_pending_lines(drawn.tolerated_pending, "recorded in the audit"):
+        typer.echo(line)
     for item in evidence:
         for line in render.audit_evidence_lines(item):
             typer.echo(line)
@@ -3076,6 +3080,8 @@ def extract_audit_sample_cmd(ctx: typer.Context) -> None:
             project, human, drawn.audit_id, Channel.CLI
         )
     typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for line in render.tolerated_pending_lines(drawn.tolerated_pending, "recorded in the audit"):
+        typer.echo(line)
     for item in evidence:
         for line in render.audit_evidence_lines(item):
             typer.echo(line)
@@ -3215,6 +3221,8 @@ def contributions_audit_sample_cmd(ctx: typer.Context) -> None:
             project, human, drawn.audit_id, Channel.CLI
         )
     typer.echo(f"audit {drawn.audit_id}: {len(drawn.items)} of {drawn.population} agreed values")
+    for line in render.tolerated_pending_lines(drawn.tolerated_pending, "recorded in the audit"):
+        typer.echo(line)
     for item in evidence:
         for line in render.audit_evidence_lines(item):
             typer.echo(line)

@@ -123,7 +123,6 @@ from factory.services.chase import (
     round_limit_issue,
     run_chase,
     start_chase,
-    tolerated_within,
 )
 from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
@@ -148,6 +147,7 @@ from factory.services.search import (
     run_query,
     stored_works_by_ids,
 )
+from factory.services.tolerance import tolerated_within
 from factory.sources.reflist import NAME as REFLIST
 from factory.sources.reflist import ReflistEntry
 from factory.sources.registry import SourceFactory, reflist_factory, stored_factory

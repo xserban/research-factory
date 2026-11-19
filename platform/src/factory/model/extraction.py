@@ -17,9 +17,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, Field
+from pydantic import (
+    AfterValidator,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from factory.model.base import StrictModel
 from factory.model.fulltext import DOCUMENT_ID_RE
@@ -343,6 +349,23 @@ class ExtractionAuditSampled(StrictModel):
     population_digest: str = Field(min_length=1)
     protocol_id: str = Field(pattern=PROTOCOL_ID_RE)
     pack: str | None = None
+    tolerated_pending: tuple[str, ...] = ()
+    """Sorted, unique works the audit was drawn without, within the protocol's
+    `pending_tolerance` (decision 138): works with an unresolved disagreement or a stale or
+    queued unit. Left out of the event while empty."""
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_tolerated(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.tolerated_pending:
+            data.pop("tolerated_pending", None)
+        return data
+
+    @model_validator(mode="after")
+    def _tolerated_sorted(self) -> ExtractionAuditSampled:
+        if list(self.tolerated_pending) != sorted(set(self.tolerated_pending)):
+            raise ValueError("tolerated_pending must be sorted and unique")
+        return self
 
 
 class ExtractionAuditLabelled(StrictModel):

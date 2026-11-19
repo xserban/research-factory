@@ -493,3 +493,75 @@ def test_items_sampled_without_an_extraction_are_never_outdated(
     report = extraction_audit_report(project)
     assert report is not None
     assert (report.labelled, report.incorrect, report.outdated) == (1, 1, 0)
+
+
+def _tolerate(monkeypatch: pytest.MonkeyPatch, fewer_than: int) -> None:
+    import factory.services.tolerance as tolerance
+    from factory.model.protocol import UnscreenedTolerance
+
+    monkeypatch.setattr(
+        tolerance,
+        "pending_tolerance",
+        lambda _p: UnscreenedTolerance(fewer_than=fewer_than, fraction=0.0),
+    )
+
+
+def test_unresolved_disagreement_within_pending_tolerance_is_recorded(
+    project: Project,
+    human: Actor,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    odd = world[0]
+    _run(project, ext_a, PassLabel.A, lambda w: [_r()])
+    _run(
+        project,
+        ext_b,
+        PassLabel.B,
+        lambda w: [_r(value="2", cell="t1.r3.c3")] if w == odd else [_r()],
+    )
+    with pytest.raises(FactoryValidationError):
+        extraction_audit_sample(project, human, random_seed=1)  # no tolerance: refused
+    _tolerate(monkeypatch, 2)
+
+    sampled = extraction_audit_sample(project, human, random_seed=1)
+
+    assert sampled.tolerated_pending == (odd,)
+    (event,) = _events(project, "extraction.audit_sampled")
+    assert event.payload["tolerated_pending"] == [odd]
+    assert all(item.work_id != odd for item in sampled.items)
+
+
+def test_unresolved_disagreements_beyond_tolerance_still_refuse(
+    project: Project,
+    human: Actor,
+    ext_a: Actor,
+    ext_b: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run(project, ext_a, PassLabel.A, lambda w: [_r()])
+    _run(project, ext_b, PassLabel.B, lambda w: [_r(value="2", cell="t1.r3.c3")])
+    _tolerate(monkeypatch, 1)  # at least one work is disputed, and one is not fewer than one
+    with pytest.raises(FactoryValidationError) as e:
+        extraction_audit_sample(project, human, random_seed=1)
+    assert "disagree" in e.value.issues[0].reason
+    assert _events(project, "extraction.audit_sampled") == []
+
+
+def test_tolerated_pending_is_left_out_of_the_dump_while_empty() -> None:
+    plain = ExtractionAuditSampled(
+        audit_id="xau_01HZZZZZZZZZZZZZZZZZZZZZZZ",
+        items=(),
+        random_seed=1,
+        population=0,
+        population_digest="d",
+        protocol_id="P@01234567",
+    )
+    assert "tolerated_pending" not in plain.model_dump(mode="json")
+    with pytest.raises(ValueError, match="sorted and unique"):
+        ExtractionAuditSampled.model_validate(
+            {**plain.model_dump(mode="json"), "tolerated_pending": ["b", "a"]}
+        )

@@ -92,6 +92,7 @@ from factory.services.screening import (
 from factory.services.screening_stats import cohen_kappa, kappa_by_criterion
 from factory.services.search import corpus_work_ids
 from factory.services.stages import require_pass_stage, screening_plan, task_kind
+from factory.services.tolerance import tolerated_within
 
 TA = ScreeningStage.TITLE_ABSTRACT
 
@@ -157,6 +158,9 @@ class Agreement(StrictModel):
     unscreened: list[str] = Field(default_factory=list)
     """Pass A works without a live decision that the protocol's `unscreened_tolerance` lets
     through (IDEA-46); excluded from the pairs, never counted as excluded."""
+    tolerated_pending: list[str] = Field(default_factory=list)
+    """Pass B works without a live decision that the protocol's `pending_tolerance` lets through
+    (decision 138); excluded from the pairs. Agreement writes no event, so this is the record."""
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,18 @@ def tolerated_unscreened(screen: _Screen) -> frozenset[str]:
     return missing if tolerance.allows(len(missing), len(queue)) else frozenset()
 
 
+def tolerated_missing_b(project: Project, screen: _Screen) -> frozenset[str]:
+    """The pass B works with no live decision that the protocol's `pending_tolerance` lets
+    through (decision 138): all of them when their number is within it, none otherwise (and none
+    without a tolerance). Works of a claimed or open task are never among them; callers refuse
+    on those first."""
+    queue = screen.queues[PassLabel.B]
+    if queue is None:
+        return frozenset()
+    missing = queue - screen.decided[PassLabel.B].keys()
+    return frozenset(tolerated_within(project, missing, len(queue)))
+
+
 def tolerated_unscreened_works(project: Project) -> frozenset[str]:
     """The title/abstract pass A works left unscreened within the declared tolerance (IDEA-46),
     for reports; empty without a protocol, a pass A or a tolerance. Read-only."""
@@ -205,8 +221,10 @@ def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = 
     the cannot-assess rate per criterion (R-36, R-38).
 
     Refused, with nothing written, while either pass has an open or claimed screening task, while
-    a work in either pass's queue lacks a live screening decision, when the passes share a session
-    or a model, when the protocol plans one pass, or when a pass has not been opened.
+    a work in either pass's queue lacks a live screening decision (pass A beyond the
+    `unscreened_tolerance`, pass B beyond the `pending_tolerance`; the tolerated pass B works are
+    returned in `tolerated_pending`, since agreement writes no event), when the passes share a
+    session or a model, when the protocol plans one pass, or when a pass has not been opened.
     """
     require_pass_stage(stage)
     with project.index.exclusive():
@@ -233,6 +251,8 @@ def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = 
             missing = queue - screen.decided[label].keys()
             if label is PassLabel.A:
                 missing -= tolerated
+            else:
+                missing -= tolerated_missing_b(project, screen)
             if missing:
                 raise _refuse(
                     f"pass {label.value}: {len(missing)} works still lack a live screening "
@@ -261,6 +281,8 @@ def passes_settled(
         missing = queue - screen.decided[label].keys()
         if label is PassLabel.A:
             missing -= tolerated_unscreened(screen)
+        else:
+            missing -= tolerated_missing_b(project, screen)
         if missing:
             return False
         if _blocking_tasks(project, label, stage):
@@ -533,7 +555,7 @@ def agreement_summary(project: Project, *, stage: ScreeningStage = TA) -> Agreem
     screen = _load(project, stage)
     if screen is None or not screen.known or screen.plan.passes == 1:
         return None
-    for work in screen.dual - tolerated_unscreened(screen):
+    for work in screen.dual - tolerated_unscreened(screen) - tolerated_missing_b(project, screen):
         if work not in screen.decided[PassLabel.A] or work not in screen.decided[PassLabel.B]:
             return None
     return _agreement(project, screen)
@@ -776,7 +798,8 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
     outcome_pairs: list[tuple[bool, bool]] = []
     criterion_pairs: list[tuple[str | None, str | None]] = []
     unscreened = tolerated_unscreened(screen)
-    for work in sorted(screen.dual - unscreened):
+    pending = tolerated_missing_b(project, screen)
+    for work in sorted(screen.dual - unscreened - pending):
         a, b = decided_a[work], decided_b[work]
         outcome_pairs.append((a.verdict.promotes, b.verdict.promotes))
         criterion_pairs.append((_exclusion(a), _exclusion(b)))
@@ -812,6 +835,7 @@ def _agreement(project: Project, screen: _Screen) -> Agreement:
         single_pass=sorted(screen.single),
         cannot_assess_rate=_cannot_assess_rate(screen),
         unscreened=sorted(unscreened),
+        tolerated_pending=sorted(pending),
     )
 
 
