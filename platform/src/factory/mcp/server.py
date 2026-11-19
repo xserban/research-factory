@@ -3666,10 +3666,11 @@ def build_server(
         decision: str | None = None,
     ) -> dict[str, JsonValue]:
         """Propose that two live claims (`clm_`) or contribution items (`ext_`) of different
-        works contradict each other, with a note of at most 500 characters. The platform stores
-        both quotes. A proposal stays inferred until the researcher confirms it; `decision` is
-        not an input and giving it is refused. The same pair proposed twice is written once.
-        Refused to a session that has joined a pass."""
+        works contradict each other, or two m-claims rows of the claims digest, each as
+        `row:<work_id>#<row_key>` (the key copied from the digest line). The note has at most
+        500 characters. The platform stores both quotes; a row's quote is checked against its
+        anchor in the work's pinned conversion first. A proposal stays inferred until the
+        researcher confirms it; `decision` is X to a session that has joined a pass."""
 
         def propose() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
