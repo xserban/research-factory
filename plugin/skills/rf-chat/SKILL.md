@@ -1,6 +1,6 @@
 ---
 name: rf-chat
-description: Use when the researcher wants to talk to a selection of papers about a hypothesis (a spar): find the papers that argue against and for it, read them, and record a checked argument sheet. Explore is the default; Prepare is for a result that may feed a lead. Also use when the researcher asks a question of a selection of papers (Ask): answer it sentence by sentence, each sentence resting on a verified quote.
+description: Use when the researcher wants to talk to a selection of papers about a hypothesis (a spar): find the papers that argue against and for it, read them, and record a checked argument sheet. Explore is the default; Prepare is for a result that may feed a lead. Also use when the researcher asks a question of a selection of papers (Ask): answer it sentence by sentence, each sentence resting on a verified quote. Contradictions mode: read the claims digest and propose pairs of conflicting claims from different papers for the researcher to decide.
 stage: [develop]
 ---
 
@@ -80,9 +80,33 @@ the selection; what each sentence says, and what the papers leave open, is your 
    counts. Tell the researcher how to rate, a sentence or the whole:
    `factory answers rate <ans_id> sound|weak|wrong [--sentence N] --note "..."`. You never rate.
 
+## Contradictions
+
+Use this mode when the researcher asks which papers of a selection contradict each other. You propose
+pairs; the researcher decides, from the Contradictions page of the hub or with
+`factory contradictions confirm|reject <ctr_id> --rationale "..."`. You never decide, and a pair you
+propose stays "proposed" until then.
+
+1. Agree the selection (`layers`, `include`, `exclude`) and wait for the answer. Call
+   `selection_resolve`; report the works and `est_tokens`. Call `claims_digest` and read `markdown`
+   whole, never skimmed. Name the `gaps`.
+2. Look for pairs of claims from different papers that conflict on the same topic: the same
+   `about` (the same subject), an opposite `direction`, or findings that cannot both hold under
+   the stated conditions. Two claims of one paper are never a pair. A difference of wording or
+   scope is not a contradiction; say what makes it one.
+3. For each candidate pair, read both paragraphs in full (`chat_sections`, then `document_read`)
+   before you propose it. Run `chat_verify` on each side's quote with the anchor shown in the digest.
+4. Record each pair with `contradiction_propose`. Its `ref_a` and `ref_b` are
+   `row:<work_id>#<row_key>`: the work id of the paper and the text after `key=` of the digest line,
+   copied exactly. Put in `note` (at most 500 characters) what the two quotes say that cannot both
+   hold. The platform checks both quotes against their anchors and refuses a row that is not served
+   or a quote that is not in its paragraph; fix it and call again, do not rephrase a quote.
+5. Report the pairs you proposed, each with its two quotes and your note, the pairs you looked at
+   and dropped (and why), and how the researcher decides. Do not say which side is right.
+
 ## Tool arguments
 
-Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`, `answer_record`) take `project`, `role`, `model` (your own
+Writing tools (`sheet_open`, `sheet_argue`, `sheet_close`, `answer_record`, `contradiction_propose`) take `project`, `role`, `model` (your own
 model id) and `skill`, the bare name `rf-chat`; the platform computes the skill hash.
 
 ## Never
@@ -90,6 +114,7 @@ model id) and `skill`, the bare name `rf-chat`; the platform computes the skill 
 - Never invent or paraphrase a quote; an argument rests only on text you have read.
 - Never judge the balance of the evidence, give a verdict or suggest a lean: the balance is the
   researcher's (`factory sheets balance`); no tool lets you write it.
+- Never decide a contradiction: you propose it, the researcher confirms or rejects it.
 - Never assert absence beyond the computed coverage.
 - Never name a work as held-out; held-out works are read as corpus (decision 37.9).
 - Never rate your own arguments or answers; strengths are your judgement and are labelled so.

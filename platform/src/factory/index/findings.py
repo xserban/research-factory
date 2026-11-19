@@ -5,7 +5,7 @@ proposal of the same pair changes nothing (first write wins). A decision is fold
 actor is a human (defence in depth, R-51: no service writes one for another actor kind), and the
 latest human decision governs. Handlers are total: a decision naming an unknown contradiction
 changes nothing. The table is empty for a log without these events, so it is left out of the
-state hash then.
+state hash then. The quotes, anchors and note of the first proposal are kept for readers (N10).
 """
 
 from __future__ import annotations
@@ -28,6 +28,15 @@ def finding_tables(metadata: MetaData) -> Table:
         Column("ref_b", String, nullable=False),
         Column("work_a", String, nullable=False),
         Column("work_b", String, nullable=False),
+        Column("quote_a", String),
+        Column("quote_b", String),
+        Column("anchor_a", String),
+        Column("anchor_b", String),
+        Column("conversion_a", String),
+        Column("conversion_b", String),
+        Column("about_a", String),
+        Column("about_b", String),
+        Column("note", String),
         Column("decision", String),
         Column("decision_event_id", String),
         Column("event_id", String, nullable=False),
@@ -46,6 +55,15 @@ def finding_handlers(contradictions: Table) -> dict[str, Handler]:
                 ref_b=p.ref_b,
                 work_a=p.work_a,
                 work_b=p.work_b,
+                quote_a=p.quote_a,
+                quote_b=p.quote_b,
+                anchor_a=p.anchor_a,
+                anchor_b=p.anchor_b,
+                conversion_a=p.conversion_a,
+                conversion_b=p.conversion_b,
+                about_a=p.about_a,
+                about_b=p.about_b,
+                note=p.note,
                 event_id=event.id,
             )
             .on_conflict_do_nothing()
