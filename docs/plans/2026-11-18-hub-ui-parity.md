@@ -744,3 +744,28 @@ Each wraps an existing service; none re-derives a number. All are pure functions
 | `hub_screening.py` (extend) | Flow/Screening | `screening_stops`, `dashboard._screening` (passes, calibration, cannot-assess, checks, ranking id) |
 | `hub_payloads.py` (extend) | Flow, Overview, Lenses | `flow_ledger` by source group and step (`site_flow.table_spec`), `pipeline_strip` stations, `citations.citation_report` (rate per year, external count), stage-by-mode and result-grid functions in `hub_lenses.py` |
 
+
+## 35. Port status
+
+Platform page (`platform`), code written, not run:
+
+- HM-11 — done (Capabilities, "Commands that build and serve the hubs"; lists the v2 and classic commands, not copied)
+- BL-1 — done (Backlog, header ⓘ and sub line; selection kept in the page only)
+- BL-2 — done (Backlog, Board / Dependency tree switch, hash `view`)
+- BL-3 — done (Backlog, filter box, area chips, slice select, counter)
+- BL-4 — done (Backlog, area note under the chips)
+- BL-5 — done (Backlog, five state columns with help lines and cards; plus a per-area stacked count bar)
+- BL-6 — done (Backlog, layered dependency tree, chain lights on selection, list alternative)
+- BL-7 — done (Backlog, idea detail panel beside the board, not a drawer; the shared drawer shows papers)
+- BL-8 — done (Backlog, selection tray, Copy brief with static text, Clear)
+- BL-9 — done (Backlog, footer source path and digest; message when the file is absent; build time is the shell's as-of stamp)
+- CG-1 — done (Capabilities, summary cards)
+- CG-2 — done (Capabilities, count check line)
+- CG-3 — done (Capabilities, "Not derived" lines)
+- CG-4 — done (Capabilities, stage by kind matrix with search; click opens the stage panel)
+- CG-5 — done (Capabilities, stage panel: skill cards with steps, tool entries with schema)
+- CG-6 — done (Capabilities, Unassigned)
+- CG-7 — done (Capabilities, Marked tools)
+- CG-8 — done (Capabilities, Flags)
+- CG-9 — open (code hash, decisions sha and skill hashes shown; build time is not repeated, the shell stamps it)
+- HM-13 — open (rail entries belong to shell.js)
