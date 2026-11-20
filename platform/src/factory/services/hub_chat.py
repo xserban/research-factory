@@ -31,7 +31,7 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.mining.spec import Population
 from factory.services import answers as answers_service
-from factory.services import chat_requests
+from factory.services import chat_requests, spar_metrics
 from factory.services import runner as runner_service
 from factory.services import sheet_diff as sheet_diff_service
 from factory.services import sheets as sheets_service
@@ -273,6 +273,57 @@ def chat_payload(project: Project) -> dict[str, Any]:
         "requests": requests,
         "sheets": sheets,
         "answers": answers,
+        "precision": precision_payload(project),
+    }
+
+
+def _metric_row(r: spar_metrics.Row) -> dict[str, Any]:
+    return {
+        "key": r.key,
+        "sound": r.sound,
+        "weak": r.weak,
+        "wrong": r.wrong,
+        "unrated": r.unrated,
+        "rated": r.rated,
+        "precision_text": spar_metrics.show_precision(r),
+    }
+
+
+_PRECISION: dict[str, tuple[tuple[int, float], dict[str, Any]]] = {}
+
+
+def precision_payload(project: Project) -> dict[str, Any]:
+    """The Precision section: the computed tables of `spar_metrics`, with their texts. Cached on
+    the event-log signature like `_lists`; a deep copy is returned."""
+    key = str(project.paths.dir)
+    signature = event_log_signature(project)
+    with _LISTS_LOCK:
+        hit = _PRECISION.get(key)
+        if hit is not None and hit[0] == signature:
+            return copy.deepcopy(hit[1])
+    payload = _precision_payload(project)
+    with _LISTS_LOCK:
+        _PRECISION.pop(key, None)
+        _PRECISION[key] = (signature, payload)
+        while len(_PRECISION) > _LISTS_KEPT:
+            del _PRECISION[next(iter(_PRECISION))]
+    return copy.deepcopy(payload)
+
+
+def _precision_payload(project: Project) -> dict[str, Any]:
+    got = spar_metrics.precision(project)
+    ag = got.agreement
+    return {
+        "measures": dict(spar_metrics.MEASURES),
+        "arguments": {k: [_metric_row(r) for r in v] for k, v in got.arguments.items()},
+        "answers": {k: [_metric_row(r) for r in v] for k, v in got.answers.items()},
+        "agreement": {
+            "table": ag.table,
+            "n": ag.n,
+            "agreed": ag.agreed,
+            "raw": None if ag.raw is None else round(ag.raw * 100),
+            "kappa": None if ag.kappa is None else round(ag.kappa, 2),
+        },
     }
 
 

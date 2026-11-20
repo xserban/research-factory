@@ -19,6 +19,7 @@ import typer
 from factory.errors import FactoryValidationError
 from factory.services import chat_requests as chat_requests_service
 from factory.services import runner
+from factory.services import spar_metrics as spar_metrics_service
 from factory.services import spar_v2 as spar_v2_service
 from factory.services.context import Project
 from factory.services.selection import SelectionSpec
@@ -252,3 +253,71 @@ def advance_cmd(
         typer.echo(
             f"{request_id}: {final.state}" + (f" at {final.next_role}" if final.next_role else "")
         )
+
+
+def _table(title: str, rows: tuple[spar_metrics_service.Row, ...]) -> list[str]:
+    lines = [title]
+    if not rows:
+        return [*lines, "  none"]
+    for r in rows:
+        lines.append(
+            f"  {r.key}: {spar_metrics_service.show_precision(r)}  sound {r.sound} weak {r.weak} "
+            f"wrong {r.wrong} unrated {r.unrated}"
+        )
+    return lines
+
+
+@chat_app.command("precision")
+def precision_cmd(
+    ctx: typer.Context,
+    sheet: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--sheet", help="Only this sheet; repeatable. Answer sentences are not filtered by it."
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help=(
+                "Only ratings given on or after this date; arguments rated earlier are left out "
+                "(not counted as unrated)."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Your ratings summarised: sound, weak and wrong by stance, source, strength, model, engine
+    and role, the critic against your rating, and answer sentences by model. Counts are computed."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        got = spar_metrics_service.precision(project, sheet_ids=sheet or None, since=since)
+    out = _table("Arguments (precision = sound / rated; unrated not counted)", got.arguments["all"])
+    titles = {
+        "stance": "By stance",
+        "source": "By source (an argument counts under each source of its paper)",
+        "strength": "By strength",
+        "model": "By model",
+        "engine": "By engine",
+        "role": "By role (agentic spar)",
+    }
+    for key, title in titles.items():
+        out += _table(title, got.arguments[key])
+    ag = got.agreement
+    out.append("Critic against researcher (holds=sound, overreaches=weak, misread=wrong)")
+    for verdict, cells in sorted(ag.table.items()):
+        out.append(
+            "  "
+            + verdict
+            + ": "
+            + ", ".join(f"{r} {cells.get(r, 0)}" for r in spar_metrics_service.RATINGS)
+        )
+    raw = "—" if ag.raw is None else f"{round(ag.raw * 100)}%"
+    kappa = "—" if ag.kappa is None else f"{ag.kappa:.2f}"
+    out.append(f"  compared n={ag.n}: raw agreement {raw}, kappa {kappa}")
+    out += _table("Answer sentences", got.answers["all"])
+    out += _table("Answer sentences by model", got.answers["model"])
+    typer.echo("\n".join(out))

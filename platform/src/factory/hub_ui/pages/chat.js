@@ -35,6 +35,7 @@ HUB.load(['shell', 'chat']).then(d => {
 .ch-diff{background:var(--raised);border-radius:var(--r);padding:12px 16px;margin:12px 0}
 .ch-diff ul{margin:6px 0;padding-left:18px}.ch-diff li{margin:6px 0;overflow-wrap:anywhere}
 .ch-sugg{margin-top:4px;padding:6px 8px;border-radius:var(--r-s);background:var(--surface);font:400 var(--t-s) var(--f-ui)}
+.ch-prec{border-collapse:collapse;font:400 var(--t-s) var(--f-ui);width:100%}.ch-prec th,.ch-prec td{text-align:left;padding:3px 8px;border-bottom:1px solid var(--hair)}
 .ch-empty{color:var(--dim);font:400 var(--t-s) var(--f-ui);padding:8px 0}`;
     document.head.appendChild(st);
   }
@@ -296,10 +297,27 @@ HUB.load(['shell', 'chat']).then(d => {
     wireResults(host);
   }
 
+  /* ---------- 6. precision: your ratings summarised; every figure is computed, never typed ---------- */
+  function paintPrecision() {
+    const P = C.precision || {}, A = P.arguments || {}, ms = P.measures || {};
+    const tbl = (title, rows, tip) => `<div class="h3" style="margin-top:12px">${esc(title)} ${tip ? H.info(esc(tip), 'About ' + title) : ''}</div>` + (rows && rows.length
+      ? `<table class="ch-prec"><thead><tr><th>Group</th><th>Sound share</th><th>Sound</th><th>Weak</th><th>Wrong</th><th>Not rated</th></tr></thead><tbody>${rows.map(x => `<tr><td>${esc(x.key)}</td><td class="num">${esc(x.precision_text)}</td><td class="num">${fmt(x.sound)}</td><td class="num">${fmt(x.weak)}</td><td class="num">${fmt(x.wrong)}</td><td class="num">${fmt(x.unrated)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="ch-empty">Nothing yet.</div>');
+    const g = P.agreement || { table: {}, n: 0 };
+    const rows = Object.keys(g.table || {}).sort().map(v => `<tr><td>${esc(v)}</td>${['sound', 'weak', 'wrong'].map(k => `<td class="num">${fmt((g.table[v] || {})[k] || 0)}</td>`).join('')}</tr>`).join('');
+    const agree = `<div class="h3" style="margin-top:12px">Critic against you ${H.info(esc(ms.agreement || ''), 'About critic agreement')}</div>` +
+      (g.n ? `<table class="ch-prec"><thead><tr><th>Critic said</th><th>You: sound</th><th>weak</th><th>wrong</th></tr></thead><tbody>${rows}</tbody></table>` : '') +
+      `<div class="meta">${fmt(g.n)} compared · agreement ${g.raw === null || g.raw === undefined ? '—' : esc(String(g.raw)) + '%'} · kappa ${g.kappa === null || g.kappa === undefined ? '—' : esc(String(g.kappa))}</div>`;
+    main.querySelector('#ch-precision').innerHTML =
+      tbl('All arguments', A.all, (ms.precision || '') + ' ' + (ms.since || '')) + tbl('By stance', A.stance) + tbl('By source', A.source, ms.source) +
+      tbl('By strength', A.strength) + tbl('By model', A.model) + tbl('By engine', A.engine) + tbl('By role', A.role, ms.role) +
+      agree + tbl('Answer sentences by model', (P.answers || {}).model, ms.answers);
+  }
+
   /* ---------- the whole page, and the poll while an order is waiting or running ---------- */
   function refresh() {
     if (!HUB.served) { paintProgress(); paintEarlier(); return Promise.resolve(); }
-    return getLive('').then(({ ok, j }) => { if (ok) { C = j; paintProgress(); paintEarlier(); const sel = main.querySelector('#ch-parent'); if (sel && document.activeElement !== sel) sel.innerHTML = parentOptions(); } })
+    return getLive('').then(({ ok, j }) => { if (ok) { C = j; paintProgress(); paintEarlier(); paintPrecision(); const sel = main.querySelector('#ch-parent'); if (sel && document.activeElement !== sel) sel.innerHTML = parentOptions(); } })
       .then(() => { if ((st.sheet || st.answer) && !(document.activeElement && document.activeElement.closest('.ch-rate, .ch-bal') && main.contains(document.activeElement.closest('.ch-rate, .ch-bal')))) return openResult(); })
       .catch(() => {});
   }
@@ -310,8 +328,9 @@ HUB.load(['shell', 'chat']).then(d => {
        <section class="card ch-card"><h3>2. Your order</h3><div id="ch-form"></div></section>
        <section class="card ch-card"><h3>3. Progress</h3><div id="ch-progress"></div></section>
        <section class="card ch-card"><h3>4. Result</h3><div id="ch-result"></div></section>
-       <section class="card ch-card"><h3>5. Earlier sheets and answers</h3><div id="ch-earlier"></div></section>`;
-    paintBasket(); paintForm(); paintProgress(); paintEarlier(); openResult();
+       <section class="card ch-card"><h3>5. Earlier sheets and answers</h3><div id="ch-earlier"></div></section>
+       <section class="card ch-card"><h3>6. Precision ${H.info(esc((M.precision || 'Your ratings summarised; every figure is computed from them.')), 'About precision')}</h3><div id="ch-precision"></div></section>`;
+    paintBasket(); paintForm(); paintProgress(); paintEarlier(); paintPrecision(); openResult();
   }
   readHash(); render(); if (HUB.served) refresh();
   window.addEventListener('hashchange', () => { readHash(); render(); });
