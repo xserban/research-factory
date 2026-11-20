@@ -105,3 +105,21 @@ def test_status_carries_the_same_queue(
 def test_fresh_project_status_has_an_empty_queue(settings: Settings, clock: FixedClock) -> None:
     init_project(settings, "solo", "pilot", session=SESSION, clock=clock)
     assert project_status(fresh(settings, "solo", clock)).human == HumanQueue(items=[])
+
+
+def test_undrawn_calibration_is_a_waiting_item_and_the_refusal_names_the_command(
+    project: Project, agent: Actor, human: Actor, mock_sources: SourcesFor
+) -> None:
+    from factory.model.screening import PassLabel
+    from factory.services.calibration import calibration_drawn, calibration_status
+    from factory.services.dedup import dedup_run
+    from factory.services.screening import screen_next
+
+    ready_protocol(project, agent, human, mock_sources)
+    dedup_run(project)
+    assert calibration_status(project).required
+    assert not calibration_drawn(project)
+    item = _items(human_queue(project))[(Gate.CALIBRATION_LABELS, "title-abstract")]
+    assert item.command == "factory --project demo calibrate draw --stage title-abstract"
+    refused = screen_next(project, agent, PassLabel.A)
+    assert any("factory calibrate draw --stage title-abstract" in b for b in refused.blocked)

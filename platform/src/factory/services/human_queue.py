@@ -20,11 +20,11 @@ from enum import StrEnum
 from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
 from factory.model.members import ProjectRole
-from factory.model.protocol import ScreeningStage
+from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.services import version_pairs
 from factory.services.agreement import screen_agreement
 from factory.services.audit import audit_report
-from factory.services.calibration import calibration_status
+from factory.services.calibration import calibration_drawn, calibration_status
 from factory.services.context import Project
 from factory.services.extraction_agreement import extraction_agreement
 from factory.services.extraction_audit import extraction_audit_report
@@ -139,6 +139,19 @@ def human_queue(project: Project, *, agent: bool = False) -> HumanQueue:
     )
     for stage in stages:
         calibration = calibration_status(project, stage=stage)
+        if (
+            protocol is not None
+            and protocol.status is ProtocolStatus.READY
+            and calibration.required
+            and not calibration_drawn(project, stage=stage)
+        ):
+            # The draw itself is the awaiting act: screening is refused until it is made.
+            add(
+                Gate.CALIBRATION_LABELS,
+                stage,
+                1,
+                f"{base} calibrate draw --stage {stage.value}",
+            )
         add(
             Gate.CALIBRATION_LABELS,
             stage,
