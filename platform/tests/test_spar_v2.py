@@ -873,3 +873,53 @@ def test_chat_advance_no_wait_starts_one_role_and_returns(
     run = sv.progress(project, request).open_run
     assert run is not None
     _end(v2_env, run)
+
+
+# -------------------------------------------------------------- one sheet per v2 request
+
+
+def test_a_v2_request_has_one_sheet_and_writers_write_to_it_only(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    w = sorted(world)
+    request = _request(project)
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    opened = sh.open_sheet(
+        project, _agent(1), "Reflection helps", SPEC, _proposals(world), mode="prepare",  # type: ignore[arg-type]
+        request_id=request, run_id=run,
+    )  # fmt: skip
+    with pytest.raises(FactoryValidationError) as err:  # the same run opens another
+        _search(project, world, request, run)
+    assert "request_id" in {i.field for i in err.value.issues}
+    assert _count(project, "sheets") == 1
+    # a second sheet of the request that got into the log by hand is not the plan's sheet
+    twin = opened.model_copy(update={"sheet_id": project.ids.new("sht")})
+    with project.index.exclusive():
+        blob = project.blobs.put_json({"forged": True})
+        project.record(
+            [
+                project.events.make(
+                    "sheet.opened", twin, _agent(1), refs=(twin.sheet_id,), input_blob=blob
+                )
+            ]
+        )
+    assert _count(project, "sheets") == 2
+    assert sv.progress(project, request).sheet_id == opened.sheet_id
+    _end(v2_env, run)
+    for i, work in enumerate((w[0], w[1])):
+        reader = _open_run(project)
+        _read(project, reader, work, 10 + i)
+        _end(v2_env, reader)
+    against = _open_run(project)
+    with pytest.raises(FactoryValidationError) as err2:
+        sh.record_arguments(
+            project, _agent(20), twin.sheet_id, [_arg(w[0], "against")], run_id=against
+        )
+    assert "run" in {i.field for i in err2.value.issues}
+    with pytest.raises(FactoryValidationError):
+        sh.close_section(project, _agent(20), twin.sheet_id, "against", run_id=against)
+    assert _count(project, "sheet_arguments") == 0
+    sh.record_arguments(
+        project, _agent(20), opened.sheet_id, [_arg(w[0], "against")], run_id=against
+    )

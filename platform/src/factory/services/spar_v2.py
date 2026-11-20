@@ -216,16 +216,25 @@ def _bound(
 
 
 def check_sheet_run(
-    project: Project, run_id: str | None, request_id: str | None, roles: tuple[str, ...]
+    project: Project,
+    run_id: str | None,
+    request_id: str | None,
+    roles: tuple[str, ...],
+    *,
+    sheet_id: str | None = None,
+    opening: bool = False,
 ) -> bool:
     """Refuse (field `run`) a sheet write that does not match the run. A sheet of a v2 request is
     written only by the open run of one of `roles` bound to that request; any other sheet is not
     written by a v2 role run. Returns whether the sheet is a v2 request's. The caller has synced
-    the index."""
+    the index. A v2 request has one sheet: `opening` refuses (field `request_id`) a second, and a
+    write that names a `sheet_id` other than the plan's is refused (field `run`)."""
     v2 = False
+    current: Plan | None = None
     if request_id is not None:
         with project.index.connect() as conn:
-            v2 = plan(conn, request_id) is not None
+            current = plan(conn, request_id)
+        v2 = current is not None
     bound = bound_role(project, run_id)
     if v2:
         if bound is None or bound[0] != request_id or bound[1] not in roles:
@@ -234,6 +243,19 @@ def check_sheet_run(
                 f"a sheet of the v2 request {request_id} is written only by its "
                 + " or ".join(roles)
                 + " role session",
+            )
+        if opening and current is not None and current.sheet_id is not None:
+            raise _issue(
+                "request_id", f"{request_id}: its sheet {current.sheet_id} is already open"
+            )
+        if (
+            sheet_id is not None
+            and current is not None
+            and current.sheet_id is not None
+            and sheet_id != current.sheet_id
+        ):
+            raise _issue(
+                "run", f"a role session writes the sheet of its request ({current.sheet_id}) only"
             )
     elif bound is not None:
         raise _issue("run", "a v2 role session writes only the sheet of its own request")

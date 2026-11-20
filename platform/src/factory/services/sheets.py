@@ -286,7 +286,7 @@ def open_sheet(
         issues.append(ValidationIssue("supersedes", f"{supersedes}: no such sheet"))
     try:
         check_result_request(project, actor, request_id, "spar", opens_mode=mode)
-        check_sheet_run(project, run_id, request_id, ("search",))
+        check_sheet_run(project, run_id, request_id, ("search",), opening=True)
     except FactoryValidationError as err:
         issues.extend(err.issues)
     if issues:
@@ -402,7 +402,9 @@ def record_arguments(
             )
         )
         try:
-            v2 = check_sheet_run(project, run_id, row["request_id"], (stance,))
+            v2 = check_sheet_run(
+                project, run_id, row["request_id"], (stance,), sheet_id=sheet_id
+            )
             if v2 and stance == "for" and _wrote_against(project, sheet_id, actor.session):
                 # a v2 case for is another session's whatever the mode: not only in prepare
                 issues.append(
@@ -627,7 +629,7 @@ def close_section(
     project.index.sync()
     early = _sheet_row(project, sheet_id)
     if early is not None:
-        check_sheet_run(project, run_id, early["request_id"], (section,))
+        check_sheet_run(project, run_id, early["request_id"], (section,), sheet_id=sheet_id)
     check_result_request(project, actor, request_id, "spar", parent=sheet_id)
     payload = SheetSectionClosed(sheet_id=sheet_id, section=section, request_id=request_id)
     with project.index.exclusive():
