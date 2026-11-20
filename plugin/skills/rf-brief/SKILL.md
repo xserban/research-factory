@@ -78,6 +78,10 @@ quick review, not a systematic one.
   `factory brief plan <project>` prints under "skipped" (for deep, the label `deep review`).
   State also: no human confirmed the screening decisions or extracted rows beyond the gates
   above, and the review is exploratory.
+- The platform computes the note's counts, rows and quote table: run `factory brief note <project>`
+  and paste its output as the body of the note. Add at most a short synthesis whose every sentence
+  cites a quote listed under "Findings with verified quotes"; a claim listed as unverified is
+  never a finding, and you type no number the note does not contain.
 - Present the note to the researcher; recording it as a page is `page_brief` then `page_record`
   with scope `overview`, whose platform check names any sentence that fails.
 

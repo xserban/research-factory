@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from enum import StrEnum
 from typing import Annotated
 
 import typer
@@ -30,6 +31,11 @@ brief_app = typer.Typer(
 )
 
 _TIERS = (Tier.BRIEF, Tier.DEEP)
+
+
+class NoteFormat(StrEnum):
+    MD = "md"
+    JSON = "json"
 
 
 def default_slug(question: str) -> str:
@@ -146,3 +152,29 @@ def brief_status_cmd(
     typer.echo(papers)
     for item in status.blocking:
         typer.echo(f"blocking: {item}")
+
+
+@brief_app.command("note")
+def brief_note_cmd(
+    ctx: typer.Context,
+    project: Annotated[str, typer.Argument(help="Project slug.")],
+    fmt: Annotated[NoteFormat, typer.Option("--format", help="md or json.")] = NoteFormat.MD,
+) -> None:
+    """The computed evidence note: counts, extracted rows, verified quotes, limits and label.
+    Read-only; the agent adds at most a short synthesis that cites verified quotes."""
+    from factory.cli import main
+    from factory.services import agent_view
+    from factory.services import brief_note as note_service
+
+    with main._reporting_errors():
+        opened = _open(ctx, project)
+        full = main._full_view(opened)
+        note = note_service.brief_note(opened, full=full)
+        text = (
+            note.model_dump_json()
+            if fmt is NoteFormat.JSON
+            else note_service.render_brief_note(note)
+        )
+        if not full:
+            text = agent_view.scrubbed_text(opened, text)
+    typer.echo(text, nl=not text.endswith("\n"))
