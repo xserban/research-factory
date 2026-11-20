@@ -94,6 +94,7 @@ __all__ = [
     "check_sheet_run",
     "progress",
     "readings_view",
+    "refuse_blind_read",
     "record_checks",
     "record_coverage",
     "record_reading",
@@ -237,6 +238,22 @@ def check_sheet_run(
     elif bound is not None:
         raise _issue("run", "a v2 role session writes only the sheet of its own request")
     return v2
+
+
+def refuse_blind_read(project: Project, run_id: str | None) -> None:
+    """Refuse (field `run`) a read of a sheet to the open run of the for-writer of a v2 request:
+    the case for is written without seeing the case against, so the sheet tools that show the
+    against section (`sheet_view`, `sheet_list`) are closed to that run on the server, whatever
+    its allow-list says. The writer is served the hypothesis and selection by `spar_role_next`.
+    Any other session, and a run that has ended, reads as before."""
+    project.index.sync()
+    found = bound_role(project, run_id)
+    if found is not None and found[1] == "for":
+        raise _issue(
+            "run",
+            "the case for is written without reading the sheet; "
+            "its assignment (`spar_role_next`) holds what it needs",
+        )
 
 
 def role_started_event(project: Project, request_id: str, run_id: str, slot: Slot) -> Any:

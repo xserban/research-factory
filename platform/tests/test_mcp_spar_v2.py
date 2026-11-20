@@ -167,3 +167,51 @@ def test_cli_request_v2_list_and_advance(
     assert run is not None
     v2_env.processes[-1].release()
     assert runner.wait(run, 10)
+
+
+# --------------------------------------------------------- fix round: the for-writer is blind
+
+
+def _to_for_writer(
+    project: Project, launcher: FakeLauncher, world: list[str]
+) -> tuple[str, str, str, str]:
+    """Play search, readers (all planned) and the against writer; returns request, sheet, the
+    against writer's run (ended) and the for writer's open run."""
+    from tests.test_spar_v2 import _agent, _arg, _end, _open_run, _read, _request, _search
+    from factory.services import sheets as sh
+
+    w = sorted(world)
+    request = _request(project)
+    run = sv.advance(project, request, launcher=launcher)
+    assert run is not None
+    sheet = _search(project, world, request, run)
+    _end(launcher, run)
+    for i, work in enumerate((w[0], w[1])):
+        run = _open_run(project)
+        _read(project, run, work, 10 + i)
+        _end(launcher, run)
+    against = _open_run(project)
+    sh.record_arguments(project, _agent(20), sheet, [_arg(w[0], "against")], run_id=against)
+    sh.close_section(project, _agent(20), sheet, "against", run_id=against)
+    _end(launcher, against)
+    return request, sheet, against, _open_run(project)
+
+
+@pytest.mark.anyio
+async def test_a_bound_for_writer_run_cannot_read_the_sheet_tools(
+    settings: Settings, project: Project, clock: FixedClock, world: list[str], v2_env: FakeLauncher
+) -> None:
+    request, sheet, against, writer = _to_for_writer(project, v2_env, world)
+    cap = UnitCap(1, writer)
+    for tool, extra in (("sheet_view", {"sheet_id": sheet}), ("sheet_list", {})):
+        out = await _call(settings, clock, cap, tool, **extra)
+        assert out["ok"] is False, tool
+        assert out["errors"][0]["field"] == "run", out
+    # the for writer is served what it needs through its assignment
+    task = await _call(settings, clock, cap, "spar_role_next", **act("writer-for"))
+    assert task["ok"] is True and task["data"]["batch"]["role"] == "for"
+    # an ordinary session and the ended against run still read the sheet
+    assert (await _call(settings, clock, UnitCap(), "sheet_view", sheet_id=sheet))["ok"] is True
+    assert (await _call(settings, clock, UnitCap(1, against), "sheet_list"))["ok"] is True
+    v2_env.processes[-1].release()
+    assert runner.wait(writer, 10)

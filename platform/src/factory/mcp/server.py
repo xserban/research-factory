@@ -6330,11 +6330,13 @@ def build_server(
     @server.tool()
     def sheet_list(project: str) -> dict[str, JsonValue]:
         """The argument sheets of the project with their section state and argument counts.
-        Read-only. Refused to a session that has joined a pass."""
+        Read-only. Refused to a session that has joined a pass, and (field `run`) to the run of
+        the for-writer of a v2 spar."""
 
         def listing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            spar_v2_service.refuse_blind_read(opened, unit_cap.run_id)
             data: dict[str, JsonValue] = {
                 "sheets": _plain([asdict(i) for i in sheets_service.list_sheets(opened)])
             }
@@ -6349,11 +6351,13 @@ def build_server(
         per stance, tier-1 works without an argument, ratings). Read-only. Strengths are the
         writer's judgement; ratings and the balance are the researcher's, made in the CLI. The
         current balance, when the researcher has written one, comes first, with the number
-        recorded; no tool writes it, and you never state or suggest a balance."""
+        recorded; no tool writes it, and you never state or suggest a balance. Refused (field `run`)
+        to the run of the for-writer of a v2 spar, which writes without reading the case against."""
 
         def viewing() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
             _refuse_pass_session(opened)
+            spar_v2_service.refuse_blind_read(opened, unit_cap.run_id)
             view = sheets_service.view_sheet(opened, sheet_id)
             data = _plain(asdict(view))
             assert isinstance(data, dict)
