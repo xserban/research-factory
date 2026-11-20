@@ -61,3 +61,27 @@ def test_a_package_import_does_not_tie_its_importers_together(tmp_path: Path) ->
     probe.write_text("from pkg import a\n")
     found = module._imports(probe, "t", {"pkg.a", "pkg.b", "pkg"})
     assert found == {"pkg.a"}
+
+
+def test_a_test_in_a_subfolder_is_named_by_its_path_under_tests() -> None:
+    """A selected test inside `tests/<pkg>/` is printed as `tests/<pkg>/<file>`, so pytest finds it
+    (a bare file name made a whole shard exit with 'file not found')."""
+    module = _load()
+    mode, names = module.select(["platform/src/factory/document/linenumbers.py"])
+    assert mode == "touched"
+    assert "document/test_linenumbers.py" in names
+    tests = SCRIPT.parents[1] / "platform" / "tests"
+    assert all((tests / n).is_file() for n in names), [
+        n for n in names if not (tests / n).is_file()
+    ]
+
+
+def test_a_changed_test_in_a_subfolder_selects_itself() -> None:
+    mode, names = _load().select(["platform/tests/document/test_linenumbers.py"])
+    assert mode == "touched" and "document/test_linenumbers.py" in names
+
+
+def test_all_test_files_include_subfolders() -> None:
+    names = _load().all_test_files()
+    assert "document/test_linenumbers.py" in names
+    assert "test_affected_tests.py" in names

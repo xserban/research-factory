@@ -113,8 +113,18 @@ def _closure(start: set[str], importers: dict[str, set[str]]) -> set[str]:
     return seen
 
 
+def _test_name(path: Path) -> str:
+    """A test file's name relative to `platform/tests/` (`document/test_x.py` for a subfolder)."""
+    return path.relative_to(TESTS).as_posix()
+
+
+def _test_paths() -> list[Path]:
+    """Every test file, subfolders included (`tests/document/` holds tests too)."""
+    return sorted(TESTS.rglob("test_*.py"))
+
+
 def all_test_files() -> list[str]:
-    return sorted(p.name for p in TESTS.glob("test_*.py"))
+    return [_test_name(p) for p in _test_paths()]
 
 
 def select(changed: list[str]) -> tuple[str, list[str]]:
@@ -139,14 +149,14 @@ def select(changed: list[str]) -> tuple[str, list[str]]:
             outside.add(Path(c).parent.name)
     reached = _closure(start, importers)
     chosen = {
-        Path(files[m]).name
+        _test_name(files[m])
         for m in reached
         if m.startswith("tests.") and Path(files[m]).name.startswith("test_")
     }
     for name in outside:
-        for path in TESTS.glob("test_*.py"):
+        for path in _test_paths():
             if f'"{name}"' in path.read_text("utf-8") or f"/ {name!r}" in path.read_text("utf-8"):
-                chosen.add(path.name)
+                chosen.add(_test_name(path))
     chosen.update(a for a in ALWAYS if (TESTS / a).exists())
     return "touched", sorted(chosen)
 
