@@ -211,7 +211,13 @@ def test_failed_admission_can_be_retried(admission: Admission) -> None:
     admission.lookups.fail_openalex = True
     first = admit_import(project, admission.import_id, sources=admission.lookups.sources())
     assert first.failed_runs == 1  # the openalex query; the offline importlist query succeeded
-    # one run succeeded, so the import is admitted: a retry would double-admit
+    # The module's invariant (admission plans only records no earlier run retrieved; "a retried
+    # failed run is the same case"): the retry plans the failed query alone, never the record the
+    # importlist run already admitted, and a further call finds nothing left.
+    admission.lookups.fail_openalex = False
+    second = admit_import(project, admission.import_id, sources=admission.lookups.sources())
+    assert second.failed_runs == 0 and len(second.runs) == 1
+    assert second.runs[0].source == "openalex"
     with pytest.raises(FactoryValidationError):
         admit_import(project, admission.import_id, sources=admission.lookups.sources())
 

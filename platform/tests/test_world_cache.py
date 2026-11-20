@@ -131,13 +131,16 @@ def test_monkeypatched_module_binding_builds_again(
     before = _counts("_build").get("miss", 0)
     _build(_project(tmp_path / "a"), "Primary five?")
     original = helpers.pilot_question_spec
-    monkeypatch.setattr(helpers, "pilot_question_spec", lambda p: original(p + " (patched)"))
-    patched = _project(tmp_path / "b")
-    _build(patched, "Primary five?")
-    assert _counts("_build").get("miss", 0) == before + 2
-    events = read_all(patched.paths.events_dir, patched.catalog)
-    assert any("(patched)" in e.model_dump_json() for e in events)
-    monkeypatch.undo()
+    # A context, not `monkeypatch.undo()`: the fixture is shared with the conftest's autouse
+    # patches (environment variables are part of the key), and undo() would revert those too, so
+    # the "original binding is back" world below would differ by its environment, not its binding.
+    with monkeypatch.context() as patch:
+        patch.setattr(helpers, "pilot_question_spec", lambda p: original(p + " (patched)"))
+        patched = _project(tmp_path / "b")
+        _build(patched, "Primary five?")
+        assert _counts("_build").get("miss", 0) == before + 2
+        events = read_all(patched.paths.events_dir, patched.catalog)
+        assert any("(patched)" in e.model_dump_json() for e in events)
     _build(_project(tmp_path / "c"), "Primary five?")  # the original binding is back: a hit
     assert _counts("_build").get("miss", 0) == before + 2
 

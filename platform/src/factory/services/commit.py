@@ -85,7 +85,12 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         )
 
     staged: dict[str, list[_Entry]] = {}
-    refused: list[str] = []
+    # A deleted event file refuses the job whoever hosts its project. The log is the host's source
+    # of truth: with a hosted project's only event file gone, the index no longer shows it hosted
+    # here, and the per-project check below would skip it instead of refusing.
+    refused: list[str] = [
+        f"{path}: deleted" for path, status in changes if "D" in status and _is_event_path(path)
+    ]
     clock = SystemClock()
     session = IdGenerator(clock).ulid()
     for slug in list_projects(settings):
@@ -99,7 +104,7 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
             staged[slug] = entries
     if refused:
         raise FactoryValidationError(
-            [ValidationIssue("history", problem) for problem in sorted(refused)]
+            [ValidationIssue("history", problem) for problem in sorted(set(refused))]
         )
 
     commit = _commit(root, host_id, staged, sign) if staged else None
@@ -111,6 +116,17 @@ def commit_hosted(settings: Settings, *, sign: bool, push: str | None) -> Commit
         projects={slug: len(entries) for slug, entries in staged.items()},
         commit=commit,
         pushed=pushed,
+    )
+
+
+def _is_event_path(path: str) -> bool:
+    """Whether a repository path names a project's event file (`projects/<slug>/events/...`)."""
+    parts = path.split("/", 3)
+    return (
+        len(parts) == 4
+        and parts[0] == "projects"
+        and parts[2] == "events"
+        and re.fullmatch(_EVENT_FILE_RE, parts[3]) is not None
     )
 
 

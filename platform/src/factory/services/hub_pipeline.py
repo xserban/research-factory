@@ -166,6 +166,8 @@ BLURBS: Final[dict[str, str]] = {
     "miners": "How each reading was made and how stable it is.",
     "data": "The extracted values, row by row.",
     "findings": "What the miners found.",
+    "contradictions": "Pairs of claims that conflict, by topic, for the researcher to decide.",
+    "chat": "Spar with the evidence: sheets, answers, ratings and the questions asked.",
     "write": "Synthesis pages, bibliography and exports.",
     "living": "New papers, how current the review is, and its heartbeat.",
     "costs": "Run costs and the runs behind them.",

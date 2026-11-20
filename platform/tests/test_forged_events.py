@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gzip
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -76,6 +77,8 @@ from factory.services.hypotheses import (
 )
 from factory.services.hypothesis_review import record_review, review_next
 from factory.services.leads import record_lead
+from tests.evaluation_helpers import REFUTED, report_runs, unlocked
+from tests.experiment_helpers import XW, xw
 from tests.helpers import S2, SESSION
 from tests.hypothesis_helpers import (
     CRITIC,
@@ -276,14 +279,18 @@ def test_human_act_by_an_agent_does_not_fold(project: Project, human: Actor, nam
 
 
 def test_abandon_and_conclusion_by_an_agent_do_not_fold(
-    project: Project, human: Actor, hw: HW
+    project: Project, human: Actor, xw: XW, tmp_path: Path
 ) -> None:
+    hw = xw  # the hypothesis of the experiment world (`hw.hid`)
     inert(
         project,
         "hypothesis.abandoned",
         HypothesisAbandoned(hypothesis_id=hw.hid, reason=AbandonReason.OTHER, note="n"),
         AGENT,
     )
+    # A conclusion folds only after a folded conclusive evaluation (5cc44fe5, review I2): record a
+    # real one, so the agent's conclusion below is inert because of its actor, not for want of it.
+    report_runs(project, human, tmp_path, unlocked(project, human, xw), REFUTED)
     inert(
         project,
         "hypothesis.concluded",

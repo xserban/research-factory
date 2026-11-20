@@ -101,6 +101,12 @@ async def test_suggest_scrubs_a_held_out_seed_without_a_signal_and_views_scrub_i
         ok = await _suggest(client)
         decision_id = ok["data"]["decision_id"]
         # A human adds text that names the held-out seed; the agent view must not show it.
+        # The server mints its own event ids (a second generator on the same fixed clock), and an
+        # id drawn in the same millisecond sorts at random against this project's. Floor ours past
+        # the log's last event, so the selection sorts after the suggestion it answers (a selection
+        # that sorts first folds as an unknown decision: the old flake, ~50% of runs).
+        [*_, last] = read_all(project.paths.events_dir, project.catalog)
+        project.ids.floor(last.id.removeprefix("ev_"))
         decisions_service.select(
             project, human, decision_id, ["I01"], [f"Check {held.doi}"], "", Channel.CLI
         )

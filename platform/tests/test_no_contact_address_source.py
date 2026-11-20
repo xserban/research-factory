@@ -44,6 +44,9 @@ ALLOWED = {
     "services/fulltext.py",
     "services/probe.py",
     "services/search.py",
+    # A local page payload: its "tool" dict key names an MCP tool in the capabilities matrix; it is
+    # not a request parameter and nothing here is sent to a host (hub_platform.py, 2a0ab117).
+    "services/hub_platform.py",
     # The settings field itself.
     "config.py",
 }

@@ -195,6 +195,7 @@ FAMILY_OF_PREFIX: dict[str, str] = {
     "protocol": OTHER,
     "question": OTHER,
     "region": OTHER,
+    "spar": OTHER,
     "relation": OTHER,
     "runner": OTHER,
     "task": OTHER,

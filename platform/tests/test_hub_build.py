@@ -23,7 +23,17 @@ from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
 from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = (
+    "protocol",
+    "pipeline",
+    "sources",
+    "method",
+    "costs",
+    "write",
+    "platform",
+    "contradictions",
+    "chat",
+)
 CORE = {
     "shell",
     "overview",
