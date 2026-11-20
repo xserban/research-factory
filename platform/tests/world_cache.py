@@ -8,14 +8,14 @@ key restores that snapshot into its own root instead of building again, so every
 private, independent copy (tests stay isolated and order-insensitive).
 
 The key is conservative. It covers the builder, every argument (models by value, the conftest
-`mock_sources` factory by kind, plain functions by code and by the immutable values they capture),
+`mock_sources` factory by kind, plain functions by code and by the values they capture),
 and the state the builder starts from: the project's event log with event ids removed, the clock
 reading, the settings, and the bytes of every file under the root outside the project directory;
 and what a monkeypatch could change (module bindings by identity, environment variables, the
 working directory: see `_environment_key`).
-Anything it cannot key safely (an unknown callable, a function capturing a mutable value, an object
-without a value form, a non-fixed clock, a world that stores absolute paths) bypasses the cache and
-builds as before. Set `FACTORY_TEST_NO_WORLD_CACHE=1` to disable the cache entirely.
+Anything it cannot key safely (an unknown callable, an object without a value form, a non-fixed
+clock, a world that stores absolute paths, a build that wrote to one of its arguments) bypasses the
+cache and builds as before. Set `FACTORY_TEST_NO_WORLD_CACHE=1` to disable the cache entirely.
 
 Invariant: a restored world is byte-identical to the template the builder produced in the same
 process, event ids included; so tests sharing a key see one random draw of ids per process rather
@@ -52,6 +52,13 @@ R = TypeVar("R")
 # a builder passes them. `mock_sources` records requests in `http_log`, which is replayed.
 _KEYED_CALLABLES = frozenset({"mock_sources.<locals>.make", "fake_sources.<locals>.make"})
 
+# Bindings that change by themselves, not through a patch, and so must not change the key: pydantic
+# finishes a model with forward references on first use, and tempfile draws its name sequence on the
+# first temporary directory (often the snapshot store's own). Keyed on them, a world's first two
+# builds in a process never shared a snapshot.
+_LAZY_CLASS_ATTRIBUTES = ("__pydantic_", "__signature__")
+_LAZY_MODULE_BINDINGS = frozenset({"tempfile._name_sequence"})
+
 
 @dataclass(frozen=True)
 class _Snapshot:
@@ -84,15 +91,16 @@ def _function_key(func: FunctionType) -> str:
     """A plain function by its code and the values it closes over.
 
     Two functions with the same key compute the same thing: same source position, bytecode,
-    constants, defaults and captured values. Captured values must be immutable (a captured list
-    could be a side channel the test inspects), so a function capturing one is unkeyable.
+    constants, defaults and captured values. A captured list, dict or set is keyed by value. It
+    could be a side channel the test inspects, so the wrapper compares the argument keys after the
+    build and refuses to store a world whose build changed one (see `_args_key`).
     """
     code = func.__code__
     consts = [c for c in code.co_consts if not isinstance(c, CodeType)]
     cells = []
     for name, cell in zip(code.co_freevars, func.__closure__ or (), strict=True):
         captured = cell.cell_contents
-        if isinstance(captured, list | dict | set) or (
+        if (
             not isinstance(captured, FunctionType | BaseModel | Enum)
             and callable(captured)
             and not isinstance(captured, type)
@@ -130,6 +138,11 @@ def _arg_key(value: Any) -> str:
     if value is None or isinstance(value, str | int | float | bool | bytes):
         return repr(value)
     raise _Unkeyable(type(value).__qualname__)
+
+
+def _args_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    """Every argument after the project by value, captured containers of functions included."""
+    return "\x1f".join([_arg_key(list(args[1:])), _arg_key(dict(sorted(kwargs.items())))])
 
 
 def _tree_digest(root: Path, skip: Path) -> str:
@@ -193,14 +206,20 @@ def _environment_key(project: Project) -> str:
             parts.append(f"{name}.{key}={_object_tag(value)}")
             if isinstance(value, type) and value.__module__ == name:
                 parts.extend(
-                    f"{name}.{key}.{k}={_object_tag(v)}" for k, v in _namespace_items(value)
+                    f"{name}.{key}.{k}={_object_tag(v)}"
+                    for k, v in _namespace_items(value)
+                    if not k.startswith(_LAZY_CLASS_ATTRIBUTES)
                 )
             elif isinstance(value, ModuleType) and not value.__name__.startswith(
                 ("factory", "tests")
             ):
                 external[value.__name__] = value
     for name, module in sorted(external.items()):
-        parts.extend(f"{name}.{k}={_object_tag(v)}" for k, v in _namespace_items(module))
+        parts.extend(
+            f"{name}.{k}={_object_tag(v)}"
+            for k, v in _namespace_items(module)
+            if f"{name}.{k}" not in _LAZY_MODULE_BINDINGS
+        )
     # The project is new in every test, so its parts are compared by kind, not identity: a patch
     # on it (or on one of its stores) adds or replaces an attribute of another kind.
     for key, value in _namespace_items(project):
@@ -283,11 +302,11 @@ def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:
         if os.environ.get("FACTORY_TEST_NO_WORLD_CACHE") or not isinstance(project, Project):
             return build(*args, **kwargs)
         try:
+            args_key = _args_key(args, kwargs)
             key_text = "\x1f".join(
                 [
                     name,
-                    _arg_key(list(args[1:])),
-                    _arg_key(dict(sorted(kwargs.items()))),
+                    args_key,
                     _state_key(project),
                     _environment_key(project),
                 ]
@@ -304,7 +323,7 @@ def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:
         if key in _SNAPSHOTS:
             snap = _SNAPSHOTS[key]
             if snap is None:  # known not to be cacheable
-                STATS[name, "bypass: absolute paths"] += 1
+                STATS[name, "bypass: not restorable"] += 1
                 return build(*args, **kwargs)
             STATS[name, "hit"] += 1
             _clear(root)
@@ -320,6 +339,10 @@ def snapshot_world(build: Callable[P, R]) -> Callable[P, R]:
         STATS[name, "miss"] += 1
         log_start = len(log) if log is not None else 0
         value = build(*args, **kwargs)
+        if _args_key(args, kwargs) != args_key:
+            # The build wrote to an argument: a restore could not repeat that write.
+            _SNAPSHOTS[key] = None
+            return value
         target = _store() / key
         shutil.copytree(root, target, symlinks=True)
         roots = {str(root).encode(), str(root.resolve()).encode()}
