@@ -196,6 +196,21 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "reference_layer_schemes",
         "reference_layers",
         "reference_layer_labels",
+        # Spar sheets, answers, chat requests and argument checks (added 2026-11-18 to 11-20): an
+        # old log has none, so they leave the hash while empty (old log replay).
+        "sheets",
+        "sheet_arguments",
+        "sheet_balances",
+        "sheet_candidates",
+        "sheet_ratings",
+        "answers",
+        "answer_ratings",
+        "answer_sentences",
+        "argument_checks",
+        "chat_requests",
+        "spar_coverage",
+        "spar_readings",
+        "spar_roles",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
