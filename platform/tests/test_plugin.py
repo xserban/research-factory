@@ -31,6 +31,7 @@ SKILLS = (
     "rf-run",
     "rf-screen",
     "rf-search",
+    "rf-search-run",
     "rf-spar-v2",
     "rf-technique-bounce",
     "rf-verify",
@@ -409,3 +410,26 @@ def test_rf_spar_v2_has_one_section_per_role_and_the_never_rules() -> None:
     assert "never rate an argument, write the balance" in lowered
     assert "wrote no argument against" in lowered
     assert "ask nothing, wait for nothing" in lowered
+
+
+def test_rf_search_run_names_its_tools_and_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-search-run" / "SKILL.md").read_text("utf-8")
+    for needed in (
+        "search_run",
+        "search_slice",
+        "report_search",
+        "dedup_run",
+        "resume_run",
+        "esearch-cap",
+        "deviation_id",
+        "factory dedup pairs",
+        "factory calibrate draw",
+        "notice",
+        "## Never",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    never = text.split("## Never", 1)[1].split("\n## ", 1)[0]
+    assert "held-out" in never and "Never decide a human gate" in never
+    run = (REPO_ROOT / "plugin" / "skills" / "rf-run" / "SKILL.md").read_text("utf-8")
+    assert "rf-search-run" in run
