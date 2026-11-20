@@ -491,7 +491,9 @@ def screen_next(
                 batch=None,
                 blocked=[
                     "the calibration set must be drawn and labelled by the human before "
-                    "screening; an agent does not draw it"
+                    "screening; an agent does not draw it. The researcher runs "
+                    f"`factory calibrate draw --stage {stage.value}`, then "
+                    "`factory calibrate label`"
                 ],
                 remaining=0,
             )

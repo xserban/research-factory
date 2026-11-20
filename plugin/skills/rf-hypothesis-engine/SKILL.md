@@ -274,7 +274,10 @@ combination cites up to 10 rows), and only the text of a long quote is cut (mark
    `verification`, `diversity`, `score`), `top`, `exclude_prior`, `recorded` (`after` by default,
    `first` or `hide`; see below), and `balance` (default true: the top is shared across the sources in play, so
    the many combinations do not crowd out challenges, gaps and limitations; `per_source_top` sets
-   the share; `balance=false` is the plain global order).
+   the share; `balance=false` is the plain global order). `group_claims_by_work` (default true)
+   gives one claims candidate per paper (`claims-work:<work_id>`, flags `grouped` and `rows=<n>`,
+   support = its limitation rows, independence 1, at most 19 rows cited); false gives one candidate
+   per limitation row (CLI `--no-group-claims`).
 2. Call `lead_queue` with those knobs (`lead_candidates` shows the same candidates unordered, to
    see everything one source produced). Show the researcher the ordered list as the tool returned
    it: for each entry the source, the observation, the measures (support, independence, verified
@@ -322,6 +325,16 @@ as a validation error naming the field; shorten it and record again. The by-hand
 `technique_*`, `claims_digest`, `corpus_search` and `chat_verify`; step 4 with `lead_list`,
 `hypothesis_list` and two `corpus_search` calls; step 5 with a hand order; step 10 counted from
 `lead_list` and `hypothesis_list` and said to be counted by hand.
+
+### The lead cache
+
+`factory leads candidates` and `factory leads queue` keep a derived cache under
+`projects/<slug>/cache/lead-engine/`, so a second process is not cold (the first scan takes
+tens of seconds). An entry is keyed by the last folded event, the engine's code version and the
+call parameters, so a new event or a code change is a miss, never a stale answer. The cache holds
+only candidates and accepted quote verdicts, is bounded, safe to delete and never authoritative;
+held-out masking still runs on every reply. `--refresh` drops it and recomputes;
+`FACTORY_LEAD_CACHE=off` switches it off.
 
 ## Stopping
 

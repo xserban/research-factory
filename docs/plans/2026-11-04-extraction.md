@@ -1,5 +1,7 @@
 # Schema, Extraction, Verification, Dual Extraction, Agreement and Audit Implementation Plan (slice 2, sub-plan D)
 
+Status: merged (plan 2D, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Dependencies.** Plan C (full-text screening, branch `plan-2c-fulltext-screening`) must be merged first: this plan reads the full-text stage (`final_outcomes(project, stage=FULL_TEXT)`, `fulltext_queue`, the `stage` column, `screening_plan`). **Decision 49 (converters for LaTeX and PDF) is still pending.** Extraction must work on any converted document, whatever the converter: it reads only the manifest and Markdown through `resolve_anchor` / `conversion_manifest`, never converter-specific structure. Tests build documents from the existing HTML fixture and from hand-written Markdown with anchors (`tests/document_helpers.py`), not from a particular converter.

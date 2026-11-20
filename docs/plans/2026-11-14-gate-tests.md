@@ -1,5 +1,7 @@
 # Gate tests: registry-driven refusal and floor (pilot 2, layer 1)
 
+Status: unknown (not verified 2026-11-20)
+
 Date: 2026-11-14. Scope: the first two items of layer 1 of `2026-11-14-pilot-2.md` section 3. Tests only; no product code changes. Testing is paused, so the new tests are written without being run.
 
 ## What exists (survey, 2026-11-14)

@@ -150,7 +150,9 @@ class Candidate(_Labelled):
     `other`). `flags` names a defect of a cited row or a caution:
     `failure-quote-not-checked` (a challenge: the platform cannot tell whether the `failed` quote
     states a failure; the session must read it); `no-stored-quote` (the row stored no quote; the
-    quote is None, never the field value, and the row counts as unverified)."""
+    quote is None, never the field value, and the row counts as unverified). `rows_total` is set
+    only on a claims candidate grouped by work: every limitation row of the work (the cited rows
+    are at most 19 of them)."""
 
     candidate_id: str
     source: Source
@@ -158,6 +160,7 @@ class Candidate(_Labelled):
     approaches: tuple[str, ...] = ()
     works: tuple[CandidateWork, ...]
     works_total: int
+    rows_total: int | None = None
     quotes: tuple[CandidateQuote, ...]
     triggers: tuple[CandidateTrigger, ...]
     basis: tuple[BasisRow, ...]
@@ -274,6 +277,8 @@ class OldestLead(StrictModel):
     triggers: int
     source: str
     event_id: str
+    recorded_at: str | None = None
+    """The timestamp of the recording event (the table view shows its age)."""
 
 
 class LeadStats(_Labelled):

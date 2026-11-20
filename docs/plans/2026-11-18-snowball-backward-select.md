@@ -1,5 +1,7 @@
 # Plan: selected backward snowball rounds, taken offline from stored records
 
+Status: unknown (not verified 2026-11-20; decision 135 proposed)
+
 Date: 2026-11-18 · Branch: `snowball-backward-select` · Decision: 135 (proposed) · Amends: slice 3a ruling 7 (backward rounds take every candidate) for protocols that opt in
 
 ## Goal

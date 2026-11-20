@@ -1,5 +1,7 @@
 # Plan: reference lookup without relying on OpenAlex (IDEA-89)
 
+Status: merged (IDEA-89, backlog: built, reviewed, merged 2026-11-16; decision 130)
+
 Date: 2026-11-16 · Branch: `reference-lookup-crossref` · Decision: 130 (proposed, this plan)
 
 ## Goal

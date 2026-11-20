@@ -9,7 +9,9 @@ from sqlalchemy import text
 from factory.services.context import Project
 from factory.services.evidence_groups import group_index
 from factory.services.evidence_report import evidence_report
+from factory.services.fulltext_screening import fulltext_queue
 from factory.services.horizon import horizon_view, timeline_view
+from factory.services.prisma import prisma_flow
 from factory.services.view_coverage import coverage_view
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a  # noqa: F401
 from tests.extraction_helpers import screened  # noqa: F401
@@ -91,3 +93,17 @@ def test_a_row_of_an_absorbed_work_is_dropped_with_its_primary_outside_the_corpu
         < sum(len(g.rows) for g in evidence_report(project).groups)
     )
     assert "merge-read" not in _codes(view)  # the dropped row was not read under its primary
+
+
+def test_the_late_merge_keeps_the_rows_and_leaves_the_flow_counts_canonical(
+    project: Project, vb_world: VbWorld
+) -> None:
+    """Rows stay (decision 92 item 9) while the full-text queue and the boxes count canonical
+    works only (b0a4a766): included = not sought + sought, the absorbed work is not queued."""
+    primary, absorbed = _merged(project, vb_world)
+    queue = fulltext_queue(project)
+    queued = {e.work_id for e in queue.eligible} | set(queue.not_retrieved)
+    assert absorbed not in queued and primary in queued
+    flow = prisma_flow(project)
+    assert flow.full_text.not_sought + flow.full_text.sought == flow.included
+    assert sum(len(g.rows) for g in evidence_report(project).groups) == 6

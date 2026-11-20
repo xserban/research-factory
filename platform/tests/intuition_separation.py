@@ -131,6 +131,12 @@ TABLE_READERS = frozenset(
         "factory.services.runner",
         "factory.services.briefing",
         "factory.services.site_synthesis",
+        # Tutorial and run map (checked 2026-11-20): prose and tool or command names that mention
+        # layer words (`concepts`, `interpretations`); no SQL, no table access.
+        "factory.learn.concepts",
+        "factory.learn.stages_late",
+        "factory.services.hub_learn",
+        "factory.services.hub_platform",
     }
 )
 

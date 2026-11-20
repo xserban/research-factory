@@ -120,7 +120,7 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
     const maxRule = Math.max(1, ...rules.map(r => sum(SE.rule_counts[r])));
     body.innerHTML = `
     ${SE.error ? `<p class="sx-bad" role="alert">The archived search pages could not be read: ${esc(SE.error)}</p>` : ''}
-    <section>${header({ title: 'Searches', infoHtml: M.search, sub: 'What each source reported and what was retrieved.' })}
+    <section>${header({ title: 'Searches', infoHtml: (M.tab_search ? M.tab_search + '<br><br>' : '') + M.search, sub: 'What each source reported and what was retrieved.' })}
       <div class="sx-kpis">${kpi(qs.length, 'queries run')}${kpi(SE.runs_complete, 'runs complete')}${kpi(SE.runs_partial, 'runs partial', SE.runs_partial ? 'warn' : '')}
         ${kpi(nIdent, 'records identified')}${kpi(ident.duplicates_removed, term('duplicates', 'duplicates') + ' removed')}${kpi(tiles.active, 'merges active')}${kpi(tiles.reverted, 'merges reverted')}</div>
     </section>
@@ -263,10 +263,10 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
   const cs = { q: '', conv: '', low: false, sort: 'recall', dir: 1, bin: null, binConv: null };
   function renderConv() {
     const docs = CV.documents || [], conv = Object.keys(CV.summary || {});
-    if (!docs.length) { body.innerHTML = header({ title: 'Conversion', infoHtml: M.conversion }) + empty('No document has been converted yet.'); return; }
+    if (!docs.length) { body.innerHTML = header({ title: 'Conversion', infoHtml: (M.tab_conversion ? M.tab_conversion + '<br><br>' : '') + M.conversion }) + empty('No document has been converted yet.'); return; }
     const p = hp(); cs.q = p.get('cq') || cs.q;
     body.innerHTML = `
-    <section>${header({ title: 'Conversion coverage', infoHtml: M.conversion, sub: CV.computed ? 'Computed ' + esc(String(CV.computed_at || '').replace('T', ' ').slice(0, 16)) + '. Low is below ' + CV.low + '.' : '' })}
+    <section>${header({ title: 'Conversion coverage', infoHtml: (M.tab_conversion ? M.tab_conversion + '<br><br>' : '') + M.conversion, sub: CV.computed ? 'Computed ' + esc(String(CV.computed_at || '').replace('T', ' ').slice(0, 16)) + '. Low is below ' + CV.low + '.' : '' })}
       ${CV.computed ? '' : `<p class="meta">Coverage has not been computed yet. Run it, then rebuild:</p>${copyCmd(CV.commands.coverage)}`}
       ${conv.length ? `<table class="t sx-plain" style="max-width:760px"><thead><tr><th class="l">Converter</th><th class="r">Documents</th><th class="r">Median recall</th><th class="r">Median precision</th><th class="r">Low recall</th><th class="r">Low precision</th></tr></thead><tbody>
       ${conv.map(c => { const s = CV.summary[c]; return `<tr><td><span class="dot" style="background:${convColour[c]}"></span> ${esc(c)}</td><td class="r">${fmt(s.documents)}</td><td class="r">${f3(s.median_recall)}</td><td class="r">${f3(s.median_precision)}</td><td class="r">${fmt(s.low_recall)}</td><td class="r">${fmt(s.low_precision)}</td></tr>`; }).join('')}</tbody></table>` : ''}
@@ -372,10 +372,20 @@ pre.sx-pre{background:var(--bg);border-radius:var(--r-s);padding:10px;font:400 1
     </section>
     ${DC.kinds.map(k => `<section class="sx-sec">${header({ title: k.title })}
       <table class="t sx-plain"><thead><tr><th class="l">File</th><th class="l">Version</th><th class="l">Registered</th><th class="l">Status</th><th class="l">Earlier versions</th></tr></thead><tbody>
-      ${k.files.map(f => `<tr><td>${f.href ? `<a href="${esc(f.href)}">${esc(f.title || f.path)}</a>` : esc(f.title || f.path)}${f.outside ? ' <span class="sx-bad">outside the project</span>' : ''}<div class="meta mono">${esc(f.path)}</div></td>
+      ${k.files.map(f => `<tr><td>${f.href ? `<a href="${esc(HUB.served ? f.url : f.href)}"${HUB.served ? ' target="_blank" rel="noopener"' : ''}>${esc(f.title || f.path)}</a>` : esc(f.title || f.path)}${f.outside ? ' <span class="sx-bad">outside the project</span>' : ''}<div class="meta mono">${esc(f.path)}</div>
+          ${HUB.served && !f.outside ? `<div><button class="btn" type="button" data-sf="${esc(f.url)}">Show contents</button></div><div data-sfbox="${esc(f.url)}"></div>` : ''}
+          <div class="meta mono">registered sha256 ${esc(f.sha_full || '')}${f.current_sha ? `<br>on disk sha256 ${esc(f.current_sha)}` : '<br>not on disk'}${f.size != null ? `<br>${fmt(f.size)} bytes, modified ${esc(f.modified || '')}` : ''}</div></td>
         <td class="mono">v${fmt(f.version)}</td><td>${esc(f.registered)}</td>
         <td>${f.state === 'changed' ? '<span class="sx-warn">changed since registration</span>' : f.state === 'missing' ? '<span class="sx-bad">missing</span>' : 'unchanged'}</td>
-        <td>${f.history.map(r => `<div class="meta mono">v${fmt(r.version)}: ${esc(r.at)}, ${esc(r.sha)}</div>`).join('')}</td></tr>`).join('')}</tbody></table></section>`).join('')}`;
+        <td>${f.history.map(r => `<div class="meta mono">v${fmt(r.version)}: ${esc(r.at)}, ${esc(r.sha)}${HUB.served ? ` <button class="btn" type="button" data-sf="${esc(r.url)}">Show</button>` : ''}</div><div data-sfbox="${esc(r.url)}"></div>`).join('')}</td></tr>`).join('')}</tbody></table></section>`).join('')}`;
+    body.querySelectorAll('button[data-sf]').forEach(b => b.onclick = async () => {
+      const box = [...body.querySelectorAll('[data-sfbox]')].find(x => x.dataset.sfbox === b.dataset.sf);
+      if (box.firstChild) { box.replaceChildren(); return; }
+      const r = await fetch(b.dataset.sf);
+      if (!r.ok) { box.innerHTML = '<p class="meta">This file cannot be shown (too large or not stored).</p>'; return; }
+      if (!(r.headers.get('content-type') || '').startsWith('text/plain')) { box.innerHTML = `<p class="meta">Not a text file: <a href="${esc(b.dataset.sf)}">download it</a>.</p>`; return; }
+      box.innerHTML = `<pre class="sx-pre">${esc(await r.text())}</pre>`;
+    });
   }
 
   show();

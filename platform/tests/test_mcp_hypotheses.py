@@ -48,6 +48,11 @@ TOOLS = (
     # The read-only list tools (b299847, PROJECT_READ in services/access.py).
     "lead_list",
     "hypothesis_list",
+    # The hypothesis engine's read-only, exploratory services (PROJECT_READ): they record,
+    # decide and register nothing, so the gate statement below still holds.
+    "lead_candidates",
+    "lead_queue",
+    "lead_stats",
 )
 SESSION_F = "01JZ9Q3K5M7N8P0R2S4T6V8W1F"
 IDEATE = {"role": "ideator", "model": "claude-opus-5-5", "skill": "rf-ideate"}

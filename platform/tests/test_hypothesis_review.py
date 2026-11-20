@@ -116,7 +116,9 @@ def test_same_model_refused_when_the_plan_asks_for_a_distinct_critic(
 def test_nothing_waiting_and_no_second_serving(project: Project, hw: HW) -> None:
     first = review_next(project, CRITIC)
     assert first is not None
-    assert review_next(project, CRITIC) is None  # its claim is live until the lease lapses
+    # the holder resumes its own review (2ff2487f): served again as it stands, same task
+    again = review_next(project, CRITIC)
+    assert again is not None and again.task_id == first.task_id
     assert review_next(project, OTHER) is None  # held by the critic: passed over
     record_review(project, CRITIC, first.task_id, verdict())
     assert review_next(project, OTHER) is None  # reviewed: nothing waits

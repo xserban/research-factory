@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -22,7 +23,18 @@ from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
 from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = (
+    "protocol",
+    "pipeline",
+    "sources",
+    "method",
+    "costs",
+    "write",
+    "platform",
+    "contradictions",
+    "chat",
+    "learn",
+)
 CORE = {
     "shell",
     "overview",
@@ -37,6 +49,8 @@ CORE = {
     "corpus",
     "landscape",
     "landscape_uses",
+    "contradictions",
+    "chat",
     *NEW_PAGES,
 }
 OPTIONAL = {"journeys"}  # delivered by hub_journeys; may be absent
@@ -149,6 +163,24 @@ def test_only_is_honoured_and_unknown_names_refused(world: Project, tmp_path: Pa
         hb.build_static(world, tmp_path / "x", only={"nope"})
 
 
+def test_payloads_only_writes_json_and_its_gzip_in_the_given_order(
+    world: Project, tmp_path: Path
+) -> None:
+    out = tmp_path / "child"
+    report = hb.build_static(world, out, only=["living", "overview"], payloads_only=True)
+    assert list(report.payloads) == ["living", "overview"]  # the requested one first
+    assert sorted(p.name for p in (out / "data").iterdir()) == [
+        "living.json",
+        "living.json.gz",
+        "overview.json",
+        "overview.json.gz",
+    ]
+    assert not (out / "assets").exists() and not list(out.glob("*.html"))
+    for name in ("living", "overview"):
+        raw = (out / "data" / f"{name}.json").read_bytes()
+        assert gzip.decompress((out / "data" / f"{name}.json.gz").read_bytes()) == raw
+
+
 def test_pages_use_registered_assets_and_no_external_url(world: Project, tmp_path: Path) -> None:
     hb.build_static(world, tmp_path / "ui")
     pages = sorted((tmp_path / "ui").glob("*.html"))
@@ -205,10 +237,13 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "miners",
         "data",
         "findings",
+        "contradictions",
+        "chat",
         "write",
         "living",
         "costs",
         "platform",
+        "learn",
         "kit",
     ]
     for spec in hub_ui.PAGES.values():
@@ -295,6 +330,17 @@ def test_corpus_payload_is_identical_to_the_one_the_full_citation_report_gave(
         GOLDEN_CORPUS.parent.mkdir(exist_ok=True)
         GOLDEN_CORPUS.write_text(text, encoding="utf-8")
     assert text == GOLDEN_CORPUS.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["pipeline", "findings", "mining", "screening", "flow"])
+def test_payload_built_with_one_sync_and_memo_equals_the_plain_build(
+    world: Project, tmp_path: Path, name: str
+) -> None:
+    """The build runs each payload inside `frozen_sync` and a call memo; the same builder called
+    outside both (the old behaviour: a sync and a recomputation per read) gives the same payload."""
+    built = _payload(world, tmp_path, name)
+    plain = json.loads(hb.dumps(hb.BUILDERS[name](hb.HubContext(world))))
+    assert built == plain
 
 
 def test_corpus_has_only_included_works_and_maps_duplicates(world: Project, tmp_path: Path) -> None:
@@ -500,7 +546,7 @@ def test_journeys_payload_carries_the_journey_index(world: Project, tmp_path: Pa
     assert idx["scope"] == "included" and idx["bytes"] == len(
         json.dumps(idx["works"], separators=(",", ":"))
     )
-    assert any(len(stop) == 9 for stops in idx["works"].values() for stop in stops)
+    assert any(len(stop) == 11 for stops in idx["works"].values() for stop in stops)
     assert report.payloads["journeys"].bytes < 3_000_000
 
 

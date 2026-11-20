@@ -36,6 +36,7 @@ CLI_READS: frozenset[str] = frozenset(
     for command in (
         "rebuild",
         "status",
+        "tour",
         "gates",
         "trace",
         "check",

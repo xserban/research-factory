@@ -1,5 +1,7 @@
 # Evidence Report, Frontiers, Trace Extensions and Pack Completion Implementation Plan (slice 2, sub-plan E)
 
+Status: merged (plan 2E, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Dependencies.** Plans C (full-text screening, `plan-2c-fulltext-screening`) and D (extraction, `docs/plans/2026-11-04-extraction.md`) must be merged first: this plan consumes D's `final_rows`, `grouped_rows`, `independence_counts`, `live_claims`, `unit_states`, `stale_extractions`, the `ml-benchmark` pack and the extraction projection tables, and C's `res:full-text:<work>` and conversion/anchor trace nodes. It redefines none of them. **Decision 49 (converters for LaTeX and PDF) is still pending**: the report reads only extracted rows, and the trace walks anchor, conversion and document nodes by id, so no task depends on a converter.

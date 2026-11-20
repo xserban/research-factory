@@ -83,3 +83,20 @@ def test_project_variant_hides_the_tabs_unless_served_by_the_main_hub() -> None:
     bar = site_chrome.hub_bar("projects", main_hub_only=True)
     assert "location.pathname.indexOf('/p/')" in bar
     assert "location.pathname.indexOf('/p/')" not in site_chrome.hub_bar("projects")
+
+
+def test_project_variant_keeps_the_switch_to_the_new_hub_visible() -> None:
+    bar = site_chrome.hub_bar(
+        "projects", context="<a class=rf-switch href='ui/'>new</a>", main_hub_only=True
+    )
+    assert ".hubbar a:not(.rf-switch)" in bar
+    assert ".hubbar a.rf-switch{" in site_chrome.BAR_CSS
+
+
+def test_new_hub_has_a_served_only_switch_back_to_the_classic_hub() -> None:
+    from factory.services import hub_ui
+
+    shell = hub_ui.asset_bytes("shell.js").decode("utf-8")
+    assert 'id="classicHub"' in shell and "hidden" in shell.split('id="classicHub"')[1][:20]
+    assert "if (HUB.served) { const a = $('#classicHub')" in shell
+    assert ".btn[hidden]{display:none}" in hub_ui.asset_bytes("kit.css").decode("utf-8")

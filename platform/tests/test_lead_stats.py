@@ -112,3 +112,48 @@ def test_the_stats_are_labelled_and_the_oldest_undecided_follow_the_event_not_th
         )
     order = [o.lead_id for o in lead_stats(project).oldest_undecided]
     assert order == [max(a, b), min(a, b)] and ids  # the lead with the older event comes first
+
+
+def test_the_stats_table_is_compact_and_json_stays_complete() -> None:
+    from datetime import UTC, datetime
+
+    from factory.cli import render
+    from factory.model.lead_engine import LeadStats, OldestLead
+
+    long = "a very long framework name " * 12
+    stats = LeadStats(
+        recorded=300,
+        by_state={"open": 200, "promoted": 40, "parked": 30, "discarded": 30},
+        decided=100,
+        promotion_rate=0.1333,
+        decided_promotion_rate=0.4,
+        discard_reasons={f"reason number {i} " * 8: i + 1 for i in range(8)},
+        by_trigger_kind={"item": 300, "work": 300},
+        by_source={"claims": {"recorded": 300, "open": 200, "promoted": 40, "parked": 30}},
+        hypotheses_drafted=12,
+        hypotheses_by_state={"draft": 12},
+        hypotheses_registered=0,
+        hypotheses_closed={"abandoned": 0, "concluded": 0},
+        reviews=3,
+        reviews_by_recommendation={"revise": 3},
+        outcomes={},
+        oldest_undecided=tuple(
+            OldestLead(
+                lead_id=f"lead_{'x' * 40}{i}",
+                framework=long,
+                triggers=20,
+                source="claims",
+                event_id=str(i),
+                recorded_at="2026-11-01T10:00:00Z",
+            )
+            for i in range(10)
+        ),
+    )
+    lines = render.lead_stats_lines(stats, now=datetime(2026, 11, 20, tzinfo=UTC))
+    assert lines[0].startswith("EXPLORATORY") and max(len(x) for x in lines) <= 110
+    assert any("18d" in x for x in lines) and sum("oldest" in x for x in lines) == 1
+    assert sum(x.startswith("  lead_") for x in lines) == 5
+    at = lines.index("discard reasons (top 5):")
+    assert "reason number 7" in lines[at + 1] and "reason number 3" in lines[at + 5]
+    assert "reason number 2" not in " ".join(lines)
+    assert len(stats.model_dump_json()) > 3000 and "reason number 0" in stats.model_dump_json()

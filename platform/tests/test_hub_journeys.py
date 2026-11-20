@@ -213,7 +213,7 @@ def test_journey_index_scope_and_text_limit() -> None:
 def test_journey_index_stops_carry_the_quote_and_event_id() -> None:
     r, t = build()
     stops = hj.journey_index(r, t, True)["works"]["w1"]
-    assert all(len(s) == 9 for s in stops)
+    assert all(len(s) == 11 for s in stops)
     screens = [s for s in stops if s[0] == hj.STAGES.index("title-abstract")]
     assert screens and all(s[7] == "a quote" for s in screens)
     assert all(s[8] is None for s in stops)  # hand-built steps hold no event id
@@ -349,3 +349,28 @@ def test_one_references_stop_per_work_and_swimlanes_carry_the_extras(project: Pr
         )
     stops = [s for s in hj.reference_extras(project)[WORK] if s.stage == "references-extracted"]
     assert len(stops) == 1 and "1 later re-extraction" in str(stops[0].text)
+
+
+def test_stops_carry_the_document_and_primary_ids_of_their_step() -> None:
+    steps = [
+        step("01T10:00:00", "found", source="arxiv", method="database", run="r1"),
+        step("02T10:00:00", "merged", primary="w9", absorbed="w1", rule="doi"),
+        step("03T10:05:00", "document added", document="d1", route="arxiv"),
+        step("04T10:00:00", "converted", document="d1", converter="docling"),
+    ]
+    by_stage = {s.stage: s for s in hj.build_stops("w1", steps)}
+    assert (by_stage["deduplicated"].document_id, by_stage["deduplicated"].primary_id) == (
+        None,
+        "w9",
+    )
+    assert by_stage["retrieval"].document_id == "d1" and by_stage["conversion"].document_id == "d1"
+    assert by_stage["found"].document_id is None and by_stage["found"].primary_id is None
+    r, t = build()
+    row = hj.journey_index(r, t, True)["works"]["w1"][0]
+    assert len(row) == 11 and row[9] is None and row[10] is None
+    merged = [
+        s
+        for s in hj.journey_index([x for x in r], {"w1": steps}, True, scope="all")["works"]["w1"]
+        if s[10]
+    ]
+    assert merged and merged[0][10] == "w9"

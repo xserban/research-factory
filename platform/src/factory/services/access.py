@@ -356,6 +356,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:inbox resolve": Permission.WORK_RUN,
     "cli:inbox withdraw": Permission.WORK_RUN,
     "cli:search chase": Permission.WORK_RUN,
+    "cli:dedup pair": Permission.HUMAN_CONFIRM,
+    "cli:dedup pairs": Permission.PROJECT_READ,
     "cli:references extract": Permission.WORK_RUN,
     "cli:references scheme record": Permission.HUMAN_CONFIRM,
     "cli:references layers label": Permission.HUMAN_LABEL,

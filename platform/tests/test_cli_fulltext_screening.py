@@ -79,7 +79,9 @@ def test_status_without_a_full_text_plan_does_not_raise(
     _setup(project, agent, human, mock_sources)
     code, out, err = _run(settings.root, "status")
     assert code == 0, err
-    assert "full-text" not in out
+    # Decision 149: a protocol without a full-text plan is named as a blocking next step.
+    assert "BLOCKING next step" in out
+    assert "full-text screening is not planned in the protocol" in out
 
 
 def test_full_text_commands_with_stage_option(

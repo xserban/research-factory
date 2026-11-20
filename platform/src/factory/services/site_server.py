@@ -36,6 +36,7 @@ Invariants:
   the local human, `cli:inbox add`). The pages' other acts are the routes above. Further read-only
   routes: `ui/data/sources-doc-<document_id>.json` (one converted document: texts, lost and added
   runs), `ui/file/original|markdown/<document_id>` (the stored files, by registered id only),
+  `ui/study/<registration_id>` (a registered study file, from its stored blob, by id only),
   `ui/ops/<path>` (a file of the project's `ops/` folder: no `..`, absolute path, symlink or
   directory, size capped), `ui/download/wiki.zip` (the vault, built once per fingerprint),
   `ui/status.json` (per payload: fresh, built_at, error) and `GET /api/screening`
@@ -71,6 +72,7 @@ import html as html_lib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +99,7 @@ from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
     hub_chat,
+    hub_learn,
     hub_serve,
     site_auth,
     site_backlog,
@@ -1405,7 +1408,10 @@ def _handler_class(
                 return
             rest = unquote(url[len(UI_PREFIX) + 1 :])
             if rest in ("", "index.html") or (rest.endswith(".html") and "/" not in rest):
-                text = hub_serve.page_text("overview" if rest in ("", "index.html") else rest[:-5])
+                index = rest in ("", "index.html")
+                text = hub_serve.page_text(
+                    hub_learn.landing_page(slot.project) if index else rest[:-5]
+                )
                 if text is None:
                     self._deny(404, "not found")
                     return
@@ -1422,7 +1428,15 @@ def _handler_class(
                 self._cache = (
                     "public, max-age=31536000, immutable" if found.immutable else "no-cache"
                 )
-                self._send(200, found.body, found.content_type, {})
+                if found.gz and hub_serve.accepts_gzip(self.headers.get("Accept-Encoding")):
+                    self._send(
+                        200,
+                        found.gz,
+                        found.content_type,
+                        {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"},
+                    )
+                else:
+                    self._send(200, found.body, found.content_type, {"Vary": "Accept-Encoding"})
             elif rest.startswith(UI_DOC_PREFIX) and rest.endswith(".json"):
                 self._ui_document(slot, rest[len(UI_DOC_PREFIX) : -len(".json")], None)
             elif rest.startswith("data/") and rest.endswith(".json"):
@@ -1430,6 +1444,18 @@ def _handler_class(
             elif rest.startswith("file/"):
                 kind, _, doc_id = rest[len("file/") :].partition("/")
                 self._ui_document(slot, doc_id, kind)
+            elif rest.startswith("study/"):
+                found_study = hub_serve.study_file(slot.project, rest[len("study/") :])
+                if found_study is None:
+                    self._deny(404, "not found")
+                    return
+                body, kind, name = found_study
+                safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+                extra = {"X-Content-Type-Options": "nosniff"}
+                if not kind.startswith("text/plain"):
+                    extra["Content-Disposition"] = f'attachment; filename="{safe}"'
+                self._cache = "no-store"
+                self._send(200, body, kind, extra)
             elif rest.startswith("ops/"):
                 found_ops = hub_serve.ops_file(slot.project, rest[len("ops/") :])
                 if found_ops is None:
@@ -1509,8 +1535,10 @@ def _handler_class(
             )
 
         def _payload(self, name: str, slot: Slot) -> None:
-            """A cached payload with its ETag (304 when the browser has it), or why not yet."""
-            answer = slot.ui.get(name)
+            """A cached payload with its ETag (304 when the browser has it, stale or fresh), gzipped
+            when the client accepts it, or why not yet."""
+            want_gz = hub_serve.accepts_gzip(self.headers.get("Accept-Encoding"))
+            answer = slot.ui.get(name, gzip=want_gz)
             if isinstance(answer, hub_serve.Unknown):
                 self._deny(404, "not found")
             elif isinstance(answer, hub_serve.Building):
@@ -1524,28 +1552,24 @@ def _handler_class(
                 )
             elif isinstance(answer, hub_serve.Failed):
                 self._json(500, {"error": "build failed", "payload": answer.name})
-            elif isinstance(answer, hub_serve.Stale):
-                self._cache = "no-store"
-                self._send(
-                    200,
-                    answer.body,
-                    "application/json; charset=utf-8",
-                    {"X-Hub-Stale": "1"},
-                )
             else:
-                self._cache = "private, max-age=0, must-revalidate"
+                self._cache = "private, no-cache"  # keep it, revalidate each time
+                headers = {"ETag": answer.etag, "Vary": "Accept-Encoding"}
+                if isinstance(answer, hub_serve.Stale):
+                    headers["X-Hub-Stale"] = "1"
                 seen = {
                     t.strip().removeprefix("W/")
                     for t in (self.headers.get("If-None-Match") or "").split(",")
                 }
                 if answer.etag in seen or "*" in seen:
                     self.send_response(304)
-                    self.send_header("ETag", answer.etag)
+                    for key, value in headers.items():
+                        self.send_header(key, value)
                     self.end_headers()
                     return
-                self._send(
-                    200, answer.body, "application/json; charset=utf-8", {"ETag": answer.etag}
-                )
+                if answer.gzip:
+                    headers["Content-Encoding"] = "gzip"
+                self._send(200, answer.body, "application/json; charset=utf-8", headers)
 
         def _lazy_item(self, url: str, slot: Slot) -> bool:
             """Serve an item page of a lazily built product, rendering it on its first request
@@ -2056,6 +2080,7 @@ class MainHub:
             self._timer.stop()
         for found in list(self._slots.values()):
             found.rebuilder.stop()
+            found.ui.stop()
 
 
 def make_main_server(

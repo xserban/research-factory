@@ -334,8 +334,9 @@ def calibrated_models(
 
 def recorded_population(project: Project, stage: ScreeningStage) -> set[str]:
     """`stage_population` with the absorbed records kept: the works whose recorded decisions still
-    read as outcomes, so `merge-verdict-conflict` keeps reporting them."""
-    return _stage_works(project, require_pass_stage(stage))
+    read as outcomes, so `merge-verdict-conflict` keeps reporting them and the rows extracted from
+    them stay in the evidence views (decision 92 item 9)."""
+    return _stage_works(project, require_pass_stage(stage), with_absorbed=True)
 
 
 def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]:
@@ -344,7 +345,9 @@ def _calibration_population(project: Project, stage: ScreeningStage) -> set[str]
     return _stage_works(project, stage) - absorbed_ids(project)
 
 
-def _stage_works(project: Project, stage: ScreeningStage) -> set[str]:
+def _stage_works(
+    project: Project, stage: ScreeningStage, *, with_absorbed: bool = False
+) -> set[str]:
     """The corpus at title/abstract; at full text, the works whose title/abstract final outcome is
     INCLUDED and that have a converted live document (the eligible works of `fulltext_queue`)."""
     corpus = _corpus_ids(project)
@@ -352,7 +355,8 @@ def _stage_works(project: Project, stage: ScreeningStage) -> set[str]:
         return corpus
     from factory.services.fulltext_screening import fulltext_queue  # circular at import time
 
-    return {entry.work_id for entry in fulltext_queue(project).eligible} & corpus
+    queue = fulltext_queue(project, with_absorbed=with_absorbed)
+    return {entry.work_id for entry in queue.eligible} & corpus
 
 
 def stage_population(project: Project, stage: ScreeningStage) -> set[str]:

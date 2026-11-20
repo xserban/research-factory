@@ -137,7 +137,8 @@ def test_rail_and_palette_list_exactly_the_registered_pages() -> None:
     listed = [a for a, _ in rail_ids]
     assert len(listed) == len(set(listed))  # one entry per page
     # the rail has its own reading order, not the registry's; kit is design, off the rail
-    assert sorted(listed) == sorted(i for i in ids if i != "kit")
+    # Kit and Learn have their own links next to the rail, not rail entries.
+    assert sorted(listed) == sorted(i for i in ids if i not in ("kit", "learn"))
     pal = re.search(r"const PAGES = \[(.*?)\n\];", shell, re.S)
     assert pal is not None
     assert sorted(re.findall(r"'(\w+)\.html'", pal.group(1))) == sorted(ids)

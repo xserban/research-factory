@@ -46,6 +46,7 @@ from factory.cli.team import (
     review_app,
     workspace_cmd,
 )
+from factory.cli.tour import tour_cmd
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.optional import converter_infos, override_registry
@@ -199,6 +200,7 @@ from factory.services import snowball as snowball_service
 from factory.services import suggestions as suggestions_service
 from factory.services import technique_graph as technique_service
 from factory.services import trace as trace_service
+from factory.services import version_pairs as version_pairs_service
 from factory.services import versions as versions_service
 from factory.services import view_coverage as view_coverage_service
 from factory.services import views as views_service
@@ -628,6 +630,7 @@ app.add_typer(review_app)
 protocol_app.command("record")(protocol_record_cmd)
 protocol_app.command("amend")(protocol_amend_cmd)
 protocol_app.command("deviation")(protocol_deviation_cmd)
+app.command("tour")(tour_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)
@@ -857,6 +860,8 @@ def status(
     typer.echo(f"rigor mode: {report.rigor_mode.value}")
     typer.echo(f"stage: {report.stage.value if report.stage else 'unknown'}")
     typer.echo(f"events: {report.events_total}")
+    for blocked in report.blocking:
+        typer.echo(f"BLOCKING next step: {blocked}")
     typer.echo(f"question: {report.question or 'none'}")
     protocol = report.protocol
     if protocol is None:
@@ -1847,6 +1852,41 @@ def dedup_list_cmd(ctx: typer.Context) -> None:
         merges = dedup_service.list_merges(project)
     for line in render.merge_lines(merges):
         typer.echo(line)
+
+
+@dedup_app.command("pairs")
+def dedup_pairs_cmd(
+    ctx: typer.Context,
+    limit: Annotated[int, typer.Option("--limit", min=1, help="How many candidates to show.")] = 50,
+) -> None:
+    """Candidate version pairs, best first, for the researcher to rule on."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        found = version_pairs_service.candidates(project, limit=limit)
+    for line in render.pair_lines(found):
+        typer.echo(line)
+
+
+@dedup_app.command("pair")
+def dedup_pair_cmd(
+    ctx: typer.Context,
+    work_a: Annotated[str, typer.Argument(help="One work id.")],
+    work_b: Annotated[str, typer.Argument(help="The other work id.")],
+    decision: Annotated[str, typer.Argument(help="same or different.")],
+    rationale: Annotated[
+        str, typer.Option("--rationale", help="Why the works are or are not one.")
+    ],
+) -> None:
+    """Record the researcher's ruling on a pair and apply it at once (human only)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        event_id = version_pairs_service.decide_pair(
+            project, project.human_actor(), work_a, work_b, decision, rationale
+        )
+    typer.echo(f"recorded {event_id}")
+    typer.echo("dedup applied")
 
 
 @dedup_app.command("revert")
@@ -7107,6 +7147,10 @@ _SOURCES_OPT = typer.Option(
 _PER_SOURCE_OPT = typer.Option("--per-source", help="Candidates kept per source (default 20).")
 _TECH_MIN_OPT = typer.Option("--technique-min-works", help="Works each approach needs (3).")
 _CO_WORKS_OPT = typer.Option("--max-co-works", help="Works that may already use both (0).")
+_GROUP_OPT = typer.Option(
+    "--group-claims/--no-group-claims",
+    help="One claims candidate per work (default) or one per limitation row.",
+)
 _FULL_OPT = typer.Option(
     "--full", help="Table: print every quote and trigger (default is the compact view)."
 )
@@ -7150,6 +7194,14 @@ def leads_candidates_cmd(
     layer: Annotated[str, _LAYER_OPT] = "core",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    group_claims: Annotated[bool, _GROUP_OPT] = True,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Drop the on-disk lead cache first and recompute (see FACTORY_LEAD_CACHE).",
+        ),
+    ] = False,
     top: Annotated[
         int, typer.Option("--top", min=1, help="Candidates in the table (default 20).")
     ] = 20,
@@ -7171,6 +7223,8 @@ def leads_candidates_cmd(
             layer=layer,
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
+            group_claims_by_work=group_claims,
+            refresh=refresh,
         )
     _engine_table(
         result,
@@ -7219,6 +7273,14 @@ def leads_queue_cmd(
     ] = "after",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    group_claims: Annotated[bool, _GROUP_OPT] = True,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Drop the on-disk lead cache first and recompute (see FACTORY_LEAD_CACHE).",
+        ),
+    ] = False,
     full: Annotated[bool, _FULL_OPT] = False,
     show: Annotated[str | None, _SHOW_OPT] = None,
     format_: Annotated[str, _FORMAT_OPT] = "table",
@@ -7241,9 +7303,11 @@ def leads_queue_cmd(
             layer=layer,
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
+            group_claims_by_work=group_claims,
             balance=balance,
             per_source_top=per_source_top,
             recorded=recorded,
+            refresh=refresh,
         )
     _engine_table(
         result,

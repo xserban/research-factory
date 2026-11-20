@@ -16,6 +16,7 @@ Invariants:
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import json
 import re
 import time
@@ -23,7 +24,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from sqlalchemy import text as sql_text
 
@@ -36,6 +37,7 @@ from factory.services import (
     hub_findings,
     hub_graph,
     hub_landscape,
+    hub_learn,
     hub_lenses,
     hub_living,
     hub_method,
@@ -660,14 +662,91 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "costs": hub_costs.build,
     "write": hub_write.build,
     "platform": hub_platform.build,
+    "learn": hub_learn.build,
 }
 
 # Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes
-# they read. Every other payload is keyed on the whole log (see `hub_serve.fingerprint`).
+# they read. Every other payload is keyed on `PAYLOAD_INPUTS` (see `hub_serve.fingerprint`).
 PAYLOAD_EVENTS: dict[str, tuple[str, ...]] = {
     hub_landscape.LANDSCAPE: hub_landscape.EVENT_PREFIXES,
     hub_landscape.USES: hub_landscape.EVENT_PREFIXES,
 }
+
+# What a payload reads, for its cache key (`hub_serve.fingerprint`). A spec is a tuple of event type
+# prefixes ("extraction." matches `extraction.recorded`); a spec that starts with "*" means every
+# event type except those named with a leading "-". A payload with no entry reads every event.
+# Conservative: a family is left out only where no builder of the payload reads it (the live pilot's
+# constant runner, task, feed and watch events must not restale the corpus pages).
+_QUIET: Final = ("-runner.", "-task.", "-feed.", "-watch.", "-xrun.", "-file.", "-notice.")
+PAYLOAD_INPUTS: dict[str, tuple[str, ...]] = {
+    **{
+        name: ("*", *_QUIET)
+        for name in (
+            "shell",
+            "overview",
+            "flow",
+            "screening",
+            "graph",
+            "lenses",
+            "mining",
+            "findings",
+            "explore",
+            "corpus",
+            "journeys",
+        )
+    },
+    # the call ledger and the budget: agent-written work and its runs, not inbox, feed or pages
+    "costs": (
+        "runner.",
+        "task.",
+        "budget.",
+        "ledger.",
+        "xrun.",
+        "member.",
+        "review.",
+        "extraction.",
+        "screening.",
+        "mine.",
+        "miner.",
+        "decision.",
+        "calibration.",
+        "audit.",
+        "check.",
+        "document.",
+        "fulltext.",
+        "reference.",
+        "search.",
+        "probe.",
+        "interpretation.",
+        "contribution.",
+        "relation.",
+        "idea.",
+        "concept.",
+        "hypothesis.",
+        "draft.",
+        "manuscript.",
+        "experiment.",
+        "lead.",
+        "label.",
+        "appraisal.",
+        "consolidation.",
+        "taxonomy.",
+        "vocabulary.",
+    ),
+}
+
+
+def reads(name: str, event_type: str) -> bool:
+    """Whether the cache key of payload `name` follows events of `event_type` (landscape payloads
+    follow `PAYLOAD_EVENTS`; a grid follows the mining payload)."""
+    if name in PAYLOAD_EVENTS:
+        return event_type.startswith(PAYLOAD_EVENTS[name])
+    if name.startswith(hub_mining.GRID_PREFIX):
+        name = "mining"
+    spec = PAYLOAD_INPUTS.get(name, ("*",))
+    if spec[0] == "*":
+        return not any(event_type.startswith(p[1:]) for p in spec[1:])
+    return event_type.startswith(spec)
 
 
 # ---------------------------------------------------------------- build
@@ -695,15 +774,33 @@ def dumps(payload: object) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=None)
 
 
+def _write_payload(data_dir: Path, name: str, text: str) -> None:
+    """`<name>.json.gz` then `<name>.json`, each renamed into place from a temporary file."""
+    raw = (text + "\n").encode("utf-8")
+    for suffix, body in ((".json.gz", gzip.compress(raw, 6, mtime=0)), (".json", raw)):
+        tmp = data_dir / f"{name}{suffix}.tmp"
+        tmp.write_bytes(body)
+        tmp.replace(data_dir / f"{name}{suffix}")
+
+
 def build_static(
-    project: Project, out_dir: Path, only: Collection[str] | None = None
+    project: Project,
+    out_dir: Path,
+    only: Collection[str] | None = None,
+    *,
+    payloads_only: bool = False,
 ) -> BuildReport:
     """Write ``data/<name>.json`` and ``.js``, ``assets/*`` and the pages whose payloads built.
 
     ``only`` limits the payload names (unknown names raise ValueError before anything is
     written); pages are written when every payload they need was built in this run. A failed
     payload's stale ``data/<name>.json|js`` and the stale ``.html`` of pages skipped because of
-    it are deleted and listed in ``report.removed``."""
+    it are deleted and listed in ``report.removed``.
+
+    ``payloads_only`` is the served hub's child build: only ``data/<name>.json`` and its
+    ``.json.gz`` (compressed once, here) are written, each through a temporary file so a file
+    that exists is complete (the gzip first); no ``.js``, assets or pages. A list ``only`` fixes
+    the build order (the payload a request waits for comes first)."""
     only_set = None if only is None else set(only)
     if only_set is not None:
         unknown = sorted(
@@ -717,6 +814,9 @@ def build_static(
                 f"{GRID_FAMILY}, {hub_mining.GRID_PREFIX}<miner>"
             )
     names = [n for n in BUILDERS if only_set is None or n in only_set]
+    if isinstance(only, list | tuple):
+        rank = {n: i for i, n in enumerate(only)}
+        names.sort(key=lambda n: rank[n])
     ctx = HubContext(project)
     report = BuildReport()
     builders: dict[str, Callable[[HubContext], dict[str, Any]]] = {n: BUILDERS[n] for n in names}
@@ -740,7 +840,8 @@ def build_static(
     for name in names:
         started = time.perf_counter()
         try:
-            with call_memo.entering():  # one reading of each shared derivation per payload
+            # one reading of each shared derivation per payload, and one index sync
+            with ctx.project.index.frozen_sync(), call_memo.entering():
                 text = dumps(builders[name](ctx))
         except Exception as exc:
             report.errors[name] = f"{type(exc).__name__}: {exc}"
@@ -748,6 +849,12 @@ def build_static(
                 if stale.is_file():  # an old file must not outlive a failed rebuild
                     stale.unlink()
                     report.removed.append(f"data/{stale.name}")
+            continue
+        if payloads_only:
+            _write_payload(data_dir, name, text)
+            report.payloads[name] = PayloadReport(
+                round(time.perf_counter() - started, 2), len(text.encode("utf-8")) + 1
+            )
             continue
         (data_dir / f"{name}.json").write_text(text + "\n", encoding="utf-8")
         (data_dir / f"{name}.js").write_text(
@@ -757,6 +864,8 @@ def build_static(
         report.payloads[name] = PayloadReport(
             round(time.perf_counter() - started, 2), len(text.encode("utf-8")) + 1
         )
+    if payloads_only:
+        return report
     for asset in hub_ui.ASSETS:
         target = out_dir / "assets" / asset
         target.parent.mkdir(parents=True, exist_ok=True)

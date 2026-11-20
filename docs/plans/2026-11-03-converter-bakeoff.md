@@ -1,5 +1,7 @@
 # Canonical Markdown and Converter Bake-off Implementation Plan (slice 2, sub-plan B1 of B1–B2)
 
+Status: merged (plans B1/B2; converters chosen, decision 49)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Context:** Slice 2 runs A → B → C → D → E without pilot data (decision 47). Plan A, full-text acquisition, is merged. Plan B is split into two parts:

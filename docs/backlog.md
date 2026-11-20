@@ -528,7 +528,7 @@ Status: built, reviewed (one Sonnet review, fixes 11cbf07), tested on its own fi
 - To do, in order:
   1. ~~Merge into `main`~~ done 2026-11-12 (after merging `main` 11c3685 into the branch: ruff, mypy and the guard, index, conventions and config test files pass on the merged code; the CLI files were not rerun after that merge). Before it, the 32 CLI test files ran one by one with `FACTORY_ROOT` and `FACTORY_PLUGIN_DIR` unset: 27 pass (one, `test_cli_extraction`, is all slow-marked and was deselected); 16 tests fail in `test_cli` (3), `test_cli_evidence` (5), `test_cli_gates` (1), `test_drafts_b_cli_mcp` (4) and `test_drafts_cli_mcp` (3), the same tests failing on `main` 5bc9879, so none is from this branch. They are pre-existing and open.
   2. **Open, blocked on live sessions (2026-11-12):** move `.claude/worktrees/runtime` to the merged commit. Not done: six `factory serve` processes were live (five from the runtime, one stray from `plan-reference-layers`, started about 6 hours earlier), all at PROJECTION_VERSION 83 without the guard; moving the runtime under them, or any version-84 process touching the pilot index, would set off the rebuild back-and-forth this idea is about. Close those sessions first, then move it when no session or wave is running (`git -C .claude/worktrees/runtime checkout --detach <commit>`). Restart every open MCP server so it loads the new code; until then the guard does not act.
-  3. ~~Write the config list~~ done 2026-11-12: `/home/obd/Documents/research-factory-pilot/root/mcp-configs.txt` listing `/home/obd/Documents/Projects/research-factory/.mcp.json` and `/home/obd/Documents/research-factory-pilot/screeners/factory-mcp.json` (researcher's approval: it is in the pilot root).
+  3. ~~Write the config list~~ done 2026-11-12: `$HOME/Documents/research-factory-pilot/root/mcp-configs.txt` listing `$HOME/Documents/Projects/research-factory/.mcp.json` and `$HOME/Documents/research-factory-pilot/screeners/factory-mcp.json` (researcher's approval: it is in the pilot root).
   4. ~~Repoint `.mcp.json`~~ already done by an uncommitted local edit in the main checkout (`PYTHONPATH` and `FACTORY_PLUGIN_DIR` on the runtime). The config part of the check, run read-only (`mcp_line_hits`, not a full `factory check`, which would sync the pilot index with version 84 code), resolves both configs to the runtime: no finding. Still to do once the runtime is moved: a full `factory check` on the pilot. Original step: repoint `.mcp.json` at the runtime (an absolute `--project .claude/worktrees/runtime/platform`, or the same `PYTHONPATH` form as the screener config), then run `factory check` on the pilot and confirm no `mcp-code-lines-differ` or `mcp-config-unresolved` finding.
   5. ~~Scripts~~ checked 2026-11-12: every live script in `research-factory-pilot/` points at the runtime; only the copies in `screeners/_config-backup-2026-11-12/` name `plan-8`, `plan-reference-layers` or `scratch-combined`. Original step: point every wave and miner script at the runtime (`PYTHONPATH`, `FACTORY_PLUGIN_DIR`); grep the scripts for other worktree paths.
   6. ~~Regenerate `docs/MAP.md`~~ done 2026-11-12 at 2327d1d. Original step: regenerate `docs/MAP.md` (`uv run --project platform python scripts/gen_map.py`).
@@ -951,7 +951,7 @@ Status: merged into main 2026-11-18 (6bc3e975; untested, test pause; first serve
 **Open questions:** whether a product whose build takes minutes (dashboard snapshot) should show the old page with a banner instead of the updating page.
 
 ### IDEA-97 — Hub UI v2: one design system, lenses and paper exploration
-Status: merged into main 2026-11-18 (branch `hub-ui-v2`; built and reviewed twice by Sonnet, fix rounds A–C, with guard mutation on sets, screening, trace and XSS; targeted tests only, no full suite; static build `factory hub build <slug> --out DIR`; routes `/p/<slug>/ui/` with payload cache, trace, snowball act (inbox) and corpus acts merged 2026-11-18 (hub-ui-routes; reviewed with guard mutation, fixed); polish merged (hub-ui-polish); the running server needs a restart to serve them; switch-over and researcher's live check pending; fix list `docs/plans/2026-11-18-hub-ui-fixlist.md`) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-54, IDEA-55, IDEA-96 (route hook after its merge) · 2026-11-19: every old-hub page ported (seven new pages Protocol, Pipeline, Sources, Method, Costs & runs, Write & export, Platform; Living and gap fixes; shared routes; prewarm speed-ups), merged into main 90dd65a2 (parity 342/347 closed, see docs/plans/2026-11-18-hub-ui-parity.md; acts reviewed with guard mutation, fixed; gate 30 files green); not browser-checked; switch-over pending
+Status: merged into main 2026-11-18 (branch `hub-ui-v2`; built and reviewed twice by Sonnet, fix rounds A–C, with guard mutation on sets, screening, trace and XSS; targeted tests only, no full suite; static build `factory hub build <slug> --out DIR`; routes `/p/<slug>/ui/` with payload cache, trace, snowball act (inbox) and corpus acts merged 2026-11-18 (hub-ui-routes; reviewed with guard mutation, fixed); polish merged (hub-ui-polish); the running server needs a restart to serve them; switch-over and researcher's live check pending; fix list `docs/plans/2026-11-18-hub-ui-fixlist.md`) · Added: 2026-11-18 (researcher) · Slice: — · Depends on: IDEA-54, IDEA-55, IDEA-96 (route hook after its merge) · 2026-11-19: every old-hub page ported (seven new pages Protocol, Pipeline, Sources, Method, Costs & runs, Write & export, Platform; Living and gap fixes; shared routes; prewarm speed-ups), merged into main 90dd65a2 (parity 342/347 closed, see docs/plans/2026-11-18-hub-ui-parity.md; acts reviewed with guard mutation, fixed; gate 30 files green); not browser-checked; switch-over pending · 2026-11-20: responsiveness stack merged (435fa04d): builds out of process, per-payload fingerprints, caching + gzip, faster builders, last parity items (347/347 ported or ruled), click tests on every page; gated; not browser-checked by the researcher
 **What:** replace the cluttered hub shell with one calm design system (tokens, eight colour themes, rail, Ctrl-K, paper drawer with evidence quotes, ⓘ panels, glossary terms, "Why this number?" traces) and eleven pages: Overview, Flow (+ screening views), Corpus (explorer port), Lenses, Explore, Graph (landscape, foundations, schools, main path, river, reference health), Miners, Data, Findings, Living (feed river, horizon, heartbeat), Kit. Pages load JSON payloads built by services instead of inlined data.
 **Why:** the researcher found the hub cluttered and wants innovative, question-led ways to read and explore the corpus; design note `docs/design-note-hub-ui-2026-11-18.md`.
 **Rigour notes:** every number computed from a payload and pinned by a test; included (PRISMA) and mined (miner rows) sets named and reconciled; one citation count; quotes shown with every classified value; held-out works never hidden; no model call (similarity is a stated formula); offline (vendored OFL fonts); WCAG AA on token pairs.
@@ -999,3 +999,102 @@ Status: engine v1 built on branches hypothesis-engine-services and hypothesis-en
 **Why:** the guided run of the skill assembled candidates and the order by hand; the platform now computes them.
 **Rigour notes:** exploratory label on every reply; no new event type or trigger kind; no model call; the order is a rule, not a verdict; held-out scrubbing in the MCP layer only (decision 37 item 9).
 **Open questions:** combination volume (9,506 on the pilot before the cap); one row per claims candidate; proposed decision 148.
+
+
+### IDEA-104 — Held-out seeds file is tracked in the public repository
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** docs/pilot/heldout-seeds.md is tracked in git although the repository has been public since 2026-11-16; untrack it and ignore it, rewrite history, or declare the pilot contaminated in docs/pilot/log.md.
+**Why:** The pilot hold-out (decision 37) is void if the seeds can be read.
+**Rigour notes:** The researcher decides; history keeps the file even after removal. Also check docs/pilot/seeds.md, log.md and docs/thesis-proposal.pdf for what may be public.
+**Open questions:** which of the three options; whether to rewrite history.
+
+### IDEA-105 — Promote built Proposed decisions to Decided in one pass
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** About 55 rows of docs/decisions.md are Proposed although the code is built and relied on (54, 76-79, 81-102, 104-117, 120, 126, 128, 130-131, 133-140, 148), and the foundation rows 10-14, 27, 28, 30, 31, 33-35.
+**Why:** The log's status column no longer says what binds; CLAUDE.md itself says 'decision 82 proposed'.
+**Rigour notes:** Only the researcher's standing approval promotes a row; rows that are not built stay Proposed; no text of a Decided row changes.
+**Open questions:** whether to promote per slice or all at once.
+
+### IDEA-106 — Split the MCP and CLI registration modules by stage and tighten the import contract
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** mcp/server.py (7,363 lines, build_server is one 6,519-line closure of about 216 tools) and cli/main.py (8,135 lines) become mcp/tools/<stage>.py with register(server, ctx) and typer sub-apps; set allow_indirect_imports=false in the import-linter contract if feasible.
+**Why:** With indirect imports allowed, mcp and cli can reach the writer through any service and nothing checks that they hold no logic; the closure cannot be tested per tool.
+**Rigour notes:** Tool names, parameters and replies unchanged (a golden test of the tool list); no logic moves into the interfaces.
+**Open questions:** whether a size check for interface functions is worth adding.
+
+### IDEA-107 — Split the largest services and handlers
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** Split services/check.py (2,952 lines) by stage module, site_server._handler_class (551 lines) per route group, site_catalog.derive_catalog, site.products, events/catalog.default_catalog (per module) and extraction._record; 22 functions exceed 150 lines.
+**Why:** Review and testing cost grows with file size.
+**Rigour notes:** Behaviour identical; the check codes and their order stay as they are.
+**Open questions:** order of splitting.
+
+### IDEA-108 — Rigor mode can be promoted after init
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** rf-frame says the rigor mode is reversible by promotion and that the human sets it, but no event or command changes it (project.created only; check --promote-to only reports a gap).
+**Why:** A researcher who starts exploratory and wants the pilot mode must start a new project.
+**Rigour notes:** A promotion is a human act, an event that supersedes (never edits) the mode, and every gate re-evaluates from the new mode; demotion stays refused.
+**Open questions:** event name and whether past exploratory work is relabelled.
+
+### IDEA-109 — Runtime check for technique and engine isolation (R-87)
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** The runtime check scans only for organisation-layer ids (check.py:1340); technique graph, lead queue and miner rows are kept out of counts by code structure and tests, not by a check.
+**Why:** A new service that wires a technique count into a report would not trip check, against the claim that they never enter counts.
+**Rigour notes:** The check reads the registry of count sources and flags any that include a derived layer.
+**Open questions:** how to declare a count source.
+
+### IDEA-110 — Human gates for hypotheses and miner registration are agent-passable
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** Hypothesis gates are policy-based and agent-passable (mcp/server.py hypothesis tools, hypothesis_gates.py); MCP miner_register is open to an agent while the CLI text calls it the researcher's act; snowball_round's go-ahead exists only in its docstring (the hard control is the protocol snowball_plan, R-82).
+**Why:** Specs R-37, R-46, R-84 and R-88 speak of human gates; the real protection depends on the rigor preset and gate_policies.
+**Rigour notes:** State per tool who may pass the gate and say so in tool docs and skills, or make the gate human; no change to Decided rows.
+**Open questions:** which gates the researcher wants human in exploratory mode.
+
+### IDEA-111 — Rating and balance of sheets are CLI-only
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** No hub page or MCP prompt directs the researcher to rate arguments or write the balance (factory sheets rate); the agent can only say 'run the command'.
+**Why:** A researcher who only uses Claude meets a dead end, while researcher ratings are first-class (memory: spar human in the loop).
+**Rigour notes:** Ratings stay human acts (R-37 line); the hub chat page may already offer it: verify first.
+**Open questions:** hub control versus MCP prompt.
+
+### IDEA-112 — Consolidate confusing names
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** calibrate, screen-check, audit and gate audit; check as verb and as the check_* draws; pass A/B for screening, extraction and miners; lead, hypothesis, idea, contradiction and finder; sheet, answer, spar and chat.
+**Why:** Three vocabularies for argued results confuse a new user and the skills.
+**Rigour notes:** Renames need a decision and a migration of events; start with a glossary page.
+**Open questions:** glossary first or renames.
+
+### IDEA-113 — Hub: held-out recall (R-24), inbox page, stage guidance and exploratory banner
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** Held-out recall appears only in the CLI and report (hub_protocol.py:71 withholds it); the link inbox has no hub page; pipeline.js stations may not cover miners, engine and output; no hub-wide banner marks exploratory mode.
+**Why:** The researcher's own view is text-only for these.
+**Rigour notes:** Held-out seed results are not shown where they would unblind the screening agents (decision 37.9 stands).
+**Open questions:** which of the four first.
+
+### IDEA-114 — Pass B versus spec R-33
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** R-33 says two independent passes with exclusions tested in reverse criterion order; passes.py and rf-screen say pass B tests a sample against exclusions, so it is a second pass only for the sample unless ScreeningPlan says otherwise.
+**Why:** Spec and skill disagree on what pass B is.
+**Rigour notes:** Align the text, or the code, by decision; do not change R-33 silently.
+**Open questions:** which side is right.
+
+### IDEA-115 — Test and skill hygiene from the code-health review
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** Replace the 12 mid-test monkeypatch.undo() calls with monkeypatch.context(); the module-level _CACHE in test_hub_ui_clicks.py is shared state; check that CI runs the slow acceptance files; decide whether services/background.py is dead; add a CI script that checks every tool name in the 32 skills against the registered tools and clarifies evaluate_hypothesis and group_claims_by_work in rf-hypothesis-engine (CLI names, not MCP tools).
+**Why:** Order-dependent tests and unlisted skill drift.
+**Rigour notes:** Test changes only; no product behaviour.
+**Open questions:** none.
+
+### IDEA-116 — Skill and help text drift found in the stage reviews
+Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 (docs/review-2026-11-20-summary.md)
+**What:** protocol_app help omits the amend path (cli/main.py:275 versus record, amend and deviation); with protocol.ready off a search needs no protocol, which rf-run and rf-protocol do not say; status does not say 'calibration not required in this mode'; pass-session refusals are not explained in the non-pass tool docs.
+**Why:** A new user learns the real flow only from refusals.
+**Rigour notes:** Text only.
+**Open questions:** none.
+
+### IDEA-117 — CLI for question, seeds, probe and search
+Status: not built (job G1 of 2026-11-20 stopped after the five smaller items).
+**What:** thin CLI wrappers so a human can work without Claude: `factory question record`, `factory seeds add|list`, `factory probe run`, `factory search run` (`question show` and `search slice` already exist).
+**Why:** the framing, seed, probe and search steps run only as MCP tools today (flow review, `ops/review-2026-11-20/stages-0-4.md`, gap 5).
+**Rigour notes:** human-attributed acts like the existing ones; read-only ones in `CLI_READS`; no logic outside services; mock-source tests for search.
+**Open questions:** JSON spec parsing for the question and the seed lists; source adapters for `search run`; the actor and decision-id handling.

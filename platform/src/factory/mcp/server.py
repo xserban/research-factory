@@ -430,7 +430,11 @@ def build_server(
             summary = search_service.run_query(
                 opened, query_id, sources=adapters, resume_run=resume_run, actor=actor
             )
-            return _withheld(opened, summary.model_dump(mode="json"))
+            data = summary.model_dump(mode="json")
+            notice = protocol_service.exploratory_search_notice(opened)
+            if notice is not None:
+                data["notice"] = notice
+            return _withheld(opened, data)
 
         return _reply(project, search)
 
@@ -3308,13 +3312,17 @@ def build_server(
         layer: str = "core",
         technique_min_works: int = 3,
         max_co_works: int = 0,
+        group_claims_by_work: bool = True,
     ) -> dict[str, JsonValue]:
         """Observations to check, not leads and not claims of novelty: technique challenges,
         combinations and gaps, and limitation rows of m-claims, each with its works, verbatim
         quotes and anchors, and the exact `triggers` (item/work, at most 20) a `lead_record` call
         accepts. `sources` is any of technique-challenge, technique-combination, technique-gap,
         claims-limitation (default all); `per_source` caps each source; `layer` is core (default),
-        all or a layer id; `technique_min_works` and `max_co_works` narrow combinations and gaps.
+        all or a layer id; `technique_min_works` and `max_co_works` narrow combinations and gaps;
+        `group_claims_by_work` (default true) gives one claims candidate per work
+        (`claims-work:<work_id>`, its limitation rows as triggers, at most 19 plus the work),
+        false one per limitation row.
         Every cited row has its quote, with `side` (the approach it supports), `described_as` and
         the miner's `evidence` class; a challenge carries the flag `failure-quote-not-checked`
         (read the failed quote: the platform cannot tell whether it states a failure); a gap is
@@ -3331,6 +3339,7 @@ def build_server(
                 layer=layer,
                 technique_min_works=technique_min_works,
                 max_co_works=max_co_works,
+                group_claims_by_work=group_claims_by_work,
             ),
             bound_candidates,
         )
@@ -3348,6 +3357,7 @@ def build_server(
         layer: str = "core",
         technique_min_works: int = 3,
         max_co_works: int = 0,
+        group_claims_by_work: bool = True,
         include_leads: bool = True,
         recorded: str = "after",
     ) -> dict[str, JsonValue]:
@@ -3365,7 +3375,9 @@ def build_server(
         default top divided by the number of sources) and merged by the global order;
         `balance=false` keeps the global order. `exclude_prior` leaves out candidates with a prior
         hit (parked or discarded lead, hypothesis, closed direction). Prior hits name what they
-        share. Measures are comparable only within one call. EXPLORATORY. Read-only; the reply
+        share. `group_claims_by_work` (default true): one claims candidate per work, its support
+        counting the work's limitation rows (independence 1). Measures are comparable only within
+        one call. EXPLORATORY. Read-only; the reply
         shows at most 30 entries and keeps a quote for every cited row, cutting long text, not
         rows (see `reply_cap`). Refused to a session that has joined a pass."""
         return _lead_engine_reply(
@@ -3380,6 +3392,7 @@ def build_server(
                 layer=layer,
                 technique_min_works=technique_min_works,
                 max_co_works=max_co_works,
+                group_claims_by_work=group_claims_by_work,
                 include_leads=include_leads,
                 balance=balance,
                 per_source_top=per_source_top,

@@ -524,6 +524,7 @@ def _content_model(scope: ScopeKey) -> type[ExtractBatchContent]:
     return ContributionBatchContent if scope is Scope.CONTRIBUTION else ExtractBatchContent
 
 
+@memoised
 def _kind_tasks(
     project: Project, scope: ScopeKey, calibration_id: str | None = None
 ) -> list[tuple[str, str, ExtractBatchContent]]:

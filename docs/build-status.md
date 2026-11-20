@@ -1,6 +1,6 @@
 # Build status
 
-Updated 2026-11-12 (restart and costs merged into `plan-feed-hub`; targeted tests run). Each line of work, and where it stands: **built** (code committed, mypy and ruff pass), **reviewed** (one model review of the branch, fixes committed), **tested** (the test suite has run and passed), **merged** (on `main`). Testing was paused by the researcher from 2026-11-05; on 2026-11-12 targeted runs of this line's test files were allowed (one file per process), so "partly" below means those files pass but the full suite has not run. No feature of this line has been tried live yet. The untested-work list kept by the controller names what to run first when testing resumes.
+Updated 2026-11-12 (restart and costs merged into `plan-feed-hub`; targeted tests run). Each line of work, and where it stands: **built** (code committed, mypy and ruff pass), **reviewed** (one model review of the branch, fixes committed), **tested** (the test suite has run and passed), **merged** (on `main`). Tests run on GitHub Actions (see `docs/runbook-ci.md`: affected files on every pull request, the whole offline suite on every push to main, the slow suites nightly); locally only mypy, ruff and the touched test files are run. The table below is a historical record of the 2026-11-12 line, written while testing was paused; "partly" there means the targeted files passed but the full suite had not run.
 
 Update this file in the landing commit of every plan, together with the backlog statuses.
 

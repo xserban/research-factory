@@ -6,16 +6,11 @@ A research factory is a platform in which teams of researchers and AI agents run
 
 ## How it works
 
-- **The platform never calls a model.** Every judgement (screening, extraction, interpretation, hypotheses) comes from an AI agent or a
-  researcher through MCP tools or the command line, and is recorded with its provenance (model, skill version, input blob). Scripts
-  compute counts, hashes and statistics; agents never do bookkeeping.
-- **Events are the source of truth.** Append-only JSONL files under `projects/<slug>/events/`; nothing is edited or deleted, and
-  corrections supersede. The SQLite index is a projection that can be rebuilt from the events and is written only by the projector.
-- **Business logic lives in `platform/src/factory/services/`.** `mcp/` and `cli/` parse input, call a service and format output.
-- **Sources:** arXiv, OpenAlex, Crossref, PubMed with PMC and Europe PMC full text. The contact address configured for polite API
-  use is never sent to any outside host.
-- **Interpretation layers are labelled.** Miner rows from uncalibrated miners, taxonomies and the technique landscape are exploratory:
-  they never enter counts that a report uses.
+A project moves through nine stages: frame, gather, screen, acquire, extract, understand, develop, write, maintain. Claude reads and judges through MCP tools, led by one skill per stage. The platform never calls a model. It records every act as an append-only event, computes every count from the events, and holds the gates that only a person may pass. The database is a copy that can be rebuilt from the events.
+
+New here? Open the hub page **Start here** (`/p/<slug>/ui/learn.html`; the served hub opens on it for a project with no work past setup), or run `factory tour` for the stage list with your progress and `factory tour --stage N` for one stage card. The overview map of the stages and loops is on the Platform page, tab "How it works".
+
+Business logic lives in `platform/src/factory/services/`; `mcp/` and `cli/` parse input, call a service and format output. Sources: arXiv, OpenAlex, Crossref, PubMed with PMC and Europe PMC full text. The contact address configured for polite API use is never sent to any outside host. Outputs of uncalibrated miners, taxonomies and the technique landscape are labelled exploratory and never enter counts that a report uses.
 
 ## Getting started
 

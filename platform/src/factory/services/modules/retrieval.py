@@ -61,6 +61,9 @@ SPEC = ModuleSpec(
         "queries",
         "limits",
         "snowball_plan",
+        # decision 138: governs snowball and chase rounds (owned here); screening agreement
+        # and extraction audit only read it.
+        "pending_tolerance",
     ),
     checks=(
         CheckRule("shortfall-unexplained", ("error", "error", "error")),

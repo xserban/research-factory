@@ -16,6 +16,8 @@ projects/*/.index/
 projects/*/library/
 # Factory: ephemeral progress of long operations (slice 8, IDEA-44), never an event
 projects/*/.progress/
+# Factory: derived, rebuildable lead engine cache (never an event)
+projects/*/cache/
 projects/*/blobs/**/*.pdf
 # Factory: the rebuildable shared mining store (slice M ruling 18)
 /.mining/

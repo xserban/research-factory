@@ -1,5 +1,7 @@
 # Full-text Screening and Full PRISMA Implementation Plan (slice 2, sub-plan C)
 
+Status: merged (plan 2C, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Screen the works promoted at title/abstract against their full text with the slice-1 machinery (two independent passes, calibration, κ, disagreements, audit, verified quotes), citing anchors in a pinned converted document, and derive the full PRISMA 2020 flow.

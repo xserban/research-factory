@@ -15,11 +15,13 @@ import pytest
 
 from factory.lineage.paths import MAX_DEPTH
 from factory.model.regions import RegionSnapshotTaken
+from factory.regions import evaluate as evaluate_module
 from factory.regions.evaluate import Evaluation, evaluate
 from factory.regions.rules import CitesRule, LineageRule, MemberType, RuleSet
 from factory.regions.version import compress, members_text
+from factory.services.agreement import Outcome
 from factory.services.context import Project
-from tests.test_lineage_scale import CHAIN, _paper, _populate
+from tests.test_lineage_scale import CHAIN, PAPERS, _paper, _populate
 
 pytestmark = pytest.mark.slow
 
@@ -56,9 +58,13 @@ def _timed(project: Project, rules: RuleSet) -> tuple[Evaluation, float]:
     return result, time.perf_counter() - start
 
 
-def test_region_scale(project: Project) -> None:
+def test_region_scale(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
     project.index.sync()
     _populate(project)
+    # A cites rule keeps only corpus works (0405e75c); the synthetic papers have no screening
+    # events, so the corpus is supplied in place of the screening service, every paper included.
+    corpus = {_paper(i): Outcome.INCLUDED for i in range(PAPERS)}
+    monkeypatch.setattr(evaluate_module, "final_outcomes", lambda project: corpus)
     _pin_base(project)  # an incremental fold: nothing is rebuilt, the synthetic rows stay
     tracemalloc.start()
     try:

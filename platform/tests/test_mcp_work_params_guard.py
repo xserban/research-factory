@@ -40,11 +40,19 @@ RESOLVES: dict[str, frozenset[str]] = {
     "writing_outline": frozenset({"scope_works"}),
     "draft_create": frozenset({"scope_works"}),
     "draft_repin": frozenset({"scope_works"}),
+    # `spar_v2.record_reading` maps the id with `resolve_work_id`.
+    "spar_reading_record": frozenset({"work_id"}),
 }
 
 EXEMPT: dict[tuple[str, str], str] = {
     ("lead_record", "framework"): "a framework's name, not a work id",
     ("corpus_search", "per_work_limit"): "a hit count per work, not a work id",
+    ("lead_candidates", "technique_min_works"): "a minimum count of works, not a work id",
+    ("lead_candidates", "max_co_works"): "a maximum count of co-works, not a work id",
+    ("lead_queue", "technique_min_works"): "a minimum count of works, not a work id",
+    ("lead_candidates", "group_claims_by_work"): "a flag: one claims candidate per work, not an id",
+    ("lead_queue", "group_claims_by_work"): "a flag: one claims candidate per work, not an id",
+    ("lead_queue", "max_co_works"): "a maximum count of co-works, not a work id",
     ("technique_combinations", "min_works"): "a minimum count of works, not a work id",
     ("technique_combinations", "max_co_works"): "a maximum count of co-works, not a work id",
     ("technique_gaps", "min_works"): "a minimum count of works, not a work id",

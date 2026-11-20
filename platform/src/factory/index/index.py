@@ -5,6 +5,7 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,74 @@ NON_STATE_TABLES: frozenset[str] = frozenset(
         "task_claims",
         "source_requests",
         "request_starts",
+    }
+)
+# The tables of the base projection (commit a2fb6bc, base state hash 277c8dd2): always hashed, even
+# when empty. Every later table belongs in OMITTED_WHEN_EMPTY (or NON_STATE_TABLES), so that it
+# leaves an old log's hash unchanged; tests/test_state_hash_tables.py enforces the partition.
+HASHED_ALWAYS: frozenset[str] = frozenset(
+    {
+        "amendments",
+        "audit_items",
+        "audits",
+        "blocked_pairs",
+        "calibration_draws",
+        "calibration_items",
+        "calibration_labels",
+        "chase_queries",
+        "chase_rounds",
+        "citation_contexts",
+        "decisions",
+        "deviations",
+        "document_conversions",
+        "document_failures",
+        "events",
+        "extraction_audit_items",
+        "extraction_audits",
+        "extraction_claims",
+        "extraction_closures",
+        "extraction_fields",
+        "extraction_passes",
+        "extraction_resolutions",
+        "extraction_rows",
+        "extraction_sessions",
+        "fulltext_attempts",
+        "fulltext_documents",
+        "fulltext_fetches",
+        "fulltext_source_changes",
+        "goals",
+        "inbox_items",
+        "inbox_resolutions",
+        "label_sessions",
+        "merges",
+        "pages",
+        "pass_sessions",
+        "passes",
+        "press_reviews",
+        "probes",
+        "project",
+        "protocols",
+        "provenance",
+        "queries",
+        "questions",
+        "reference_context_sets",
+        "reference_decisions",
+        "reference_entries",
+        "reference_extractions",
+        "reference_links",
+        "resolutions",
+        "runs",
+        "sample_considered",
+        "sample_extensions",
+        "seed_admissions",
+        "seed_explanations",
+        "seed_split",
+        "seeds",
+        "snowball_candidates",
+        "snowball_queries",
+        "snowball_rounds",
+        "tasks",
+        "works",
     }
 )
 OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
@@ -196,6 +265,21 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "reference_layer_schemes",
         "reference_layers",
         "reference_layer_labels",
+        # Spar sheets, answers, chat requests and argument checks (added 2026-11-18 to 11-20): an
+        # old log has none, so they leave the hash while empty (old log replay).
+        "sheets",
+        "sheet_arguments",
+        "sheet_balances",
+        "sheet_candidates",
+        "sheet_ratings",
+        "answers",
+        "answer_ratings",
+        "answer_sentences",
+        "argument_checks",
+        "chat_requests",
+        "spar_coverage",
+        "spar_readings",
+        "spar_roles",
     }
 )
 """Tables added after slice 3: while empty they leave no trace in the hash, so a log without
@@ -353,6 +437,7 @@ class Index:
         self._owner: int | None = None  # that thread's ident while it holds it
         self._snapshot = False  # set and read only by the owner
         self._clean = False  # owner only: the index holds the whole log, for this hold
+        self._frozen: ContextVar[bool] = ContextVar("index_frozen", default=False)
         self._on_exclusive = on_exclusive
         self._on_write_lock = on_write_lock
 
@@ -362,7 +447,7 @@ class Index:
         Inside `snapshot()` it applies nothing: the snapshot synced on entry and holds only the
         shared lock, under which this process must not write.
         """
-        if self._in_snapshot():
+        if self._in_snapshot() or self._frozen.get():
             return SyncResult(applied=0, rebuilt=False)
         with self._locked():
             if self._clean:
@@ -376,6 +461,25 @@ class Index:
         While a hold lasts, a `sync()` after one that found the log fully applied reads nothing
         (no other writer can append under the write lock); every append inside a hold calls this."""
         self._clean = False
+
+    @contextmanager
+    def frozen_sync(self) -> Iterator[None]:
+        """Sync once, then make `sync()` a no-op until the block exits, without holding any lock.
+
+        For a long read-only build (the hub) whose services each call `sync()`: every call scans
+        the event files, which costs about 30 ms on the pilot and was repeated hundreds of times.
+        Invariant: the build reads the log as of the one sync; events appended meanwhile are seen
+        by the next build. Nested blocks reuse the outer one. Only this thread's context is frozen.
+        """
+        if self._frozen.get():
+            yield
+            return
+        self.sync()
+        token = self._frozen.set(True)
+        try:
+            yield
+        finally:
+            self._frozen.reset(token)
 
     @contextmanager
     def snapshot(self) -> Iterator[None]:

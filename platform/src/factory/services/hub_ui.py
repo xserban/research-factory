@@ -188,6 +188,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/costs.js": ("hub_ui/pages/costs.js", "text/javascript; charset=utf-8"),
     "pages/write.js": ("hub_ui/pages/write.js", "text/javascript; charset=utf-8"),
     "pages/platform.js": ("hub_ui/pages/platform.js", "text/javascript; charset=utf-8"),
+    "pages/learn.js": ("hub_ui/pages/learn.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -403,6 +404,7 @@ PAGES: Final[dict[str, PageSpec]] = {
     "living": PageSpec("living", "Living review", "pages/living.js", ("shell", "living")),
     "costs": PageSpec("costs", "Costs & runs", "pages/costs.js", ("shell", "costs")),
     "platform": PageSpec("platform", "Platform", "pages/platform.js", ("shell", "platform")),
+    "learn": PageSpec("learn", "Start here", "pages/learn.js", ("shell", "learn")),
     "kit": PageSpec("kit", "Brand kit", "pages/kit.js", ("shell",)),
 }
 

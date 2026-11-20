@@ -79,6 +79,7 @@ def test_the_options_reach_the_service(
         "5",
         "--max-co-works",
         "1",
+        "--no-group-claims",
         *KNOBS,
     )
     assert code == 0, err
@@ -88,6 +89,10 @@ def test_the_options_reach_the_service(
     assert p["sources"] == ["technique-gap", "claims-limitation"] and p["top"] == 1
     assert p["balance"] == 0 and p["exclude_prior"] == 1 and p["per_source"] == 5
     assert p["max_co_works"] == 1 and p["technique_min_works"] == 1
+    assert p["group_claims_by_work"] == 0
+    code, out, err = _run(settings.root, "queue", "--format", "json", *KNOBS)
+    assert code == 0, err
+    assert json.loads(out)["parameters"]["group_claims_by_work"] == 1
     code, out, err = _run(
         settings.root, "queue", "--format", "json", "--per-source-top", "1", *KNOBS
     )
