@@ -114,7 +114,7 @@ class ProjectStatus(StrictModel):
     decisions: DecisionStatus = DecisionStatus()
     stage: Stage | None = None
     """The derived stage (spec 7a ruling 4); None only where an agent path takes it out."""
-    blocking: list[str] = []
+    blocking: list[str] = Field(default_factory=list)
     """Next steps that stop the flow and that a count would hide; empty when none."""
 
 
