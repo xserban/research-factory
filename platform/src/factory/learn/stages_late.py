@@ -133,7 +133,7 @@ DEVELOP = StageCard(
     goal="Turn the corpus into candidate leads, argue each for and against with checked quotes, and register a falsifiable hypothesis before it is tested.",
     acts=(A, H, S),
     gates=(
-        "You rate the arguments of a spar and write the balance; this is on the command line.",
+        "You rate the arguments of a spar and write the balance, on the Chat page (Your rating rows and the balance form) or on the command line.",
         "You decide each lead, and conclude or abandon a hypothesis.",
         "Whether an agent may pass the lead and registration gates depends on the gate policies of the project.",
     ),
@@ -150,8 +150,8 @@ DEVELOP = StageCard(
         ),
         Step(
             H,
-            "Rate each argument and write the balance.",
-            (cli("sheets rate"), cli("sheets balance"), cli("answers rate")),
+            "Rate each argument and write the balance: on the Chat page, beside each quote and its paragraph, or on the command line.",
+            (page("chat"), cli("sheets rate"), cli("sheets balance"), cli("answers rate")),
         ),
         Step(
             H,
@@ -177,7 +177,7 @@ DEVELOP = StageCard(
     ),
     mistakes=(
         "A lead cannot cite a sheet until both sections are closed and your balance is written.",
-        "Agents cannot rate or balance. Waiting for you is intended and the path is the command line.",
+        "Agents cannot rate or balance. Waiting for you is intended; rate on the Chat page or on the command line.",
         "A lead without a trigger or a framework is refused.",
         "The same session cannot draft and register, or review its own draft.",
         "Reading queue scores as evidence. They are labelled exploratory.",
