@@ -54,6 +54,8 @@ CLI_READS: frozenset[str] = frozenset(
         "versions list",
         "inbox list",
         "brief note",
+        "brief plan",
+        "brief status",
         "report prisma",
         "report search",
         "report methods",
