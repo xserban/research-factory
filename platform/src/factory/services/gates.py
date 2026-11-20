@@ -20,6 +20,7 @@ Invariants:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -30,10 +31,12 @@ from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.gates import GatePolicies
+from factory.model.levels import AutonomyLevel
 from factory.model.miners import MINER_NAME_RE
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
 from factory.model.screening import Channel
+from factory.modules.autonomy import resolve_policy
 from factory.modules.contract import (
     Autonomy,
     AutonomyAct,
@@ -42,7 +45,7 @@ from factory.modules.contract import (
     GatePolicy,
     PolicyKind,
 )
-from factory.modules.presets import Enforcement, enforcement, preset
+from factory.modules.presets import Enforcement, enforcement
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core, passes
 from factory.services.access import gate_role_issues
@@ -133,6 +136,17 @@ def _policies_of(project: Project, protocol_id: str | None) -> GatePolicies | No
     return ProtocolSpec.model_validate_json(str(row[0])).gate_policies
 
 
+def autonomy_level(project: Project) -> AutonomyLevel:
+    """The project's autonomy level (contract C2, `services.project.project_levels`); `attended`
+    while that reader does not exist (lane L1 not merged) or the project has none."""
+    import importlib
+
+    reader = getattr(importlib.import_module("factory.services.project"), "project_levels", None)
+    if reader is None:
+        return AutonomyLevel.ATTENDED
+    return AutonomyLevel(str(reader(project).autonomy_level))
+
+
 def effective_policy(
     project: Project,
     gate_id: str,
@@ -141,14 +155,20 @@ def effective_policy(
     mode: RigorMode | None = None,
 ) -> GatePolicy:
     """The protocol's entry for `gate_id` (the current protocol's when `protocol_id` is None),
-    else the preset of `mode` (the project's rigor mode unless a caller names it)."""
+    else the preset of `mode` (the project's rigor mode unless a caller names it), both read
+    through the autonomy profile of the project's level (`modules.autonomy.resolve_policy`; under
+    `attended` the profile is empty and this is the plain rule)."""
     project.index.sync()
     policies = _policies_of(project, protocol_id)
+    entry: GatePolicy | None = None
     if policies is not None:
-        for entry in policies.entries:
-            if entry.gate == gate_id:
-                return entry.as_policy()
-    return preset(mode or indexed_rigor_mode(project), gate_id)
+        for candidate in policies.entries:
+            if candidate.gate == gate_id:
+                entry = candidate.as_policy()
+                break
+    return resolve_policy(
+        autonomy_level(project), mode or indexed_rigor_mode(project), gate_id, entry
+    )
 
 
 def protocol_at(project: Project, event_id: str) -> str | None:
@@ -388,12 +408,41 @@ def gate_audit_sample(
     written: for a non-human actor (`actor`), a seed out of range (`random_seed`), a gate that is
     not a decision gate or is not `agent_audit` now (`gate_id`), no agent act to audit
     (`gate_id`), or a new draw over the very population of the latest audit (`passes`)."""
+    return _draw_audit(project, actor, gate_id, random_seed, platform=False)
+
+
+def gate_audit_sample_platform(project: Project, gate_id: str) -> GateAuditSampled:
+    """The platform's own draw under `supervised` or `autonomous` (contract C4): the sample is
+    drawn by the platform (a `system` actor), never by an agent session. The seed is derived from
+    the population digest, so the draw is reproducible and no agent chooses it. Refused (field
+    `gate_id`) under `attended`, where the human draws, and in every case `gate_audit_sample`
+    refuses."""
+    if autonomy_level(project) is AutonomyLevel.ATTENDED:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(
+                    "gate_id",
+                    "the platform draws an audit only for a supervised or autonomous project",
+                )
+            ]
+        )
+    return _draw_audit(project, project.system_actor(), gate_id, None, platform=True)
+
+
+def _draw_audit(
+    project: Project, actor: Actor, gate_id: str, random_seed: int | None, *, platform: bool
+) -> GateAuditSampled:
     from factory.services.modules.default import default_modules  # the registry imports services
 
-    seed, seed_issues = audit_core.validate_seed(random_seed)
     with project.index.exclusive():
         project.index.sync()
-        issues = audit_core.human_gate(project, actor, Channel.CLI, noun="sample")
+        if platform:
+            seed = 0
+            seed_issues: list[ValidationIssue] = []
+            issues: list[ValidationIssue] = []
+        else:
+            seed, seed_issues = audit_core.validate_seed(random_seed)
+            issues = audit_core.human_gate(project, actor, Channel.CLI, noun="sample")
         issues.extend(seed_issues)
         known = {g.gate_id for g in default_modules().gates() if g.kind is GateKind.DECISION}
         policy = effective_policy(project, gate_id) if gate_id in known else None
@@ -407,6 +456,8 @@ def gate_audit_sample(
                 [ValidationIssue("gate_id", f"no agent act at gate {gate_id} to audit")]
             )
         audit_core.refuse_reopen(_last_digest(project, gate_id), population)
+        if platform:
+            seed = int(hashlib.sha256(population.digest.encode()).hexdigest()[:8], 16)
         size = audit_size(len(population), policy.fraction or 0.0, policy.minimum or 0)
         drawn = draw_uniform(population.keys, size, seed, key=str)
         payload = GateAuditSampled(
@@ -460,6 +511,68 @@ def gate_audit_record(
             channel=channel,
         )
         event = project.events.make("gate.audit_labelled", payload, actor)
+        project.record([event])
+    return event.id
+
+
+def gate_audit_record_agent(
+    project: Project,
+    actor: Actor,
+    audit_id: str,
+    act_event_id: str,
+    correct: bool,
+    note: str | None,
+) -> str:
+    """An agent's label on one sampled act under `supervised` or `autonomous` (contract C4): the
+    third-session audit. Recorded as `gate.audit_labelled` with the agent actor; the fold ignores
+    it (`index/gates.py` takes human labels only), so no table and no state hash change, and the
+    trust ledger counts it apart from human labels. Refused, nothing written: for a non-agent
+    actor or an `attended` project (`actor`), an audit not drawn by the platform, an unknown
+    audit or an act outside its sample (`audit_id`, `act_event_id`), or the session that closed
+    the act (`session`: the labeller must be another session)."""
+    with project.index.exclusive():
+        project.index.sync()
+        issues: list[ValidationIssue] = []
+        if actor.kind != "agent" or autonomy_level(project) is AutonomyLevel.ATTENDED:
+            issues.append(
+                ValidationIssue("actor", "only an agent of a supervised or autonomous project")
+            )
+        with project.index.connect() as conn:
+            drawn = conn.execute(
+                text(
+                    "SELECT e.actor_kind FROM gate_audits a JOIN events e ON e.id = a.event_id "
+                    "WHERE a.audit_id = :a"
+                ),
+                {"a": audit_id},
+            ).first()
+            sampled = conn.execute(
+                text("SELECT 1 FROM gate_audit_items WHERE audit_id = :a AND act_event_id = :e"),
+                {"a": audit_id, "e": act_event_id},
+            ).first()
+            closer = conn.execute(
+                text("SELECT session FROM events WHERE id = :e"), {"e": act_event_id}
+            ).first()
+        if drawn is None:
+            issues.append(ValidationIssue("audit_id", "unknown gate audit"))
+        elif str(drawn[0]) != "system":
+            issues.append(ValidationIssue("audit_id", "the sample was not drawn by the platform"))
+        if sampled is None:
+            issues.append(ValidationIssue("act_event_id", "not in this audit sample"))
+        if closer is not None and str(closer[0]) == actor.session:
+            issues.append(
+                ValidationIssue("session", "the session that closed the act cannot label it")
+            )
+        if issues:
+            raise FactoryValidationError(issues)
+        payload = GateAuditLabelled(
+            audit_id=audit_id,
+            act_event_id=act_event_id,
+            correct=correct,
+            note=note or None,
+            channel=Channel.MCP,
+        )
+        blob = project.blobs.put_json(payload.model_dump(mode="json"))
+        event = project.events.make("gate.audit_labelled", payload, actor, input_blob=blob)
         project.record([event])
     return event.id
 

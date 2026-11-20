@@ -429,6 +429,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:taxonomy proposals": Permission.PROJECT_READ,
     "cli:taxonomy derive": Permission.PROJECT_READ,
     "cli:experiments deviation": Permission.PROTOCOL_CHANGE,
+    "cli:review deferred list": Permission.PROJECT_READ,
+    "cli:review deferred decide": Permission.HUMAN_LABEL,
     "cli:gate audit sample": Permission.HUMAN_LABEL,
     "cli:gate audit label": Permission.HUMAN_LABEL,
     "cli:calibrate draw": Permission.HUMAN_LABEL,
