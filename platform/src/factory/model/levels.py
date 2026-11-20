@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
 
-from factory.model.project import RigorMode
+from factory.model.rigor import RigorMode
 
 
 class Tier(StrEnum):

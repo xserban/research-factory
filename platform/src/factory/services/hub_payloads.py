@@ -36,6 +36,7 @@ from factory.services.context import Project
 from factory.services.flow_ledger import LedgerRow, flow_ledger
 from factory.services.hub_graph import CitationGraph, load_citation_graph
 from factory.services.human_queue import human_queue
+from factory.services.level_statement import level_statement
 from factory.services.prisma import UNSPECIFIED, PrismaFlow, prisma_flow
 from factory.services.protocol import list_deviations
 from factory.services.site import status as site_status
@@ -778,6 +779,7 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
         "cited_here": {w: [c.count, c.self_count] for w, c in cites.items()},
         "sets": sets_payload(d.sets),
         "next_actions": [i.model_dump(mode="json") for i in human_queue(project).items],
+        "level_statement": level_statement(project).model_dump(mode="json"),
         "methods": {
             k: METHODS[k]
             for k in (
