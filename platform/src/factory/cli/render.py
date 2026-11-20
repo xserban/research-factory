@@ -86,6 +86,7 @@ from factory.services.results import BatchResult
 from factory.services.shared_mining import SharedProject, SharedUnit
 from factory.services.snowball import Comparison, RoundCandidate, RoundResult
 from factory.services.trace import TraceNode
+from factory.services.version_pairs import PairCandidate
 from factory.services.watch import CycleSummary, WatchStatus
 from factory.services.xruns import XrunView
 
@@ -2500,3 +2501,21 @@ def lead_stats_lines(result: Any, *, now: Any = None) -> list[str]:
         lines += [f"  {v:>4}  {_short(k, 80)}" for k, v in top]
     lines.append("--format json has every figure (hypotheses, reviews, outcomes, trigger kinds)")
     return _fit(lines)
+
+
+def pair_lines(found: Sequence[PairCandidate]) -> list[str]:
+    """The count, each candidate pair best first with its evidence, and the deciding command."""
+    if not found:
+        return ["no candidate pairs"]
+    lines = [f"{len(found)} candidate pairs"]
+    for c in found:
+        shared = ", ".join(c.shared_surnames) if c.shared_surnames else "none"
+        lines.append(f"{c.score:.2f}  {c.basis}  {c.work_a}  {c.work_b}")
+        for year, title, ids in (
+            (c.year_a, c.title_a, c.identifiers_a),
+            (c.year_b, c.title_b, c.identifiers_b),
+        ):
+            lines.append(f"    {year if year is not None else 'n.d.'}  {title}  [{ids}]")
+        lines.append(f"    shared surnames: {shared}")
+    lines.append("decide: factory dedup pair <work_a> <work_b> same|different --rationale TEXT")
+    return lines
