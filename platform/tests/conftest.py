@@ -36,11 +36,21 @@ from tests.helpers import (
     install_skill,
 )
 
+_HARNESS_ENV_PREFIX = "FACTORY_TEST_"
+
 
 @pytest.fixture(autouse=True)
-def _no_hub_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Served test projects build hub payloads only when a test asks (the prewarm is on by
-    default in a real server); a prewarm test sets `FACTORY_HUB_PREWARM` itself."""
+def _isolated_factory_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shell environment cannot change a test's result: every `FACTORY_*` variable is
+    removed before the test (`FACTORY_ROOT` and `FACTORY_PLUGIN_DIR` point at the real
+    pilot on a developer machine). Variables that steer the test harness itself
+    (`FACTORY_TEST_*`) stay. A test that needs one sets it with `monkeypatch.setenv` in
+    its own body, which runs after this fixture. Served test projects also build hub
+    payloads only when a test asks (the prewarm is on by default in a real server); a
+    prewarm test sets `FACTORY_HUB_PREWARM` itself."""
+    for name in [n for n in os.environ if n.startswith("FACTORY_")]:
+        if not name.startswith(_HARNESS_ENV_PREFIX):
+            monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FACTORY_HUB_PREWARM", "0")
 
 

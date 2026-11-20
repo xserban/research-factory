@@ -36,7 +36,9 @@ pytestmark = [
 ]
 
 # Scratch root for browser profiles: FACTORY_TEST_TMP when set, else the system temp dir.
-PROFILE_ROOT = Path(os.environ.get("FACTORY_TEST_TMP") or tempfile.gettempdir()) / "rf-clicks-profiles"
+PROFILE_ROOT = (
+    Path(os.environ.get("FACTORY_TEST_TMP") or tempfile.gettempdir()) / "rf-clicks-profiles"
+)
 
 COLLECTOR = """<script>
 window.__rfErrors = [];
