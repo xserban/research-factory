@@ -51,7 +51,7 @@ one batch at a time. Each judgement is recorded with a verbatim quote so that it
    span supports the verdict, change the verdict (`cannot-assess` or `unsure`).
 8. Repeat from step 1. Stop when `batch` is null. Screen every served batch even if `blocked`
    is non-empty (calibration batches arrive with the gate reason).
-8. If `batch` is null and `blocked` is non-empty, report the reasons verbatim to the
+9. If `batch` is null and `blocked` is non-empty, report the reasons verbatim to the
    researcher. If `batch` is null, `blocked` is empty and `remaining` > 0, other sessions hold
    the work; report and stop. Calibration, agreement and audit are human steps; do not
    attempt them and do not work around the block. A pass that fails calibration needs a

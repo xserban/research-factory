@@ -1,5 +1,7 @@
 # Reference Extraction, Resolution and Snowballing Implementation Plan (slice 3a, sub-slice G1)
 
+Status: merged (G1, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Dependencies.** Plan B2 (conversion, anchors, `document_read`; branch merged) and plan C (full-text screening: `final_outcomes(project, stage=FULL_TEXT)`, `default_conversion`) must be merged first. Plan D (extraction) is not required. **Decision 49 (converters for LaTeX and PDF) is still pending.** Reference parsing must work on any converted document: it reads only the manifest and Markdown through `conversion_manifest` / `conversion_document`, never converter-specific structure. Tests build documents from hand-written Markdown with anchors and from the existing LaTeXML HTML fixture, not from a particular future converter. Task 1 and Task 2 change plan B's anchor grammar and LaTeXML converter; they come first and must leave every plan A–C test green.

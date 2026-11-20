@@ -382,7 +382,7 @@ def test_server_check_flock_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_the_deepest_mount_decides() -> None:
     mounts = "/dev/a / ext4 rw 0 0\nsrv:/x /mnt/lab nfs4 rw 0 0\n"
     assert linux_filesystem(Path("/mnt/lab/root"), mounts) == "nfs4"
-    assert linux_filesystem(Path("/home/obd"), mounts) == "ext4"
+    assert linux_filesystem(Path("/home/user"), mounts) == "ext4"
 
 
 def test_the_mac_mount_table() -> None:

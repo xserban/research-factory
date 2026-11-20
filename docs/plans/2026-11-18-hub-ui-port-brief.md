@@ -1,5 +1,7 @@
 # Hub v2 page port brief (binding for every page task)
 
+Status: merged (binding brief of IDEA-97, merged into main 2026-11-18)
+
 Plan: `docs/plans/2026-11-18-hub-ui.md`. Copy rules: `docs/hub-copy-guide.md` (binding: short human titles, ⓘ panels, terms, no machine phrasing).
 
 ## What you change
@@ -25,15 +27,15 @@ HUB.load(['shell', '<payload>', …]).then(d => {
 
 ## Source of the design
 
-The approved demo is at `/home/obd/Documents/Projects/research-factory/data/projects/agentic-science/ops/ui-prototypes-2026-11-18/r2/<file>.html`, with shared `kit.css`, `shell.js` and `COPY-GUIDE.md`. Port its views faithfully: same encodings, interactions and copy. Replace `window.RF`/`window.RFM` reads with payload reads. Remove demo-only hooks (`?replay=`, `zm=`, test params) and leftover prototype phrases. Its screenshots (`r2/shot-<page>-*.png`) show the approved look.
+The approved demo is at `$HOME/Documents/Projects/research-factory/data/projects/agentic-science/ops/ui-prototypes-2026-11-18/r2/<file>.html`, with shared `kit.css`, `shell.js` and `COPY-GUIDE.md`. Port its views faithfully: same encodings, interactions and copy. Replace `window.RF`/`window.RFM` reads with payload reads. Remove demo-only hooks (`?replay=`, `zm=`, test params) and leftover prototype phrases. Its screenshots (`r2/shot-<page>-*.png`) show the approved look.
 
 ## Your build copy and loop
 
-1. Make a reflink copy of the built site: `cp -a --reflink=auto /home/obd/.cache/rf-hubv2/ui-build /home/obd/.cache/rf-hubv2/ui-<page>`. Never rebuild the payloads; that takes minutes and the copy has them.
-2. After each edit: `cp platform/src/factory/hub_ui/pages/<page>.js /home/obd/.cache/rf-hubv2/ui-<page>/assets/pages/<page>.js`.
+1. Make a reflink copy of the built site: `cp -a --reflink=auto $HOME/.cache/rf-hubv2/ui-build $HOME/.cache/rf-hubv2/ui-<page>`. Never rebuild the payloads; that takes minutes and the copy has them.
+2. After each edit: `cp platform/src/factory/hub_ui/pages/<page>.js $HOME/.cache/rf-hubv2/ui-<page>/assets/pages/<page>.js`.
 3. Screenshot:
    ```
-   chromium --headless=new --disable-gpu --hide-scrollbars --user-data-dir=$(mktemp -d -p /home/obd/.cache/rf-overnight-tmp) --window-size=1440,1400 --virtual-time-budget=7000 --screenshot=/home/obd/.cache/rf-hubv2/ui-<page>/shot-<state>.png "file:///home/obd/.cache/rf-hubv2/ui-<page>/<page>.html#<state>"
+   chromium --headless=new --disable-gpu --hide-scrollbars --user-data-dir=$(mktemp -d -p $HOME/.cache/rf-overnight-tmp) --window-size=1440,1400 --virtual-time-budget=7000 --screenshot=$HOME/.cache/rf-hubv2/ui-<page>/shot-<state>.png "file://$HOME/.cache/rf-hubv2/ui-<page>/<page>.html#<state>"
    ```
    - Take dark, `?theme=light`, `?theme=gruvbox` and `?theme=lcars` at 1440, plus one at 390.
    - Remove the temporary profile afterwards.

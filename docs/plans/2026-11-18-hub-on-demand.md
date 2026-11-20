@@ -1,5 +1,7 @@
 # Plan: hub products built on open (IDEA-96)
 
+Status: merged (IDEA-96, merged into main 2026-11-18, 6bc3e975)
+
 Date: 2026-11-18 · Branch: `hub-on-demand` (from `hub-stall-fix`) · Follows: IDEA-55, plan 2026-11-10-site-hub
 
 ## Goal

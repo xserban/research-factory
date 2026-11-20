@@ -1,5 +1,7 @@
 # Spar features: hub chat page, Ask, agentic spar v2 and extras (plan, 2026-11-19)
 
+Status: merged (spar-night features merged into main 2026-11-20, IDEA-88/101)
+
 Builds on IDEA-88 v1 (merged 2026-11-19: passages, keyword and vector search, claims digest, candidates, argument sheets, `rf-chat`; decisions 139, 140) and IDEA-101. Executed as one unattended night run of about 6–7 hours. Each feature has its own branch from `main`, is built, reviewed and fixed. Nothing is merged or pushed. The researcher decides the merges in the morning.
 
 ## 1. Goal
