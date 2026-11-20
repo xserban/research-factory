@@ -114,6 +114,8 @@ class ProjectStatus(StrictModel):
     decisions: DecisionStatus = DecisionStatus()
     stage: Stage | None = None
     """The derived stage (spec 7a ruling 4); None only where an agent path takes it out."""
+    blocking: list[str] = Field(default_factory=list)
+    """Next steps that stop the flow and that a count would hide; empty when none."""
 
 
 def init_project(
@@ -209,7 +211,19 @@ def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
         inbox=_inbox_counts(project),
         decisions=_decision_status(project),
         stage=derive_stage(stage_facts(project)),
+        blocking=_blocking_steps(project),
     )
+
+
+NO_FULL_TEXT_PLAN = "full-text screening is not planned in the protocol"
+
+
+def _blocking_steps(project: Project) -> list[str]:
+    """A protocol with no `full_text_screening` plan skips the full-text stage without a word in
+    the counts; name it so it cannot pass unnoticed. Reads only; no count changes."""
+    if current_protocol(project) is not None and not has_full_text_plan(project):
+        return [f"{NO_FULL_TEXT_PLAN}; amend the protocol to add a full_text_screening plan"]
+    return []
 
 
 def _decision_status(project: Project) -> DecisionStatus:
