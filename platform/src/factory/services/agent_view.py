@@ -32,6 +32,7 @@ from factory.services import trace as trace_service
 from factory.services.call_memo import entering
 from factory.services.context import Project
 from factory.services.flow_ledger import flow_by_source, flow_ledger, ledger_reconciles
+from factory.services.protocol import exploratory_search_notice
 from factory.services.withholding import WITHHELD as WITHHELD
 from factory.services.withholding import held_out_tokens, withhold
 from factory.services.xrun_accounting import hidden_acceptances
@@ -249,6 +250,9 @@ def search_view(project: Project) -> JsonValue:
         "search": prisma_service.search_report(project).model_dump(mode="json")
     }
     data = collapsed_import_rows(project, data)
+    notice = exploratory_search_notice(project)
+    if notice is not None:
+        data["notice"] = notice
     return without_record_keys(withheld(project, data, include_work_ids=False))
 
 

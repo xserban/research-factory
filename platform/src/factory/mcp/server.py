@@ -430,7 +430,11 @@ def build_server(
             summary = search_service.run_query(
                 opened, query_id, sources=adapters, resume_run=resume_run, actor=actor
             )
-            return _withheld(opened, summary.model_dump(mode="json"))
+            data = summary.model_dump(mode="json")
+            notice = protocol_service.exploratory_search_notice(opened)
+            if notice is not None:
+                data["notice"] = notice
+            return _withheld(opened, data)
 
         return _reply(project, search)
 

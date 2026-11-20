@@ -1007,6 +1007,20 @@ def record_deviation(
     return deviation_id
 
 
+EXPLORATORY_SEARCH_NOTICE = (
+    "exploratory mode: no protocol gate; this search is not part of a registered protocol"
+)
+
+
+def exploratory_search_notice(project: Project) -> str | None:
+    """The notice a search carries while the rigor mode has the protocol gate off, else None.
+    It changes no rule: `search_authorization` is unchanged; this only makes the absence visible."""
+    project.index.sync()
+    if enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF:
+        return EXPLORATORY_SEARCH_NOTICE
+    return None
+
+
 def search_authorization(
     project: Project,
     spec: QuerySpec,
