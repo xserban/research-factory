@@ -503,7 +503,17 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
         )
     with project.index.exclusive():  # the duplicate check and the record are one step
         _refuse_duplicate(project, kind, chosen.digest, texts)
-        payload = chat_requests.request_chat(project, actor, kind, spec, **texts)
+        payload = chat_requests.request_chat(
+            project,
+            actor,
+            kind,
+            spec,
+            hypothesis=texts["hypothesis"],
+            question=texts["question"],
+            mode=texts["mode"],
+            parent=texts["parent"],
+            note=texts["note"],
+        )
     out: dict[str, object] = {"request_id": payload.request_id, "kind": kind, "run_id": None}
     if start is False:
         return out
