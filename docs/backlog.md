@@ -1169,7 +1169,7 @@ Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/conductor.
 
 ### IDEA-127 — Distinct session for the verifier and the proposer in the agent audit path
 Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/gates.py` (agent audit label), R-154 (proposed)
-**What:** enforce, from events, that the session labelling an audit sample or confirming an agent closure differs from the proposing session (and, for the validation profile, the model); today only conductor role runs are distinct by construction, and the PRESS reviewer is enforced separately (`tests/test_press_session.py`).
+**What:** `gate_audit_record_agent` (`services/gates.py`, about line 565) already refuses a label from the session that closed the act. Not enforced: that the verifier session of a closure, and the auditor of a sample, differ from the session that PROPOSED the act, and (for the validation profile) the model; today only conductor role runs are distinct by construction. The PRESS reviewer is enforced separately (`tests/test_press_session.py`).
 **Why:** R-154 (proposed) requires an independent closer; a hand-driven agent could reuse a session.
 **Rigour notes:** session ids are attribution, not authentication (decision 160); the check refuses, writes nothing.
 **Open questions:** which events carry the proposer's session for each gate.
@@ -1179,7 +1179,7 @@ Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `tiers/validation.py
 **What:** the `brief` profile allows only "claims-only" miners but the term is operational only as "a use admitted as evidence" in `validation_profile.py`; define it in the spec (which miner kinds, which fields) and test it.
 **Why:** a brief's extraction then has one named meaning.
 **Rigour notes:** exploratory output never enters evidence counts (R-87) whatever the definition.
-**Open questions:** decision row D-V3.
+**Open questions:** decision row D-V4.
 
 ### IDEA-129 — A live end-to-end brief run
 Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: IDEA-122, lane L15
