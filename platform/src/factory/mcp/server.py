@@ -175,7 +175,7 @@ from factory.services import probe as probe_service
 from factory.services import progress as progress_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
-from factory.services import pubmed_slices
+from factory.services import pubmed_slices, tool_source
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
@@ -7371,3 +7371,6 @@ def _round_direction(value: str) -> Direction:
 
 def run(settings: Settings) -> None:
     build_server(settings).run("stdio")
+
+
+tool_source.register(build_server)

@@ -55,9 +55,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.blobs import BlobIntegrityError, BlobNotFoundError
-from factory.mcp.unit_cap import UNITS_FILE
 from factory.model.base import StrictModel
 from factory.services.context import Project
+from factory.services.run_units import UNITS_FILE
 from factory.services.runner import MINE_PREFIX
 
 COST_SOURCE = "reported-by-cli"
