@@ -19,12 +19,13 @@ from typing import Any, Literal
 
 from pydantic import JsonValue
 
-from factory.events.reader import read_all
+from factory.events.reader import read_all, read_typed
 from factory.model.base import StrictModel
 from factory.model.levels import AutonomyLevel, Tier
 from factory.model.project import RigorMode
 from factory.services.context import Project
 from factory.services.project import project_levels
+from factory.tiers.validation import validation_profile
 
 AGENT_LABELS = frozenset({"agent", "audited-agent"})
 """`autonomy` values of an agent-written act (`modules.contract.Autonomy`, minus `human`)."""
@@ -91,6 +92,55 @@ def _agent_closed(project: Project) -> tuple[AgentClosed, ...]:
     return tuple(AgentClosed(gate_id=g, closed_by_agent=n) for g, n in sorted(counts.items()))
 
 
+_VALIDATION_TYPES = (
+    "screening.decision_recorded",
+    "extraction.recorded",
+    "extraction.claim_recorded",
+    "calibration.labelled",
+    "miner.calibration_labelled",
+    "audit.sampled",
+    "audit.labelled",
+    "extraction.audit_sampled",
+    "extraction.audit_labelled",
+)
+
+
+def _validation_lines(project: Project, tier: Tier, level: AutonomyLevel) -> list[str]:
+    """What actually ran, from the events: the profile label, the passes per stage, whether an audit
+    sample was drawn and labelled and whether a calibration was labelled. Where the profile's
+    evidence is missing the line says `unvalidated`."""
+    profile = validation_profile(tier, level)
+    passes: dict[str, set[str]] = {"screening": set(), "extraction": set()}
+    seen: Counter[str] = Counter()
+    for event in read_typed(project.paths.events_dir, project.catalog, _VALIDATION_TYPES):
+        seen[event.type] += 1
+        stage = event.type.split(".")[0]
+        if stage in passes and event.payload.get("pass_label") is not None:
+            passes[stage].add(str(event.payload["pass_label"]))
+    ran = "; ".join(
+        f"{stage} {'+'.join(sorted(labels))}" if labels else f"{stage} none"
+        for stage, labels in passes.items()
+    )
+    lines = [f"validation: {profile.label}", f"passes that ran: {ran}"]
+    sampled = seen["audit.sampled"] + seen["extraction.audit_sampled"]
+    labelled = seen["audit.labelled"] + seen["extraction.audit_labelled"]
+    if sampled == 0:
+        lines.append("audit: no sample drawn (unvalidated)")
+    elif labelled == 0:
+        lines.append(f"audit: {sampled} sample(s) drawn, none labelled (unvalidated)")
+    else:
+        lines.append(f"audit: {sampled} sample(s) drawn, {labelled} label(s) recorded")
+    if seen["calibration.labelled"] + seen["miner.calibration_labelled"] > 0:
+        lines.append("calibration: a human-labelled gold set exists")
+    elif profile.calibration_required:
+        lines.append("calibration: none (unvalidated)")
+    else:
+        lines.append("calibration: none")
+    if profile.independent_judge:
+        lines.append("validation by a session and model other than the proposer's is required")
+    return lines
+
+
 def level_statement(project: Project, *, skipped: SkippedSteps | None = None) -> LevelStatement:
     """The statement for `project`. `skipped` replaces the tier-plan resolver (tests inject a
     fake); it is called only for a project that declared a tier."""
@@ -114,6 +164,8 @@ def level_statement(project: Project, *, skipped: SkippedSteps | None = None) ->
             "gates closed by an agent: "
             + ", ".join(f"{c.gate_id} ({c.closed_by_agent})" for c in closed)
         )
+    if levels.tier is not None:
+        lines.extend(_validation_lines(project, levels.tier, levels.autonomy_level))
     if not confirmed:
         lines.append("not human-confirmed: no person has confirmed the acts an agent closed")
     return LevelStatement(

@@ -45,11 +45,12 @@ from factory.modules.contract import (
     GatePolicy,
     PolicyKind,
 )
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core, passes
 from factory.services.access import gate_role_issues
 from factory.services.context import Project
+from factory.services.validation_profile import enforcement_for
 
 _LIVE_DECISIONS = {
     "reference.link_confirm": (
@@ -598,7 +599,7 @@ def gate_audit_report(project: Project, gate_id: str) -> GateAuditReport | None:
     verdict = audit_core.ceiling_verdict(
         rate,
         GATE_AUDIT_ERROR_CEILING,
-        enforced=enforcement(indexed_rigor_mode(project), "gate.audit_ceiling")
+        enforced=enforcement_for(project, "gate.audit_ceiling", mode=indexed_rigor_mode(project))
         is Enforcement.ENFORCED,
     )
     return GateAuditReport(str(audit[0]), gate_id, len(rows), len(labelled), incorrect, verdict)
