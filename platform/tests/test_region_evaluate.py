@@ -110,10 +110,13 @@ def test_cites_min_k(region_project: RWorld) -> None:
     version = "R@" + "b" * 8
     pin(region_project, region_project.works(b, c), version, REG)
     citing_1 = CitesRule(base=version, direction="citing", min_k=1)
-    # a cites b and c, d cites b, outside cites b and c
-    assert ids(run(region_project, RuleSet(include=(citing_1,)))) == sorted([a, d, outside])
+    # a cites b and c, d cites b, outside cites b and c. `outside` is a work the graph names that no
+    # corpus query found: since 0405e75c a cites rule keeps only corpus works on the citing end
+    # (and the cited end), so `outside` joins no region (it was in this list before).
+    assert ids(run(region_project, RuleSet(include=(citing_1,)))) == sorted([a, d])
     citing_2 = CitesRule(base=version, direction="citing", min_k=2)
-    assert ids(run(region_project, RuleSet(include=(citing_2,)))) == sorted([a, outside])
+    assert ids(run(region_project, RuleSet(include=(citing_2,)))) == [a]
+    assert outside not in ids(run(region_project, RuleSet(include=(citing_1,))))
     cited = pin_base(region_project, [a, outside])
     ev = run(region_project, RuleSet(include=(CitesRule(base=cited, direction="cited"),)))
     assert ids(ev) == sorted([b, c])
