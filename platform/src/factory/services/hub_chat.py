@@ -355,6 +355,10 @@ def _claim(linked: Any) -> dict[str, Any] | None:
         "about": linked.about,
         "quote": linked.quote,
         "version": linked.version,
+        "recorded_version": linked.recorded_version,
+        "version_changed": linked.version_changed,
+        "missing": linked.missing,
+        "note": sheets_service.claim_link_note(linked),
     }
 
 

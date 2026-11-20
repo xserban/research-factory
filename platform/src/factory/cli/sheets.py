@@ -68,7 +68,14 @@ def sheets_show_cmd(
         )
         if a.linked_claim:
             k = a.linked_claim
-            typer.echo(f'  rests on {a.claim_row_key}: {k.claim_type} | {k.about}: "{k.quote}"')
+            note = sheets_service.claim_link_note(k)
+            flag = f" ({note})" if note else ""
+            if k.missing:
+                typer.echo(f"  rests on {a.claim_row_key}{flag}")
+            else:
+                typer.echo(
+                    f'  rests on {a.claim_row_key}: {k.claim_type} | {k.about}: "{k.quote}"{flag}'
+                )
     c = view.coverage
     typer.echo(
         f"\ncoverage: {c.total} works; tier 1/2/3 = "

@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, get_args
 
 from sqlalchemy import text
@@ -148,6 +148,24 @@ class LinkedClaim:
     about: str
     quote: str
     version: int
+    recorded_version: int | None = None
+    """The row version recorded when the argument was made (`claim_row_version`)."""
+    version_changed: bool = False
+    """True when `recorded_version` is set and differs from the served `version`."""
+    missing: bool = False
+    """True when the recorded row key is no longer served; type, about and quote are then empty
+    and `version` is 0."""
+
+
+def claim_link_note(linked: LinkedClaim | None) -> str | None:
+    """The flag text for a changed or missing claim row; None when there is nothing to flag."""
+    if linked is None:
+        return None
+    if linked.missing:
+        return "claim row no longer served"
+    if linked.version_changed:
+        return f"claim row changed: recorded v{linked.recorded_version}, served v{linked.version}"
+    return None
 
 
 @dataclass(frozen=True)
@@ -168,7 +186,7 @@ class ArgumentView:
     rating: str | None
     rating_note: str | None
     linked_claim: LinkedClaim | None = None
-    """None without a `claim_row_key`, or when the row is no longer served."""
+    """None without a `claim_row_key`; `missing=True` when the row is no longer served."""
     check_verdict: str | None = None
     """The critic's latest check of a v2 sheet (holds, overreaches, misread), an agent's reading
     and never a rating; None when unchecked."""
@@ -666,6 +684,17 @@ def _linked_claims(project: Project, work_id: str) -> dict[str, LinkedClaim]:
     }
 
 
+def _link(served: LinkedClaim | None, recorded: int | None) -> LinkedClaim:
+    """Today's served claim with the recorded version and the change flag, or a `missing` stub."""
+    if served is None:
+        return LinkedClaim("", "", "", 0, recorded_version=recorded, missing=True)
+    return replace(
+        served,
+        recorded_version=recorded,
+        version_changed=recorded is not None and recorded != served.version,
+    )
+
+
 def close_section(
     project: Project,
     actor: Actor,
@@ -876,9 +905,11 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             model=a["model"],
             rating=a["rating"],
             rating_note=a["rating_note"],
-            linked_claim=(
-                linked.get(a["work_id"], {}).get(a["claim_row_key"]) if a["claim_row_key"] else None
-            ),
+            linked_claim=_link(
+                linked.get(a["work_id"], {}).get(a["claim_row_key"]), a["claim_row_version"]
+            )
+            if a["claim_row_key"]
+            else None,
             check_verdict=a["check_verdict"],
             check_reason=a["check_reason"],
         )
