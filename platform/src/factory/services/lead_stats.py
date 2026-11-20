@@ -93,7 +93,8 @@ def lead_stats(project: Project) -> LeadStats:
         leads = conn.execute(
             text(
                 "SELECT l.lead_id, l.state, l.framework, l.event_id, "
-                "(SELECT COUNT(*) FROM lead_triggers t WHERE t.lead_id = l.lead_id) "
+                "(SELECT COUNT(*) FROM lead_triggers t WHERE t.lead_id = l.lead_id), "
+                "(SELECT e.ts FROM events e WHERE e.id = l.event_id) "
                 "FROM leads l ORDER BY l.event_id, l.lead_id"
             )
         ).all()
@@ -160,8 +161,9 @@ def lead_stats(project: Project) -> LeadStats:
             triggers=int(n),
             source=scope_source(scopes.get(str(lead_id), ())),
             event_id=str(event_id),
+            recorded_at=None if ts is None else str(ts),
         )
-        for lead_id, state, framework, event_id, n in leads
+        for lead_id, state, framework, event_id, n, ts in leads
         if state == "open"
     )[:OLDEST]
     return LeadStats(

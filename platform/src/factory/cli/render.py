@@ -2450,23 +2450,53 @@ def lead_queue_lines(result: Any, *, full: bool = False, show: str | None = None
     return lines if full else _fit(lines)
 
 
-def lead_stats_lines(result: Any) -> list[str]:
+def _state_counts(d: Any) -> str:
+    return ", ".join(f"{k} {v}" for k, v in d.items() if v) or "none"
+
+
+def _short(text: str | None, n: int) -> str:
+    t = "-" if not text else " ".join(str(text).split())
+    return t if len(t) <= n else t[: n - 3] + "..."
+
+
+def _age(recorded_at: str | None, now: Any = None) -> str:
+    from datetime import UTC, datetime
+
+    if not recorded_at:
+        return "?"
+    try:
+        then = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "?"
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=UTC)
+    days = ((now or datetime.now(UTC)) - then).days
+    return f"{max(days, 0)}d"
+
+
+def lead_stats_lines(result: Any, *, now: Any = None) -> list[str]:
+    """The compact stats table, every line at most `WIDTH` characters; `--format json` is the
+    complete figure set. `now` is the clock of the ages (tests pass one)."""
     lines = _engine_head(result)
     lines.append(f"{result.notice}")
-    lines.append(f"leads recorded: {result.recorded}; by state: {result.by_state}")
+    rate = "-" if result.promotion_rate is None else f"{result.promotion_rate:.2f}"
     lines.append(
-        f"decided: {result.decided}; promotion rate {result.promotion_rate}; "
-        f"of decided {result.decided_promotion_rate}"
+        f"leads recorded: {result.recorded}; decided: {result.decided}; promotion rate {rate}"
     )
-    lines.append(f"discard reasons: {result.discard_reasons}")
-    lines.append(f"by trigger kind: {result.by_trigger_kind}; by source: {result.by_source}")
-    lines.append(
-        f"hypotheses drafted: {result.hypotheses_drafted} {result.hypotheses_by_state}; "
-        f"registered: {result.hypotheses_registered}; closed: {result.hypotheses_closed}"
-    )
-    lines.append(
-        f"reviews: {result.reviews} {result.reviews_by_recommendation}; outcomes: {result.outcomes}"
-    )
-    for o in result.oldest_undecided:
-        lines.append(f"oldest undecided {o.lead_id} [{o.source}] triggers={o.triggers}")
+    lines.append(f"by state: {_state_counts(result.by_state)}")
+    for source, row in result.by_source.items():
+        states = {k: v for k, v in row.items() if k != "recorded"}
+        lines.append(f"by source: {source} {row.get('recorded', 0)} ({_state_counts(states)})")
+    if result.oldest_undecided:
+        lines.append(f"oldest undecided ({len(result.oldest_undecided)} shown):")
+        for o in result.oldest_undecided[:5]:
+            lines.append(
+                f"  {_short(o.lead_id, 24)} {_age(o.recorded_at, now):>5} [{o.source}] "
+                f"{_short(o.framework, 40)}"
+            )
+    top = sorted(result.discard_reasons.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    if top:
+        lines.append("discard reasons (top 5):")
+        lines += [f"  {v:>4}  {_short(k, 80)}" for k, v in top]
+    lines.append("--format json has every figure (hypotheses, reviews, outcomes, trigger kinds)")
     return _fit(lines)

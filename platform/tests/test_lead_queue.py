@@ -127,6 +127,31 @@ def test_measures_of_the_candidates_of_a_world(
     assert queue.model_dump_json(by_alias=True) == again.model_dump_json(by_alias=True)
 
 
+def test_a_grouped_claims_candidate_counts_its_rows_as_support_and_one_work_as_independence(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    queue = lead_queue(project, sources=("claims-limitation",), **KNOBS)  # type: ignore[arg-type]
+    flat = lead_queue(
+        project,
+        sources=("claims-limitation",),
+        group_claims_by_work=False,
+        **KNOBS,  # type: ignore[arg-type]
+    )
+    assert queue.parameters["group_claims_by_work"] == 1
+    assert flat.parameters["group_claims_by_work"] == 0
+    assert all(i.entry_id.startswith("claims-work:") for i in queue.items)
+    for item in queue.items:
+        cand = item.candidate
+        assert cand is not None and cand.rows_total is not None
+        assert item.measures.support == cand.rows_total
+        assert item.measures.independence == 1 and "grouped" in cand.flags
+        assert item.measures.verification.total == len(
+            [t for t in cand.triggers if t.kind == "item"]
+        )
+    assert sum(i.measures.support for i in queue.items) == len(flat.items)
+
+
 def test_the_order_and_the_top_cap_are_runtime_knobs(
     project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:

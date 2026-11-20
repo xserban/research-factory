@@ -7107,6 +7107,10 @@ _SOURCES_OPT = typer.Option(
 _PER_SOURCE_OPT = typer.Option("--per-source", help="Candidates kept per source (default 20).")
 _TECH_MIN_OPT = typer.Option("--technique-min-works", help="Works each approach needs (3).")
 _CO_WORKS_OPT = typer.Option("--max-co-works", help="Works that may already use both (0).")
+_GROUP_OPT = typer.Option(
+    "--group-claims/--no-group-claims",
+    help="One claims candidate per work (default) or one per limitation row.",
+)
 _FULL_OPT = typer.Option(
     "--full", help="Table: print every quote and trigger (default is the compact view)."
 )
@@ -7150,6 +7154,7 @@ def leads_candidates_cmd(
     layer: Annotated[str, _LAYER_OPT] = "core",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    group_claims: Annotated[bool, _GROUP_OPT] = True,
     top: Annotated[
         int, typer.Option("--top", min=1, help="Candidates in the table (default 20).")
     ] = 20,
@@ -7171,6 +7176,7 @@ def leads_candidates_cmd(
             layer=layer,
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
+            group_claims_by_work=group_claims,
         )
     _engine_table(
         result,
@@ -7219,6 +7225,7 @@ def leads_queue_cmd(
     ] = "after",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    group_claims: Annotated[bool, _GROUP_OPT] = True,
     full: Annotated[bool, _FULL_OPT] = False,
     show: Annotated[str | None, _SHOW_OPT] = None,
     format_: Annotated[str, _FORMAT_OPT] = "table",
@@ -7241,6 +7248,7 @@ def leads_queue_cmd(
             layer=layer,
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
+            group_claims_by_work=group_claims,
             balance=balance,
             per_source_top=per_source_top,
             recorded=recorded,
