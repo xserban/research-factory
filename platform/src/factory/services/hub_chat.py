@@ -31,7 +31,7 @@ from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.mining.spec import Population
 from factory.services import answers as answers_service
-from factory.services import chat_requests
+from factory.services import chat_requests, spar_metrics
 from factory.services import runner as runner_service
 from factory.services import sheets as sheets_service
 from factory.services.context import Project
@@ -270,6 +270,37 @@ def chat_payload(project: Project) -> dict[str, Any]:
         "requests": requests,
         "sheets": sheets,
         "answers": answers,
+        "precision": precision_payload(project),
+    }
+
+
+def _metric_row(r: spar_metrics.Row) -> dict[str, Any]:
+    return {
+        "key": r.key,
+        "sound": r.sound,
+        "weak": r.weak,
+        "wrong": r.wrong,
+        "unrated": r.unrated,
+        "rated": r.rated,
+        "precision_text": spar_metrics.show_precision(r),
+    }
+
+
+def precision_payload(project: Project) -> dict[str, Any]:
+    """The Precision section: the computed tables of `spar_metrics`, with their texts."""
+    got = spar_metrics.precision(project)
+    ag = got.agreement
+    return {
+        "measures": dict(spar_metrics.MEASURES),
+        "arguments": {k: [_metric_row(r) for r in v] for k, v in got.arguments.items()},
+        "answers": {k: [_metric_row(r) for r in v] for k, v in got.answers.items()},
+        "agreement": {
+            "table": ag.table,
+            "n": ag.n,
+            "agreed": ag.agreed,
+            "raw": None if ag.raw is None else round(ag.raw * 100),
+            "kappa": None if ag.kappa is None else round(ag.kappa, 2),
+        },
     }
 
 
