@@ -89,6 +89,7 @@ from factory.events.envelope import Actor, Event
 from factory.model.base import StrictModel
 from factory.model.budgets import REQUESTS_SEARCH
 from factory.model.chase import CHASE_CHUNK, ChaseDirection
+from factory.model.decisions import DecisionLevel
 from factory.model.project import RigorMode
 from factory.model.protocol import ScreeningStage, SnowballPlan
 from factory.model.references import (
@@ -126,6 +127,7 @@ from factory.services.chase import (
 )
 from factory.services.context import Project
 from factory.services.core_works import forward_core_sources, seed_core_works
+from factory.services.decision_binding import bind
 from factory.services.dedup import active_merges
 from factory.services.document_read import default_conversion
 from factory.services.gates import indexed_rigor_mode
@@ -1101,6 +1103,11 @@ def reflist_entries(project: Project, keys: Sequence[str]) -> dict[str, ReflistE
     return out
 
 
+def _round_subject(direction: Direction, round_no: int) -> str:
+    """The decision subject that authorises one round: its direction and number."""
+    return f"snowball-{direction.value}-{round_no}"
+
+
 def snowball_round(
     project: Project,
     actor: Actor,
@@ -1109,8 +1116,14 @@ def snowball_round(
     sources: Mapping[str, SourceFactory],
     dry_run: bool = True,
     embedder: Embedder | None = None,
+    decision_ids: Sequence[str] | None = None,
 ) -> RoundResult:
     """Plan a round (`dry_run`, the default, writes nothing), or record and run it.
+
+    A recorded round in `pilot` or `systematic` must cite `decision_ids`: a `plan` decision on the
+    subject `snowball-<direction>-<round_no>` with an accepted (human) selection, so the
+    researcher's go-ahead is a recorded act bound to that round (`decision_binding.bind`).
+    `exploratory` needs none; a dry run never does.
 
     A recorded round is validated in full first (see the module invariants) and refused with
     every issue at once. Under the same lock as the plan, a backward round writes
@@ -1173,6 +1186,16 @@ def snowball_round(
         texts = [spec.text for spec in specs] or [probe.text]
         issues += search_authorization(project, probe, deviation_id=None, pending_round_texts=texts)
         issues += budget_issues(project, actor, REQUESTS_SEARCH)
+        bound: tuple[str, ...] = ()
+        try:
+            bound = bind(
+                project,
+                DecisionLevel.PLAN,
+                decision_ids,
+                subject=_round_subject(direction, plan.state.round_no),
+            )
+        except FactoryValidationError as refused:
+            issues += list(refused.issues)
         if issues:
             raise FactoryValidationError(issues)
         before, _ = corpus_size(project)
@@ -1200,6 +1223,7 @@ def snowball_round(
                 unextracted=_unextracted(plan),
                 backward_selection=None if chosen is None else chosen.selection,
                 tolerated_pending=tuple(plan.tolerated_pending),
+                decision_ids=bound,
             )
             project.record([_ledger_event(project, actor, payload)])
         else:
@@ -1234,6 +1258,7 @@ def snowball_round(
                 unextracted=_unextracted(plan),
                 selection=None if picked is None else picked.selection,
                 tolerated_pending=tuple(plan.tolerated_pending),
+                decision_ids=bound,
             )
             project.record([chase.event, _ledger_event(project, actor, payload)])
 

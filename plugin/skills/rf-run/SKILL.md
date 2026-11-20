@@ -21,7 +21,7 @@ The map of a whole run. It records nothing: it says where to look and which skil
 | `protocol` | The protocol is not ready, or PRESS is not confirmed | `rf-protocol` |
 | `search` | No complete search run | `rf-search-run` (`search_run`, `search_slice`, `report_search`, then `dedup_run`) |
 | `ta-screening` | Works wait at title and abstract | `rf-screen` |
-| `full-text` | Works wait for retrieval or a full-text outcome | `library_adoptable`, `library_adopt`, `fulltext_fetch`, `rf-screen` |
+| `full-text` | Works wait for retrieval or a full-text outcome | `rf-acquire` (`library_adoptable`, `library_adopt`, `fulltext_fetch`, conversion by the researcher), then `rf-screen` |
 | `extraction` | Extraction units or disagreements are open | `rf-extract`, `rf-mine`, `rf-contributions` |
 | `snowballing` | The stopping rule has not stopped the rounds | `rf-references`, `rf-search` |
 | `reporting` | Nothing above is open | the reports below, then `rf-lineage`, `rf-write` |

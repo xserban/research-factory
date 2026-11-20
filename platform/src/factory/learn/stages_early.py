@@ -99,7 +99,7 @@ GATHER = StageCard(
     acts=(A, S, H),
     gates=(
         "A query the protocol does not plan needs a recorded deviation.",
-        "You decide when a snowball round really runs; the first call is a dry run.",
+        "You decide when a snowball round really runs by selecting a recorded decision; the first call is a dry run.",
         "Imports and links from outside the search are admitted or resolved by you.",
     ),
     steps=(
@@ -143,7 +143,7 @@ GATHER = StageCard(
         ),
         Step(
             A,
-            "Take the reference lists of included works into the corpus. A snowball round is a dry run unless you go ahead.",
+            "Take the reference lists of included works into the corpus. A snowball round is a dry run unless you select the decision that sends it.",
             (skill("rf-references"), tool("references_extract"), tool("snowball_round")),
         ),
         Step(
@@ -252,7 +252,7 @@ ACQUIRE = StageCard(
         Step(
             A,
             "Check whether another project of the lab already holds the document, and adopt it.",
-            (tool("library_adoptable"), tool("library_adopt")),
+            (skill("rf-acquire"), tool("library_adoptable"), tool("library_adopt")),
         ),
         Step(
             A,
