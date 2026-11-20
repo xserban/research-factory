@@ -4,27 +4,18 @@
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from factory.services.context import Project
 from factory.services.evidence_groups import group_index
 from factory.services.evidence_report import evidence_report
+from factory.services.fulltext_screening import fulltext_queue
 from factory.services.horizon import horizon_view, timeline_view
+from factory.services.prisma import prisma_flow
 from factory.services.view_coverage import coverage_view
 from tests.contribution_helpers import ctr_a, ctr_b, ext_a  # noqa: F401
 from tests.extraction_helpers import screened  # noqa: F401
 from tests.views_b_helpers import VbWorld, ext_b, real_merge, set_year, vb_world  # noqa: F401
-
-# Open conflict, not a stale expectation (a ruling is needed). Decision 92 item 9 (Proposed) says
-# the rows of a work an active merge absorbs stay in the evidence report and the views read them as
-# the primary. Since b0a4a766 (flow-transparency, 2026-11-14) the full-text population holds
-# canonical works only, so a merge made after full-text screening drops the absorbed work's final
-# outcome and with it its rows from the report: this world has 5 report rows after the merge, not
-# 6, and no row is read under a primary. Strict, so the marks fail the day it is resolved.
-ABSORBED_ROWS_LEAVE = pytest.mark.xfail(
-    strict=True, reason="b0a4a766 drops an absorbed work's rows; decision 92 item 9 keeps them"
-)
 
 
 def _merged(project: Project, w: VbWorld) -> tuple[str, str]:
@@ -35,7 +26,6 @@ def _merged(project: Project, w: VbWorld) -> tuple[str, str]:
     return w.works[2], w.works[0]
 
 
-@ABSORBED_ROWS_LEAVE
 def test_views_keep_the_rows_the_report_keeps_and_read_the_primary(
     project: Project, vb_world: VbWorld
 ) -> None:
@@ -63,7 +53,6 @@ def test_horizon_follows_merges_for_members_origin_and_edge_source(
     assert view.undated == {"idea_members": 0, "new_ideas": 0, "new_edges": 0}
 
 
-@ABSORBED_ROWS_LEAVE
 def test_timeline_reads_the_absorbed_row_under_the_primary(
     project: Project, vb_world: VbWorld
 ) -> None:
@@ -77,7 +66,6 @@ def _codes(view: object) -> dict[str, str]:
     return {n.code: n.text for n in view.meta.notices}  # type: ignore[attr-defined]
 
 
-@ABSORBED_ROWS_LEAVE
 def test_the_merge_reading_is_named_in_a_notice_and_the_filter(
     project: Project, vb_world: VbWorld
 ) -> None:
@@ -91,7 +79,6 @@ def test_the_merge_reading_is_named_in_a_notice_and_the_filter(
         )
 
 
-@ABSORBED_ROWS_LEAVE
 def test_a_row_of_an_absorbed_work_is_dropped_with_its_primary_outside_the_corpus(
     project: Project, vb_world: VbWorld
 ) -> None:
@@ -106,3 +93,17 @@ def test_a_row_of_an_absorbed_work_is_dropped_with_its_primary_outside_the_corpu
         < sum(len(g.rows) for g in evidence_report(project).groups)
     )
     assert "merge-read" not in _codes(view)  # the dropped row was not read under its primary
+
+
+def test_the_late_merge_keeps_the_rows_and_leaves_the_flow_counts_canonical(
+    project: Project, vb_world: VbWorld
+) -> None:
+    """Rows stay (decision 92 item 9) while the full-text queue and the boxes count canonical
+    works only (b0a4a766): included = not sought + sought, the absorbed work is not queued."""
+    primary, absorbed = _merged(project, vb_world)
+    queue = fulltext_queue(project)
+    queued = {e.work_id for e in queue.eligible} | set(queue.not_retrieved)
+    assert absorbed not in queued and primary in queued
+    flow = prisma_flow(project)
+    assert flow.full_text.not_sought + flow.full_text.sought == flow.included
+    assert sum(len(g.rows) for g in evidence_report(project).groups) == 6

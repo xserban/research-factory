@@ -41,10 +41,14 @@ class FulltextQueue(StrictModel):
 
 
 @memoised
-def fulltext_queue(project: Project) -> FulltextQueue:
-    """Every promoted canonical work as eligible (converted) or not retrieved (no conversion)."""
+def fulltext_queue(project: Project, *, with_absorbed: bool = False) -> FulltextQueue:
+    """Every promoted canonical work as eligible (converted) or not retrieved (no conversion).
+
+    `with_absorbed` keeps the works an active merge absorbed: only the recorded population reads
+    it, so a full-text outcome recorded before a merge still reads (decision 92 item 9); a queue
+    for work to do never holds them."""
     project.index.sync()
-    absorbed = absorbed_ids(project)
+    absorbed = set() if with_absorbed else absorbed_ids(project)
     promoted = sorted(
         w for w, o in final_outcomes(project).items() if o is Outcome.INCLUDED and w not in absorbed
     )
