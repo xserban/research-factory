@@ -17,7 +17,7 @@ the request's `hypothesis`, `mode` and `selection` (`layers`, `include`, `exclud
 paper to read (`work_id`, readers only), the `sheet_id` once the searcher has opened it, the tier-1
 papers and the session budget. Pass no request id to any tool; the platform derives it. The writing
 tools take `project`, `role`, `model` (your own model id) and `skill`, the bare name `rf-spar-v2`.
-Do your role below and no other. The platform refuses, on the server, a read of the sheet (`sheet_view`, `sheet_list`) to the for-writer: the assignment holds what you need. End with a short summary of what you recorded and any refusal
+Do your role below and no other. The platform refuses, on the server, any read of the sheet to the for-writer: the assignment holds what you need. End with a short summary of what you recorded and any refusal
 verbatim.
 
 ## search
