@@ -274,7 +274,10 @@ combination cites up to 10 rows), and only the text of a long quote is cut (mark
    `verification`, `diversity`, `score`), `top`, `exclude_prior`, `recorded` (`after` by default,
    `first` or `hide`; see below), and `balance` (default true: the top is shared across the sources in play, so
    the many combinations do not crowd out challenges, gaps and limitations; `per_source_top` sets
-   the share; `balance=false` is the plain global order).
+   the share; `balance=false` is the plain global order). `group_claims_by_work` (default true)
+   gives one claims candidate per paper (`claims-work:<work_id>`, flags `grouped` and `rows=<n>`,
+   support = its limitation rows, independence 1, at most 19 rows cited); false gives one candidate
+   per limitation row (CLI `--no-group-claims`).
 2. Call `lead_queue` with those knobs (`lead_candidates` shows the same candidates unordered, to
    see everything one source produced). Show the researcher the ordered list as the tool returned
    it: for each entry the source, the observation, the measures (support, independence, verified

@@ -120,6 +120,7 @@ class _Subject:
     items: tuple[str, ...]
     works: tuple[str, ...]
     works_total: int | None = None
+    rows_total: int | None = None
     overlap: int | None = None
     score: float | None = None
     candidate: Candidate | None = None
@@ -547,6 +548,7 @@ def _subject_of(candidate: Candidate) -> _Subject:
         items=tuple(t.ref for t in candidate.triggers if t.kind == "item"),
         works=tuple(t.ref for t in candidate.triggers if t.kind == "work"),
         works_total=candidate.works_total,
+        rows_total=candidate.rows_total,
         overlap=candidate.overlap_works,
         score=candidate.score,
         candidate=candidate,
@@ -565,13 +567,15 @@ def lead_queue(
     layer: str = "core",
     technique_min_works: int = 3,
     max_co_works: int = 0,
+    group_claims_by_work: bool = True,
     include_leads: bool = True,
     balance: bool = True,
     per_source_top: int | None = None,
     recorded: str = "after",
 ) -> Queue:
     """Candidates (`candidates`, else `lead_candidates` with the same `sources`, `per_source`,
-    `layer`, `technique_min_works` and `max_co_works`) and, with `include_leads`, the open
+    `layer`, `technique_min_works`, `max_co_works` and `group_claims_by_work`: one claims
+    candidate per work, support counting its limitation rows) and, with `include_leads`, the open
     leads, each with its measures, ordered by `order_by` (see the module invariants); at most
     `top` of each are returned, `total_candidates` is before that. With `exclude_prior` a
     candidate with any prior hit is left out and listed in `excluded`. Refused with nothing
@@ -601,6 +605,7 @@ def lead_queue(
         layer=layer,
         technique_min_works=technique_min_works,
         max_co_works=max_co_works,
+        group_claims_by_work=group_claims_by_work,
     )
     project.index.sync()
     subjects = [_subject_of(c) for c in fresh.candidates]
@@ -673,7 +678,13 @@ def lead_queue(
         if subject.score is None:
             flags.append("no-score")
         m = Measures(
-            support=subject.works_total if subject.works_total is not None else len(cited),
+            support=(
+                subject.rows_total
+                if subject.rows_total is not None
+                else subject.works_total
+                if subject.works_total is not None
+                else len(cited)
+            ),
             independence=len(cited),
             verification=Verification(
                 verified=ok,
@@ -747,6 +758,7 @@ def lead_queue(
             "include_leads": int(include_leads),
             "technique_min_works": technique_min_works,
             "max_co_works": max_co_works,
+            "group_claims_by_work": int(group_claims_by_work),
             "balance": int(balance),
             "per_source_top": applied,
             "recorded": recorded,

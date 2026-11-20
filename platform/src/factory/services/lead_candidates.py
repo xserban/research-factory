@@ -455,11 +455,100 @@ def technique_candidates(
 # --- claims source --------------------------------------------------------------------------
 
 
+MAX_GROUP_ROWS = 20
+"""Limitation rows (item triggers) a grouped claims candidate cites, the work trigger included."""
+
+
+def _grouped_claims(
+    data: _Claims, chosen: list[_ClaimRow], *, per_source: int
+) -> tuple[list[Candidate], int, list[Skipped]]:
+    """One candidate per work (`claims-work:<work_id>`) over its limitation rows. Rows with no
+    `claim_quote` field are skipped with the reason `no-quote` (a work left with none is skipped
+    whole). The cited rows are the best first: a stored quote, an anchor, then the claim-type
+    order; at most `MAX_GROUP_ROWS - 1` items and the work trigger, the cut in `trigger_note`.
+    `per_source` caps works. Pure."""
+    by_work: dict[str, list[_ClaimRow]] = defaultdict(list)
+    skipped: list[Skipped] = []
+    for c in chosen:
+        if c.has_quote_field:
+            by_work[c.work_id].append(c)
+        else:
+            skipped.append(
+                Skipped(candidate_id=f"claims-limitation:{c.extraction_id}", reason="no-quote")
+            )
+    for w in sorted({c.work_id for c in chosen} - set(by_work)):
+        skipped.append(Skipped(candidate_id=f"claims-work:{w}", reason="no-quote"))
+
+    def best(c: _ClaimRow) -> tuple[bool, bool, int, str, str]:
+        return (
+            c.quote is None,
+            c.anchor is None,
+            CLAIM_ORDER.index(c.claim_type),
+            c.row_key,
+            c.extraction_id,
+        )
+
+    works = sorted(
+        by_work,
+        key=lambda w: (min(CLAIM_ORDER.index(c.claim_type) for c in by_work[w]), w),
+    )
+    out: list[Candidate] = []
+    for w in works[:per_source]:
+        rows = sorted(by_work[w], key=best)
+        shown = rows[: MAX_GROUP_ROWS - 1]
+        title = data.titles.get(w, w)
+        first = rows[0]
+        first_text = first.quote if first.quote is not None else "(no stored quote)"
+        note = None
+        if len(shown) < len(rows):
+            note = f"{len(rows)} limitation rows; the best {len(shown)} are cited"
+        flags = ["grouped", f"rows={len(rows)}"]
+        if any(r.quote is None for r in shown):
+            flags.append("no-stored-quote")
+        out.append(
+            Candidate(
+                candidate_id=f"claims-work:{w}",
+                source="claims-limitation",
+                observation=(
+                    f"{title}: {len(rows)} m-claims pass-A limitation row(s) from one paper; "
+                    f'first ({first.claim_type}): "{first_text}" '
+                    "(exploratory, pass-A rows; one paper's statements, not a corpus finding)"
+                ),
+                works=(CandidateWork(work_id=w, title=title),),
+                works_total=1,
+                rows_total=len(rows),
+                quotes=tuple(
+                    CandidateQuote(
+                        role="limitation",
+                        work_id=w,
+                        extraction_id=r.extraction_id,
+                        quote=r.quote,
+                        anchor=r.anchor,
+                    )
+                    for r in shown
+                ),
+                flags=tuple(flags),
+                triggers=(
+                    *(CandidateTrigger(kind="item", ref=r.extraction_id) for r in shown),
+                    CandidateTrigger(kind="work", ref=w),
+                ),
+                trigger_note=note,
+                basis=tuple(
+                    BasisRow(extraction_id=r.extraction_id, work_id=w, role="limitation")
+                    for r in shown
+                ),
+                miners=(f"{CLAIMS_MINER} v{data.version}",),
+            )
+        )
+    return out, len(works), skipped
+
+
 def claims_candidates(
-    data: _Claims, *, per_source: int, layer: str
+    data: _Claims, *, per_source: int, layer: str, group: bool = False
 ) -> tuple[list[Candidate], int, list[Skipped]]:
     """The limitation rows of `data` as candidates (see the module invariants), the number before
-    `per_source`, and the rows left out with why. Pure."""
+    `per_source`, and the rows left out with why. With `group`, one candidate per work (see
+    `_grouped_claims`) and the number is that of works. Pure."""
     chosen = [
         c
         for c in data.rows
@@ -470,6 +559,8 @@ def claims_candidates(
         return (CLAIM_ORDER.index(c.claim_type), c.work_id, c.row_key, c.extraction_id)
 
     chosen.sort(key=order)
+    if group:
+        return _grouped_claims(data, chosen, per_source=per_source)
     out: list[Candidate] = []
     skipped: list[Skipped] = []
     for c in chosen[:per_source]:
@@ -523,13 +614,15 @@ def lead_candidates(
     layer: str = "core",
     technique_min_works: int = 3,
     max_co_works: int = 0,
+    group_claims_by_work: bool = True,
 ) -> Candidates:
     """Observations to check, with the exact triggers a `lead_record` call accepts (see the module
     invariants). Every parameter is a runtime knob: `sources` (any of `SOURCES`), `per_source` (a
     cap per source, at least 1), `layer` (a work layer id or `all`), `technique_min_works` (works
     each approach of a combination or gap needs) and `max_co_works` (works that may already use
-    both approaches of a combination). Refused with nothing computed: an unknown source or a
-    non-positive number (the field named)."""
+    both approaches of a combination) and `group_claims_by_work` (default True: one claims
+    candidate per work, `per_source` then caps works; False: one per limitation row). Refused
+    with nothing computed: an unknown source or a non-positive number (the field named)."""
     unknown = sorted(set(sources) - set(SOURCES))
     if unknown or not sources:
         raise _refuse("sources", f"one or more of {', '.join(SOURCES)}: unknown {unknown}")
@@ -565,7 +658,9 @@ def lead_candidates(
             )
             totals["claims-limitation"] = 0
         else:
-            found_claims, total, left = claims_candidates(data, per_source=per_source, layer=layer)
+            found_claims, total, left = claims_candidates(
+                data, per_source=per_source, layer=layer, group=group_claims_by_work
+            )
             candidates.extend(found_claims)
             skipped.extend(left)
             totals["claims-limitation"] = total
@@ -582,6 +677,7 @@ def lead_candidates(
             "layer": layer,
             "technique_min_works": technique_min_works,
             "max_co_works": max_co_works,
+            "group_claims_by_work": int(group_claims_by_work),
         },
         totals={s: totals[s] for s in SOURCES if s in totals},
         candidates=tuple(candidates),

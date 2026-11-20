@@ -69,7 +69,7 @@ def test_combination_gap_and_claims_candidates(
     project: Project, agent: Actor, human: Actor, world: list[str]
 ) -> None:
     ordered = engine_world(project, agent, human, world)
-    found = _by_source(project)
+    found = _by_source(project, group_claims_by_work=False)
     combos = {c.candidate_id: c for c in found["technique-combination"]}
     pair = combos["technique-combination:exp-01+ide-02"]
     assert "not co-used in this corpus (exploratory, pass-A rows)" in pair.observation
@@ -158,6 +158,73 @@ def test_a_claim_without_a_stored_quote_is_shown_flagged_and_never_quotes_its_va
     bare = by_id["claims-limitation:ext_1"]
     assert bare.quotes[0].quote is None and bare.flags == ("no-stored-quote",)
     assert by_id["claims-limitation:ext_2"].flags == ()
+
+
+def _grouped_data() -> object:
+    from factory.services.lead_candidates import _ClaimRow, _Claims
+
+    def row(ext: str, work: str, kind: str, quote: str | None, anchor: str | None) -> _ClaimRow:
+        return _ClaimRow(ext, work, f"rk_{ext}", kind, "a", quote, anchor, None, True)
+
+    rows = [row(f"ext_a{i:02d}", "W1", "limitation", f"Quote {i}.", "s1.p1") for i in range(25)]
+    rows.append(row("ext_a99", "W1", "negative-result", None, None))
+    rows.append(row("ext_b1", "W2", "failure-analysis", "Fails.", None))
+    rows.append(_ClaimRow("ext_b2", "W2", "rk_b2", "limitation", "a", None, None, None, False))
+    rows.append(row("ext_c1", "W3", "limitation", "Third.", "s2.p2"))
+    return _Claims(1, tuple(rows), {"W1": "One", "W2": "Two", "W3": "Three"}, {})
+
+
+def test_claims_group_into_one_candidate_per_work() -> None:
+    from factory.services.lead_candidates import claims_candidates
+
+    data = _grouped_data()
+    found, total, skipped = claims_candidates(
+        data,  # type: ignore[arg-type]
+        per_source=10,
+        layer="all",
+        group=True,
+    )
+    assert total == 3 and [c.candidate_id for c in found] == [
+        "claims-work:W1",
+        "claims-work:W3",
+        "claims-work:W2",
+    ]
+    assert [s.candidate_id for s in skipped] == ["claims-limitation:ext_b2"]
+    w1 = found[0]
+    assert w1.source == "claims-limitation" and w1.works_total == 1 and w1.rows_total == 26
+    items = [t.ref for t in w1.triggers if t.kind == "item"]
+    assert len(w1.triggers) == 20 and len(items) == 19 and w1.triggers[-1].kind == "work"
+    assert items[0] == "ext_a00" and "ext_a99" not in items  # quoted rows first; the bare one cut
+    assert [q.extraction_id for q in w1.quotes] == items
+    assert w1.flags == ("grouped", "rows=26") and w1.trigger_note is not None
+    assert "26 m-claims" in w1.observation and "Quote 0." in w1.observation
+    w2 = found[2]
+    assert w2.rows_total == 1 and w2.flags == ("grouped", "rows=1") and w2.trigger_note is None
+    capped, total2, _ = claims_candidates(
+        data,  # type: ignore[arg-type]
+        per_source=2,
+        layer="all",
+        group=True,
+    )
+    assert total2 == 3 and len(capped) == 2
+
+
+def test_the_grouped_mode_is_the_default_and_echoed(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    engine_world(project, agent, human, world)
+    grouped = lead_candidates(project, sources=("claims-limitation",), **KNOBS)  # type: ignore[arg-type]
+    flat = lead_candidates(
+        project,
+        sources=("claims-limitation",),
+        group_claims_by_work=False,
+        **KNOBS,  # type: ignore[arg-type]
+    )
+    assert grouped.parameters["group_claims_by_work"] == 1
+    assert flat.parameters["group_claims_by_work"] == 0
+    assert all(c.candidate_id.startswith("claims-work:") for c in grouped.candidates)
+    assert all(c.candidate_id.startswith("claims-limitation:") for c in flat.candidates)
+    assert grouped.totals["claims-limitation"] <= flat.totals["claims-limitation"]
 
 
 STAGE_LIST = ("ideation", "experiment", "analysis", "other")
