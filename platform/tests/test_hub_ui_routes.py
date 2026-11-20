@@ -280,10 +280,13 @@ def test_a_failed_payload_is_tried_again_after_the_retry_window(
     monkeypatch.setitem(hb.BUILDERS, "overview", flaky)
 
     def settle() -> hub_serve.Answer:
+        # While a build is registered the hub answers Building or, with a file on disk from the
+        # same name, Stale (served meanwhile); the test waits for the final answer.
         deadline = time.monotonic() + 20
         while True:
             answer = service.get("overview")
-            if not isinstance(answer, hub_serve.Building) or time.monotonic() > deadline:
+            waiting = isinstance(answer, hub_serve.Building | hub_serve.Stale)
+            if not waiting or time.monotonic() > deadline:
                 return answer
             time.sleep(0.02)
 
