@@ -216,7 +216,7 @@ HUB.load(['shell', 'costs']).then(d => {
   function render() {
     const lead = S.runs ? `${fmt(S.runs)} runs served ${fmt(S.units)} units for ${usd(S.cost)} reported.` : 'No headless run is recorded yet.';
     const tabs = '<div class="seg" role="tablist" aria-label="Costs and runs">' + TABS.map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="${st.tab === k}" aria-pressed="${st.tab === k}">${l}</button>`).join('') + '</div>';
-    main.innerHTML = H.header({ title: 'Costs & runs', sub: 'What the work cost and which runs produced it.', level: 1, infoHtml: panel('The headless runs of the project, their reported cost, and the files they left.', '', M.summary) }) +
+    main.innerHTML = H.header({ title: 'Costs & runs', sub: 'What the work cost and which runs produced it.', level: 1, infoHtml: (M.tab_cost ? M.tab_cost + '<br><br>' : '') + panel('The headless runs of the project, their reported cost, and the files they left.', '', M.summary) }) +
       `<p class="lead co-lead">${esc(lead)}</p><div class="co-tabs">${tabs}</div>` + (st.tab === 'costs' ? costsTab() : runsTab());
     wire();
     if (st.run) { const el = document.getElementById('run-' + st.run); if (el) el.scrollIntoView({ block: 'center' }); }

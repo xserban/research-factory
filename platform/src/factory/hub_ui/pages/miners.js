@@ -185,7 +185,7 @@ HUB.load(['shell', 'mining']).then(d => {
     const lead = `${fmt(M.length)} miners have read ${fmt(union.size)} papers. ${fmt(nChk)} have a second reading to check them.`;
     main.innerHTML = H.header({
       level: 1, title: 'Miners',
-      infoHtml: `<b>What it shows</b>The ${HUB.term('miner', 'miners')} in the review: what each reads and records, how many papers it has covered, and whether a second reading agrees.<p><span class=k>How to read it.</span> The ring is the share of included papers the first reading covered. The ticks give agreement per compared field; the percentage beside them is the overall rate under the fairer match where it exists, else the exact match.</p><p><span class=k>How it's computed.</span> ${esc(MX.miners || '')}</p>`
+      infoHtml: (MX.tab_miners ? MX.tab_miners + '<br><br>' : '') + `<b>What it shows</b>The ${HUB.term('miner', 'miners')} in the review: what each reads and records, how many papers it has covered, and whether a second reading agrees.<p><span class=k>How to read it.</span> The ring is the share of included papers the first reading covered. The ticks give agreement per compared field; the percentage beside them is the overall rate under the fairer match where it exists, else the exact match.</p><p><span class=k>How it's computed.</span> ${esc(MX.miners || '')}</p>`
     }) + `<p class=lead>${esc(lead)}</p>`
       + GROUPS.map(g => {
         const ms = M.filter(m => meta(m)[1] === g); if (!ms.length) return '';

@@ -28,17 +28,24 @@ def hub_build_cmd(
     only: Annotated[
         str | None, typer.Option("--only", help="Comma-separated payload names to build.")
     ] = None,
+    payloads_only: Annotated[
+        bool,
+        typer.Option(
+            "--payloads-only",
+            help="Write only data/<name>.json and .json.gz (the served hub's child build).",
+        ),
+    ] = False,
 ) -> None:
     """Write the static pages, assets and payloads to `--out` (opens from file://)."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
     state.project = slug
-    names = {n.strip() for n in only.split(",") if n.strip()} if only else None
+    names = [n.strip() for n in only.split(",") if n.strip()] if only else None
     with _reporting_errors():
         project = _resolve_project(state)
         try:
-            report = hub_build.build_static(project, out, only=names)
+            report = hub_build.build_static(project, out, only=names, payloads_only=payloads_only)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
     for line in hub_build.format_report(report):

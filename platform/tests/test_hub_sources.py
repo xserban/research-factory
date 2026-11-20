@@ -79,3 +79,23 @@ def test_documents_empty_state(world: Project) -> None:  # noqa: F811
     assert docs["registered"] == 0
     assert docs["kinds"] == []
     assert docs["changed"] == 0 and docs["missing"] == 0
+
+
+def test_documents_rows_carry_ids_urls_and_cache_key_detail(world: Project) -> None:  # noqa: F811
+    from factory.services.study_files import register_file
+
+    target = world.paths.dir / "docs" / "plan.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# Plan\n", encoding="utf-8")
+    reg = register_file(world, "docs/plan.md", "study-document", "Plan", world.human_actor())
+    target.write_text("# Plan v2\n", encoding="utf-8")
+    row = hs.build(hb.HubContext(world))["documents"]["kinds"][0]["files"][0]
+    assert row["id"] == reg.registration.event_id
+    assert row["url"] == f"study/{reg.registration.event_id}"
+    assert row["state"] == "changed"
+    assert row["sha_full"] == reg.registration.sha256
+    assert row["current_sha"] != row["sha_full"] and len(row["current_sha"]) == 64
+    assert row["size"] == len("# Plan v2\n") and row["modified"]
+    assert hs.study_file(world, "missing") is None
+    got = hs.study_file(world, reg.registration.event_id)
+    assert got is not None and got[0] == b"# Plan\n"

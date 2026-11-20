@@ -19,6 +19,7 @@ from factory.model.screening import DecisionRecorded, PassLabel, ScreeningPhase,
 from factory.services.agreement import cannot_assess_queue
 from factory.services.calibration import calibration_items, stage_population
 from factory.services.context import Project
+from factory.services.hub_tab_help import TAB_HELP
 from factory.services.prisma import prisma_flow
 from factory.services.project import screening_status
 from factory.services.protocol import current_protocol, list_deviations
@@ -39,6 +40,7 @@ from factory.services.screening_check import check_list, check_report
 from factory.services.screening_stats import cohen_kappa, kappa_by_criterion
 
 METHODS: dict[str, str] = {
+    "tab_screening": TAB_HELP["screening"],
     "ranked_curve": (
         "Title/abstract screening by pass A, screening phase (calibration never counts). Records "
         "are placed in the order of the latest ranking (rank position 1 first), because "

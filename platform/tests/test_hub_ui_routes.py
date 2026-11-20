@@ -3,9 +3,12 @@ trace route and the one write act, served at `/p/<slug>/ui/` through the existin
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
+import os
 import re
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -51,6 +54,22 @@ def _req(
 
 def _events(project: Project) -> int:
     return len(read_all(project.paths.events_dir, project.catalog))
+
+
+def _inprocess(project: Project, names: Any, out: Any, poll: Any = None) -> tuple[int, str]:
+    """Stand-in for the child process: the same build, run in this process so the tests can stub
+    `hb.BUILDERS`. (`test_the_builder_runs_in_a_child_process` uses the real spawn.)"""
+    try:
+        report = hb.build_static(project, out, only=list(names), payloads_only=True)
+    except ValueError as exc:
+        return 2, str(exc)
+    return (1 if report.errors else 0), "\n".join(f"{n}: {e}" for n, e in report.errors.items())
+
+
+@pytest.fixture(autouse=True)
+def inprocess_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hub_serve, "spawn_builder", _inprocess)
+    monkeypatch.setattr(hub_serve, "BATCH_WINDOW", 0.1)
 
 
 @pytest.fixture
@@ -179,7 +198,7 @@ def test_a_payload_is_built_once_cached_and_revalidated_with_its_etag(
     status, head, body = _payload(port, "overview")
     assert status == 200 and head["content-type"].startswith("application/json")
     assert json.loads(body)["name"] == "overview"
-    assert head["cache-control"] == "private, max-age=0, must-revalidate"
+    assert head["cache-control"] == "private, no-cache"
     etag = head["etag"]
     assert etag.startswith('"') and etag.endswith('"')
     status, head, body = _req(port, "GET", f"{UI}/data/overview.json")
@@ -329,9 +348,11 @@ def test_prewarm_queues_every_payload_once_per_fingerprint(
     inbox_service.add_links(
         project, project.human_actor(), [inbox_service.LinkInput("10.1234/warm")], Channel.CLI
     )
-    assert service.prewarm_check() is True  # a new event: all again
+    assert service.prewarm_check() is True  # a new event: the payloads that read it, again
     _idle(service)
-    assert calls == expected + expected
+    again = [n for n in expected if hb.reads(n, "inbox.link_added")]
+    assert "costs" not in again and "corpus" in again
+    assert calls == expected + again
 
 
 def test_a_request_jumps_the_prewarm_queue_and_starts_no_second_builder(
@@ -377,7 +398,7 @@ def test_a_payload_of_an_older_fingerprint_is_served_stale_while_it_rebuilds(
     )
     status, head, body = _req(port, "GET", f"{UI}/data/overview.json")
     assert status == 200 and head["x-hub-stale"] == "1" and json.loads(body)["name"] == "overview"
-    assert head["cache-control"] == "no-store"
+    assert head["cache-control"] == "private, no-cache" and head["etag"].startswith('"')
     fresh = json.loads(_req(port, "GET", f"{UI}/fresh?name=overview")[2])
     assert fresh == {"fresh": False}
     gate.set()
@@ -394,6 +415,144 @@ def test_prewarm_is_off_when_the_env_switch_says_so(
     service.prewarm()
     time.sleep(0.2)
     assert calls == [] and service._worker is None and service._watcher is None
+
+
+# ---------------------------------------------------------------- child, keys, caching, gzip
+
+
+def test_the_builder_runs_in_a_child_process(
+    project: Project, calls: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    marker = tmp_path / "child.json"
+    script = (
+        "import json, os, sys, pathlib\n"
+        "out = pathlib.Path(sys.argv[1]) / 'data'\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "(out / 'overview.json').write_text(json.dumps({'pid': os.getpid()}) + '\\n')\n"
+        f"pathlib.Path({str(marker)!r}).write_text(' '.join(sys.argv[2:]))\n"
+    )
+    monkeypatch.setattr(hub_serve, "spawn_builder", hub_serve._spawn_subprocess)
+    monkeypatch.setattr(
+        hub_serve,
+        "child_command",
+        lambda project, names, out: [sys.executable, "-c", script, str(out), *names],
+    )
+    service = hub_serve.PayloadService(project)
+    deadline = time.monotonic() + 20
+    answer = service.get("overview")
+    while not isinstance(answer, hub_serve.Ready) and time.monotonic() < deadline:
+        time.sleep(0.05)
+        answer = service.get("overview")
+    assert isinstance(answer, hub_serve.Ready)
+    pid = json.loads(answer.body)["pid"]
+    assert isinstance(pid, int) and pid != os.getpid()
+    assert calls == [] and marker.read_text() == "overview"  # no builder ran in this process
+
+
+def test_a_failing_child_is_logged_with_its_stderr_tail_and_answers_500(
+    project: Project, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    script = "import sys; print('Traceback: kaboom', file=sys.stderr); sys.exit(3)"
+    monkeypatch.setattr(hub_serve, "spawn_builder", hub_serve._spawn_subprocess)
+    monkeypatch.setattr(
+        hub_serve, "child_command", lambda project, names, out: [sys.executable, "-c", script]
+    )
+    service = hub_serve.PayloadService(project)
+    deadline = time.monotonic() + 20
+    answer = service.get("overview")
+    while isinstance(answer, hub_serve.Building) and time.monotonic() < deadline:
+        time.sleep(0.05)
+        answer = service.get("overview")
+    assert isinstance(answer, hub_serve.Failed)
+    assert "kaboom" in caplog.text and "3" in caplog.text
+
+
+def test_the_child_command_is_niced_and_builds_only_the_batch(
+    project: Project, tmp_path: Any
+) -> None:
+    cmd = hub_serve.child_command(project, ["corpus", "grid"], tmp_path)
+    assert cmd[:3] == ["nice", "-n", str(hub_serve.BUILD_NICE)] and cmd[3] == sys.executable
+    assert cmd[cmd.index("--only") + 1] == "corpus,grid" and "--payloads-only" in cmd
+    assert cmd[cmd.index("--out") + 1] == str(tmp_path)
+    assert str(project.settings.root) == cmd[cmd.index("--root") + 1]
+
+
+def test_an_event_a_payload_does_not_read_leaves_it_fresh_while_others_go_stale(
+    project: Project, calls: list[str]
+) -> None:
+    service = hub_serve.PayloadService(project)
+    for name in ("costs", "corpus"):
+        service.get(name)
+    _idle(service)
+    assert service.status()["costs"]["fresh"] and service.status()["corpus"]["fresh"]
+    inbox_service.add_links(
+        project, project.human_actor(), [inbox_service.LinkInput("10.1234/quiet")], Channel.CLI
+    )
+    status = service.status()
+    assert status["costs"]["fresh"] is True and status["corpus"]["fresh"] is False
+    assert service.is_fresh("costs") and not service.is_fresh("corpus")
+    assert not hb.reads("costs", "inbox.link_added") and hb.reads("corpus", "inbox.link_added")
+    assert hb.reads("pipeline", "runner.finished")  # an unlisted payload reads every event
+
+
+def test_a_stale_payload_has_an_etag_and_is_revalidated_with_304(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    port, project = served
+    _, head, _ = _payload(port, "overview")
+    built_for = head["etag"]
+    gate = threading.Event()
+    monkeypatch.setitem(hb.BUILDERS, "overview", lambda ctx: (gate.wait(20), {"n": 2})[1])
+    inbox_service.add_links(
+        project, project.human_actor(), [inbox_service.LinkInput("10.1234/stale2")], Channel.CLI
+    )
+    status, head, body = _req(port, "GET", f"{UI}/data/overview.json")
+    assert status == 200 and head["x-hub-stale"] == "1"
+    assert head["etag"] == built_for  # the fingerprint the file was built for
+    assert head["cache-control"] == "private, no-cache"
+    status, head, body = _req(
+        port, "GET", f"{UI}/data/overview.json", headers={"If-None-Match": built_for}
+    )
+    assert status == 304 and body == b"" and head["x-hub-stale"] == "1"
+    assert head["etag"] == built_for and head["cache-control"] == "private, no-cache"
+    gate.set()
+    status, head, _ = _payload(port, "overview", headers={"If-None-Match": built_for})
+    assert status == 200 and head["etag"] != built_for and "x-hub-stale" not in head
+
+
+def test_a_payload_is_served_gzipped_when_asked_and_decodes_to_the_same_json(
+    served: tuple[int, Project],
+) -> None:
+    port, _ = served
+    status, plain_head, plain = _payload(port, "overview")
+    assert "content-encoding" not in plain_head and plain_head["vary"] == "Accept-Encoding"
+    status, head, body = _req(
+        port, "GET", f"{UI}/data/overview.json", headers={"Accept-Encoding": "gzip, br"}
+    )
+    assert (
+        status == 200 and head["content-encoding"] == "gzip" and head["vary"] == "Accept-Encoding"
+    )
+    assert head["etag"] == plain_head["etag"] and gzip.decompress(body) == plain
+    status, head, body = _req(
+        port,
+        "GET",
+        f"{UI}/data/overview.json",
+        headers={"Accept-Encoding": "gzip", "If-None-Match": plain_head["etag"]},
+    )
+    assert status == 304
+    cached = hub_serve.PayloadService(served[1])._dir / "overview.json.gz"
+    assert cached.is_file()  # compressed once, by the build
+
+
+def test_assets_are_served_gzipped_when_asked(served: tuple[int, Project]) -> None:
+    port, _ = served
+    version = hub_ui.asset_version()
+    path = f"{UI}/assets/shell.js?v={version}"
+    status, head, plain = _req(port, "GET", path)
+    assert status == 200 and "content-encoding" not in head and head["vary"] == "Accept-Encoding"
+    status, head, body = _req(port, "GET", path, headers={"Accept-Encoding": "gzip"})
+    assert head["content-encoding"] == "gzip" and gzip.decompress(body) == plain
+    assert len(body) < len(plain) and "immutable" in head["cache-control"]
 
 
 # ---------------------------------------------------------------- trace
@@ -843,3 +1002,88 @@ def test_hub_routes_refuse_a_project_token(served: tuple[int, Project]) -> None:
     assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 403
     assert _req(port, "POST", "/api/projects/create", {"slug": "zz"}, token)[0] == 403
     assert len(_link_events(project)) == before
+
+
+def _register(project: Project, rel: str, content: bytes, title: str | None = None) -> str:
+    from factory.services.study_files import register_file
+
+    target = project.paths.dir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return register_file(
+        project, rel, "study-document", title, project.human_actor()
+    ).registration.event_id
+
+
+def test_study_file_is_served_by_registered_id_only(served: tuple[int, Project]) -> None:
+    port, project = served
+    md = _register(project, "docs/plan.md", b"# Plan\n", "Plan")
+    blob = _register(project, "docs/data.bin", b"\x00\x01")
+    html = _register(project, "docs/page.html", b"<script>x()</script>")
+    before = _events(project)
+    ok = _req(port, "GET", f"{UI}/study/{md}")
+    assert ok[0] == 200 and ok[2] == b"# Plan\n"
+    assert ok[1]["content-type"].startswith("text/plain")
+    assert "attachment" not in ok[1].get("content-disposition", "")
+    # the stored version stays readable after the file changes on disk
+    (project.paths.dir / "docs/plan.md").write_bytes(b"# Plan v2\n")
+    assert _req(port, "GET", f"{UI}/study/{md}")[2] == b"# Plan\n"
+    other = _req(port, "GET", f"{UI}/study/{blob}")
+    assert other[0] == 200 and other[1]["content-disposition"].startswith("attachment")
+    page = _req(port, "GET", f"{UI}/study/{html}")  # a page is never served as a page
+    assert page[1]["content-type"].startswith("text/plain")
+    assert _events(project) == before
+
+
+def test_study_file_refuses_unknown_ids_paths_and_large_files(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services import hub_sources
+
+    port, project = served
+    reg = _register(project, "docs/plan.md", b"x" * 50)
+    for bad in (
+        "study/nope",
+        "study/",
+        "study/docs/plan.md",  # a path is not an id
+        "study/../outside.txt",
+        "study/%2e%2e/outside.txt",
+        "study/..%2fdocs%2fplan.md",
+        "study/%00",
+    ):
+        assert _req(port, "GET", f"{UI}/{bad}")[0] == 404, bad
+    assert _req(port, "GET", f"{UI}/study/{reg}")[0] == 200
+    monkeypatch.setattr(hub_sources, "STUDY_FILE_CAP", 10)
+    assert _req(port, "GET", f"{UI}/study/{reg}")[0] == 404
+
+
+def test_wiki_zip_copies_inside_symlinks_and_lists_outside_ones(
+    served: tuple[int, Project], monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    import io
+    import zipfile
+
+    from factory.services import site as site_service
+
+    port, project = served
+    inside = project.paths.dir / "library-file.pdf"
+    inside.write_bytes(b"original bytes")
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_bytes(b"secret")
+
+    def fake(p: Project, out: Any) -> None:
+        (out / "docs").mkdir()
+        (out / "docs" / "a.pdf").symlink_to(inside)
+        (out / "docs" / "b.pdf").symlink_to(outside)
+        (out / "docs" / "dangling.pdf").symlink_to(tmp_path / "gone.pdf")
+        (out / "index.md").write_text("# vault", encoding="utf-8")
+
+    monkeypatch.setattr(site_service, "_build_wiki", fake)
+    status, _, body = _req(port, "GET", f"{UI}/download/wiki.zip")
+    assert status == 200
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    assert zf.read("docs/a.pdf") == b"original bytes"
+    assert "docs/b.pdf" not in zf.namelist() and "docs/dangling.pdf" not in zf.namelist()
+    note = zf.read("SKIPPED-LINKS.txt").decode()
+    assert "docs/b.pdf" in note and "docs/dangling.pdf" in note and "secret" not in note
+    assert "docs/a.pdf" not in note

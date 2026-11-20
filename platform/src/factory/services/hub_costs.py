@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from factory.services import budgets as budgets_service
 from factory.services import ledger as ledger_service
 from factory.services.context import Project
+from factory.services.hub_tab_help import TAB_HELP
 from factory.services.run_costs import (
     CostReport,
     RunCost,
@@ -37,6 +38,7 @@ if TYPE_CHECKING:  # hub_build imports this module to register its builder
 FILE_CAP = 200
 
 METHODS: dict[str, str] = {
+    "tab_cost": TAB_HELP["cost"],
     "summary": (
         "Totals over every headless run recorded in the project's events. Cost is the figure "
         "the CLI printed on each run's result line, the API-equivalent price of its tokens; a "

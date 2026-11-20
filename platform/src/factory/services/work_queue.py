@@ -302,6 +302,7 @@ def _needs_by_work(project: Project) -> dict[str, tuple[str, ...]]:
     return {work: tuple(sorted(miners)) for work, miners in by_work.items()}
 
 
+@memoised
 def pending_work(project: Project) -> dict[str, int]:
     """The open units per task kind: screening (title/abstract and full text, each pass),
     extraction (evidence and contribution) and mining (registered miners). Every kind is listed,

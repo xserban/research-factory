@@ -342,7 +342,8 @@ function updating(on){
 const WAIT_CAP_MS = 300000;
 function fetchPayload(n){
   let started = false, waited = 0, pause = 0;
-  const attempt = () => fetch('data/' + n + '.json').then(r => {
+  /* no-cache: revalidate with the ETag; a 304 reuses the stored body (stale or fresh) */
+  const attempt = () => fetch('data/' + n + '.json', {cache: 'no-cache'}).then(r => {
     if (r.status === 503) {
       if (!started) { started = true; updating(true); }
       const s = Math.max(1, parseInt(r.headers.get('Retry-After') || '2', 10));
