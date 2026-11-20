@@ -19,6 +19,11 @@ Invariants:
   it; else `taken` while that run is open, and `failed` once it has ended without a complete
   result (`result` still lists a sheet left incomplete). A failed request is not served again;
   the researcher asks again.
+- `engine` is `v1` (default; older events have none) or `v2`, the agentic spar (`spar_v2`): a v2
+  request is worked by role runs that `spar_v2.advance` starts, never taken by `chat_request_next`
+  or counted by the stage `spar`; its state is derived from its plan (`index/spar_v2.plan`), and
+  `next_role`, `sessions`, `max_sessions` and `readers_cut` say where it stands. A failed v2 request
+  names the failed role in `next_role`. A v2 spar has no parent and no follow-up; an ask is v1.
 - `chat_request_next` serves the oldest open request of the run's kind, once: the taking is one
   event written under the index lock, so two runs never take the same request.
 - Prepare, two sessions: a Prepare spar run writes only the case against of a new sheet and
@@ -39,7 +44,9 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
+from factory.index.spar_v2 import MIN_MAX_SESSIONS, Plan, plan
 from factory.model.chat_requests import (
+    MAX_SESSIONS_MAX,
     NOTE_MAX,
     PARENT_RE,
     REQUEST_ID_RE,
@@ -49,6 +56,7 @@ from factory.model.chat_requests import (
     ChatMode,
     ChatRequested,
     ChatRequestTaken,
+    Engine,
 )
 from factory.services.context import Project
 from factory.services.selection import SelectionSpec
@@ -103,14 +111,25 @@ class ChatRequestInfo:
     actor: str
     ts: str
     selection: dict[str, Any] = field(default_factory=dict)
+    engine: str = "v1"
+    max_sessions: int | None = None
+    next_role: str | None = None
+    """v2 only: the role the request waits for, runs or failed at (None once done)."""
+    next_work: str | None = None
+    sessions: int | None = None
+    """v2 only: the role sessions started so far, computed."""
+    readers_cut: tuple[str, ...] = ()
+    """v2 only: tier-1 papers left unread because the session budget has no session for them."""
 
 
 def _issue(field_name: str, message: str) -> FactoryValidationError:
     return FactoryValidationError([ValidationIssue(field_name, message)])
 
 
-def _info(row: Any) -> ChatRequestInfo:
-    if row["complete"]:
+def _info(row: Any, derived: Plan | None = None) -> ChatRequestInfo:
+    if derived is not None:
+        state = derived.state
+    elif row["complete"]:
         state = "done"
     elif row["taken_run"] is None:
         state = "open"
@@ -118,6 +137,7 @@ def _info(row: Any) -> ChatRequestInfo:
         state = "taken"
     else:
         state = "failed"
+    nxt = None if derived is None else derived.next
     return ChatRequestInfo(
         request_id=row["request_id"],
         kind=row["kind"],
@@ -128,10 +148,16 @@ def _info(row: Any) -> ChatRequestInfo:
         note=row["note"],
         state=state,
         result=row["result"],
-        taken_run=row["taken_run"],
+        taken_run=row["taken_run"] if derived is None else derived.open_run,
         actor=row["actor"],
         ts=row["ts"],
         selection=json.loads(row["selection"]),
+        engine=row["engine"],
+        max_sessions=row["max_sessions"],
+        next_role=None if nxt is None else nxt.role,
+        next_work=None if nxt is None else nxt.work_id,
+        sessions=None if derived is None else derived.sessions,
+        readers_cut=() if derived is None else derived.readers_cut,
     )
 
 
@@ -188,11 +214,15 @@ def request_chat(
     mode: str | None = None,
     parent: str | None = None,
     note: str | None = None,
+    engine: str = "v1",
+    max_sessions: int | None = None,
 ) -> ChatRequested:
     """Record one request as the researcher. A spar needs `hypothesis` (and `mode`, default
     explore) and no `question`; an ask needs `question` and neither `hypothesis` nor `mode`.
     Raises `FactoryValidationError` (nothing written, every issue together) for a non-human actor,
-    a bad kind, text, mode or note, or a `parent` that is no sheet or answer of the project."""
+    a bad kind, text, mode or note, or a `parent` that is no sheet or answer of the project.
+    `engine` is `v1` or `v2` (a spar only, with no parent); `max_sessions` (v2 only) is the budget
+    of role sessions, at least `MIN_MAX_SESSIONS`."""
     if actor.kind != "human":
         raise _issue("actor", "a request is the researcher's act")
     issues: list[ValidationIssue] = []
@@ -224,6 +254,22 @@ def request_chat(
             issues.append(ValidationIssue("mode", "only a spar has a mode"))
     if note is not None and len(note) > NOTE_MAX:
         issues.append(ValidationIssue("note", f"a note has at most {NOTE_MAX} characters"))
+    if engine not in get_args(Engine):
+        issues.append(ValidationIssue("engine", f"{engine}: must be v1 or v2"))
+    elif engine == "v2":
+        if kind != "spar":
+            issues.append(ValidationIssue("engine", "only a spar runs as v2"))
+        if parent is not None:
+            issues.append(ValidationIssue("parent", "a v2 spar has no parent"))
+        if max_sessions is not None and not MIN_MAX_SESSIONS <= max_sessions <= MAX_SESSIONS_MAX:
+            issues.append(
+                ValidationIssue(
+                    "max_sessions",
+                    f"must be between {MIN_MAX_SESSIONS} and {MAX_SESSIONS_MAX}",
+                )
+            )
+    elif max_sessions is not None:
+        issues.append(ValidationIssue("max_sessions", "only a v2 spar has a session budget"))
     project.index.sync()
     if parent is not None:
         issues.extend(_parent_issues(project, kind, mode, parent))
@@ -238,6 +284,8 @@ def request_chat(
         mode=mode,
         parent=parent,
         note=note,
+        engine=engine,
+        max_sessions=max_sessions,
     )
     with project.index.exclusive():
         project.index.sync()
@@ -274,7 +322,7 @@ def check_result_request(
         row = conn.execute(
             text(
                 "SELECT r.kind, r.parent, r.mode, r.taken_run, r.taken_session, x.outcome,"
-                " x.run_id FROM chat_requests r"
+                " x.run_id, r.engine FROM chat_requests r"
                 " LEFT JOIN runner_runs x ON x.run_id = r.taken_run WHERE r.request_id = :r"
             ),
             {"r": request_id},
@@ -283,6 +331,13 @@ def check_result_request(
         raise _issue("request_id", f"{request_id}: no such chat request")
     if str(row[0]) != kind:
         raise _issue("request_id", f"{request_id}: is a request to {row[0]}, not to {kind}")
+    if str(row[7]) == "v2":
+        # a v2 request is written by its role runs; the run binding is checked by `spar_v2`
+        if opens_mode is not None and row[2] != opens_mode:
+            raise _issue("request_id", f"{request_id}: asks for mode {row[2]}, not {opens_mode}")
+        if parent is not None:
+            raise _issue("request_id", f"{request_id}: a v2 spar has no follow-up")
+        return
     if row[3] is None:
         raise _issue("request_id", f"{request_id}: not taken; take it with chat_request_next")
     if row[4] != actor.session:
@@ -306,7 +361,9 @@ def _select(project: Project, where: str, params: dict[str, Any]) -> list[ChatRe
         rows = (
             conn.execute(text(f"{_STATE_SQL} {where} ORDER BY r.event_id"), params).mappings().all()
         )
-    return [_info(r) for r in rows]
+        return [
+            _info(r, plan(conn, r["request_id"]) if r["engine"] == "v2" else None) for r in rows
+        ]
 
 
 def list_requests(
@@ -318,8 +375,9 @@ def list_requests(
 
 
 def open_count(project: Project, kind: str) -> int:
-    """The open requests of `kind`: the pending units of the stage of that name."""
-    return len(list_requests(project, kind=kind, state="open"))
+    """The open v1 requests of `kind`: the pending units of the stage of that name. A v2 request is
+    worked by its role stages and is never counted here."""
+    return len([r for r in list_requests(project, kind=kind, state="open") if r.engine == "v1"])
 
 
 def view_request(project: Project, request_id: str) -> ChatRequestInfo:
@@ -358,7 +416,9 @@ def take_next(project: Project, actor: Actor, run_id: str | None) -> ChatRequest
             ).first()
         if already is not None:
             raise _issue("run", f"this run took {already[0]} already: one run, one request")
-        open_requests = [r for r in list_requests(project, kind=kind, state="open")]
+        open_requests = [
+            r for r in list_requests(project, kind=kind, state="open") if r.engine == "v1"
+        ]
         if not open_requests:
             return None
         chosen = open_requests[0]

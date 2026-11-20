@@ -32,6 +32,8 @@ NOTE_MAX = 600
 
 ChatKind = Literal["spar", "ask"]
 ChatMode = Literal["explore", "prepare"]
+Engine = Literal["v1", "v2"]
+MAX_SESSIONS_MAX = 60
 
 
 class ChatRequested(StrictModel):
@@ -43,12 +45,23 @@ class ChatRequested(StrictModel):
     mode: ChatMode | None = None
     parent: str | None = Field(default=None, pattern=PARENT_RE)
     note: str | None = Field(default=None, max_length=NOTE_MAX)
+    engine: Engine = "v1"
+    """`v1`: one headless run answers the request (stage `spar`); `v2`: separate role runs
+    (`services/spar_v2.py`). Absent in older events (v1)."""
+    max_sessions: int | None = Field(default=None, ge=1, le=MAX_SESSIONS_MAX)
+    """For `v2`: the most role sessions the request may start; none means the default."""
 
     @model_validator(mode="after")
     def _shape(self) -> ChatRequested:
         if self.kind == "spar":
             if self.hypothesis is None or self.question is not None or self.mode is None:
                 raise ValueError("a spar has a hypothesis and a mode, and no question")
+            if self.engine == "v2" and self.parent is not None:
+                raise ValueError("a v2 spar has no parent")
+            if self.engine == "v1" and self.max_sessions is not None:
+                raise ValueError("only a v2 spar has a session cap")
+        elif self.engine != "v1" or self.max_sessions is not None:
+            raise ValueError("an ask runs as v1 and has no session cap")
         elif self.question is None or self.hypothesis is not None or self.mode is not None:
             raise ValueError("an ask has a question, and no hypothesis or mode")
         return self

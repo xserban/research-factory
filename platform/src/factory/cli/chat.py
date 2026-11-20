@@ -3,7 +3,9 @@
 Business logic stays in `services/chat_requests.py`. The researcher orders a spar or an ask here
 (`request` writes one `chat.requested` event as the human) and lists the orders with their derived
 state (`requests`). A headless run (`factory runs start spar|ask`) takes the oldest open request of
-its kind. For a Prepare spar the case for is a second request: `--parent <sht_ id> --mode prepare`.
+its kind. A v2 spar (`--engine v2`, the agentic spar of `services/spar_v2.py`) is worked by role
+runs that `advance` starts one after another; `requests` shows its next role and session count.
+For a Prepare spar the case for is a second request: `--parent <sht_ id> --mode prepare`.
 The shared helpers of `factory.cli.main` are imported inside the commands, because that module
 imports this one.
 """
@@ -14,8 +16,16 @@ from typing import Annotated
 
 import typer
 
+from factory.errors import FactoryValidationError
 from factory.services import chat_requests as chat_requests_service
+from factory.services import runner
+from factory.services import spar_v2 as spar_v2_service
+from factory.services.context import Project
 from factory.services.selection import SelectionSpec
+
+ADVANCE_POLL_SECONDS = 60.0
+"""How long `chat advance` waits for the next role to start after a run closed."""
+ADVANCE_POLL_INTERVAL = 0.2
 
 chat_app = typer.Typer(
     name="chat",
@@ -48,9 +58,18 @@ def request_spar_cmd(
     mode: Annotated[str, typer.Option("--mode", help="explore (default) or prepare.")] = "explore",
     parent: Annotated[str | None, _PARENT] = None,
     note: Annotated[str | None, _NOTE] = None,
+    engine: Annotated[
+        str,
+        typer.Option("--engine", help="v1 (one run, default) or v2 (separate role runs)."),
+    ] = "v1",
+    max_sessions: Annotated[
+        int | None,
+        typer.Option("--max-sessions", help="v2: most role sessions (default 15, at least 5)."),
+    ] = None,
 ) -> None:
-    """Order a spar as the researcher. Prepare writes only the case against; order the case for
-    afterwards with `--parent <sheet> --mode prepare`."""
+    """Order a spar as the researcher. Prepare writes only the case against in v1; order the case
+    for afterwards with `--parent <sheet> --mode prepare`. A v2 spar writes both cases in separate
+    sessions; start it with `factory chat advance <request id>`."""
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
@@ -65,8 +84,10 @@ def request_spar_cmd(
             mode=mode,
             parent=parent,
             note=note,
+            engine=engine,
+            max_sessions=max_sessions,
         )
-    typer.echo(f"{payload.request_id} spar ({payload.mode}) ordered: {hypothesis}")
+    typer.echo(f"{payload.request_id} spar ({payload.mode}, {engine}) ordered: {hypothesis}")
 
 
 @request_app.command("ask")
@@ -120,4 +141,92 @@ def requests_cmd(
         follow = f" (follows {r.parent})" if r.parent else ""
         result = f" -> {r.result}" if r.result else ""
         what = r.hypothesis or r.question
-        typer.echo(f"{r.request_id} {r.kind}{mode} [{r.state}]{follow}{result}: {what}")
+        v2 = ""
+        if r.engine == "v2":
+            v2 = f" v2 {r.sessions}/{r.max_sessions or spar_v2_service.DEFAULT_MAX_SESSIONS}"
+            if r.next_role:
+                v2 += f" next {r.next_role}"
+            if r.readers_cut:
+                v2 += f" ({len(r.readers_cut)} readers cut)"
+        typer.echo(f"{r.request_id} {r.kind}{mode}{v2} [{r.state}]{follow}{result}: {what}")
+
+
+def wait_for_chain(
+    project: Project,
+    request_id: str,
+    *,
+    seconds: float | None = None,
+    interval: float | None = None,
+) -> None:
+    """Stay while the request's chain runs: wait for the open role run to close, then poll (up to
+    `seconds`) until the request is done or failed or the next role run is open, and repeat. Ends
+    when the request is done or failed, or when nothing started within `seconds` of a run
+    closing (no watcher: another process must pick the request up)."""
+    import time
+
+    limit = ADVANCE_POLL_SECONDS if seconds is None else seconds
+    pause = ADVANCE_POLL_INTERVAL if interval is None else interval
+    while True:
+        running = spar_v2_service.progress(project, request_id)
+        if running.open_run is None:
+            return
+        ended = running.open_run
+        runner.wait_until_closed(project, ended)
+        deadline = time.monotonic() + limit
+        while time.monotonic() < deadline:
+            after = spar_v2_service.progress(project, request_id)
+            if after.state in ("done", "failed") or after.open_run not in (None, ended):
+                break
+            time.sleep(pause)
+        else:
+            return
+
+
+@chat_app.command("advance")
+def advance_cmd(
+    ctx: typer.Context,
+    request_id: Annotated[str, typer.Argument(help="A v2 spar request (chr_ id).")],
+    retry: Annotated[
+        bool, typer.Option("--retry/--no-retry", help="Retry a failed role as a new run.")
+    ] = True,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait/--no-wait",
+            help="Stay until the request is done or a role fails (default); --no-wait starts "
+            "one role and returns.",
+        ),
+    ] = True,
+) -> None:
+    """Start the next role run of a v2 spar request (a failed role is retried) and, by default,
+    stay and start each following role until the request is done or a role fails. The chain
+    continues only while a watching process runs: this command (without --no-wait) or the hub;
+    with `--no-wait` it stops after the role started here, and the next `chat advance` or the
+    hub's reconcile picks the request up."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        try:
+            run_id = spar_v2_service.advance(project, request_id, retry=retry)
+        except FactoryValidationError as exc:
+            for issue in exc.issues:
+                typer.echo(f"{issue.field}: {issue.reason}", err=True)
+            raise typer.Exit(2) from exc
+        if run_id is None:
+            typer.echo(f"{request_id}: every role is done")
+            return
+        current = spar_v2_service.progress(project, request_id)
+        typer.echo(f"started {run_id} ({current.next.role if current.next else 'done'})")
+        if not wait:
+            typer.echo(
+                "the chain continues only while a watching process runs (the hub or "
+                "`chat advance` without --no-wait); otherwise run `chat advance` again"
+            )
+            return
+        wait_for_chain(project, request_id)
+        final = chat_requests_service.view_request(project, request_id)
+        typer.echo(
+            f"{request_id}: {final.state}" + (f" at {final.next_role}" if final.next_role else "")
+        )

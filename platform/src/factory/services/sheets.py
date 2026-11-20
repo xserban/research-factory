@@ -78,6 +78,7 @@ from factory.services.paper_profile import (
     load_miner_work_rows,
 )
 from factory.services.selection import SelectionSpec, resolve_selection_cached
+from factory.services.spar_v2 import check_sheet_run
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
@@ -165,6 +166,10 @@ class ArgumentView:
     rating_note: str | None
     linked_claim: LinkedClaim | None = None
     """None without a `claim_row_key`, or when the row is no longer served."""
+    check_verdict: str | None = None
+    """The critic's latest check of a v2 sheet (holds, overreaches, misread), an agent's reading
+    and never a rating; None when unchecked."""
+    check_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -262,11 +267,14 @@ def open_sheet(
     tier1_cap: int = TIER1_CAP,
     supersedes: str | None = None,
     request_id: str | None = None,
+    run_id: str | None = None,
 ) -> SheetOpened:
     """Open a sheet over the selection of `spec`: run `chat_candidates` on `proposals` and record
     the computed table. Raises `FactoryValidationError` (nothing written) for a system or human
     actor, an empty or over-long hypothesis, a `supersedes` that is no sheet, or any issue of the
-    candidates check."""
+    candidates check. `run_id` is the headless run of the session (the MCP server passes its own):
+    a sheet of a v2 request is opened only by the open searcher run of that request, and a v2 role
+    run opens no other sheet (`spar_v2.check_sheet_run`)."""
     _require_agent(actor)
     issues: list[ValidationIssue] = []
     hypothesis = hypothesis.strip()
@@ -279,6 +287,7 @@ def open_sheet(
         issues.append(ValidationIssue("supersedes", f"{supersedes}: no such sheet"))
     try:
         check_result_request(project, actor, request_id, "spar", opens_mode=mode)
+        check_sheet_run(project, run_id, request_id, ("search",), opening=True)
     except FactoryValidationError as err:
         issues.extend(err.issues)
     if issues:
@@ -363,10 +372,16 @@ def _wrote_against(project: Project, sheet_id: str, session: str | None) -> bool
 
 
 def record_arguments(
-    project: Project, actor: Actor, sheet_id: str, arguments: Sequence[ArgumentInput]
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    arguments: Sequence[ArgumentInput],
+    *,
+    run_id: str | None = None,
 ) -> list[SheetArgumentRecorded]:
     """Record the arguments of one section of a sheet, all or none (see the module invariants).
-    Every argument of a call has the same stance."""
+    Every argument of a call has the same stance. On a sheet of a v2 request only the open writer
+    run of that stance (`run_id`) records."""
     _require_agent(actor)
     project.index.sync()
     row = _sheet_row(project, sheet_id)
@@ -387,6 +402,17 @@ def record_arguments(
                 row, stance, actor.session, _wrote_against(project, sheet_id, actor.session)
             )
         )
+        try:
+            v2 = check_sheet_run(project, run_id, row["request_id"], (stance,), sheet_id=sheet_id)
+            if v2 and stance == "for" and _wrote_against(project, sheet_id, actor.session):
+                # a v2 case for is another session's whatever the mode: not only in prepare
+                issues.append(
+                    ValidationIssue(
+                        "session", "the case for is written by a session that wrote none against"
+                    )
+                )
+        except FactoryValidationError as err:
+            issues.extend(err.issues)
     selection = resolve_selection_cached(project, _spec_of(_loads(row["selection"])))
     if selection.digest != row["selection_digest"]:
         issues.append(
@@ -581,18 +607,28 @@ def _linked_claims(project: Project, work_id: str) -> dict[str, LinkedClaim]:
 
 
 def close_section(
-    project: Project, actor: Actor, sheet_id: str, section: str, *, request_id: str | None = None
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    section: str,
+    *,
+    request_id: str | None = None,
+    run_id: str | None = None,
 ) -> SheetSectionClosed:
     """Close a section of a sheet: `against` once, then `for` once. Refused (nothing written) for
     a non-agent actor, an unknown sheet or section, a section already closed, and `for` before
     `against` is closed. `request_id` (section `for` only) names the Prepare follow-up request,
-    whose parent is this sheet, that this closing answers."""
+    whose parent is this sheet, that this closing answers. On a sheet of a v2 request only the open
+    writer run of that section (`run_id`) closes it, and no `request_id` is named."""
     _require_agent(actor)
     if section not in get_args(Section):
         raise _issue("section", f"{section}: must be against or for")
     if request_id is not None and section != "for":
         raise _issue("request_id", "only the section for answers a follow-up request")
     project.index.sync()
+    early = _sheet_row(project, sheet_id)
+    if early is not None:
+        check_sheet_run(project, run_id, early["request_id"], (section,), sheet_id=sheet_id)
     check_result_request(project, actor, request_id, "spar", parent=sheet_id)
     payload = SheetSectionClosed(sheet_id=sheet_id, section=section, request_id=request_id)
     with project.index.exclusive():
@@ -737,7 +773,11 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
         found = (
             conn.execute(
                 text(
-                    "SELECT a.*, r.rating AS rating, r.note AS rating_note FROM sheet_arguments a "
+                    "SELECT a.*, r.rating AS rating, r.note AS rating_note, "
+                    "(SELECT c.verdict FROM argument_checks c WHERE c.argument_id = a.argument_id "
+                    "ORDER BY c.event_id DESC LIMIT 1) AS check_verdict, "
+                    "(SELECT c.reason FROM argument_checks c WHERE c.argument_id = a.argument_id "
+                    "ORDER BY c.event_id DESC LIMIT 1) AS check_reason FROM sheet_arguments a "
                     "LEFT JOIN sheet_ratings r ON r.argument_id = a.argument_id "
                     "WHERE a.sheet_id = :s ORDER BY a.event_id"
                 ),
@@ -778,6 +818,8 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             linked_claim=(
                 linked.get(a["work_id"], {}).get(a["claim_row_key"]) if a["claim_row_key"] else None
             ),
+            check_verdict=a["check_verdict"],
+            check_reason=a["check_reason"],
         )
         for a in found
     )

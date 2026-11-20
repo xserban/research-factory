@@ -24,12 +24,34 @@ NOT_ALLOWED: dict[str, dict[str, str]] = {
         "contradiction_propose": "the Contradictions mode is attended; no runner stage serves it",
         "lead_record": "a lead needs the researcher's balance; no headless run records one",
     },
+    "rf-spar-v2": {
+        "lead_record": "a lead needs the researcher's balance; no role run records one",
+        "answer_record": "an answer is the ask stage's; no spar role writes one",
+    },
 }
 """Per skill, the tool names the skill mentions that the run does not allow, with the reason."""
 
 STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
     "spar": {"answer_record": "an answer is written by the ask stage"},
     "ask": {},
+    "spar2-search": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-read": {"spar_coverage_record": "the coverage role records the sweep"},
+    "spar2-against": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-for": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-critic": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-cover": {"spar_reading_record": "a reader records readings"},
 }
 """Per stage key (a skill shared by two stages), the tools that stage does not allow."""
 

@@ -8,15 +8,16 @@ results that name the request (`sheets.request_id`, `sheets.for_request_id`,
 An event is folded only when it is consistent with what `services/chat_requests.py` enforces; one
 that fails stays in the log and changes nothing (no service writes one, so it was written by hand):
 - a request needs a human actor and a parent that is a folded sheet or answer when one is named;
-- a taking needs an agent actor, a folded request not taken before and, when the run is known, a
-  run of the request's stage (`spar` or `ask`).
+- a taking needs an agent actor, a folded v1 request not taken before and, when the run is known,
+  a run of the request's stage (`spar` or `ask`); a v2 request (`engine`) is never taken: its role
+  runs are folded by `index/spar_v2.py`.
 
 Handlers are total: a failure at any point folds nothing and never raises, on rebuild too.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Column, MetaData, String, Table, text
+from sqlalchemy import Column, Integer, MetaData, String, Table, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
@@ -46,6 +47,8 @@ def chat_request_tables(metadata: MetaData) -> ChatRequestTables:
         Column("mode", String),
         Column("parent", String),
         Column("note", String),
+        Column("engine", String, nullable=False, server_default="v1"),
+        Column("max_sessions", Integer),
         Column("actor", String, nullable=False),
         Column("ts", String, nullable=False),
         Column("event_id", String, nullable=False),
@@ -83,6 +86,8 @@ def chat_request_handlers(tables: ChatRequestTables) -> dict[str, Handler]:
                 mode=payload.mode,
                 parent=payload.parent,
                 note=payload.note,
+                engine=payload.engine,
+                max_sessions=payload.max_sessions,
                 actor=event.actor.id,
                 ts=format_ts(event.ts),
                 event_id=event.id,
@@ -95,11 +100,11 @@ def chat_request_handlers(tables: ChatRequestTables) -> dict[str, Handler]:
         if event.actor.kind != "agent":
             return
         row = conn.execute(
-            text("SELECT kind, taken_run FROM chat_requests WHERE request_id = :r"),
+            text("SELECT kind, taken_run, engine FROM chat_requests WHERE request_id = :r"),
             {"r": payload.request_id},
         ).first()
-        if row is None or row[1] is not None:
-            return
+        if row is None or row[1] is not None or str(row[2]) != "v1":
+            return  # a v2 request is worked by role runs (`spar.role_started`), never taken
         stage = conn.execute(
             text("SELECT stage FROM runner_runs WHERE run_id = :r"), {"r": payload.run_id}
         ).first()

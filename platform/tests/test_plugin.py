@@ -30,6 +30,7 @@ SKILLS = (
     "rf-run",
     "rf-screen",
     "rf-search",
+    "rf-spar-v2",
     "rf-technique-bounce",
     "rf-verify",
     "rf-write",
@@ -350,3 +351,16 @@ def test_rf_chat_has_an_unattended_run_section() -> None:
     assert "`chat_request_next`" in text and "never ask the researcher anything" in lowered
     assert "`request_id`" in text and "the researcher rates and writes the balance" in lowered
     assert "explore unless the request says `prepare`" in lowered
+
+
+def test_rf_spar_v2_has_one_section_per_role_and_the_never_rules() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-spar-v2" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split()).lower()
+    for role in ("search", "read", "against", "for", "critic", "cover"):
+        assert f"\n## {role}\n" in text, role
+    assert "`spar_role_next`" in text and "pass no request id" in lowered
+    assert "`spar_reading_record`" in text and "`spar_coverage_record`" in text
+    assert "`sheet_check`" in text and "not a rating" in lowered
+    assert "never rate an argument, write the balance" in lowered
+    assert "wrote no argument against" in lowered
+    assert "ask nothing, wait for nothing" in lowered

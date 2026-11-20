@@ -222,6 +222,12 @@ from factory.model.sheets import (
     SheetOpened,
     SheetSectionClosed,
 )
+from factory.model.spar_v2 import (
+    SheetArgumentChecked,
+    SparCoverageRecorded,
+    SparReadingRecorded,
+    SparRoleStarted,
+)
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 from factory.model.taxonomies import (
     MiningRequested,
@@ -331,6 +337,10 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("sheet.balance_recorded", SheetBalanceRecorded, 1))
     catalog.register(EventType("chat.requested", ChatRequested, 1))
     catalog.register(EventType("chat.request_taken", ChatRequestTaken, 1))
+    catalog.register(EventType("spar.role_started", SparRoleStarted, 1))
+    catalog.register(EventType("spar.reading_recorded", SparReadingRecorded, 1))
+    catalog.register(EventType("sheet.argument_checked", SheetArgumentChecked, 1))
+    catalog.register(EventType("spar.coverage_recorded", SparCoverageRecorded, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))
