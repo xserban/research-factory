@@ -43,7 +43,15 @@ from factory.services.search import list_works, register_query, run_query
 from factory.services.seeds import add_seeds, admit_seed, explain_seed_miss
 from factory.sources.base import RawPage, SearchResult
 from factory.sources.registry import INTERFACES, SourceFactory
-from tests.helpers import T0, _positive_item, _protocol, _seed_item, bind_ids, openalex_item
+from tests.helpers import (
+    T0,
+    _positive_item,
+    _protocol,
+    _seed_item,
+    bind_ids,
+    openalex_item,
+    reviewer_of,
+)
 from tests.screening_helpers import _citing, _corpus, _decide, _merge_items, _ordinary, _settle
 
 SourcesFor = Callable[..., Mapping[str, SourceFactory]]
@@ -333,7 +341,7 @@ def test_unconfirmed_press_review_is_reported_as_unconfirmed(
     finding = PressFinding(
         element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
     )
-    review_id = press_review(project, agent, protocol_id, (finding,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
 
     report = search_report(project)
 
