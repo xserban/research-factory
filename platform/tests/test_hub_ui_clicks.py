@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,7 +35,8 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("chromium") is None, reason="chromium is not on PATH"),
 ]
 
-PROFILE_ROOT = Path("/home/obd/.cache/rf-overnight-tmp")
+# Scratch root for browser profiles: FACTORY_TEST_TMP when set, else the system temp dir.
+PROFILE_ROOT = Path(os.environ.get("FACTORY_TEST_TMP") or tempfile.gettempdir()) / "rf-clicks-profiles"
 
 COLLECTOR = """<script>
 window.__rfErrors = [];
