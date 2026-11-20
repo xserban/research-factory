@@ -18,6 +18,31 @@ Update this file in the landing commit of every plan, together with the backlog 
 | `idea-49-nfc-resolve` | IDEA-49 parts 1 and 2: NFC-tolerant `document_read` (batch and miner membership included); `screen resolve` accepts an unresolved full-text `cannot-assess` work (single- or dual-pass). Part 3 (verdict only after a read) not built, options in IDEA-49. Also `screen resolve` matches ids by NFC form. No new event type, no index change | yes | no | partly (2026-11-12, one file per process: the new `test_document_read_nfc.py` and `test_fulltext_resolve_cannot_assess.py`, `test_agreement.py`, `test_document_read.py`, `test_document_read_gate.py`, `test_miner_select.py`, `test_cli_fulltext_screening.py`, `test_mcp_fulltext_screening.py` pass; 34 failures in four screening files are identical on `main` 5bc9879, see IDEA-49 and IDEA-65; full suite not run) | yes (`main`, 2026-11-12; follow-ups IDEA-66, IDEA-67, part 3 ruling in IDEA-49) |
 | `index-rebuild-guard` | IDEA-62: index hold guard (an older `PROJECTION_VERSION` refuses to rebuild over a newer one held in the last 10 minutes), `check` warnings for MCP configs on different code lines, runbook section on the shared runtime. No PROJECTION_VERSION bump, no new event type | yes | yes (Sonnet review, fixes 11cbf07) | partly (its own, the index and the CLI test files run one by one; the 16 CLI failures are identical on `main` 5bc9879; full suite not run; not tried live) | yes (2026-11-12: `main` 11c3685 merged into the branch, then fast-forward) |
 
+## Slice 9: tiers and autonomy levels (integration branch `tiers-base`, 2026-11-21)
+
+Plan `docs/plans/2026-11-20-tiers-and-autonomy.md`, spec `docs/specs/slice-9-tiers-autonomy.md`, proposed rows 163 to 168 in `docs/specs/slice-9-decision-rows.md`, open rulings in `docs/decision-sheet-2026-11-21.md`. Each lane was built on its own branch `tiers/<lane>` and merged into `tiers-base`. "Built" means committed with its tests written; the tests run on GitHub CI, and the integrated branch had a first CI run with three failures fixed in 982ca9cc. Nothing is on `main`, and no lane has been tried live.
+
+| Lane | Content | Built | Reviewed | Merged into `tiers-base` | On main |
+|---|---|---|---|---|---|
+| L0 | Spec and decision rows D1 to D6 | yes | no | yes | no |
+| L1 | Tier and autonomy level at init, status line, level statement in every report | yes (1a58fd89) | no | yes | no |
+| L2 | Tier plans, brief templates, skill `rf-brief`, `factory brief` | yes (5a4392ae) | no | yes | no |
+| L3 | Autonomy profiles, effective policy, trust ledger, deferred review, agent audit label | yes (8ae9e07d) | no | yes | no |
+| L4 | Conductor and runner stages frame, gather, acquire, write; `conductor.*` events | yes (11fbc268) | no | yes | no |
+| L5 | Level metrics and benchmark protocol (`factory bench level`) | yes (ecceb8c5) | no | yes | no |
+| L6 | Deep tier: skill `rf-deep`, plan pins | yes (1bf6a0c8) | no | yes | no |
+| L7 | Hub page `levels`, Learn concepts, overview badges | yes (1fdfc0f5) | no | yes | no |
+| L9 | The brief's computed evidence note | yes (0952a780) | no | yes | no |
+| L10 | Conductor steps understand, develop (lead, drafter, critic) and maintain | yes (34fe2cf6) | no | yes | no |
+| L11 | Validation profile per tier and level | yes (67788a31) | no | yes | no |
+| L12 | On-the-fly miner design, skill `rf-miner-suggest`, `check_proposal` (not wired) | yes (b410fdb7) | no | yes | no |
+| L13 | Walking-skeleton test of the tiers | yes (b8f423c8) | no | yes | no |
+| L14 | Enforcement bundle: PRESS session, tier caps, gate-policy fold reads the level | yes (459595ed, 25df9fc1, e21a613d) | no | yes | no |
+| L15 | Make the stock brief plan run end to end | no (prompt only; branch has no commit) | no | no | no |
+| R | Stage-alternatives research | prompt only in the repository; reports not verified | no | n/a | n/a |
+
+Known gaps: `AUTONOMOUS_FLOOR` is empty (decision 165 unruled); the stock brief plan cannot reach extraction without the workaround in the skeleton test (L15); `check_proposal` is not wired to a tool (IDEA-123); the last screening batch may pass the tier cap (IDEA-124). Follow-ups are IDEA-121 to IDEA-129 in `docs/backlog.md`.
+
 ## Before merging this line
 
 State at the restart-and-costs wrap-up (2026-11-12, after the unification on `main` ae5f5b5): items 2, 3 and 4 were done at the unification (backlog reconciled, decisions 118 and 119, `MAP.md` regenerated); item 1 is open (IDEA-65: about 400 test files not run on the unified line); item 5 is open.
