@@ -252,7 +252,7 @@ ACQUIRE = StageCard(
         Step(
             A,
             "Check whether another project of the lab already holds the document, and adopt it.",
-            (tool("library_adoptable"), tool("library_adopt")),
+            (skill("rf-acquire"), tool("library_adoptable"), tool("library_adopt")),
         ),
         Step(
             A,
