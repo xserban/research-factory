@@ -858,6 +858,8 @@ def status(
     typer.echo(f"rigor mode: {report.rigor_mode.value}")
     typer.echo(f"stage: {report.stage.value if report.stage else 'unknown'}")
     typer.echo(f"events: {report.events_total}")
+    for blocked in report.blocking:
+        typer.echo(f"BLOCKING next step: {blocked}")
     typer.echo(f"question: {report.question or 'none'}")
     protocol = report.protocol
     if protocol is None:
