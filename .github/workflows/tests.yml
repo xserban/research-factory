@@ -115,7 +115,7 @@ jobs:
           [ -s shard.txt ] || { echo "nothing to run in this shard"; exit 0; }
           marker="not network and not slow"
           [ "${{ needs.plan.outputs.slow }}" = true ] && marker="not network"
-          uv run pytest $(cat shard.txt) -q -p no:cacheprovider -n auto --dist loadfile \
+          uv run --with numpy pytest $(cat shard.txt) -q -p no:cacheprovider -n auto --dist loadfile \
             -m "$marker" --durations=25 --junitxml=junit-${{ matrix.shard }}.xml
       - name: Summary
         if: always()
