@@ -1091,3 +1091,10 @@ Status: new · Added: 2026-11-20 · Slice: — · Depends on: review 2026-11-20 
 **Why:** A new user learns the real flow only from refusals.
 **Rigour notes:** Text only.
 **Open questions:** none.
+
+### IDEA-117 — CLI for question, seeds, probe and search
+Status: not built (job G1 of 2026-11-20 stopped after the five smaller items).
+**What:** thin CLI wrappers so a human can work without Claude: `factory question record`, `factory seeds add|list`, `factory probe run`, `factory search run` (`question show` and `search slice` already exist).
+**Why:** the framing, seed, probe and search steps run only as MCP tools today (flow review, `ops/review-2026-11-20/stages-0-4.md`, gap 5).
+**Rigour notes:** human-attributed acts like the existing ones; read-only ones in `CLI_READS`; no logic outside services; mock-source tests for search.
+**Open questions:** JSON spec parsing for the question and the seed lists; source adapters for `search run`; the actor and decision-id handling.

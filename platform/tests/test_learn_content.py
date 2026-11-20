@@ -84,7 +84,7 @@ def test_concepts_and_glossary_have_their_size() -> None:
 
 def test_no_unverified_claim_markers() -> None:
     text = repr(STAGES) + repr(CONCEPTS) + repr(GLOSSARY)
-    for marker in ("unverified", "TODO", "dedup pairs"):
+    for marker in ("unverified", "TODO"):
         assert marker not in text
 
 

@@ -105,8 +105,8 @@ GATHER = StageCard(
     steps=(
         Step(
             A,
-            "Run each planned query exactly as the protocol states it. There is no separate skill for this; rf-run names the tool.",
-            (skill("rf-run"), tool("search_run")),
+            "Run each planned query exactly as the protocol states it. The skill rf-search-run guides it, including the human gates.",
+            (skill("rf-search-run"), tool("search_run")),
         ),
         Step(
             A,
@@ -125,6 +125,11 @@ GATHER = StageCard(
         ),
         Step(
             H, "List the merges and revert a wrong one.", (cli("dedup list"), cli("dedup revert"))
+        ),
+        Step(
+            H,
+            "Decide the pairs of versions of one work (for example a preprint and its published version) that the platform lists for you.",
+            (cli("dedup pairs"), cli("dedup pair")),
         ),
         Step(
             H,
