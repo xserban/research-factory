@@ -10,7 +10,7 @@ Invariants:
   discarded lead, every hypothesis in any state and every provider's rows that share a key, sorted,
   capped at `PRIOR_CAP` with the total count beside it.
 - A lead may cite a sheet (`sheet` trigger) only if the sheet was run in `prepare` mode, both its
-  sections are closed and the researcher has recorded its balance (decision N-4); the projection
+  sections are closed and the researcher has recorded its balance (decision 143); the projection
   folds no lead that cites a sheet failing this.
 - A lead is immutable; a decision supersedes the earlier one and nothing is deleted. Who may decide
   is the gate `hypotheses.lead_decide` (`hypothesis_gates.may_pass`); the lead's author never

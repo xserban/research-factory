@@ -268,7 +268,7 @@ def _lead_recorded(t: HypothesisTables) -> Handler:
             x.kind is TriggerKind.SHEET and sheet_lead_problem(conn, x.ref) is not None
             for x in p.triggers
         ):
-            return  # a sheet that breaks the lead guard (decision N-4); no service writes it
+            return  # a sheet that breaks the lead guard (decision 143); no service writes it
         inserted = conn.execute(
             sqlite_insert(t.leads)
             .values(

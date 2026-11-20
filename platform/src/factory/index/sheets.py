@@ -363,7 +363,7 @@ def _wrote_against(conn: Connection, sheet_id: str, session: str | None) -> bool
 
 
 def sheet_lead_problem(conn: Connection, sheet_id: str) -> str | None:
-    """Why a lead may not cite the sheet, or None when it may (decision N-4): it must exist, be a
+    """Why a lead may not cite the sheet, or None when it may (decision 143): it must exist, be a
     `prepare` sheet, have both sections closed and carry a balance the researcher recorded. The
     service refuses with this text; the lead projection folds no lead for which it is not None."""
     row = conn.execute(
