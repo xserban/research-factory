@@ -187,7 +187,7 @@ def _drive(page: Path) -> dict[str, Any]:
             ],
             capture_output=True,
             text=True,
-            timeout=150,
+            timeout=300,  # real time: a loaded CI runner needs far more than the 120 s of virtual time
             check=False,
         )
     finally:
