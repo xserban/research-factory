@@ -173,7 +173,7 @@ async def test_mcp_report_methods_refused_to_pass_session_mid_screening(
     async with open_session(settings, clock) as reviewer:  # a session outside the passes
         allowed = await reviewer.call("report_methods", project="demo")
     assert allowed["ok"] is True
-    assert set(allowed["data"]) == {"report", "text"}
+    assert set(allowed["data"]) == {"report", "text", "level_statement"}
     async with open_session(settings, clock) as reviewer:
         numbers = await reviewer.call("report_prisma", project="demo")
     assert numbers["ok"] is True

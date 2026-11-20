@@ -126,6 +126,8 @@ def test_status_human_output(tmp_path: Path) -> None:
     assert result.stdout == (
         "project: demo\n"
         "rigor mode: systematic\n"
+        "tier: not declared\n"
+        "autonomy level: attended\n"
         "stage: scoping\n"
         "events: 1\n"
         "question: none\n"

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import text
 
-from factory.errors import FactoryValidationError, ValidationIssue
+from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.gates import GatePolicies
@@ -145,7 +145,10 @@ def autonomy_level(project: Project) -> AutonomyLevel:
     reader = getattr(importlib.import_module("factory.services.project"), "project_levels", None)
     if reader is None:
         return AutonomyLevel.ATTENDED
-    return AutonomyLevel(str(reader(project).autonomy_level))
+    try:
+        return AutonomyLevel(str(reader(project).autonomy_level))
+    except ProjectNotFoundError:  # a log without `project.created` (a replayed fixture): legacy
+        return AutonomyLevel.ATTENDED
 
 
 def effective_policy(
