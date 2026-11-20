@@ -39,3 +39,6 @@ experiments/*/tools/
 # Local scratch, never committed
 tmp/
 /data/
+
+# Held-out seeds are never tracked (CLAUDE.md pilot hold-out). Kept outside git; see decision 37.9.
+docs/pilot/heldout-seeds.md
