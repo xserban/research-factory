@@ -48,6 +48,7 @@ Plans are in [docs/plans/](docs/plans/), the decision log in [docs/decisions.md]
 | [docs/specs/](docs/specs/README.md) | System contracts, slice specs and slice roadmap |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the parts fit: layers, events, index, services, interfaces |
 | [docs/MAP.md](docs/MAP.md) | Generated map of modules, events, tables, tools, commands and skills |
+| [docs/hub-guide.md](docs/hub-guide.md) | Building a hub page or view: design and chart rules (UX books, Tufte), copy, steps, speed budget, review loop |
 | [docs/plans/](docs/plans/) | Implementation plans, one per slice or feature |
 | [docs/backlog.md](docs/backlog.md) | Idea backlog: not yet in any spec |
 | [docs/pilot/](docs/pilot/seeds.md) | Manual pilot (linear attention for vision): seeds, split, log |
