@@ -74,6 +74,9 @@ Order of merging into `tiers-base`: C1 (done) -> L1 -> L3 and L2 (parallel) -> L
 | L3 | Autonomous floors, effective policy, trust ledger, deferred queue | `attended` behaviour byte-identical (existing gate tests unchanged); supervised pins; ledger and queue tests |
 | L4 | Conductor and runner stages | steps advance through a fake runner; every stop rule has a test; the platform imports no model SDK |
 | L5 | Metrics and the benchmark protocol | metrics computed on a test world; protocol document |
+| L6 | Deep tier: skill `rf-deep`, independent PRESS-lite, capped snowball, audit, contradictions | skill pins; every skill a plan names exists |
+| L7 | Hub page `levels`, Learn concepts, overview badges | registry tests updated; page lints |
+| L9 | The brief's evidence note (computed counts, verified quotes, label) | counts equal the PRISMA report; unverified quote flagged |
 | R | Stage-alternatives research (template per stage, read-only) | one report per stage |
 
 ## 5. Decisions needed from the researcher (proposed defaults; lanes build the mechanism so that the default changes nothing)
