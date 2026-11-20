@@ -6466,7 +6466,8 @@ def build_server(
         headless run's kind, and mark it taken by the run. Served only to a run of the stage
         `spar` or `ask`; any other session is refused with field `run`. `batch` holds the request
         (`request_id`, `kind`, `hypothesis` or `question`, `mode`, `selection` with `layers`,
-        `include` and `exclude`, `parent`, `note`), or is null when none is open. One unit per run:
+        `include` and `exclude`, `parent`, `respar` for a re-spar, `note`), or is null when none is
+        open. One unit per run:
         a second call is refused with `cap-reached`. Pass the `request_id` to `sheet_open`,
         `sheet_close` or `answer_record`. Refused to a session that has joined a pass."""
 

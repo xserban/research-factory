@@ -115,4 +115,4 @@ def test_rebuild_identical_state_hash(project: Project, tmp_path: Path) -> None:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "93"
+    assert PROJECTION_VERSION == "94"

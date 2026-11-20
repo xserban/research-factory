@@ -123,6 +123,14 @@ researcher ordered the work beforehand as a recorded request, and one run answer
    researcher orders that second request (`factory chat request spar ... --parent <sht_ id>
    --mode prepare`); this run is a session that wrote no argument against, as the platform
    requires.
+   A request with `respar: true` is a re-spar: its `parent` is an earlier, closed sheet that
+   the researcher wants sparred again over today's papers. Read that sheet with `sheet_view`
+   only to see what was argued, then work as for a new request with the request's own
+   hypothesis, selection and mode: `sheet_open` a new sheet passing `request_id` (never write
+   into the parent; the platform records the link as `respar_of`). Read the papers afresh: do not
+   copy the earlier arguments or their strengths, and never carry over or suggest a rating. The
+   researcher compares the two sheets (`factory sheets diff`) and decides about any earlier
+   rating.
    One run answers one request: a second `chat_request_next` is refused, and a chat run is not
    resumed (the researcher orders it again). A result links to the request only from the session
    that took it, while the run is open; a Prepare follow-up never opens a sheet.

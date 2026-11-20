@@ -67,6 +67,13 @@ class SheetOpened(StrictModel):
     supersedes: str | None = Field(default=None, pattern=SHEET_ID_RE)
     request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
     """The chat request this sheet answers (`chat.requested`), when a headless run opened it."""
+    respar_of: str | None = Field(default=None, pattern=SHEET_ID_RE)
+    """The earlier sheet this one re-spars (N7): set by the platform from the request's parent,
+    never by the agent. Old events lack it."""
+    claims_fingerprint: dict[str, str] | None = None
+    """Per work of the selection, a short hash of the claims rows served when the sheet opened
+    (`sheets.claims_fingerprint`), so a later change of those rows is computed, not remembered.
+    Old events lack it: their claims are not checked."""
 
 
 class SheetArgumentRecorded(StrictModel):
