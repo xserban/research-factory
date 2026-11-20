@@ -40,7 +40,7 @@ Turns a stated goal into a recorded question. Source: research-factory-old `stag
    `pilot` (dual screening on a sample, advisory kappa) or `systematic` (full PRISMA, dual
    screening, enforced kappa). Read the project's current mode with `project_status`. The rigor
    mode is a project setting, not a field of the question spec, so the human sets it. Put your
-   reasoning in `rationale` or `scheme_rationale`, and say the choice is reversible by promotion.
+   reasoning in `rationale` or `scheme_rationale`, and say the choice is made at creation and is not changed by a command: `check --promote-to <mode>` only reports the gaps that mode would show. What an agent may pass by mode: `exploratory` lets a session other than the proposer promote leads, register hypotheses (no review needed) and settle mine disagreements under audit; `pilot` lets it confirm reference links, import resolutions and release drafts, but not leads, hypotheses or mine disagreements; `systematic` leaves every gate to the human. Say this when you propose the mode.
 9. Every mutating tool also takes `project` (the project slug), `role`, and `model` (your own model id), alongside `skill`, which is the bare skill name. The platform computes the skill hash; do not send one. Pass the bare skill name `rf-frame` as `skill`.
 
 ## Done when

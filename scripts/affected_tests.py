@@ -113,8 +113,14 @@ def _closure(start: set[str], importers: dict[str, set[str]]) -> set[str]:
     return seen
 
 
+def _test_files() -> list[Path]:
+    """Every test file at any depth under tests/ (some live in subfolders, e.g. tests/document)."""
+    return sorted(p for p in TESTS.rglob("test_*.py") if "__pycache__" not in p.parts)
+
+
 def all_test_files() -> list[str]:
-    return sorted(p.name for p in TESTS.glob("test_*.py"))
+    """Test file paths relative to tests/ (`test_x.py`, `document/test_y.py`)."""
+    return [p.relative_to(TESTS).as_posix() for p in _test_files()]
 
 
 def select(changed: list[str]) -> tuple[str, list[str]]:
@@ -139,14 +145,15 @@ def select(changed: list[str]) -> tuple[str, list[str]]:
             outside.add(Path(c).parent.name)
     reached = _closure(start, importers)
     chosen = {
-        Path(files[m]).name
+        files[m].relative_to(TESTS).as_posix()
         for m in reached
-        if m.startswith("tests.") and Path(files[m]).name.startswith("test_")
+        if m.startswith("tests.") and files[m].name.startswith("test_")
     }
     for name in outside:
-        for path in TESTS.glob("test_*.py"):
-            if f'"{name}"' in path.read_text("utf-8") or f"/ {name!r}" in path.read_text("utf-8"):
-                chosen.add(path.name)
+        for path in _test_files():
+            text = path.read_text("utf-8")
+            if f'"{name}"' in text or f"/ {name!r}" in text:
+                chosen.add(path.relative_to(TESTS).as_posix())
     chosen.update(a for a in ALWAYS if (TESTS / a).exists())
     return "touched", sorted(chosen)
 

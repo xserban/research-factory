@@ -2890,12 +2890,18 @@ def build_server(
         model: str,
         skill: str,
         dry_run: bool = True,
+        decision_ids: list[str] | None = None,
     ) -> dict[str, JsonValue]:
         """Plan (default) or run a snowball round: `backward` (the references of the included
         works' documents) or `forward` (works citing them). A dry run writes nothing and shows
         the candidates, the queries and whether the protocol's `snowball_plan` allows the round.
-        Run a real round only after the researcher's go-ahead; follow with `dedup_run`.
-        Refused to a session that has joined a pass."""
+        A real round (`dry_run` false) in a `pilot` or `systematic` project needs the researcher's
+        go-ahead as a recorded act: `decision_ids` names a `plan` decision on the subject
+        `snowball-<direction>-<round_no>` (for example `snowball-backward-1`), proposed with
+        `decision_suggest` (items: the round's plan from the dry run) and selected by the
+        researcher; refused otherwise (`decision_ids`). A dry run and an `exploratory` project
+        need none. Follow a real round with `dedup_run`. Refused to a session that has joined a
+        pass."""
 
         def round_() -> JsonValue:
             parsed = _round_direction(direction)
@@ -2903,7 +2909,7 @@ def build_server(
             _refuse_pass_session(opened)
             actor = make_agent_actor(settings, session, role, model, skill)
             result = snowball_service.snowball_round(
-                opened, actor, parsed, sources=adapters, dry_run=dry_run
+                opened, actor, parsed, sources=adapters, dry_run=dry_run, decision_ids=decision_ids
             )
             return _withheld(opened, result.model_dump(mode="json"), include_work_ids=False)
 

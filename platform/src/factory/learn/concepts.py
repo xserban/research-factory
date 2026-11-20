@@ -31,6 +31,15 @@ CONCEPTS: tuple[Concept, ...] = (
         "The status command lists what waits for you, each with its command.",
     ),
     Concept(
+        "human-in-log",
+        "Who is the human in the log",
+        "The command line always writes a human actor and cannot tell you from an agent with a "
+        "shell. MCP relay tools write a human actor for acts you confirm in the client (decision "
+        "37.6). So a gate is attribution plus the platform refusing agent actors on the MCP path, "
+        "not authentication. Resting on documentation only: the go-ahead before a real snowball "
+        "round, and that an agent-registered hypothesis is never reported as confirmatory.",
+    ),
+    Concept(
         "holdout",
         "Held-out seeds",
         "Some of the papers you name are held back. They measure whether the search finds papers "
