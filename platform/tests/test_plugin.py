@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
     "rf-acquire",
     "rf-appraise",
+    "rf-brief",
     "rf-cards",
     "rf-chat",
     "rf-contributions",
@@ -460,3 +461,52 @@ def test_rf_acquire_names_its_tools_and_gates() -> None:
     assert "held-out" in never and "executable" in never
     run = (REPO_ROOT / "plugin" / "skills" / "rf-run" / "SKILL.md").read_text("utf-8")
     assert "rf-acquire" in run
+
+
+BRIEF_TOOLS = (
+    "project_status",
+    "question_record",
+    "seed_add",
+    "protocol_record",
+    "protocol_press_review",
+    "search_run",
+    "report_search",
+    "dedup_run",
+    "snowball_round",
+    "ranking_compute",
+    "screen_next",
+    "screen_record",
+    "audit_sample",
+    "fulltext_fetch",
+    "fulltext_status",
+    "extract_next",
+    "extract_record",
+    "extraction_status",
+    "extract_agreement",
+    "extract_audit_sample",
+    "finder_contradictions",
+    "report_evidence",
+    "chat_verify",
+    "claims_digest",
+    "page_brief",
+    "page_record",
+)
+
+
+def test_rf_brief_names_existing_tools_labels_the_note_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-brief" / "SKILL.md").read_text("utf-8")
+    assert _frontmatter("rf-brief")["stage"] == "[frame, gather, screen, acquire, extract, write]"
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in BRIEF_TOOLS:
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "quick review, skipped:",
+        "factory brief plan",
+        "factory protocol confirm-press",
+        "factory audit label",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    assert "report_evidence" in text and "none typed from memory" in text

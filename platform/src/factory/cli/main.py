@@ -19,6 +19,7 @@ from factory.cli.activity import activity_cmd
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.answers import answers_app
 from factory.cli.bench import bench_app
+from factory.cli.brief import brief_app
 from factory.cli.chat import chat_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
@@ -636,6 +637,7 @@ app.command("tour")(tour_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)
+app.add_typer(brief_app)
 app.command("resume")(resume_cmd)
 app.command("activity")(activity_cmd)
 app.add_typer(budget_app)
