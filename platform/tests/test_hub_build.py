@@ -38,6 +38,8 @@ CORE = {
     "corpus",
     "landscape",
     "landscape_uses",
+    "contradictions",
+    "chat",
     *NEW_PAGES,
 }
 OPTIONAL = {"journeys"}  # delivered by hub_journeys; may be absent
@@ -224,6 +226,8 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "miners",
         "data",
         "findings",
+        "contradictions",
+        "chat",
         "write",
         "living",
         "costs",
