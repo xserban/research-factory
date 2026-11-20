@@ -134,7 +134,8 @@ def test_overview_and_every_page_are_served_in_fetch_mode(served: tuple[int, Pro
     port, _ = served
     status, head, body = _req(port, "GET", f"{UI}/")
     assert status == 200 and head["content-type"].startswith("text/html")
-    assert "overview.js" in body.decode()
+    # A project with nothing past setup opens on Learn, otherwise on Overview (decision 155).
+    assert "overview.js" in body.decode() or "learn.js" in body.decode()
     for page in hub_ui.PAGES:
         status, head, body = _req(port, "GET", f"{UI}/{page}.html")
         text = body.decode()
