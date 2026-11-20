@@ -247,7 +247,10 @@ def test_conclusion_needs_an_evaluation_and_a_human(
     conclude_hypothesis(project, human, hid, "It held under these conditions.")
     view = hypothesis_view(project, hid)
     assert view is not None and view.state == "evaluated"
-    assert view.conclusion == "It held under these conditions."
+    # The monkeypatched source satisfies the service's guard only; the fold wants a folded
+    # conclusive evaluation (review I2), so no conclusion is folded here. The folded conclusion
+    # after a real evaluation is tested in test_evaluation.
+    assert view.conclusion is None
 
 
 def test_state_computed_from_events(
