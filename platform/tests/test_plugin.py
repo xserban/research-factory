@@ -17,6 +17,7 @@ SKILLS = (
     "rf-contributions",
     "rf-critic",
     "rf-curate",
+    "rf-deep",
     "rf-develop",
     "rf-experiment",
     "rf-extract",
@@ -468,23 +469,17 @@ BRIEF_TOOLS = (
     "question_record",
     "seed_add",
     "protocol_record",
-    "protocol_press_review",
     "search_run",
     "report_search",
     "dedup_run",
-    "snowball_round",
     "ranking_compute",
     "screen_next",
     "screen_record",
-    "audit_sample",
     "fulltext_fetch",
     "fulltext_status",
     "extract_next",
     "extract_record",
     "extraction_status",
-    "extract_agreement",
-    "extract_audit_sample",
-    "finder_contradictions",
     "report_evidence",
     "chat_verify",
     "claims_digest",
@@ -503,10 +498,54 @@ def test_rf_brief_names_existing_tools_labels_the_note_and_marks_human_gates() -
     for needed in (
         "quick review, skipped:",
         "factory brief plan",
-        "factory protocol confirm-press",
-        "factory audit label",
+        "rf-deep",
         "## Human gates",
         "## Done when",
     ):
         assert needed in text, needed
     assert "report_evidence" in text and "none typed from memory" in text
+
+
+DEEP_TOOLS = (
+    "project_status",
+    "protocol_record",
+    "protocol_press_review",
+    "search_run",
+    "report_search",
+    "dedup_run",
+    "snowball_round",
+    "ranking_compute",
+    "screen_next",
+    "screen_record",
+    "screen_agreement",
+    "audit_sample",
+    "extract_agreement",
+    "extract_audit_sample",
+    "finder_contradictions",
+    "report_evidence",
+    "chat_verify",
+    "claims_digest",
+)
+
+
+def test_rf_deep_names_existing_tools_labels_the_note_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-deep" / "SKILL.md").read_text("utf-8")
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in DEEP_TOOLS:
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "deep review, skipped:",
+        "factory brief plan",
+        "factory protocol confirm-press",
+        "factory audit label",
+        "factory extract audit-label",
+        "does NOT enforce",
+        "Decision 158",
+        "`dry_run` true",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    human = text.split("## Human gates", 1)[1].split("\n## ", 1)[0]
+    assert "PRESS confirmation" in human and "audit label" in human

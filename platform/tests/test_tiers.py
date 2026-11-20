@@ -166,3 +166,17 @@ def test_brief_new_refuses_a_bad_slug_and_writes_nothing(tmp_path: Path) -> None
     )
     assert result.exit_code == 1
     assert not (tmp_path / "projects").exists() or not any((tmp_path / "projects").iterdir())
+
+
+def test_every_skill_a_plan_names_exists_in_the_plugin() -> None:
+    skills = Path(__file__).resolve().parents[2] / "plugin" / "skills"
+    for tier in Tier:
+        for stage in plan_for(tier).stages:
+            assert (skills / stage.skill / "SKILL.md").is_file(), (tier, stage.skill)
+
+
+def test_the_deep_plan_runs_under_rf_deep_and_the_brief_plan_under_rf_brief() -> None:
+    assert {s.skill for s in plan_for(Tier.DEEP).stages if s.skill == "rf-brief"} == set()
+    assert "rf-deep" in {s.skill for s in plan_for(Tier.DEEP).stages}
+    assert "rf-deep" not in {s.skill for s in plan_for(Tier.BRIEF).stages}
+    assert report_label(Tier.DEEP).startswith("deep review, skipped:")

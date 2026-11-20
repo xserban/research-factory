@@ -36,6 +36,7 @@ STAGE_SKILL: Final[dict[str, str]] = {
 assert tuple(STAGE_SKILL) == PLAN_STAGE_IDS
 
 BRIEF_SKILL: Final = "rf-brief"
+DEEP_SKILL: Final = "rf-deep"
 
 _BRIEF_FIELDS: Final = ("method_name", "task", "dataset", "metric", "value", "split")
 """At most six fields of the ml-benchmark pack (the template schema of a brief)."""
@@ -149,7 +150,7 @@ def _brief() -> TierPlan:
 
 
 def _deep() -> TierPlan:
-    s = BRIEF_SKILL
+    s = DEEP_SKILL
     return TierPlan(
         tier=Tier.DEEP,
         stages=(
