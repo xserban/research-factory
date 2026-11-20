@@ -22,7 +22,17 @@ from tests.fulltext_helpers import _ft_world
 from tests.helpers import SourcesFor
 from tests.test_hub_payloads_flow import listed_miners  # noqa: F401  (fixture)
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = (
+    "protocol",
+    "pipeline",
+    "sources",
+    "method",
+    "costs",
+    "write",
+    "platform",
+    "contradictions",
+    "chat",
+)
 CORE = {
     "shell",
     "overview",
@@ -205,6 +215,8 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "miners",
         "data",
         "findings",
+        "contradictions",
+        "chat",
         "write",
         "living",
         "costs",
