@@ -49,6 +49,7 @@ from tests.helpers import (
     pilot_question_spec,
     ready_protocol,
     record_pilot_question,
+    reviewer_of,
 )
 
 SEARCH = QuerySpec(source="openalex", kind=QueryKind.KEYWORD, text="attention")
@@ -272,10 +273,10 @@ def test_press_review_needs_agent_and_current_protocol(
     assert [i.field for i in human_refused.value.issues] == ["actor"]
 
     with pytest.raises(FactoryValidationError) as stale:
-        press_review(project, agent, "P@00000000", (FINDING,))
+        press_review(project, reviewer_of(agent), "P@00000000", (FINDING,))
     assert [i.field for i in stale.value.issues] == ["protocol_id"]
 
-    review_id = press_review(project, agent, protocol_id, (FINDING,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (FINDING,))
     assert review_id.startswith("prs_")
     assert len(_events(project, "protocol.press_reviewed")) == 1
     current = current_protocol(project)
@@ -287,7 +288,7 @@ def test_press_confirmation_answers_every_finding(
 ) -> None:
     human = project.human_actor()
     protocol_id = ready_protocol(project, agent, human, mock_sources, press=False)
-    review_id = press_review(project, agent, protocol_id, (FINDING, FINDING))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (FINDING, FINDING))
 
     with pytest.raises(FactoryValidationError) as short:
         confirm_press(project, human, review_id, ("only one",))
@@ -308,7 +309,7 @@ def test_press_confirmation_is_human_only(
     project: Project, agent: Actor, mock_sources: SourcesFor
 ) -> None:
     protocol_id = ready_protocol(project, agent, project.human_actor(), mock_sources, press=False)
-    review_id = press_review(project, agent, protocol_id, (FINDING,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (FINDING,))
 
     with pytest.raises(FactoryValidationError) as refused:
         confirm_press(project, agent, review_id, ("accepted",))
@@ -347,7 +348,7 @@ def test_search_refused_before_press_confirmed(
         register_query(project, agent, SEARCH, sources=sources)
     assert [i.field for i in none_yet.value.issues] == ["press"]
 
-    review_id = press_review(project, agent, protocol_id, (FINDING,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (FINDING,))
     with pytest.raises(FactoryValidationError) as reviewed_only:
         register_query(project, agent, SEARCH, sources=sources)
     assert [i.field for i in reviewed_only.value.issues] == ["press"]

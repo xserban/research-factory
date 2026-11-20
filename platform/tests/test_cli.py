@@ -43,6 +43,7 @@ from tests.helpers import (
     openalex_item,
     ready_protocol,
     record_pilot_question,
+    reviewer_of,
 )
 
 
@@ -126,6 +127,8 @@ def test_status_human_output(tmp_path: Path) -> None:
     assert result.stdout == (
         "project: demo\n"
         "rigor mode: systematic\n"
+        "tier: not declared\n"
+        "autonomy level: attended\n"
         "stage: scoping\n"
         "events: 1\n"
         "question: none\n"
@@ -249,7 +252,7 @@ def test_confirm_press_cli(
     finding = PressFinding(
         element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
     )
-    review_id = press_review(project, agent, protocol_id, (finding,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
     env = _cli_env(settings.root)
 
     wrong_count = runner.invoke(

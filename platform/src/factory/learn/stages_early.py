@@ -21,7 +21,7 @@ FRAME = StageCard(
     steps=(
         Step(
             H,
-            "Create the project and choose its mode once: exploratory, pilot or systematic. The mode cannot be changed later.",
+            "Create the project and choose its mode once: exploratory, pilot or systematic. Optionally declare a tier (brief, deep, pilot or systematic, which fixes the mode) and an autonomy level (attended, supervised or autonomous). None of them can be changed later.",
             (cli("init"),),
         ),
         Step(

@@ -166,6 +166,7 @@ FAMILY_OF_PREFIX: dict[str, str] = {
     "baseline": OTHER,
     "credential": OTHER,
     "sheet": OTHER,
+    "conductor": OTHER,
     "spar": OTHER,
     "user": OTHER,
     "briefing": OTHER,

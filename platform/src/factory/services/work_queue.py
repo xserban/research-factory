@@ -270,6 +270,7 @@ def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
     miner whose population is refused (see `miner_population`) is skipped, not raised."""
     from factory.services.mining import miner_population  # mining imports the extraction stack
     from factory.services.protocol import current_protocol
+    from factory.services.validation_profile import miner_use_refusal
 
     project.index.sync()
     protocol = current_protocol(project)
@@ -279,6 +280,8 @@ def mining_needs(project: Project) -> dict[str, tuple[str, ...]]:
     for use in protocol.spec.miners or ():
         if not (use.layers or use.on_demand):
             continue
+        if miner_use_refusal(project, evidence=use.evidence) is not None:
+            continue  # the tier's validation profile does not run this miner
         try:
             population = miner_population(project, use.name)
         except FactoryValidationError:

@@ -53,6 +53,9 @@ CLI_READS: frozenset[str] = frozenset(
         "notices list",
         "versions list",
         "inbox list",
+        "brief note",
+        "brief plan",
+        "brief status",
         "report prisma",
         "report search",
         "report methods",
@@ -140,6 +143,7 @@ CLI_READS: frozenset[str] = frozenset(
         "decide show",
         "dashboard serve",
         "dashboard export",
+        "bench level",
     )
 )
 """Commands with no `TOOL_PERMISSIONS` row because they record no research fact. `rebuild` and

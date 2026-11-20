@@ -28,6 +28,8 @@ BlobRef = Annotated[str, StringConstraints(pattern=BLOB_REF_RE)]
 RUNNER_PIPELINE_ID_RE = rf"^rpl_{ULID_RE}$"
 STAGE_KEY_RE = (
     r"^(screen|extract|appraise|contributions|intuition|spar|ask"
+    r"|frame|gather|acquire|write|understand|develop-lead|develop-draft|develop-critic|maintain"
+    r"|conduct-verify|conduct-audit"
     r"|spar2-(?:search|read|against|for|critic|cover)"
     r"|mine:m-[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )

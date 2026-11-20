@@ -188,6 +188,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/costs.js": ("hub_ui/pages/costs.js", "text/javascript; charset=utf-8"),
     "pages/write.js": ("hub_ui/pages/write.js", "text/javascript; charset=utf-8"),
     "pages/platform.js": ("hub_ui/pages/platform.js", "text/javascript; charset=utf-8"),
+    "pages/levels.js": ("hub_ui/pages/levels.js", "text/javascript; charset=utf-8"),
     "pages/learn.js": ("hub_ui/pages/learn.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
@@ -375,6 +376,7 @@ class PageSpec:
 
 PAGES: Final[dict[str, PageSpec]] = {
     "protocol": PageSpec("protocol", "Protocol", "pages/protocol.js", ("shell", "protocol")),
+    "levels": PageSpec("levels", "How this study runs", "pages/levels.js", ("shell", "levels")),
     "overview": PageSpec("overview", "Overview", "pages/overview.js", ("shell", "overview")),
     "pipeline": PageSpec("pipeline", "Pipeline", "pages/pipeline.js", ("shell", "pipeline")),
     "corpus": PageSpec("corpus", "Corpus", "pages/corpus.js", ("shell", "corpus")),

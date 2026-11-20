@@ -39,6 +39,7 @@ from factory.model.digest import (
     NoticeRow,
     VersionRow,
 )
+from factory.model.levels import AutonomyLevel
 from factory.model.notices import unassessed_notices
 from factory.model.watch import CycleStatus
 from factory.regions.rules import MemberType
@@ -47,6 +48,7 @@ from factory.services.conclusions import conclusion_diff
 from factory.services.context import Project
 from factory.services.feed import current_config
 from factory.services.feed_read import feed_list, pending_sends, scope_drift
+from factory.services.gates import autonomy_level
 from factory.services.human_queue import Gate, human_queue
 from factory.services.inbox_watch import route_labels
 from factory.services.notices import assessments, observed_notices
@@ -70,6 +72,8 @@ DECISION_KEYS = (
     "inferred-relations",
     "fuzzy-reference-links",
 )
+DEFERRED_KEY = "deferred-reviews"
+"""Added to the open decisions only for a supervised or autonomous project (contract C6)."""
 
 
 class DigestProject(StrictModel):
@@ -369,7 +373,7 @@ def _open_decisions(project: Project) -> dict[str, int]:
     for item in human_queue(project).items:
         gates[item.gate.value] = gates.get(item.gate.value, 0) + item.count
     unassessed = unassessed_notices(observed_notices(project), assessments(project))
-    return {
+    counts = {
         "screening-disagreements": gates.get(Gate.SCREENING_DISAGREEMENTS.value, 0),
         "calibration-labels": gates.get(Gate.CALIBRATION_LABELS.value, 0),
         "audit-labels": gates.get(Gate.SCREENING_AUDIT.value, 0)
@@ -378,6 +382,9 @@ def _open_decisions(project: Project) -> dict[str, int]:
         "inferred-relations": 0,  # slice 3b's lineage is not built; its count joins here
         "fuzzy-reference-links": reference_counts(project).unconfirmed,
     }
+    if autonomy_level(project) is not AutonomyLevel.ATTENDED:
+        counts[DEFERRED_KEY] = gates.get(Gate.DEFERRED_REVIEW.value, 0)
+    return counts
 
 
 def _notices(

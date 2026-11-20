@@ -11,11 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
     "rf-acquire",
     "rf-appraise",
+    "rf-brief",
     "rf-cards",
     "rf-chat",
     "rf-contributions",
     "rf-critic",
     "rf-curate",
+    "rf-deep",
     "rf-develop",
     "rf-experiment",
     "rf-extract",
@@ -25,6 +27,7 @@ SKILLS = (
     "rf-intuition",
     "rf-lineage",
     "rf-mine",
+    "rf-miner-suggest",
     "rf-probe",
     "rf-protocol",
     "rf-references",
@@ -460,3 +463,120 @@ def test_rf_acquire_names_its_tools_and_gates() -> None:
     assert "held-out" in never and "executable" in never
     run = (REPO_ROOT / "plugin" / "skills" / "rf-run" / "SKILL.md").read_text("utf-8")
     assert "rf-acquire" in run
+
+
+BRIEF_TOOLS = (
+    "project_status",
+    "question_record",
+    "seed_add",
+    "protocol_record",
+    "search_run",
+    "report_search",
+    "dedup_run",
+    "ranking_compute",
+    "screen_next",
+    "screen_record",
+    "fulltext_fetch",
+    "fulltext_status",
+    "extract_next",
+    "extract_record",
+    "extraction_status",
+    "report_evidence",
+    "chat_verify",
+    "claims_digest",
+    "page_brief",
+    "page_record",
+)
+
+
+def test_rf_brief_names_existing_tools_labels_the_note_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-brief" / "SKILL.md").read_text("utf-8")
+    assert _frontmatter("rf-brief")["stage"] == "[frame, gather, screen, acquire, extract, write]"
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in BRIEF_TOOLS:
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "quick review, skipped:",
+        "factory brief plan",
+        "rf-deep",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    assert "report_evidence" in text and "none typed from memory" in text
+
+
+DEEP_TOOLS = (
+    "project_status",
+    "protocol_record",
+    "protocol_press_review",
+    "search_run",
+    "report_search",
+    "dedup_run",
+    "snowball_round",
+    "ranking_compute",
+    "screen_next",
+    "screen_record",
+    "screen_agreement",
+    "audit_sample",
+    "extract_agreement",
+    "extract_audit_sample",
+    "finder_contradictions",
+    "report_evidence",
+    "chat_verify",
+    "claims_digest",
+)
+
+
+def test_rf_deep_names_existing_tools_labels_the_note_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-deep" / "SKILL.md").read_text("utf-8")
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in DEEP_TOOLS:
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "deep review, skipped:",
+        "factory brief plan",
+        "factory protocol confirm-press",
+        "factory audit label",
+        "factory extract audit-label",
+        "does NOT enforce",
+        "Decision 158",
+        "`dry_run` true",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    human = text.split("## Human gates", 1)[1].split("\n## ", 1)[0]
+    assert "PRESS confirmation" in human and "audit label" in human
+
+
+def test_rf_miner_suggest_names_existing_tools_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-miner-suggest" / "SKILL.md").read_text("utf-8")
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in (
+        "project_status",
+        "question_view",
+        "miner_list",
+        "mine_status",
+        "decision_suggest",
+        "miner_register",
+        "protocol_record",
+        "protocol_amend",
+        "miner_calibration_label",
+    ):
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "exploratory, unvalidated, agent-proposed",
+        "agent-proposed schema",
+        "factory mine request",
+        "factory miner admit",
+        "not-stated",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    human = text.split("## Human gates", 1)[1].split("\n## ", 1)[0]
+    assert "admission" in human and "ticking" in human

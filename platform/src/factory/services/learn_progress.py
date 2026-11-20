@@ -56,6 +56,7 @@ _GATE_STAGE: Final[dict[Gate, str]] = {
     Gate.DOCUMENTS_UNCONVERTED: "acquire",
     Gate.INBOX_OPEN: "gather",
     Gate.VERSION_PAIRS: "gather",
+    Gate.DEFERRED_REVIEW: "write",
 }
 
 

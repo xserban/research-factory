@@ -8,8 +8,10 @@ from sqlalchemy import text
 from factory.clock import Clock, parse_ts
 from factory.config import Settings
 from factory.errors import FactoryValidationError, ProjectNotFoundError, ValidationIssue
+from factory.events.reader import read_typed
 from factory.model.base import StrictModel
 from factory.model.dedup import MergeStatus
+from factory.model.levels import RIGOR_OF_TIER, AutonomyLevel, Tier
 from factory.model.project import ProjectCreated, RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.seed import SeedKind
@@ -90,9 +92,21 @@ class DecisionStatus(StrictModel):
     recommendation_followed: float | None = None
 
 
+class ProjectLevels(StrictModel):
+    """The tier and autonomy level a project declared at init (plan tiers-and-autonomy, C2).
+    A legacy project has no tier (None) and is `attended`."""
+
+    tier: Tier | None
+    autonomy_level: AutonomyLevel
+    rigor_mode: RigorMode
+
+
 class ProjectStatus(StrictModel):
     slug: str
     rigor_mode: RigorMode
+    tier: Tier | None = None
+    """None: not declared (a legacy project)."""
+    autonomy_level: AutonomyLevel = AutonomyLevel.ATTENDED
     created_at: datetime
     events_total: int
     events_by_type: dict[str, int]
@@ -118,19 +132,66 @@ class ProjectStatus(StrictModel):
     """Next steps that stop the flow and that a count would hide; empty when none."""
 
 
+def _init_levels(
+    rigor_mode: str | None, tier: str | None, autonomy_level: str | None
+) -> tuple[RigorMode | None, Tier | None, AutonomyLevel, list[ValidationIssue]]:
+    """Validate the three settings together. A tier fixes the rigour mode (`RIGOR_OF_TIER`); a
+    `rigor_mode` that disagrees with it is refused; without either the mode is `pilot`."""
+    issues: list[ValidationIssue] = []
+    mode: RigorMode | None = None
+    chosen_tier: Tier | None = None
+    level = AutonomyLevel.ATTENDED
+    if tier is not None:
+        try:
+            chosen_tier = Tier(tier)
+        except ValueError:
+            choices = ", ".join(t.value for t in Tier)
+            issues.append(ValidationIssue("tier", f"must be one of: {choices}"))
+    if autonomy_level is not None:
+        try:
+            level = AutonomyLevel(autonomy_level)
+        except ValueError:
+            choices = ", ".join(a.value for a in AutonomyLevel)
+            issues.append(ValidationIssue("autonomy_level", f"must be one of: {choices}"))
+    if rigor_mode is not None:
+        try:
+            mode = RigorMode(rigor_mode)
+        except ValueError:
+            choices = ", ".join(m.value for m in RigorMode)
+            issues.append(ValidationIssue("rigor_mode", f"must be one of: {choices}"))
+    if chosen_tier is not None:
+        fixed = RIGOR_OF_TIER[chosen_tier]
+        if mode is not None and mode is not fixed:
+            issues.append(
+                ValidationIssue(
+                    "rigor_mode",
+                    f"tier {chosen_tier.value} runs under {fixed.value}, not {mode.value}",
+                )
+            )
+        mode = fixed
+    elif mode is None and not issues:
+        mode = RigorMode.PILOT
+    return mode, chosen_tier, level, issues
+
+
 def init_project(
-    settings: Settings, slug: str, rigor_mode: str, *, session: str, clock: Clock
+    settings: Settings,
+    slug: str,
+    rigor_mode: str | None,
+    *,
+    session: str,
+    clock: Clock,
+    tier: str | None = None,
+    autonomy_level: str | None = None,
 ) -> Project:
-    """Create a project and record `project.created`. Writes nothing if validation fails."""
+    """Create a project and record `project.created`. Writes nothing if validation fails.
+    `rigor_mode` None takes the tier's mode, or `pilot` without a tier."""
     issues = slug_issues(slug)
-    try:
-        mode = RigorMode(rigor_mode)
-    except ValueError:
-        choices = ", ".join(m.value for m in RigorMode)
-        issues.append(ValidationIssue("rigor_mode", f"must be one of: {choices}"))
+    mode, chosen_tier, level, level_issues = _init_levels(rigor_mode, tier, autonomy_level)
+    issues.extend(level_issues)
     if not issues and ProjectPaths(settings.root, slug).dir.exists():
         issues.append(ValidationIssue("slug", "project already exists"))
-    if issues:
+    if issues or mode is None:
         raise FactoryValidationError(issues)
 
     paths = ProjectPaths(settings.root, slug)
@@ -145,7 +206,7 @@ def init_project(
         with project.writing():
             event = project.events.make(
                 "project.created",
-                ProjectCreated(slug=slug, rigor_mode=mode),
+                ProjectCreated(slug=slug, rigor_mode=mode, tier=chosen_tier, autonomy_level=level),
                 project.human_actor(),
             )
             project.record([event])
@@ -153,6 +214,20 @@ def init_project(
         shutil.rmtree(paths.dir, ignore_errors=True)
         raise
     return project
+
+
+def project_levels(project: Project) -> ProjectLevels:
+    """The declared tier, autonomy level and rigour mode, read from the first `project.created`
+    event (the index's `project` table is not widened, so no state hash changes). A legacy
+    project gives tier None and `attended`."""
+    for event in read_typed(project.paths.events_dir, project.catalog, ("project.created",)):
+        payload = ProjectCreated.model_validate(event.payload)
+        return ProjectLevels(
+            tier=payload.tier,
+            autonomy_level=payload.autonomy_level,
+            rigor_mode=payload.rigor_mode,
+        )
+    raise ProjectNotFoundError(f"project {project.paths.slug!r} has no project.created event")
 
 
 def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
@@ -174,6 +249,7 @@ def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
     if row is None:
         raise ProjectNotFoundError(f"project {slug!r} has no project.created event")
     works, records = corpus_size(project)
+    levels = project_levels(project)
     question = current_question(project)
     protocol = current_protocol(project)
     seeds = all_seeds(project)
@@ -181,6 +257,8 @@ def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
     return ProjectStatus(
         slug=slug,
         rigor_mode=RigorMode(row[0]),
+        tier=levels.tier,
+        autonomy_level=levels.autonomy_level,
         created_at=parse_ts(str(row[1])),
         events_total=sum(by_type.values()),
         events_by_type=by_type,

@@ -23,6 +23,7 @@ from factory.services import discovery as discovery_service
 from factory.services import evidence_report as evidence_report_service
 from factory.services import flow_query as flow_query_service
 from factory.services import flow_skipped as flow_skipped_service
+from factory.services import level_statement as level_statement_service
 from factory.services import methods as methods_service
 from factory.services import passes as passes_service
 from factory.services import prisma as prisma_service
@@ -186,7 +187,9 @@ def prisma_view(project: Project, update: str | None = None, by_source: bool = F
     if by_source:
         data.update(by_source_view(project))
     data = collapsed_import_rows(project, data)
-    return without_record_keys(withheld(project, data, include_work_ids=False))
+    return level_statement_service.with_level_statement(
+        project, without_record_keys(withheld(project, data, include_work_ids=False))
+    )
 
 
 def flow_works_view(
@@ -253,7 +256,9 @@ def search_view(project: Project) -> JsonValue:
     notice = exploratory_search_notice(project)
     if notice is not None:
         data["notice"] = notice
-    return without_record_keys(withheld(project, data, include_work_ids=False))
+    return level_statement_service.with_level_statement(
+        project, without_record_keys(withheld(project, data, include_work_ids=False))
+    )
 
 
 def methods_view(project: Project) -> JsonValue:
@@ -263,7 +268,9 @@ def methods_view(project: Project) -> JsonValue:
         "report": report.model_dump(mode="json"),
         "text": methods_service.render_methods(report, withheld=fields),
     }
-    return withheld(project, data, include_work_ids=False)
+    return level_statement_service.with_level_statement(
+        project, withheld(project, data, include_work_ids=False)
+    )
 
 
 def methods_text(project: Project) -> str:
@@ -281,7 +288,9 @@ def agent_search(project: Project) -> prisma_service.SearchReport:
 
 def discovery_view(project: Project) -> JsonValue:
     view = discovery_service.agent_view(discovery_service.discovery_report(project))
-    return withheld(project, view, include_work_ids=False)
+    return level_statement_service.with_level_statement(
+        project, withheld(project, view, include_work_ids=False)
+    )
 
 
 def agent_evidence(
@@ -296,7 +305,9 @@ def evidence_view(
     project: Project, expect: Sequence[Mapping[str, str]] = (), *, without_grey: bool = False
 ) -> JsonValue:
     report = agent_evidence(project, expect, without_grey=without_grey)
-    return withheld(project, report.model_dump(mode="json"), include_work_ids=False)
+    return level_statement_service.with_level_statement(
+        project, withheld(project, report.model_dump(mode="json"), include_work_ids=False)
+    )
 
 
 def agent_trace(

@@ -18,7 +18,10 @@ from factory.cli import appraisal_render, evidence_render, portfolio_render, ren
 from factory.cli.activity import activity_cmd
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.answers import answers_app
+from factory.cli.bench import bench_app
+from factory.cli.brief import brief_app
 from factory.cli.chat import chat_app
+from factory.cli.conductor import conductor_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
@@ -599,10 +602,12 @@ app.add_typer(dashboard_app)
 app.add_typer(site_app)
 app.add_typer(hub_app)
 app.add_typer(costs_app)
+app.add_typer(bench_app)
 app.add_typer(pages_app)
 app.add_typer(sheets_app)
 app.add_typer(answers_app)
 app.add_typer(chat_app)
+app.add_typer(conductor_app)
 app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
@@ -634,6 +639,7 @@ app.command("tour")(tour_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)
+app.add_typer(brief_app)
 app.command("resume")(resume_cmd)
 app.command("activity")(activity_cmd)
 app.add_typer(budget_app)
@@ -801,16 +807,42 @@ def main(
 def init(
     ctx: typer.Context,
     slug: Annotated[str, typer.Argument(help="New project slug.")],
-    mode: Annotated[str, typer.Option("--mode", help="Rigor mode.")] = "pilot",
+    mode: Annotated[
+        str | None,
+        typer.Option("--mode", help="Rigor mode (default pilot; with --tier, the tier's mode)."),
+    ] = None,
+    tier: Annotated[
+        str | None,
+        typer.Option(
+            "--tier", help="Tier: brief, deep, pilot or systematic. Fixes the rigor mode."
+        ),
+    ] = None,
+    autonomy_level: Annotated[
+        str | None,
+        typer.Option(
+            "--autonomy-level",
+            help="Who closes the decision gates: attended (default), supervised or autonomous.",
+        ),
+    ] = None,
 ) -> None:
     """Create a project."""
     state = _state(ctx)
     with _reporting_errors():
         authorise_root_command(state.settings, "cli:init", session=state.session, clock=state.clock)
-        project_service.init_project(
-            state.settings, slug, mode, session=state.session, clock=state.clock
+        created = project_service.init_project(
+            state.settings,
+            slug,
+            mode,
+            session=state.session,
+            clock=state.clock,
+            tier=tier,
+            autonomy_level=autonomy_level,
         )
-    typer.echo(f"initialised {slug} ({mode})")
+        levels = project_service.project_levels(created)
+    extra = "" if levels.tier is None else f", tier {levels.tier.value}"
+    if levels.autonomy_level.value != "attended":
+        extra += f", autonomy {levels.autonomy_level.value}"
+    typer.echo(f"initialised {slug} ({levels.rigor_mode.value}{extra})")
 
 
 @app.command()
@@ -858,6 +890,8 @@ def status(
         return
     typer.echo(f"project: {report.slug}")
     typer.echo(f"rigor mode: {report.rigor_mode.value}")
+    typer.echo(f"tier: {report.tier.value if report.tier else 'not declared'}")
+    typer.echo(f"autonomy level: {report.autonomy_level.value}")
     typer.echo(f"stage: {report.stage.value if report.stage else 'unknown'}")
     typer.echo(f"events: {report.events_total}")
     for blocked in report.blocking:
