@@ -64,7 +64,7 @@ A refusal is reported to the researcher as returned. Do not retry with an altere
 - Never name a seed, a DOI or a citation to look for. Held-out seeds are not part of this
   step.
 - Never run `snowball_round` with `dry_run` false before the researcher has seen the dry run
-  and said to go ahead.
+  and selected the round's decision (below). Never select it yourself.
 
 ## Snowball rounds
 
@@ -72,15 +72,22 @@ A refusal is reported to the researcher as returned. Do not retry with an altere
    default). Show the researcher `state` (whether the protocol's `snowball_plan` allows the
    round and why not), the ranked `candidates` with how many included works cite each, the
    `queries`, and the works `unextracted` or `unqueryable`.
-2. Only when the researcher agrees, call it again with `dry_run` false. Read the reply:
+2. The researcher's go ahead is a recorded decision, required in `pilot` and `systematic`
+   (not in `exploratory`). Propose it with `decision_suggest`: level `plan`, subject
+   `snowball-<direction>-<round_no>` (the `round_no` the dry run shows, e.g. `snowball-backward-1`),
+   items = the round's plan (the queries and candidates you showed), each with grounds. The
+   researcher selects it (`factory decide select`, or the hub). One selection opens one round: a
+   decision on another subject, an open one or one you could not select is refused.
+3. Call `snowball_round` again with `dry_run` false and `decision_ids` set to that decision.
+   A refusal names `decision_ids` and what is missing. Read the reply:
    `round_id`, one run summary per query, `new_works`. A run that is `partial` or `failed` is
    reported with its note.
-3. Call `dedup_run`, then return to screening (`rf-screen`): the new works are pending and are
+4. Call `dedup_run`, then return to screening (`rf-screen`): the new works are pending and are
    never included by this step.
-4. After they are screened, `snowball_compare` with the `round_id` lists the references found
+5. After they are screened, `snowball_compare` with the `round_id` lists the references found
    only by the document list, only by the metadata chase, and by both. Report the three counts;
    they are a check on each mechanism, not a selection.
-5. A forward round (`direction` `forward`) follows the same dry run, go-ahead and screening. A
+6. A forward round (`direction` `forward`) follows the same dry run, go-ahead and screening. A
    round beyond the plan's maximum, or after a round with no new included work, is refused;
    report the refusal as returned.
 6. Report the yield of each round as the platform gives it: new after deduplication and
