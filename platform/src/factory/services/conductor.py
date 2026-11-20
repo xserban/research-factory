@@ -1,0 +1,682 @@
+"""The lifecycle conductor (plan tiers-and-autonomy C8, spec slice-9 section 7).
+
+`begin_conductor` takes a tier's plan; `advance` then moves it one step at a time through
+`factory.services.runner`: each step is one capped headless `claude -p` run (a proposer). Where an
+agent may close a gate of the step at the study's autonomy level (`effective_policy` is not
+`human`, and the level is `supervised` or `autonomous`), a second run of a verifier and a third of
+an auditor follow, each a distinct run and MCP session (`spar_v2.advance` is the pattern). The
+conductor is bookkeeping: it starts runs, counts and stops; every judgement is a role's.
+
+Invariants:
+- State is derived, never stored: the `conductor.*` system events are read from the log (no
+  projection table, so no state hash moves). A hand-written event (non-system actor) is ignored.
+- One step at a time, one open run: `advance` starts nothing while the conductor's run is open
+  (or any run of the project: the runner refuses, and the refusal pauses with reason `refused`).
+- The stop rules are computed: a failed or lost run (retried only by `advance(retry=True)`, as a
+  new run in a new session), a spent budget (`max_runs`, `max_minutes`), any gate whose trust state
+  is `pause`, and a human-only gate of a finished step (the conductor waits, escalates once to the
+  deferred queue when that exists, and never starts a run for it). A stage is never skipped.
+- The conductor records no human act and writes only `conductor.*` system events. The platform
+  calls no model: a step is an outside process.
+"""
+
+from __future__ import annotations
+
+import importlib
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Final, Literal, Protocol, cast
+
+from pydantic import JsonValue
+
+from factory.canonical import canonical_json
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.events.envelope import Event
+from factory.events.reader import read_all, read_typed
+from factory.model.base import StrictModel
+from factory.model.conductor import (
+    ConductorFinished,
+    ConductorPaused,
+    ConductorRole,
+    ConductorStarted,
+    ConductorStepFinished,
+    ConductorStepStarted,
+    PauseReason,
+    StepOutcome,
+)
+from factory.model.levels import AutonomyLevel
+from factory.modules.contract import PolicyKind
+from factory.services import runner
+from factory.services.context import Project
+from factory.services.project import project_levels
+
+EVENT_TYPES: Final = (
+    "conductor.started",
+    "conductor.step_started",
+    "conductor.step_finished",
+    "conductor.paused",
+    "conductor.finished",
+)
+
+STEP_STAGE: Final[Mapping[str, str]] = {
+    "frame": "frame",
+    "gather": "gather",
+    "screen": "screen",
+    "acquire": "acquire",
+    "extract": "extract",
+    "write": "write",
+}
+"""The lifecycle ids of a plan the conductor can run, and the runner stage of each."""
+
+STEP_GATES: Final[Mapping[str, tuple[str, ...]]] = {
+    "frame": ("protocol.ready", "protocol.press_confirm"),
+    "gather": ("import.resolution_confirm",),
+    "extract": ("mine.resolve",),
+    "write": ("writing.release", "manuscript.citation_confirm"),
+}
+"""The gates that close in a step. A gate id no policy names is `human` (`presets.preset`), so an
+id listed here that does not exist yet (`protocol.press_confirm`) fails safe: the conductor
+waits."""
+
+_GATE_EVENT_NAMESPACES: Final[Mapping[str, tuple[str, ...]]] = {"writing.release": ("draft",)}
+_QUEUE_UNITS: Final = ("screen", "extract")
+"""Steps whose pending units are a work queue: with nothing pending the step is complete."""
+
+_STARTING: ContextVar[tuple[PendingUnits, GateClosed] | None] = ContextVar(
+    "conductor_starting", default=None
+)
+"""Set only while `advance` calls the runner: the seams it decided with, so that the runner's
+pending-unit question is answered from the same state."""
+
+
+class StageLike(Protocol):
+    @property
+    def stage_id(self) -> str: ...
+    @property
+    def skipped(self) -> bool: ...
+    @property
+    def caps(self) -> Mapping[str, int]: ...
+    @property
+    def skill(self) -> str: ...
+    @property
+    def note(self) -> str: ...
+
+
+class LimitsLike(Protocol):
+    @property
+    def max_papers(self) -> int: ...
+    @property
+    def max_minutes(self) -> int: ...
+    @property
+    def max_runs(self) -> int: ...
+
+
+class PlanLike(Protocol):
+    """The shape of `factory.tiers.model.TierPlan` the conductor reads (contract C3)."""
+
+    @property
+    def tier(self) -> Any: ...
+    @property
+    def stages(self) -> Sequence[StageLike]: ...
+    @property
+    def limits(self) -> LimitsLike: ...
+
+
+@dataclass(frozen=True)
+class Budget:
+    max_minutes: int
+    max_runs: int
+    max_units_per_run: int
+
+
+@dataclass(frozen=True)
+class ConductorRun:
+    conductor_id: str
+    tier: str
+    autonomy_level: str
+    steps: tuple[str, ...]
+    budget: Budget
+
+
+class ConductorStatus(StrictModel):
+    conductor_id: str | None
+    state: Literal["none", "running", "waiting", "paused", "finished"]
+    steps: tuple[str, ...] = ()
+    steps_done: int = 0
+    stage_id: str | None = None
+    role: ConductorRole | None = None
+    run_id: str | None = None
+    runs: int = 0
+    minutes: float = 0.0
+    reason: str | None = None
+    gate_id: str | None = None
+    lines: tuple[str, ...] = ()
+
+
+StartRun = Callable[..., str]
+PendingUnits = Callable[[Project, str], dict[str, int]]
+GateClosed = Callable[[Project, str, str], bool]
+Escalate = Callable[[Project, str, str], None]
+
+
+def _refuse(field: str, reason: str) -> FactoryValidationError:
+    return FactoryValidationError([ValidationIssue(field, reason)])
+
+
+# ------------------------------------------------------------------------------ derived state
+
+
+@dataclass
+class _Trail:
+    started: Event
+    meta: ConductorStarted
+    events: list[Event]  # this run's later events, in id order
+
+    def payloads(self, kind: str) -> list[Event]:
+        return [e for e in self.events if e.type == f"conductor.{kind}"]
+
+
+def _load(project: Project) -> _Trail | None:
+    """The latest conductor run that is not finished. System events only."""
+    events = [
+        e
+        for e in read_typed(project.paths.events_dir, project.catalog, EVENT_TYPES)
+        if e.actor.kind == "system"
+    ]
+    current: _Trail | None = None
+    for event in events:
+        if event.type == "conductor.started":
+            current = _Trail(event, ConductorStarted.model_validate(event.payload), [])
+        elif current is not None and event.payload.get("conductor_id") == current.meta.conductor_id:
+            current.events.append(event)
+    if current is None or current.payloads("finished"):
+        return None
+    return current
+
+
+def _closed_roles(trail: _Trail) -> set[tuple[int, str]]:
+    done = (
+        ConductorStepFinished.model_validate(e.payload) for e in trail.payloads("step_finished")
+    )
+    return {(f.step, f.role) for f in done if f.outcome == "complete"}
+
+
+def _open_run(trail: _Trail) -> ConductorStepStarted | None:
+    finished = {e.payload.get("run_id") for e in trail.payloads("step_finished")}
+    for event in reversed(trail.payloads("step_started")):
+        payload = ConductorStepStarted.model_validate(event.payload)
+        if payload.run_id not in finished:
+            return payload
+        return None
+    return None
+
+
+def _policy_kinds(project: Project, stage_id: str) -> dict[str, PolicyKind]:
+    from factory.services.gates import effective_policy
+
+    return {g: effective_policy(project, g).kind for g in STEP_GATES.get(stage_id, ())}
+
+
+def roles_of(project: Project, stage_id: str, level: AutonomyLevel) -> tuple[ConductorRole, ...]:
+    """The role runs of a step: always the proposer; a verifier and an auditor, each its own run,
+    when the level is not `attended` and an agent may close some gate of the step."""
+    kinds = _policy_kinds(project, stage_id)
+    if level is not AutonomyLevel.ATTENDED and any(
+        k is not PolicyKind.HUMAN for k in kinds.values()
+    ):
+        return ("proposer", "verifier", "auditor")
+    return ("proposer",)
+
+
+def _stage_of(stage_id: str, role: ConductorRole) -> str:
+    if role == "verifier":
+        return "conduct-verify"
+    if role == "auditor":
+        return "conduct-audit"
+    return STEP_STAGE[stage_id]
+
+
+def _trust_pauses(project: Project) -> list[str]:
+    try:
+        module: Any = importlib.import_module("factory.services.gate_trust")
+    except ModuleNotFoundError:
+        return []
+    return [str(t.gate_id) for t in module.trust_ledger(project) if t.state == "pause"]
+
+
+def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
+    """Whether a human has acted on `gate_id` since the step's proposer finished: a human-actor
+    event of the gate's namespace after the last `conductor.step_finished` of the step. A v1
+    heuristic read from the events (the gate acts are the researcher's, made outside the
+    conductor); L3's deferred queue can replace it."""
+    trail = _load(project)
+    if trail is None:
+        return False
+    steps = trail.meta.steps
+    index = steps.index(stage_id) if stage_id in steps else -1
+    after = max(
+        (e.id for e in trail.payloads("step_finished") if e.payload["step"] == index),
+        default=None,
+    )
+    if after is None:
+        return False
+    names = (gate_id.split(".")[0], *_GATE_EVENT_NAMESPACES.get(gate_id, ()))
+    return any(
+        e.actor.kind == "human" and e.type.split(".")[0] in names
+        for e in read_all(project.paths.events_dir, project.catalog)
+        if e.id > after
+    )
+
+
+@dataclass(frozen=True)
+class _Decision:
+    kind: Literal["finished", "running", "start", "pause", "wait", "complete-empty"]
+    step: int | None = None
+    stage_id: str | None = None
+    role: ConductorRole | None = None
+    reason: PauseReason | None = None
+    gate_id: str | None = None
+    detail: str = ""
+    run_id: str | None = None
+
+
+def _runs_started(trail: _Trail) -> int:
+    return len(trail.payloads("step_started"))
+
+
+def _minutes(project: Project, trail: _Trail) -> float:
+    return (project.clock.now() - trail.started.ts).total_seconds() / 60.0
+
+
+def _decide(
+    project: Project,
+    trail: _Trail,
+    *,
+    retry: bool,
+    pending: PendingUnits,
+    gate_closed: GateClosed,
+) -> _Decision:
+    meta = trail.meta
+    level = AutonomyLevel(meta.autonomy_level)
+    open_run = _open_run(trail)
+    if open_run is not None:
+        return _Decision(
+            "running", open_run.step, open_run.stage_id, open_run.role, run_id=open_run.run_id
+        )
+    closed = _closed_roles(trail)
+    position: tuple[int, str, ConductorRole] | None = None
+    waiting_gate: str | None = None
+    for index, stage_id in enumerate(meta.steps):
+        roles = roles_of(project, stage_id, level)
+        todo = next((r for r in roles if (index, r) not in closed), None)
+        if todo is not None:
+            position = (index, stage_id, todo)
+            break
+        human = [g for g, k in _policy_kinds(project, stage_id).items() if k is PolicyKind.HUMAN]
+        waiting_gate = next((g for g in human if not gate_closed(project, stage_id, g)), None)
+        if waiting_gate is not None:
+            position = (index, stage_id, "proposer")
+            break
+    if position is None:
+        return _Decision("finished")
+    index, stage_id, role = position
+    paused_gates = _trust_pauses(project)
+    if paused_gates:
+        return _Decision(
+            "pause", index, stage_id, role, "trust-pause", paused_gates[0],
+            f"trust state pause: {', '.join(paused_gates)}",
+        )  # fmt: skip
+    if waiting_gate is not None:
+        return _Decision("wait", index, stage_id, None, "human-gate", waiting_gate,
+                         f"gate {waiting_gate} awaits a human")  # fmt: skip
+    last = [
+        e
+        for e in trail.payloads("step_finished")
+        if e.payload["step"] == index and e.payload["role"] == role
+    ]
+    if last and not retry:
+        outcome = last[-1].payload["outcome"]
+        return _Decision(
+            "pause",
+            index,
+            stage_id,
+            role,
+            "lost-run" if outcome == "lost" else "failed-run",
+            detail=f"the {role} run of {stage_id} {outcome}; advance with retry",
+        )
+    if _runs_started(trail) >= meta.max_runs:
+        return _Decision(
+            "pause", index, stage_id, role, "budget", detail=f"{meta.max_runs} runs started"
+        )
+    if _minutes(project, trail) >= meta.max_minutes:
+        return _Decision(
+            "pause", index, stage_id, role, "budget", detail=f"{meta.max_minutes} minutes spent"
+        )
+    if (
+        role == "proposer"
+        and stage_id in _QUEUE_UNITS
+        and sum(pending(project, stage_id).values()) == 0
+    ):
+        return _Decision("complete-empty", index, stage_id, role)
+    return _Decision("start", index, stage_id, role)
+
+
+# ----------------------------------------------------------------------- the runner's pending
+
+
+def pending_units(project: Project, stage: str) -> int:
+    """The pending unit of a conductor stage (`runner.CONDUCT_STAGES`): 1 while the conductor is
+    starting exactly that role run, else 0 (so a hand start of the stage is refused)."""
+    seams = _STARTING.get()
+    if seams is None:
+        return 0
+    trail = _load(project)
+    if trail is None:
+        return 0
+    decision = _decide(project, trail, retry=True, pending=seams[0], gate_closed=seams[1])
+    if decision.kind != "start" or decision.stage_id is None or decision.role is None:
+        return 0
+    return int(_stage_of(decision.stage_id, decision.role) == stage)
+
+
+# ------------------------------------------------------------------------------------ commands
+
+
+def _plan_blob(project: Project, plan: PlanLike, steps: Sequence[str]) -> str:
+    view: dict[str, JsonValue] = {
+        "tier": str(getattr(plan.tier, "value", plan.tier)),
+        "steps": list(steps),
+        "stages": [
+            {
+                "stage_id": s.stage_id,
+                "skill": s.skill,
+                "skipped": s.skipped,
+                "caps": dict(s.caps),
+                "note": s.note,
+            }
+            for s in plan.stages
+        ],
+        "limits": {
+            "max_papers": plan.limits.max_papers,
+            "max_minutes": plan.limits.max_minutes,
+            "max_runs": plan.limits.max_runs,
+        },
+    }
+    return project.blobs.put(canonical_json(view))
+
+
+def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
+    """Start a conductor run of `plan`: writes `conductor.started` (system actor). Refused, with
+    nothing written, when a conductor run is open, when the plan's tier is not the project's
+    declared tier, when no stage is left to run, or when a stage that is not skipped has no runner
+    stage (a step is never silently skipped)."""
+    if _load(project) is not None:
+        raise _refuse("conductor", "a conductor run of this project is already open")
+    levels = project_levels(project)
+    if levels.tier is not None and levels.tier != plan.tier:
+        raise _refuse("plan", f"the project declared tier {levels.tier.value}, not {plan.tier}")
+    live = [s.stage_id for s in plan.stages if not s.skipped]
+    unsupported = [s for s in live if s not in STEP_STAGE]
+    if unsupported:
+        raise _refuse("plan", f"no runner stage for: {', '.join(unsupported)}")
+    if not live:
+        raise _refuse("plan", "every stage of the plan is skipped")
+    limits = plan.limits
+    budget = Budget(
+        max_minutes=max(1, limits.max_minutes),
+        max_runs=max(1, limits.max_runs),
+        max_units_per_run=max(1, min(limits.max_papers, runner.MAX_UNIT_CAP)),
+    )
+    conductor_id = project.ids.new("cnd")
+    blob = _plan_blob(project, plan, live)
+    started = ConductorStarted(
+        conductor_id=conductor_id,
+        tier=str(getattr(plan.tier, "value", plan.tier)),
+        autonomy_level=levels.autonomy_level.value,
+        steps=tuple(live),
+        max_minutes=budget.max_minutes,
+        max_runs=budget.max_runs,
+        max_units_per_run=budget.max_units_per_run,
+        plan_blob=blob,
+    )
+    with project.writing():
+        project.record(
+            [
+                project.events.make(
+                    "conductor.started", started, project.system_actor(), input_blob=blob
+                )
+            ]
+        )
+    return ConductorRun(conductor_id, started.tier, started.autonomy_level, started.steps, budget)
+
+
+def _write(project: Project, kind: str, payload: StrictModel) -> None:
+    with project.writing():
+        project.record([project.events.make(f"conductor.{kind}", payload, project.system_actor())])
+
+
+def _already_paused(trail: _Trail, d: _Decision) -> bool:
+    if not trail.events or trail.events[-1].type != "conductor.paused":
+        return False
+    p = trail.events[-1].payload
+    return (p["reason"], p.get("step"), p.get("gate_id")) == (d.reason, d.step, d.gate_id)
+
+
+def _escalate_default(project: Project, gate_id: str, stage_id: str) -> None:
+    """Hand a waiting human gate to the deferred queue (lane L3) when it offers `escalate_waiting`;
+    before that the `conductor.paused` event is the waiting item."""
+    try:
+        module: Any = importlib.import_module("factory.services.human_queue")
+    except ModuleNotFoundError:  # pragma: no cover
+        return
+    hook = getattr(module, "escalate_waiting", None)
+    if hook is not None:
+        hook(project, gate_id, stage_id)
+
+
+def advance(
+    project: Project,
+    *,
+    retry: bool = False,
+    start_run: StartRun | None = None,
+    pending: PendingUnits | None = None,
+    gate_closed: GateClosed | None = None,
+    escalate: Escalate | None = None,
+) -> ConductorStatus:
+    """Take the open conductor run one step further and return its status. First closes the
+    conductor's own open run when the runner has recorded its outcome; then decides from the log
+    (stop rules before anything is started) and starts at most one role run. `retry` lets a failed
+    or lost role run be started again, as a new run in a new session. The four callables are the
+    seams of the tests (a fake runner); the defaults are the runner and the deferred queue."""
+    trail = _load(project)
+    if trail is None:
+        return conductor_status(project)
+    meta = trail.meta
+    start = start_run or runner.start_run
+    pend = pending or runner.pending_units
+    closer = gate_closed or default_gate_closed
+    open_run = _open_run(trail)
+    if open_run is not None:
+        outcome = runner.run_outcome(project, open_run.run_id)
+        if outcome is not None:
+            _write(
+                project,
+                "step_finished",
+                ConductorStepFinished(
+                    conductor_id=meta.conductor_id,
+                    step=open_run.step,
+                    stage_id=open_run.stage_id,
+                    role=open_run.role,
+                    run_id=open_run.run_id,
+                    outcome=cast(StepOutcome, outcome),
+                ),
+            )
+            trail = _load(project) or trail
+    decision = _decide(project, trail, retry=retry, pending=pend, gate_closed=closer)
+    if decision.kind == "complete-empty":
+        assert decision.step is not None and decision.stage_id is not None
+        _write(
+            project,
+            "step_finished",
+            ConductorStepFinished(
+                conductor_id=meta.conductor_id,
+                step=decision.step,
+                stage_id=decision.stage_id,
+                role="proposer",
+                outcome="complete",
+            ),
+        )
+        return advance(
+            project, retry=retry, start_run=start_run, pending=pending,
+            gate_closed=gate_closed, escalate=escalate,
+        )  # fmt: skip
+    if decision.kind == "finished":
+        _write(
+            project,
+            "finished",
+            ConductorFinished(
+                conductor_id=meta.conductor_id,
+                steps_done=len(meta.steps),
+                runs=_runs_started(trail),
+            ),
+        )
+    elif decision.kind == "start":
+        assert decision.step is not None and decision.stage_id is not None and decision.role
+        stage = _stage_of(decision.stage_id, decision.role)
+        cap = _unit_cap(meta)
+        token = _STARTING.set((pend, closer))
+        try:
+            run_id = start(project, stage, unit_cap=cap)
+        except FactoryValidationError as exc:
+            decision = _Decision(
+                "pause", decision.step, decision.stage_id, decision.role, "refused",
+                detail="; ".join(f"{i.field}: {i.reason}" for i in exc.issues),
+            )  # fmt: skip
+        else:
+            attempts = 1 + sum(
+                1
+                for e in trail.payloads("step_started")
+                if e.payload["step"] == decision.step and e.payload["role"] == decision.role
+            )
+            _write(
+                project,
+                "step_started",
+                ConductorStepStarted(
+                    conductor_id=meta.conductor_id,
+                    step=decision.step,
+                    stage_id=decision.stage_id,
+                    role=decision.role,
+                    run_id=run_id,
+                    attempt=attempts,
+                ),
+            )
+        finally:
+            _STARTING.reset(token)
+    if decision.kind in ("pause", "wait") and not _already_paused(trail, decision):
+        assert decision.reason is not None
+        if decision.kind == "wait" and decision.gate_id is not None and decision.stage_id:
+            (escalate or _escalate_default)(project, decision.gate_id, decision.stage_id)
+        _write(
+            project,
+            "paused",
+            ConductorPaused(
+                conductor_id=meta.conductor_id,
+                reason=decision.reason,
+                step=decision.step,
+                stage_id=decision.stage_id,
+                gate_id=decision.gate_id,
+                detail=decision.detail,
+            ),
+        )
+    return conductor_status(project, retry=retry, pending=pend, gate_closed=closer)
+
+
+def _unit_cap(meta: ConductorStarted) -> int:
+    return max(1, min(meta.max_units_per_run, runner.MAX_UNIT_CAP))
+
+
+def conductor_status(
+    project: Project,
+    *,
+    retry: bool = False,
+    pending: PendingUnits | None = None,
+    gate_closed: GateClosed | None = None,
+) -> ConductorStatus:
+    """The status of the latest conductor run (read-only): where it is and why it stopped."""
+    trail = _load(project)
+    if trail is None:
+        done = [
+            e
+            for e in read_typed(project.paths.events_dir, project.catalog, ("conductor.finished",))
+            if e.actor.kind == "system"
+        ]
+        if done:
+            last = ConductorFinished.model_validate(done[-1].payload)
+            return ConductorStatus(
+                conductor_id=last.conductor_id,
+                state="finished",
+                steps_done=last.steps_done,
+                runs=last.runs,
+                lines=(f"finished: {last.steps_done} steps, {last.runs} runs",),
+            )
+        return ConductorStatus(conductor_id=None, state="none", lines=("no conductor run",))
+    meta = trail.meta
+    decision = _decide(
+        project,
+        trail,
+        retry=retry,
+        pending=pending or runner.pending_units,
+        gate_closed=gate_closed or default_gate_closed,
+    )
+    tail = trail.events[-1] if trail.events else None
+    if decision.kind == "start" and tail is not None and tail.type == "conductor.paused":
+        refusal = ConductorPaused.model_validate(tail.payload)
+        if (
+            refusal.reason == "refused"
+        ):  # the runner refused the start; the next advance tries again
+            decision = _Decision(
+                "pause",
+                refusal.step,
+                refusal.stage_id,
+                decision.role,
+                "refused",
+                detail=refusal.detail,
+            )
+    closed = _closed_roles(trail)
+    done_steps = sum(
+        1
+        for i in range(len(meta.steps))
+        if all(
+            (i, r) in closed
+            for r in roles_of(project, meta.steps[i], AutonomyLevel(meta.autonomy_level))
+        )
+    )
+    state: Literal["running", "waiting", "paused"] = (
+        "running" if decision.kind in ("running", "start", "complete-empty", "finished")
+        else "waiting" if decision.kind == "wait" else "paused"
+    )  # fmt: skip
+    lines = [f"conductor {meta.conductor_id}: {meta.tier} at {meta.autonomy_level}"]
+    lines.append(f"steps: {done_steps}/{len(meta.steps)} done ({', '.join(meta.steps)})")
+    lines.append(
+        f"runs {_runs_started(trail)}/{meta.max_runs}, "
+        f"minutes {_minutes(project, trail):.1f}/{meta.max_minutes}"
+    )
+    if decision.stage_id:
+        lines.append(f"at {decision.stage_id}" + (f" ({decision.role})" if decision.role else ""))
+    if decision.reason:
+        lines.append(f"stopped: {decision.reason}: {decision.detail}")
+    return ConductorStatus(
+        conductor_id=meta.conductor_id,
+        state=state,
+        steps=meta.steps,
+        steps_done=done_steps,
+        stage_id=decision.stage_id,
+        role=decision.role,
+        run_id=decision.run_id,
+        runs=_runs_started(trail),
+        minutes=round(_minutes(project, trail), 2),
+        reason=decision.reason,
+        gate_id=decision.gate_id,
+        lines=tuple(lines),
+    )
