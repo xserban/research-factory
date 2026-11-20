@@ -1,6 +1,250 @@
-/* Platform page: what the platform can do (capabilities by lifecycle stage) and the backlog board.
-   Payload: platform (services/hub_platform.py). Every number comes from the payload. Read-only.
-   Tabs: Capabilities, Backlog. Hash keys: tab, stage, q, view, area, state, slice, idea. */
+/* Platform page: how a project runs (the run map), what the platform can do (capabilities by
+   lifecycle stage) and the backlog board. Payload: platform (services/hub_platform.py). Every number
+   comes from the payload. Read-only. Tabs: How it works, Capabilities, Backlog.
+   Hash keys: tab, rm, stage, q, view, area, state, slice, idea. */
+/* "How it works" tab: the run map. Text is declared in the payload (`run_map`,
+   services/hub_platform.py); each stage's skills and tool count come from the catalog. Read-only.
+   Exposes HUB_HOWTO.render(H, P, st, go) -> html and HUB_HOWTO.wire(main, st, go). Hash key: rm (stage). */
+(function () {
+  const ACTOR = {
+    human: ['Researcher', 'var(--h-collab)'],
+    claude: ['Claude session', 'var(--h-none)'],
+    platform: ['Platform', 'var(--mut)'],
+  };
+  const CSS = `
+.rm-lead{font:400 var(--t-l)/1.4 var(--f-display);max-width:68ch;margin:4px 0 14px}
+.rm-key{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:var(--t-xs);color:var(--mut);margin:0 0 14px}
+.rm-key i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.rm-entry{padding:12px 16px;margin:0 0 var(--gap);font-size:var(--t-s);color:var(--mut)}
+.rm-entry b{color:var(--fg);font-weight:600;margin-right:6px}
+.rm-track{padding:8px 4px 4px;overflow-x:auto}
+.rm-track svg{display:block;min-width:860px;width:100%;height:auto}
+.rm-line{stroke:var(--line);stroke-width:3;fill:none}
+.rm-flow{stroke:var(--acc);stroke-width:2;fill:none;stroke-dasharray:3 11;opacity:.7;animation:rm-run 1.4s linear infinite}
+@keyframes rm-run{to{stroke-dashoffset:-14}}
+.rm-loop{fill:none;stroke:var(--h-feedback);stroke-width:1.6;stroke-dasharray:5 5;opacity:.85;animation:rm-run 1.8s linear infinite reverse}
+.rm-loop-t{font:500 11px var(--f-mono);fill:var(--h-feedback)}
+.rm-nd{cursor:pointer}
+.rm-nd .disc{fill:var(--surface);stroke:var(--line);stroke-width:2;transition:stroke .15s}
+.rm-nd .fill{fill:var(--acc-soft)}
+.rm-nd:hover .disc,.rm-nd:focus-visible .disc{stroke:var(--mut)}
+.rm-nd.on .disc{stroke:var(--acc);stroke-width:3}
+.rm-nd.on .halo{opacity:1}
+.rm-nd .halo{fill:none;stroke:var(--acc);stroke-width:1;opacity:0;animation:rm-pulse 2.2s ease-out infinite}
+@keyframes rm-pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+.rm-nd .num{font:500 15px var(--f-mono);fill:var(--fg);text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.rm-nd .lab{font:600 12.5px var(--f-ui);fill:var(--fg);text-anchor:middle;pointer-events:none}
+.rm-nd .sub{font:400 11px var(--f-mono);fill:var(--mut);text-anchor:middle;pointer-events:none}
+.rm-nd .dot{fill:var(--h-none)}
+.rm-nd:focus{outline:none}
+.rm-hint{font-size:var(--t-xs);color:var(--dim);margin:2px 4px 0}
+.rm-det{margin:var(--gap) 0 0;padding:18px 20px}
+.rm-det-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:0 0 14px}
+.rm-det-h h3{margin:0;font:400 var(--t-xl)/1.1 var(--f-display)}
+.rm-det-h .n{font:500 var(--t-s) var(--f-mono);color:var(--mut)}
+.rm-det-h .nav{margin-left:auto;display:flex;gap:6px}
+.rm-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--gap)}
+.rm-lane{border-top:3px solid var(--ac);padding:10px 2px 0;min-width:0}
+.rm-lane h4{margin:0 0 8px;font:600 var(--t-xs) var(--f-ui);letter-spacing:.08em;text-transform:uppercase;color:var(--ac)}
+.rm-lane ul{margin:0;padding:0;list-style:none;display:grid;gap:6px;font-size:var(--t-s)}
+.rm-lane li{position:relative;padding-left:14px}
+.rm-lane li::before{content:"";position:absolute;left:0;top:.55em;width:6px;height:6px;border-radius:50%;background:var(--ac);opacity:.8}
+.rm-cmd{display:inline-block;margin-top:10px;font:400 var(--t-xs) var(--f-mono);color:var(--ac);background:var(--raised);padding:3px 8px;border-radius:var(--r-s)}
+.rm-chips{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 8px}
+.rm-sk{font:500 var(--t-xs) var(--f-mono);color:var(--h-none);background:color-mix(in srgb,var(--h-none) 14%,transparent);padding:2px 8px;border-radius:9px;cursor:help}
+.rm-tl{font:400 var(--t-xs) var(--f-mono);color:var(--fg);background:var(--raised);padding:2px 7px;border-radius:var(--r-s);border:0;cursor:pointer}
+.rm-tl:hover{background:var(--acc-soft)}
+.rm-sm{font-size:var(--t-xs);color:var(--mut);margin:8px 0 0}
+.rm-out{margin-top:12px;font:500 var(--t-s) var(--f-ui);color:var(--fg)}
+.rm-out span{color:var(--mut);font-weight:400}
+.rm-sec{margin:38px 0 0}
+.rm-seq{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:var(--gap);align-items:start}
+.rm-seq .card{padding:12px 10px;overflow-x:auto}
+.rm-seq svg{display:block;width:100%;min-width:520px;height:auto}
+.rm-life{stroke:var(--line);stroke-width:1.5;stroke-dasharray:4 4}
+.rm-actor{font:600 12px var(--f-ui);text-anchor:middle}
+.rm-msg{stroke:var(--dim);stroke-width:1.4;fill:none;transition:stroke .2s,opacity .2s;opacity:.55}
+.rm-msg.on{stroke:var(--acc);stroke-width:2.4;opacity:1}
+.rm-mt{font:500 11.5px var(--f-ui);fill:var(--mut);text-anchor:middle;transition:fill .2s}
+.rm-mt.on{fill:var(--fg)}
+.rm-tok{fill:var(--acc);transition:transform .7s cubic-bezier(.5,0,.3,1)}
+.rm-steps{margin:0;padding:0;list-style:none;display:grid;gap:4px}
+.rm-steps button{display:grid;grid-template-columns:26px minmax(0,1fr);gap:8px;width:100%;text-align:left;background:none;border:0;border-radius:var(--r-s);padding:7px 8px;color:var(--fg);font:inherit;cursor:pointer}
+.rm-steps button:hover{background:var(--raised)}
+.rm-steps button[aria-current=true]{background:var(--acc-soft)}
+.rm-steps .i{font:500 var(--t-xs) var(--f-mono);color:var(--mut);padding-top:2px}
+.rm-steps b{display:block;font-size:var(--t-s);font-weight:600}
+.rm-steps b small{font:500 var(--t-xs) var(--f-ui);margin-left:6px}
+.rm-steps span span{font-size:var(--t-xs);color:var(--mut)}
+.rm-ctl{display:flex;gap:8px;align-items:center;margin:0 0 10px}
+.rm-rules{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:var(--gap);align-items:start}
+.rm-rules .card{padding:16px 18px}
+.rm-rules h4{margin:0 0 4px;font:600 var(--t-s) var(--f-ui)}
+.rm-rules p{margin:0 0 14px;font-size:var(--t-s);color:var(--mut);max-width:62ch}
+.rm-rules p:last-child{margin-bottom:0}
+.rm-ind svg{display:block;width:100%;height:auto}
+.rm-ind .bx{fill:var(--raised);stroke:none}
+.rm-ind text{font:500 12px var(--f-ui);fill:var(--fg);text-anchor:middle}
+.rm-ind .k{font:400 11px var(--f-mono);fill:var(--mut)}
+.rm-ind .ar{stroke:var(--dim);stroke-width:1.4;fill:none}
+.rm-ind .wall{stroke:var(--exc);stroke-width:2;stroke-dasharray:3 4}
+@media (max-width:980px){.rm-seq,.rm-rules{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:760px){.rm-lanes{grid-template-columns:minmax(0,1fr)}}`;
+
+  let timer = null;
+  const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+  function track(H, R, rows, sel) {
+    const { esc } = H;
+    const W = 1000, Y = 190, X0 = 64, DX = (W - 2 * X0) / (R.stages.length - 1);
+    const maxT = Math.max(1, ...rows.map(r => r.n_tools || 0));
+    const pos = {}, rad = {};
+    R.stages.forEach((s, i) => {
+      const r = rows.find(x => x.id === s.id) || {};
+      pos[s.id] = X0 + i * DX; rad[s.id] = 15 + 13 * Math.sqrt((r.n_tools || 0) / maxT);
+    });
+    const heights = [78, 122, 156];
+    const loops = R.loops.map((l, k) => {
+      const x1 = pos[l.from] + (k ? 6 : -6), x2 = pos[l.to] + (k === 2 ? -6 : 6), h = heights[k % 3];
+      const y1 = Y - rad[l.from] - 4, y2 = Y - rad[l.to] - 4;
+      const d = `M${x1},${y1} C${x1},${Y - h} ${x2},${Y - h} ${x2},${y2}`;
+      const tx = (x1 + x2) / 2, ty = Y - 0.75 * h - 6;
+      return `<path class="rm-loop" d="${d}" marker-end="url(#rm-arr)"><title>${esc(l.label)}: ${esc(l.what)}</title></path>
+        <text class="rm-loop-t" x="${tx}" y="${ty}" text-anchor="middle">↺ ${esc(l.label)}</text>`;
+    }).join('');
+    const nodes = R.stages.map((s, i) => {
+      const r = rows.find(x => x.id === s.id) || {}, x = pos[s.id], rr = rad[s.id];
+      const ly = Y + 48 + (i % 2) * 22, ns = r.n_skills || 0;
+      const dots = Array.from({ length: Math.min(ns, 9) }, (_, j) => `<circle class="dot" cx="${x - (Math.min(ns, 9) - 1) * 4 + j * 8}" cy="${ly + 12}" r="2.6"/>`).join('');
+      const tick = `<line x1="${x}" y1="${Y + rr + 2}" x2="${x}" y2="${ly - 13}" stroke="var(--line)" stroke-width="1"/>`;
+      const frac = Math.max(0.08, (r.n_tools || 0) / maxT);
+      return `<g class="rm-nd${sel === s.id ? ' on' : ''}" data-rm="${esc(s.id)}" tabindex="0" role="button" aria-pressed="${sel === s.id}" aria-label="${esc(r.label || s.id)}: ${esc(String(r.n_tools || 0))} tools, ${esc(String(ns))} skills">
+        <circle class="halo" cx="${x}" cy="${Y}" r="${rr}" style="transform-origin:${x}px ${Y}px"/>
+${tick}<circle class="disc" cx="${x}" cy="${Y}" r="${rr}"/>
+        <circle class="fill" cx="${x}" cy="${Y}" r="${(rr - 3) * Math.sqrt(frac)}"/>
+        <text class="num" x="${x}" y="${Y}">${esc(String(r.n_tools || 0))}</text>
+        <text class="lab" x="${x}" y="${ly}">${i + 1} · ${esc(r.label || s.id)}</text>${dots}<title>${esc(r.label || s.id)} produces ${esc(s.out)}</title></g>`;
+    }).join('');
+    const xa = pos[R.stages[0].id], xb = pos[R.stages[R.stages.length - 1].id];
+    return `<div class="card rm-track"><svg viewBox="0 0 ${W} 300" role="group" aria-label="The run, stage by stage">
+      <defs><marker id="rm-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--h-feedback)"/></marker>
+      <marker id="rm-arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--line)"/></marker></defs>
+      <path class="rm-line" d="M${xa - 40},${Y} L${xb + 44},${Y}" marker-end="url(#rm-arr2)"/>
+      <path class="rm-flow" d="M${xa - 40},${Y} L${xb + 40},${Y}"/>
+      ${loops}${nodes}</svg>
+      <div class="rm-hint">Number in a stage: its tools. Dots under it: its skills. Size grows with the tools. Dashed arcs: loops back. Select a stage for who does what.</div></div>`;
+  }
+
+  function detail(H, R, rows, sel) {
+    const { esc } = H;
+    const i = Math.max(0, R.stages.findIndex(s => s.id === sel));
+    const s = R.stages[i], r = rows.find(x => x.id === s.id) || { skills: [], n_tools: 0, label: s.id, covers: '' };
+    const list = a => `<ul>${a.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    const lane = (k, body) => `<div class="rm-lane" style="--ac:${ACTOR[k][1]}"><h4>${esc(ACTOR[k][0])}</h4>${body}</div>`;
+    const sk = (r.skills || []).map(x => `<span class="rm-sk" title="${esc(x.d)}">${esc(x.n)}</span>`).join('');
+    const tl = s.tools.map(t => `<button type="button" class="rm-tl" data-tool="${esc(t)}" data-tool-stage="${esc((rows.find(x => (x.tools || []).includes(t)) || s).id)}" title="Open in Capabilities">${esc(t)}</button>`).join('');
+    const prev = R.stages[i - 1], next = R.stages[i + 1];
+    return `<div class="card raised rm-det" id="rm-det"><div class="rm-det-h"><span class="n">Stage ${i + 1} of ${R.stages.length}</span><h3>${esc(r.label)}</h3><span class="meta">${esc(r.covers)}</span>
+      <span class="nav"><button type="button" class="btn" data-rm="${esc(prev ? prev.id : '')}" ${prev ? '' : 'disabled'} aria-label="Previous stage">←</button><button type="button" class="btn" data-rm="${esc(next ? next.id : '')}" ${next ? '' : 'disabled'} aria-label="Next stage">→</button></span></div>
+      <div class="rm-lanes">
+        ${lane('human', list(s.human) + (s.cmd ? `<code class="rm-cmd">${esc(s.cmd)}</code>` : ''))}
+        ${lane('claude', `<div class="rm-chips">${sk || '<span class="meta">No skill; tools only.</span>'}</div><div class="rm-chips">${tl}</div>
+          <p class="rm-sm">${esc(String(r.n_skills || 0))} skills and ${esc(String(r.n_tools || 0))} tools in this stage. <a href="#" data-cap="${esc(s.id)}">See them all in Capabilities</a>.</p>${s.sessions ? `<p class="rm-sm">${esc(s.sessions)}</p>` : ''}`)}
+        ${lane('platform', list(s.platform) + `<div class="rm-out"><span>Produces</span> ${esc(s.out)}</div>`)}
+      </div></div>`;
+  }
+
+  function sequence(H, R, step) {
+    const { esc } = H;
+    const LX = { claude: 150, platform: 450, human: 750 }, top = 58, gap = 50, n = R.call.length;
+    const hgt = top + n * gap + 20;
+    const lines = Object.entries(LX).map(([k, x]) => `<text class="rm-actor" x="${x}" y="24" style="fill:${ACTOR[k][1]}">${esc(ACTOR[k][0])}</text>
+      <line class="rm-life" x1="${x}" y1="36" x2="${x}" y2="${hgt - 6}"/>`).join('');
+    const arrows = R.call.map((c, i) => {
+      const to = i + 1 < n ? R.call[i + 1].who : 'platform', y = top + i * gap + 14, x1 = LX[c.who], x2 = LX[to], on = i === step ? ' on' : '';
+      const d = x1 === x2 ? `M${x1},${y - 8} C${x1 + 70},${y - 8} ${x1 + 70},${y + 12} ${x1 + 4},${y + 12}` : `M${x1},${y} L${x2 + (x2 > x1 ? -6 : 6)},${y}`;
+      const tx = x1 === x2 ? x1 + 80 : (x1 + x2) / 2, anchor = x1 === x2 ? 'start' : 'middle';
+      return `<path class="rm-msg${on}" d="${d}" marker-end="url(#rm-a3)"/><text class="rm-mt${on}" x="${tx}" y="${x1 === x2 ? y + 6 : y - 7}" style="text-anchor:${anchor}">${i + 1}. ${esc(c.act)}</text>`;
+    }).join('');
+    const c = R.call[step], y0 = top + step * gap + 14;
+    return `<svg viewBox="0 0 900 ${hgt}" role="img" aria-label="Sequence of one tool call">
+      <defs><marker id="rm-a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--acc)"/></marker></defs>
+      ${lines}${arrows}<circle class="rm-tok" cx="0" cy="0" r="6" style="transform:translate(${LX[c.who]}px,${y0}px)"/></svg>`;
+  }
+
+  function independence(H) {
+    return `<div class="rm-ind"><svg viewBox="0 0 420 210" role="img" aria-label="Two independent passes meet only in the platform">
+      <rect class="bx" x="20" y="14" width="150" height="42" rx="8"/><text x="95" y="40">Session 1 · pass A</text>
+      <rect class="bx" x="250" y="14" width="150" height="42" rx="8"/><text x="325" y="40">Session 2 · pass B</text>
+      <line class="wall" x1="210" y1="8" x2="210" y2="66"/><text class="k" x="210" y="80">no shared view</text>
+      <path class="ar" d="M95,56 C95,96 180,96 196,110" marker-end="url(#rm-a4)"/><path class="ar" d="M325,56 C325,96 240,96 224,110" marker-end="url(#rm-a4)"/>
+      <rect class="bx" x="90" y="112" width="240" height="36" rx="8"/><text x="210" y="134">Platform: agreement, disagreements</text>
+      <path class="ar" d="M210,148 L210,166" marker-end="url(#rm-a4)"/>
+      <rect class="bx" x="110" y="168" width="200" height="34" rx="8" style="fill:color-mix(in srgb,var(--h-collab) 22%,transparent)"/><text x="210" y="189">Researcher resolves</text>
+      <defs><marker id="rm-a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--dim)"/></marker></defs></svg></div>`;
+  }
+
+  function render(H, P, st) {
+    const { esc, info } = H;
+    const R = P.run_map, M = P.methods || {};
+    if (!R) return '<p class="pl-empty">The run map is not in this payload.</p>';
+    const rows = (P.catalog && P.catalog.stages) || [];
+    const sel = R.stages.some(s => s.id === st.rm) ? st.rm : R.stages[0].id;
+    const step = Math.min(Math.max(0, st.step || 0), R.call.length - 1);
+    const key = Object.entries(ACTOR).map(([, v]) => `<span><i style="background:${v[1]}"></i>${esc(v[0])}</span>`).join('') + '<span><i style="background:var(--h-feedback)"></i>Loop back</span>';
+    return `${H.header({ title: 'How a project runs', infoHtml: esc(M.run_map || ''), sub: 'From question to living review: who does what at each stage.' })}
+      <p class="rm-lead">${esc(R.lead)}</p><div class="rm-key">${key}</div>
+      <div class="card rm-entry"><b>Every session starts here</b>${esc(R.entry)}</div>
+      ${P.catalog ? '' : `<p class="pl-line bad">The catalog could not be built, so skills and tool counts are missing${P.catalog_error ? ': ' + esc(P.catalog_error) : '.'}</p>`}
+      ${track(H, R, rows, sel)}${detail(H, R, rows, sel)}
+      <section class="rm-sec">${H.header({ title: 'One tool call', sub: 'The loop every stage repeats. Here a miner; screening, extraction and verification use their own tools.' })}
+        <div class="rm-seq"><div class="card">${sequence(H, R, step)}</div>
+        <div><div class="rm-ctl"><button type="button" class="btn" id="rm-play">${timer ? 'Pause' : 'Play'}</button><button type="button" class="btn" id="rm-next">Next step</button><span class="meta" role="status">Step ${step + 1} of ${R.call.length}</span></div>
+        <ol class="rm-steps">${R.call.map((c, i) => `<li><button type="button" data-step="${i}" aria-current="${i === step}"><span class="i">${i + 1}</span><span><b>${esc(c.act)}<small style="color:${ACTOR[c.who][1]}">${esc(ACTOR[c.who][0])}</small></b><span>${esc(c.text)}</span></span></button></li>`).join('')}</ol></div></div>
+        <p class="rm-sm">Every agent event carries the model, the skill hashed by the platform from the installed file, and the input the agent saw.</p></section>
+      <section class="rm-sec">${H.header({ title: 'Rules behind it' })}
+        <div class="rm-rules"><div class="card">${R.rules.map(([h, t]) => `<h4>${esc(h)}</h4><p>${esc(t)}</p>`).join('')}</div>
+        <div class="card">${independence(H)}<p class="rm-sm">Pass A, pass B, a critic and a verifier each run in their own Claude Code session.</p></div></div></section>`;
+  }
+
+  function wire(main, st, go, rerender) {
+    main.querySelectorAll('[data-rm]').forEach(el => {
+      const f = () => { if (el.dataset.rm) { stop(); go({ rm: el.dataset.rm }); } };
+      el.addEventListener('click', f);
+      el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); f(); } });
+    });
+    main.querySelectorAll('[data-cap]').forEach(el => el.addEventListener('click', e => { e.preventDefault(); stop(); go({ tab: 'cap', stage: el.dataset.cap, q: '' }); }));
+    main.querySelectorAll('[data-tool]').forEach(el => el.addEventListener('click', () => { stop(); go({ tab: 'cap', stage: el.dataset.toolStage, q: el.dataset.tool }); }));
+    const n = (main.querySelectorAll('[data-step]').length) || 1;
+    const pl = main.querySelector('#rm-play');
+    const setStep = k => {
+      st.step = k;
+      const svg = main.querySelector('.rm-seq svg'); if (!svg) { rerender(); return; }
+      svg.querySelectorAll('.rm-msg').forEach((m, i) => m.classList.toggle('on', i === k));
+      svg.querySelectorAll('.rm-mt').forEach((m, i) => m.classList.toggle('on', i === k));
+      const tok = svg.querySelector('.rm-tok'), arr = svg.querySelectorAll('.rm-msg')[k];
+      if (tok && arr) { const p = arr.getPointAtLength(0); tok.style.transform = `translate(${p.x}px,${p.y}px)`; }
+      main.querySelectorAll('[data-step]').forEach((b, i) => b.setAttribute('aria-current', String(i === k)));
+      const s = main.querySelector('.rm-ctl [role=status]'); if (s) s.textContent = `Step ${k + 1} of ${n}`;
+    };
+    const label = () => { if (pl) pl.textContent = timer ? 'Pause' : 'Play'; };
+    main.querySelectorAll('[data-step]').forEach(el => el.addEventListener('click', () => { stop(); setStep(Number(el.dataset.step)); }));
+    const nx = main.querySelector('#rm-next'); if (nx) nx.addEventListener('click', () => { stop(); setStep(((st.step || 0) + 1) % n); });
+    if (pl) pl.addEventListener('click', () => {
+      if (timer) { stop(); label(); return; }
+      if ((st.step || 0) >= n - 1) setStep(0);
+      timer = setInterval(() => {
+        if (!pl.isConnected) { stop(); return; }
+        if ((st.step || 0) >= n - 1) { stop(); label(); return; }
+        setStep((st.step || 0) + 1);
+      }, 1500);
+      label();
+    });
+  }
+
+  window.HUB_HOWTO = { CSS, render, wire, stop };
+})();
+
 HUB.load(['shell', 'platform']).then(d => {
   const H = HUB.init(d.shell);
   const P = d.platform || {};
@@ -76,19 +320,19 @@ HUB.load(['shell', 'platform']).then(d => {
 .pl-tree .nd.off{opacity:.18}.pl-tree .ed{stroke:var(--line);stroke-width:1.2;fill:none}.pl-tree .ed.on{stroke:var(--acc);stroke-width:2}.pl-tree .ed.off{opacity:.15}
 .pl-tree text{font:500 10px var(--f-mono);fill:var(--mut);pointer-events:none}
 @media (max-width:1100px){.pl-lay{grid-template-columns:minmax(0,1fr)}.pl-det{position:static;max-height:none}}
-@media (max-width:760px){.pl-ar{grid-template-columns:90px minmax(0,1fr) 36px}}`;
+@media (max-width:760px){.pl-ar{grid-template-columns:90px minmax(0,1fr) 36px}}` + HUB_HOWTO.CSS;
     document.head.appendChild(st);
   }
 
-  const TABS = [['cap', 'Capabilities'], ['backlog', 'Backlog']];
-  const st = { tab: 'cap', stage: '', q: '', view: 'board', area: '', state: '', slice: '', idea: '', sel: [] };
+  const TABS = [['how', 'How it works'], ['cap', 'Capabilities'], ['backlog', 'Backlog']];
+  const st = { tab: 'how', rm: '', step: 0, stage: '', q: '', view: 'board', area: '', state: '', slice: '', idea: '', sel: [] };
   const readHash = () => {
     const p = H.hash.get();
-    st.tab = TABS.some(t => t[0] === p.get('tab')) ? p.get('tab') : 'cap';
+    st.tab = TABS.some(t => t[0] === p.get('tab')) ? p.get('tab') : 'how'; st.rm = p.get('rm') || '';
     st.stage = p.get('stage') || ''; st.q = p.get('q') || ''; st.view = p.get('view') === 'tree' ? 'tree' : 'board';
     st.area = p.get('area') || ''; st.state = p.get('state') || ''; st.slice = p.get('slice') || ''; st.idea = p.get('idea') || '';
   };
-  const go = o => { H.hash.set(o); readHash(); render(); };
+  const go = o => { HUB_HOWTO.stop(); H.hash.set(o); readHash(); render(); };
   const fmt = n => (n == null ? '' : String(n));
   const lc = s => String(s || '').toLowerCase();
   const empty = msg => `<p class="pl-empty">${esc(msg)}</p>`;
@@ -309,11 +553,12 @@ HUB.load(['shell', 'platform']).then(d => {
   }
 
   function render() {
-    const hdr = H.header({ title: 'Platform', sub: 'What the platform can do, and what is planned.', level: 1 });
+    const hdr = H.header({ title: 'Platform', sub: 'How a project runs, what the platform can do, and what is planned.', level: 1 });
     const tabs = `<div class="pl-tabs"><div class="seg" role="tablist" aria-label="View">${TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" aria-pressed="${k === st.tab}">${l}</button>`).join('')}</div></div>`;
-    main.innerHTML = hdr + tabs + (st.tab === 'cap' ? cap() : backlog());
+    const body = st.tab === 'how' ? HUB_HOWTO.render(H, P, st) : st.tab === 'cap' ? cap() : backlog();
+    main.innerHTML = hdr + tabs + body;
     main.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => go({ tab: b.dataset.tab })));
-    if (st.tab === 'cap') wireCap(); else wireBacklog();
+    if (st.tab === 'how') HUB_HOWTO.wire(main, st, go, render); else if (st.tab === 'cap') wireCap(); else wireBacklog();
   }
   readHash(); render();
   window.addEventListener('hashchange', () => { readHash(); render(); });

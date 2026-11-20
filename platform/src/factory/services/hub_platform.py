@@ -9,6 +9,10 @@ Invariants:
 - An absent check is reported as absent (`skipped`, `prompts: None`), never as zero.
 - The backlog file is read from the main checkout (`site_backlog.backlog_path`); it is hub-level,
   not per project. Nothing is written back.
+- `run_map` is declared text (the "How it works" tab): what each actor does per lifecycle stage,
+  the loops back and the steps of one tool call. It holds no count; the page takes each stage's
+  skills and tool count from `catalog`. Every stage id is a `site_catalog.STAGE_IDS` id, every
+  loop joins two of them, and every tool it names is a registered tool (tests check all three).
 - Reads no network and calls no model.
 """
 
@@ -74,11 +78,135 @@ METHODS: dict[str, str] = {
         "blocked when a dependency is not done; otherwise ready. Unlocks counts the open ideas "
         "that sit below an idea in the dependency graph."
     ),
+    "run_map": (
+        "Declared text from the platform's rules, the rf-run skill and the architecture notes, drawn as a "
+        "track of the lifecycle stages. Each stage's skills and tool count come from the capability "
+        "catalog; the stage of a skill is declared in its front matter. Loops are drawn as arcs back."
+    ),
     "tree": (
         "Layers follow the recorded dependencies: an idea sits one layer right of its deepest "
         "dependency. Only ideas with a recorded idea dependency (or that others depend on) are drawn."
     ),
 }
+
+
+RUN_MAP: dict[str, Any] = {
+    "lead": (
+        "A project moves through nine stages, with three loops back. Claude reads and judges through "
+        "MCP tools, led by one skill per stage. The platform records every act as an event, computes "
+        "every count and holds the gates. The researcher decides at the gates, from the CLI and this hub."
+    ),
+    "entry": (
+        "Every session starts with rf-run: it calls project_status, which reads the stage and the "
+        "researcher's queue from the log and names the skill that takes over. No stage is remembered "
+        "from an earlier session."
+    ),
+    "stages": (
+        {
+            "id": "frame",
+            "human": ("Selects one suggestion per level, top-down: goal, questions, plan, seeds, probe, protocol", "Confirms the PRESS review of the search"),
+            "cmd": "factory decide select",
+            "tools": ("decision_suggest", "question_record", "seed_add", "probe_run", "protocol_record", "protocol_press_review"),
+            "sessions": "",
+            "platform": ("Versions the question and the protocol", "Measures the probe's recall on the seeds", "Keeps held-out seeds out of every agent answer"),
+            "out": "a ready protocol",
+        },
+        {
+            "id": "gather",
+            "human": ("Imports lists and files, then resolves and admits them", "Drops links into the inbox", "Sets the stopping rule for snowballing"),
+            "cmd": "factory import …",
+            "tools": ("search_run", "dedup_run", "inbox_add", "references_extract", "snowball_round", "search_chase"),
+            "sessions": "",
+            "platform": ("Queries the literature sources over a polite client", "Merges duplicates, reversibly", "Links reference lists to the corpus and applies the stopping rule"),
+            "out": "candidate records",
+        },
+        {
+            "id": "screen",
+            "human": ("Labels the calibration sample", "Resolves disagreements between the passes", "Passes the screening gate"),
+            "cmd": "",
+            "tools": ("screen_next", "screen_record", "screen_check_draw", "screen_agreement"),
+            "sessions": "Pass A and pass B run in separate Claude Code sessions.",
+            "platform": ("Hands out batches as leased tasks", "Computes agreement and the PRISMA counts"),
+            "out": "included works",
+        },
+        {
+            "id": "acquire",
+            "human": ("Attaches PDFs the routes cannot fetch", "Runs the conversion"),
+            "cmd": "factory document convert",
+            "tools": ("library_adoptable", "library_adopt", "fulltext_fetch", "document_read"),
+            "sessions": "",
+            "platform": ("Stores sources in the library, by hash", "Converts PDF with docling, LaTeX with pandoc, HTML with latexml", "Pins one canonical document per work"),
+            "out": "pinned full text",
+        },
+        {
+            "id": "extract",
+            "human": ("Rules on each miner's design: selection, scope, absence, passes", "Labels audit and calibration samples", "Resolves the disagreements the gate keeps"),
+            "cmd": "",
+            "tools": ("extract_next", "extract_record", "mine_next", "mine_record", "mine_disagreements", "extract_agreement"),
+            "sessions": "Pass A and pass B run in separate sessions, as in screening.",
+            "platform": ("Checks every quote against the pinned document", "Computes agreement per miner and draws audit samples"),
+            "out": "quoted rows per work",
+        },
+        {
+            "id": "understand",
+            "human": ("Confirms lineage relations and named ideas", "Reviews interpretations", "Draws regions of interest"),
+            "cmd": "",
+            "tools": ("relation_propose", "idea_propose", "interpretation_record", "region_propose", "graph_query", "view_onion"),
+            "sessions": "",
+            "platform": ("Builds the graph from confirmed items only", "Computes the views: onion, coverage, timeline, horizon"),
+            "out": "graph, regions, syntheses",
+        },
+        {
+            "id": "develop",
+            "human": ("Rates the arguments of a spar and writes the balance", "Registers or concludes hypotheses"),
+            "cmd": "",
+            "tools": ("lead_record", "hypothesis_draft", "hypothesis_review", "experiment_design", "xrun_register"),
+            "sessions": "The critic runs in its own session, apart from the drafter.",
+            "platform": ("Ties each lead to its trigger in the corpus", "Freezes a design before runs are registered"),
+            "out": "pre-registered hypotheses",
+        },
+        {
+            "id": "write",
+            "human": ("Reads and releases drafts", "Reads the findings of check"),
+            "cmd": "",
+            "tools": ("draft_write", "draft_verify_next", "draft_verify_record", "report_prisma", "report_evidence", "export_bibliography"),
+            "sessions": "The verifier runs in its own session and wrote none of the draft.",
+            "platform": ("Computes the PRISMA, methods and evidence reports", "Links every sentence to the spans it cites"),
+            "out": "verified drafts and reports",
+        },
+        {
+            "id": "maintain",
+            "human": ("Chooses the digest channel", "Accepts or rejects curation proposals"),
+            "cmd": "",
+            "tools": ("watch_run", "feed_run", "digest_get", "lessons_list", "curation_propose"),
+            "sessions": "A scheduled session runs the watch cycles.",
+            "platform": ("Runs the due watch cycles", "Computes lessons from audits, disagreements and failed runs"),
+            "out": "a digest per cycle",
+        },
+    ),
+    "loops": (
+        {"from": "extract", "to": "gather", "label": "snowball", "what": "References of the included works bring new candidates, which are screened again."},
+        {"from": "maintain", "to": "gather", "label": "living review", "what": "Each watch cycle brings new papers into the corpus."},
+        {"from": "maintain", "to": "frame", "label": "lessons", "what": "Accepted curation proposals amend the protocol, the worked examples or a skill."},
+    ),
+    "call": (
+        {"who": "claude", "act": "Ask for work", "text": "mine_next, under the skill rf-mine."},
+        {"who": "platform", "act": "Lease a task", "text": "Creates a task with a 30-minute lease and stores its exact content as the input_blob."},
+        {"who": "claude", "act": "Read and judge", "text": "Reads the pinned document and decides what it says, with quotes."},
+        {"who": "claude", "act": "Record", "text": "mine_record, with the rows, the model and the skill."},
+        {"who": "platform", "act": "Guard", "text": "Checks the lease, the pass, the gate and every quote. An invalid call writes nothing."},
+        {"who": "platform", "act": "Append and fold", "text": "Appends the event to the session's log file; the projector folds it into the index."},
+        {"who": "human", "act": "Review", "text": "The hub page rebuilds when opened; the researcher's decisions go back through the CLI as human events."},
+    ),
+    "rules": (
+        ("Independence comes from sessions", "One MCP server serves one Claude Code session and its subagents, so a subagent cannot be the second pass. The platform refuses a session that has joined the other pass."),
+        ("Judging and bookkeeping never mix", "The platform never calls a model. Every judgement comes from Claude through a tool; every count, hash, sample and PRISMA number is computed, never typed."),
+        ("Human gates have no tool", "When a stage waits on the researcher, project_status lists the exact CLI command and Claude relays it."),
+        ("Events are the record", "Events are append-only. The index and every hub page can be rebuilt from them."),
+    ),
+}
+"""Declared text for the "How it works" tab (see module invariants). Not derived: a ruling on the
+wording changes it here."""
 
 
 def _tools(cat: sc.Catalog) -> list[dict[str, Any]]:
@@ -247,6 +375,7 @@ def build(ctx: HubContext) -> dict[str, Any]:
     out: dict[str, Any] = {
         "ready": True,
         "methods": dict(METHODS),
+        "run_map": RUN_MAP,
         "commands": [dict(c) for c in COMMANDS],
         "states": list(STATES),
         "catalog": None,
