@@ -172,6 +172,7 @@ BLURBS: Final[dict[str, str]] = {
     "platform": "Capabilities and the backlog.",
     "chat": "Spar with an agent over the corpus; you rate each argument and write the balance.",
     "contradictions": "Pairs of papers that may disagree, and your decisions on them.",
+    "levels": "Tier, autonomy level, who closes each gate, trust and the deferred review queue.",
     "learn": "How a project runs, stage by stage, and where yours stands.",
 }
 

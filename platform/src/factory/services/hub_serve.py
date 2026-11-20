@@ -102,6 +102,7 @@ PREWARM_ORDER: Final = (
     "landscape",
     "landscape_uses",
     "protocol",
+    "levels",
     "pipeline",
     "sources",
     "method",

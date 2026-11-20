@@ -34,6 +34,7 @@ NEW_PAGES = (
     "contradictions",
     "chat",
     "learn",
+    "levels",
 )
 CORE = {
     "shell",
@@ -224,6 +225,7 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
     # registry order (by likely use, as the prewarm order); the rail in shell.js reads differently
     assert list(hub_ui.PAGES) == [
         "protocol",
+        "levels",
         "overview",
         "pipeline",
         "corpus",
