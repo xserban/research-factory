@@ -44,6 +44,10 @@ class StagePlan(StrictModel):
     caps: dict[str, int] = Field(default_factory=dict)
     skipped: bool = False
     note: str = ""
+    second_pass: bool = False
+    """The step needs a second, independent pass (a separate run, session and model) to be
+    complete: extraction pass B, which a work needs opened before it is final. Data, so the
+    conductor starts it whatever the autonomy level; it is no human act and lowers no gate."""
 
     @model_validator(mode="after")
     def _known(self) -> Self:
@@ -76,6 +80,9 @@ class ProtocolTemplate(StrictModel):
     snowball_backward_rounds: int = Field(default=0, ge=0)
     press_lite: bool = False
     """Whether an independent PRESS-lite review (a separate session) follows the protocol."""
+    full_text_screening: bool = False
+    """Whether the protocol declares a one-pass full-text screening plan (included works only; no
+    calibration). Extraction needs a plan; `instantiate` adds it, with the same reviewers."""
 
     def instantiate(
         self,
@@ -97,6 +104,12 @@ class ProtocolTemplate(StrictModel):
         stray = {q.source for q in queries} - set(self.sources)
         if stray:
             raise ValueError(f"queries on sources the template does not name: {sorted(stray)}")
+        reviewers = (Reviewer(role=ReviewerRole.REVIEWER_OF_RECORD, actor=reviewer, kind="human"),)
+        full_text = (
+            ScreeningPlan(passes=1, calibration_size=0, reviewers=reviewers)
+            if self.full_text_screening
+            else None
+        )
         snowball = (
             SnowballPlan(max_backward_rounds=self.snowball_backward_rounds, max_forward_rounds=0)
             if self.snowball_backward_rounds
@@ -111,10 +124,9 @@ class ProtocolTemplate(StrictModel):
             screening=ScreeningPlan(
                 passes=1 if self.passes == 1 else 2,
                 stop_after_consecutive_excludes=self.stop_after_consecutive_excludes,
-                reviewers=(
-                    Reviewer(role=ReviewerRole.REVIEWER_OF_RECORD, actor=reviewer, kind="human"),
-                ),
+                reviewers=reviewers,
             ),
+            full_text_screening=full_text,
             extraction_schema=ExtractionSchema(
                 pack=self.pack,
                 pack_version=self.pack_version,
@@ -137,7 +149,7 @@ class TierPlan(StrictModel):
     tier: Tier
     stages: tuple[StagePlan, ...]
     limits: Limits | None
-    """None for the tiers with no cap (`pilot`, `systematic`)."""
+    """None for the tiers with no cap (`pilot`, `systematic`): the conductor then has no budget."""
     protocol_template: ProtocolTemplate | None
     report_template: ReportTemplate
 

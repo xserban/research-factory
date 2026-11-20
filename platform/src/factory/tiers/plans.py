@@ -50,6 +50,7 @@ def _stage(
     caps: dict[str, int] | None = None,
     skipped: bool = False,
     note: str = "",
+    second_pass: bool = False,
 ) -> StagePlan:
     return StagePlan(
         stage_id=stage_id,
@@ -57,6 +58,7 @@ def _stage(
         caps=caps or {},
         skipped=skipped,
         note=note,
+        second_pass=second_pass,
     )
 
 
@@ -77,6 +79,7 @@ _BRIEF_PROTOCOL = ProtocolTemplate(
     dual_extract_sample=0.01,
     snowball_backward_rounds=0,
     press_lite=False,
+    full_text_screening=True,
 )
 
 _DEEP_PROTOCOL = ProtocolTemplate(
@@ -92,6 +95,7 @@ _DEEP_PROTOCOL = ProtocolTemplate(
     dual_extract_sample=0.2,
     snowball_backward_rounds=1,
     press_lite=True,
+    full_text_screening=True,
 )
 
 
@@ -128,7 +132,8 @@ def _brief() -> TierPlan:
                 "extract",
                 skill=s,
                 caps={"passes": 1, "max_fields": 6},
-                note="a template schema, one pass",
+                note="a template schema; pass A, then pass B opened for the 1% dual sample",
+                second_pass=True,
             ),
             _stage("understand", skipped=True),
             _stage("develop", skipped=True),
@@ -172,6 +177,7 @@ def _deep() -> TierPlan:
                 skill=s,
                 caps={"max_fields": 6},
                 note="template schema; a sampled audit and agreement on a sample",
+                second_pass=True,
             ),
             _stage("understand", skipped=True),
             _stage(

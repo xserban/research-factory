@@ -25,9 +25,13 @@ from factory.model.screening import NonBlank
 
 CONDUCTOR_ID_RE = rf"^cnd_{ULID_RE}$"
 
-ConductorRole = Literal["proposer", "verifier", "auditor", "lead", "drafter", "critic"]
+ConductorRole = Literal[
+    "proposer", "second-pass", "verifier", "auditor", "lead", "drafter", "critic"
+]
 """`lead`, `drafter` and `critic` are the three runs of the develop step (the hypothesis engine's
-independence rule: three distinct sessions)."""
+independence rule: three distinct sessions). `second-pass` is the run that opens the second,
+independent pass of a step whose plan asks for one (extraction pass B), in a session and with a
+model of its own."""
 StepOutcome = Literal["complete", "failed", "lost"]
 PauseReason = Literal[
     "failed-run",
@@ -50,6 +54,8 @@ class ConductorStarted(StrictModel):
     max_minutes: int = Field(ge=1)
     max_runs: int = Field(ge=1)
     max_units_per_run: int = Field(ge=1)
+    second_pass_steps: tuple[NonBlank, ...] = ()
+    """The steps whose plan asks for a second pass (a `second-pass` role run after the proposer)."""
     plan_blob: Annotated[str, Field(pattern=BLOB_REF_RE)]
 
 

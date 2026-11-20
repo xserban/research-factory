@@ -533,6 +533,17 @@ STAGES.update(
             unit="maintain step",
             fixed_cap=1,
         ),
+        # Pass B of extraction, a run of its own: another model than pass A (the engine refuses a
+        # model both passes share) and, as every run, a session of its own. It extracts only the
+        # works the protocol's dual sample serves it.
+        "extract-b": StageSpec(
+            model="claude-haiku-5-5",
+            skill="rf-extract",
+            role="second extractor",
+            tools=STAGES["extract"].tools,
+            kinds=(),
+            unit="work extracted (pass B)",
+        ),
         "conduct-verify": StageSpec(
             model="claude-sonnet-5-5",
             skill="rf-conductor",
@@ -563,6 +574,7 @@ CONDUCT_STAGES: Final = (
     "develop-draft",
     "develop-critic",
     "maintain",
+    "extract-b",
     "conduct-verify",
     "conduct-audit",
 )
@@ -854,6 +866,10 @@ def _prompt(
         miner = f" of miner `{spec.miner}` (version {spec.miner_version})"
     if spec.skill == "rf-intuition" or stage in CONDUCT_STAGES:
         parameters = f"project `{slug}`, role `{spec.role}`, model `{spec.model}`, "
+    label = "A"
+    if stage == "extract-b":
+        label = "B"
+        parameters = f"project `{slug}`, pass_label `B`, role `{spec.role}`, model `{spec.model}`, "
     extra = ""
     if stage in CONDUCT_STAGES:
         extra = (
@@ -883,9 +899,9 @@ def _prompt(
             "steps.\n\n"
         )
     return (
-        f"You are pass A of stage `{stage}`{miner} for the Research Factory project `{slug}`. "
-        "Work through the factory MCP tools and follow exactly the skill below "
-        "(you are pass `A`).\n\n"
+        f"You are pass {label} of stage `{stage}`{miner} for the Research Factory project "
+        f"`{slug}`. Work through the factory MCP tools and follow exactly the skill below "
+        f"(you are pass `{label}`).\n\n"
         f"Parameters for every factory call: {parameters}skill `{spec.skill}`.\n\n"
         f"{extra}"
         f"Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. "

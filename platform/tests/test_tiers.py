@@ -65,6 +65,15 @@ def test_deep_limits_and_additions() -> None:
     assert plan.protocol_template is not None and plan.protocol_template.press_lite
 
 
+def test_the_second_pass_of_extraction_is_plan_data() -> None:
+    for tier in (Tier.BRIEF, Tier.DEEP):
+        assert [s.stage_id for s in plan_for(tier).stages if s.second_pass] == ["extract"]
+    for tier in (Tier.PILOT, Tier.SYSTEMATIC):
+        assert not any(s.second_pass for s in plan_for(tier).stages)
+    template = plan_for(Tier.BRIEF).protocol_template
+    assert template is not None and template.dual_extract_sample == 0.01
+
+
 def test_skipped_steps_are_computed_from_the_plan() -> None:
     steps = skipped_steps(Tier.BRIEF)
     for expected in (
@@ -115,6 +124,9 @@ def test_a_tier_template_builds_a_valid_protocol_through_the_service(
         question_id, criteria=_criteria(), queries=queries, reviewer=human.id
     )
     assert spec.extraction_schema is not None and len(spec.extraction_schema.fields) <= 6
+    # A one-pass full-text plan, so that extraction has a population (calibration is not asked).
+    assert spec.full_text_screening is not None
+    assert spec.full_text_screening.passes == 1 and spec.full_text_screening.calibration_size == 0
     result = record_protocol(
         explore_project,
         agent,

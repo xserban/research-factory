@@ -73,6 +73,9 @@ STEP_STAGE: Final[Mapping[str, str]] = {
 """The lifecycle ids of a plan the conductor can run, and the runner stage of each (for `develop`
 the first of its three role stages: `_DEVELOP_STAGES`)."""
 
+SECOND_PASS_STAGE: Final[Mapping[str, str]] = {"extract": "extract-b"}
+"""The runner stage of the `second-pass` run of a step (extraction pass B)."""
+
 _DEVELOP_STAGES: Final[Mapping[str, str]] = {
     "lead": "develop-lead",
     "drafter": "develop-draft",
@@ -149,7 +152,16 @@ class PlanLike(Protocol):
     @property
     def stages(self) -> Sequence[StageLike]: ...
     @property
-    def limits(self) -> LimitsLike: ...
+    def limits(self) -> LimitsLike | None:
+        """None means the plan has no budget (`pilot`, `systematic`): the conductor then applies
+        the defaults `UNCAPPED_*`, never an unlimited run."""
+        ...
+
+
+UNCAPPED_MINUTES: Final = 24 * 60
+UNCAPPED_RUNS: Final = 200
+UNCAPPED_PAPERS: Final = runner.MAX_UNIT_CAP
+"""The budget of a plan without limits: a plan with no cap still stops, at a day and 200 runs."""
 
 
 @dataclass(frozen=True)
@@ -253,22 +265,28 @@ def effective_kind(project: Project, gate_id: str) -> PolicyKind:
     return effective_policy(project, gate_id).kind
 
 
-def roles_of(project: Project, stage_id: str, level: AutonomyLevel) -> tuple[ConductorRole, ...]:
-    """The role runs of a step: always the proposer; a verifier and an auditor, each its own run,
-    when the level is not `attended` and an agent may close some gate of the step."""
+def roles_of(
+    project: Project, stage_id: str, level: AutonomyLevel, *, second_pass: bool = False
+) -> tuple[ConductorRole, ...]:
+    """The role runs of a step: always the proposer; the `second-pass` run right after it when the
+    plan asks for one (whatever the level); a verifier and an auditor, each its own run, when the
+    level is not `attended` and an agent may close some gate of the step."""
     if stage_id == "develop":
         return ("lead", "drafter", "critic")
+    first: tuple[ConductorRole, ...] = ("proposer", "second-pass") if second_pass else ("proposer",)
     kinds = _policy_kinds(project, stage_id)
     if level is not AutonomyLevel.ATTENDED and any(
         k is not PolicyKind.HUMAN for k in kinds.values()
     ):
-        return ("proposer", "verifier", "auditor")
-    return ("proposer",)
+        return (*first, "verifier", "auditor")
+    return first
 
 
 def _stage_of(stage_id: str, role: ConductorRole) -> str:
     if stage_id == "develop":
         return _DEVELOP_STAGES[role]
+    if role == "second-pass":
+        return SECOND_PASS_STAGE[stage_id]
     if role == "verifier":
         return "conduct-verify"
     if role == "auditor":
@@ -349,7 +367,7 @@ def _decide(
     position: tuple[int, str, ConductorRole] | None = None
     waiting_gate: str | None = None
     for index, stage_id in enumerate(meta.steps):
-        roles = roles_of(project, stage_id, level)
+        roles = roles_of(project, stage_id, level, second_pass=stage_id in meta.second_pass_steps)
         todo = next((r for r in roles if (index, r) not in closed), None)
         if todo is not None:
             pre = [
@@ -432,6 +450,11 @@ def pending_units(project: Project, stage: str) -> int:
 # ------------------------------------------------------------------------------------ commands
 
 
+def _second_pass(stage: StageLike) -> bool:
+    """Whether the plan's stage asks for a second pass (a plan type without the field has none)."""
+    return bool(getattr(stage, "second_pass", False))
+
+
 def _plan_blob(project: Project, plan: PlanLike, steps: Sequence[str]) -> str:
     view: dict[str, JsonValue] = {
         "tier": str(getattr(plan.tier, "value", plan.tier)),
@@ -446,11 +469,16 @@ def _plan_blob(project: Project, plan: PlanLike, steps: Sequence[str]) -> str:
             }
             for s in plan.stages
         ],
-        "limits": {
-            "max_papers": plan.limits.max_papers,
-            "max_minutes": plan.limits.max_minutes,
-            "max_runs": plan.limits.max_runs,
-        },
+        "limits": (
+            None
+            if plan.limits is None
+            else {
+                "max_papers": plan.limits.max_papers,
+                "max_minutes": plan.limits.max_minutes,
+                "max_runs": plan.limits.max_runs,
+            }
+        ),
+        "second_pass": [s.stage_id for s in plan.stages if _second_pass(s) and not s.skipped],
     }
     return project.blobs.put(canonical_json(view))
 
@@ -471,11 +499,17 @@ def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
         raise _refuse("plan", f"no runner stage for: {', '.join(unsupported)}")
     if not live:
         raise _refuse("plan", "every stage of the plan is skipped")
+    second = tuple(s.stage_id for s in plan.stages if not s.skipped and _second_pass(s))
+    unsupported = [s for s in second if s not in SECOND_PASS_STAGE]
+    if unsupported:
+        raise _refuse("plan", f"no second-pass runner stage for: {', '.join(unsupported)}")
     limits = plan.limits
     budget = Budget(
-        max_minutes=max(1, limits.max_minutes),
-        max_runs=max(1, limits.max_runs),
-        max_units_per_run=max(1, min(limits.max_papers, runner.MAX_UNIT_CAP)),
+        max_minutes=UNCAPPED_MINUTES if limits is None else max(1, limits.max_minutes),
+        max_runs=UNCAPPED_RUNS if limits is None else max(1, limits.max_runs),
+        max_units_per_run=max(
+            1, min(UNCAPPED_PAPERS if limits is None else limits.max_papers, runner.MAX_UNIT_CAP)
+        ),
     )
     conductor_id = project.ids.new("cnd")
     blob = _plan_blob(project, plan, live)
@@ -487,6 +521,7 @@ def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
         max_minutes=budget.max_minutes,
         max_runs=budget.max_runs,
         max_units_per_run=budget.max_units_per_run,
+        second_pass_steps=second,
         plan_blob=blob,
     )
     with project.writing():
@@ -698,7 +733,12 @@ def conductor_status(
         for i in range(len(meta.steps))
         if all(
             (i, r) in closed
-            for r in roles_of(project, meta.steps[i], AutonomyLevel(meta.autonomy_level))
+            for r in roles_of(
+                project,
+                meta.steps[i],
+                AutonomyLevel(meta.autonomy_level),
+                second_pass=meta.steps[i] in meta.second_pass_steps,
+            )
         )
     )
     state: Literal["running", "waiting", "paused"] = (

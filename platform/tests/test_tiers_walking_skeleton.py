@@ -26,7 +26,7 @@ from factory.errors import FactoryValidationError
 from factory.events.envelope import Actor, Event
 from factory.events.reader import read_all, read_typed
 from factory.model.levels import AutonomyLevel, Tier
-from factory.model.protocol import Criterion, PlannedQuery, ScreeningPlan, ScreeningStage
+from factory.model.protocol import Criterion, PlannedQuery, ScreeningStage
 from factory.model.references import Decision, LinkState
 from factory.model.screening import Channel, PassLabel, ScreeningItem, Verdict
 from factory.model.search import QueryKind, QuerySpec
@@ -68,7 +68,9 @@ SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 SKILL = "rf-brief@1a2b3c4d"
 MECHANICAL_HUMAN_ATTRIBUTED = {"document.converted", "document.conversion_failed"}
-STEPS = ("frame", "gather", "screen", "acquire", "extract", "write")
+STEPS = ("frame", "gather", "screen", "acquire", "extract", "extract-b", "write")
+"""The runs the conductor starts on the stock brief plan: `extract-b` is the second-pass run of
+the extract step (a separate run and session; the plan's `second_pass` data asks for it)."""
 HUMAN_GATES = {
     "protocol.ready",
     "protocol.press_confirm",
@@ -156,7 +158,7 @@ class Scripted:
         assert unit_cap >= 1 and project is self.project
         run_id = project.ids.new("rnr")
         self.runs.append((stage, run_id))
-        getattr(self, f"_{stage}")(run_id)
+        getattr(self, "_" + stage.replace("-", "_"))(run_id)
         self.done.add(stage)
         return run_id
 
@@ -172,10 +174,7 @@ class Scripted:
             for s in template.sources
         )
         spec = template.instantiate(question, criteria=_criteria(), queries=queries, reviewer="obd")
-        # The engine extracts only from a work that passed full text (a plan must be declared):
-        # the template names none, so the frame step adds a one-pass plan (reported as a gap).
-        full_text = ScreeningPlan(passes=1, calibration_size=0, reviewers=spec.screening.reviewers)
-        spec = spec.model_copy(update={"full_text_screening": full_text})
+        assert spec.full_text_screening is not None  # the stock template declares the plan
         record_protocol(self.project, agent, spec, ready=True)
 
     def _gather(self, run: str) -> None:
@@ -212,22 +211,29 @@ class Scripted:
         run_convert(self.project, make_registry(StubConverter()))
 
     def _extract(self, run: str) -> None:
-        # Full-text screening to the end in one session, then extraction pass A in a second and
-        # pass B (a second model: it opens the pass; only the dual sample is served) in a third.
+        # Full-text screening to the end in one session, then extraction pass A in a second.
+        # (No conductor step screens full text after `acquire`: reported as a gap by lane L15.)
         _service_screen_to_end(self.project, self.actor(run), PassLabel.A, lambda _w: None)
-        for label, model in ((PassLabel.A, "claude-opus-5-5"), (PassLabel.B, "claude-sonnet-5-5")):
-            extractor = self.actor(run, model=model)
-            for _ in range(20):
-                batch = extract_next(self.project, extractor, label).batch
-                if batch is None:
-                    break
-                claims = [claim_input()] if label is PassLabel.A else []
-                result = extract_record(
-                    self.project, extractor, batch.task_id, [_r()], claims, finish=True
-                )
-                assert result.completed, (result.rows.rejected, result.claims.rejected)
-            else:
-                raise AssertionError("too many tasks")
+        self._extract_pass(run, PassLabel.A, "claude-opus-5-5")
+
+    def _extract_b(self, run: str) -> None:
+        # The second-pass run: its own session and a second model; it opens pass B, and only the
+        # works of the dual sample are served.
+        self._extract_pass(run, PassLabel.B, "claude-sonnet-5-5")
+
+    def _extract_pass(self, run: str, label: PassLabel, model: str) -> None:
+        extractor = self.actor(run, model=model)
+        for _ in range(20):
+            batch = extract_next(self.project, extractor, label).batch
+            if batch is None:
+                break
+            claims = [claim_input()] if label is PassLabel.A else []
+            result = extract_record(
+                self.project, extractor, batch.task_id, [_r()], claims, finish=True
+            )
+            assert result.completed, (result.rows.rejected, result.claims.rejected)
+        else:
+            raise AssertionError("too many tasks")
 
     def _write(self, run: str) -> None:
         self.actor(run)
@@ -273,7 +279,7 @@ def skeleton(
     )
     state_goal(project, project.human_actor(), "Does linear attention match softmax on vision?")
     scripted = Scripted(project, _sources(mock_sources))
-    conductor.begin_conductor(project, plan_for(Tier.BRIEF))  # type: ignore[arg-type]
+    conductor.begin_conductor(project, plan_for(Tier.BRIEF))
     closed: set[tuple[str, str]] = set()
     waits: list[tuple[str, str, int]] = []
     statuses: list[conductor.ConductorStatus] = []
@@ -339,6 +345,20 @@ def test_every_run_has_sessions_of_its_own(skeleton: Skeleton) -> None:
     assert len(seen) >= 4
     started = [e.payload["run_id"] for e in _events(project) if e.type == "conductor.step_started"]
     assert started == [run for _, run in scripted.runs]
+
+
+def test_the_second_pass_is_a_separate_run_in_a_separate_session(skeleton: Skeleton) -> None:
+    project, scripted = skeleton.project, skeleton.runner
+    runs = dict((stage, run) for stage, run in scripted.runs)
+    assert not scripted.sessions[runs["extract"]] & scripted.sessions[runs["extract-b"]]
+    started = [
+        (e.payload["stage_id"], e.payload["role"])
+        for e in _events(project)
+        if e.type == "conductor.step_started"
+    ]
+    assert ("extract", "proposer") in started and ("extract", "second-pass") in started
+    plan_stage = plan_for(Tier.BRIEF).stage("extract")
+    assert plan_stage.second_pass  # the requirement is plan data, not typed in the conductor
 
 
 def test_a_human_only_gate_made_the_conductor_wait(skeleton: Skeleton) -> None:
@@ -508,7 +528,7 @@ def test_a_supervised_gate_is_closed_by_an_independent_session_and_audited(
         started.append(stage)
         return "rnr_never"
 
-    conductor.begin_conductor(project, plan_for(Tier.BRIEF))  # type: ignore[arg-type]
+    conductor.begin_conductor(project, plan_for(Tier.BRIEF))
     status = conductor.advance(
         project,
         start_run=never,

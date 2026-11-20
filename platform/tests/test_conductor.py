@@ -37,6 +37,7 @@ class FStage:
     caps: Mapping[str, int] = field(default_factory=dict)
     skipped: bool = False
     note: str = ""
+    second_pass: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class FLimits:
 class FPlan:
     tier: Tier
     stages: tuple[FStage, ...]
-    limits: FLimits = FLimits()
+    limits: FLimits | None = FLimits()
 
 
 def plan(*ids: str, skipped: tuple[str, ...] = (), limits: FLimits | None = None) -> FPlan:
@@ -424,6 +425,8 @@ def test_the_stages_are_declared_without_the_gate_acts() -> None:
     for key in runner.CONDUCT_STAGES:
         spec = runner.STAGES[key]
         assert re.match(STAGE_KEY_RE, key) and runner.is_stage_key(key)
+        if key == "extract-b":  # a work queue of its own: see the second-pass tests
+            continue
         assert spec.model == "claude-sonnet-5-5" and spec.fixed_cap == 1
         assert all(t.startswith("mcp__factory__") for t in spec.tools)
         assert not [t for t in spec.tools if re.search(r"release|press|amend|confirm|decide", t)]
@@ -570,3 +573,63 @@ def test_the_platform_imports_no_model_sdk() -> None:
     )
     offenders = [str(p) for p in root.rglob("*.py") if sdk.search(p.read_text(encoding="utf-8"))]
     assert offenders == []
+
+
+# ------------------------------------------------------------------------------ the second pass
+
+
+def second_plan(*, limits: FLimits | None = None, unlimited: bool = False) -> FPlan:
+    stages = tuple(FStage(i, second_pass=i == "extract") for i in STEPS)
+    return FPlan(Tier.BRIEF, stages, None if unlimited else limits or FLimits())
+
+
+def test_a_second_pass_is_a_separate_run_after_the_proposer(
+    project: Project, fake: FakeRunner
+) -> None:
+    run = conductor.begin_conductor(project, second_plan())
+    started = ConductorStarted.model_validate(_events(project, "conductor.started")[0].payload)
+    assert started.second_pass_steps == ("extract",) and run.steps == STEPS
+    status = drive(project, fake)
+    assert status.state == "finished"
+    # `extract` has nothing pending for pass A (no run), but pass B is opened by its own run
+    assert fake.stages == ["frame", "gather", "acquire", "extract-b", "write"]
+    roles = [
+        (e.payload["stage_id"], e.payload["role"])
+        for e in _events(project, "conductor.step_started")
+    ]
+    assert ("extract", "second-pass") in roles
+
+
+def test_the_second_pass_runs_at_every_autonomy_level(
+    settings: Settings, clock: FixedClock, fake: FakeRunner
+) -> None:
+    project = make(settings, clock, level="autonomous")
+    assert conductor.roles_of(
+        project, "extract", conductor.AutonomyLevel.ATTENDED, second_pass=True
+    ) == (
+        "proposer",
+        "second-pass",
+    )
+    assert "second-pass" not in conductor.roles_of(
+        project, "extract", conductor.AutonomyLevel.ATTENDED
+    )
+
+
+def test_the_second_pass_stage_uses_another_model_and_the_extraction_tools() -> None:
+    first, second = runner.STAGES["extract"], runner.STAGES["extract-b"]
+    assert second.model != first.model and second.tools == first.tools
+    assert "extract-b" in runner.CONDUCT_STAGES
+    assert conductor.SECOND_PASS_STAGE["extract"] == "extract-b"
+
+
+def test_a_second_pass_without_a_runner_stage_is_refused(project: Project) -> None:
+    stages = tuple(FStage(i, second_pass=i == "frame") for i in STEPS)
+    with pytest.raises(FactoryValidationError):
+        conductor.begin_conductor(project, FPlan(Tier.BRIEF, stages))
+    assert _events(project, "conductor.started") == []
+
+
+def test_a_plan_without_limits_has_the_default_budget(project: Project) -> None:
+    run = conductor.begin_conductor(project, second_plan(unlimited=True))
+    assert run.budget.max_runs == conductor.UNCAPPED_RUNS
+    assert run.budget.max_minutes == conductor.UNCAPPED_MINUTES
