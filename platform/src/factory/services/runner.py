@@ -1233,6 +1233,10 @@ def start_run(
         counts = pending_units(project, stage)
         if sum(counts.values()) == 0:
             raise _refuse("stage", f"no pending unit for stage {stage!r}")
+        if assignment is not None:
+            from factory.services.spar_v2 import check_assignment
+
+            check_assignment(project, assignment.request_id, assignment.role, assignment.work_id)
         run_id = project.ids.new("rnr")
         folder = _run_dir(project, run_id)
         mcp_path = folder / "mcp.json"

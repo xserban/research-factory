@@ -317,6 +317,23 @@ def _check_startable(current: Plan, *, retry: bool) -> Slot:
     return slot
 
 
+def check_assignment(
+    project: Project, request_id: str, role: str, work_id: str | None, *, retry: bool = True
+) -> None:
+    """Refuse (field `request_id`, nothing written) a role start that is not what the plan says
+    now: the request's next role (and paper), no run open, the budget open. The runner calls this
+    under its run lock, so two starters cannot both pass for one slot."""
+    current = progress(project, request_id)
+    slot = _check_startable(current, retry=retry)
+    if slot != Slot(role, work_id):
+        raise _issue(
+            "request_id",
+            f"{request_id}: the next role is {slot.role}"
+            + ("" if slot.work_id is None else f" of {slot.work_id}")
+            + f", not {role}",
+        )
+
+
 def advance(
     project: Project,
     request_id: str,

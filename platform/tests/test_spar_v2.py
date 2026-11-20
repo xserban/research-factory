@@ -997,3 +997,64 @@ def test_a_role_run_cannot_write_through_another_roles_recorder(
     _refused_as_run(lambda: sv.record_checks(project, _agent(4), cover, checks))
     _refused_as_run(lambda: sv.record_reading(project, _agent(4), cover, w[0], reading, [section]))
     _end(v2_env, cover)
+
+
+# ------------------------------------------------------- the start checks the plan (the race)
+
+
+def test_start_run_refuses_an_assignment_that_is_not_the_next_role(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    w = sorted(world)
+    request = _request(project)
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    _search(project, world, request, run)
+    _end(v2_env, run)
+    reader = _open_run(project)  # the watcher started the reader of w[0]
+    _end(v2_env, reader)  # ... which ended without reading: the next role is w[0] again (failed)
+    before = (_events(project), len(v2_env.calls))
+    stale = runner.RoleAssignment(request, "read", w[1])  # a slot that is not the next one
+    with pytest.raises(FactoryValidationError) as err:
+        runner.start_run(project, "spar2-read", launcher=v2_env, assignment=stale)
+    assert "next role" in str(err.value)
+    assert (_events(project), len(v2_env.calls)) == before  # no runner.started, no process
+    again = runner.RoleAssignment(request, "read", w[0])
+    assert runner.start_run(project, "spar2-read", launcher=v2_env, assignment=again)
+    _end(v2_env, _open_run(project))
+
+
+def test_the_watcher_chains_the_next_role_after_a_run_closes(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    request = _request(project)
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    _search(project, world, request, run)
+    calls = len(v2_env.calls)
+    _end(v2_env, run)  # the process exits; nothing but the finish path starts the next role
+    assert len(v2_env.calls) == calls + 1
+    nxt = _open_run(project)
+    assert nxt != run and _stage(project, nxt) == "spar2-read"
+    assert sv.bound_role(project, nxt) == (request, "read", sorted(world)[0])
+
+
+def test_a_sheet_with_no_argument_is_checked_by_a_critic_run_that_ends(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    w = sorted(world)
+    request = _request(project, max_sessions=5)  # no readers
+    run = sv.advance(project, request, launcher=v2_env)
+    assert run is not None
+    sheet = _search(project, world, request, run)
+    _end(v2_env, run)
+    for n, section in ((20, "against"), (21, "for")):
+        writer = _open_run(project)
+        sh.close_section(project, _agent(n), sheet, section, run_id=writer)
+        _end(v2_env, writer)
+    critic = _open_run(project)
+    assert _stage(project, critic) == "spar2-critic"
+    assert sv.progress(project, request).next is not None
+    _end(v2_env, critic)  # nothing to check: the critic is done when its run has ended
+    got = cr.view_request(project, request)
+    assert got.next_role == "cover" and w
