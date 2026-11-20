@@ -39,6 +39,7 @@ from factory.services import (
     hub_landscape,
     hub_learn,
     hub_lenses,
+    hub_levels,
     hub_living,
     hub_method,
     hub_mining,
@@ -656,6 +657,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     hub_landscape.USES: build_landscape_uses,
     # stubs of the seven ported pages (step 0); each module's `build` replaces its stub later
     "protocol": hub_protocol.build,
+    "levels": hub_levels.build,
     "pipeline": hub_pipeline.build,
     "sources": hub_sources.build,
     "method": hub_method.build,

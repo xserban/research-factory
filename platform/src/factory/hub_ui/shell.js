@@ -90,7 +90,7 @@ function info(html, label='About this'){ const id='p'+(++popN); POPS.set(id, htm
 
 /* ---------- pages for the palette (the whole hub, grouped) ---------- */
 const PAGES = [
-  ['Frame','Protocol','protocol.html'],
+  ['Frame','Protocol','protocol.html'],['Frame','How this study runs','levels.html'],
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
@@ -115,6 +115,7 @@ const ICON = {
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
   landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
   living:'<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  levels:'<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
   protocol:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13l2 2 4-4"/>',
   pipeline:'<circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h3M14 12h3"/>',
   sources:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.300 8-3V6M4 12c0 1.700 3.600 3 8 3s8-1.300 8-3"/>',
@@ -138,6 +139,7 @@ const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.do
 const RAIL = [
   ['group','Frame'],
   ['protocol','Protocol','protocol.html'],
+  ['levels','How this study runs','levels.html'],
   ['-'],
   ['overview','Overview','overview.html'],
   ['pipeline','Pipeline','pipeline.html'],

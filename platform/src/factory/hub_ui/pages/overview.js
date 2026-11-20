@@ -17,6 +17,7 @@ HUB.load(['shell', 'overview']).then(d => {
 .ov-hero{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:40px;align-items:start;padding:20px 0 8px}
 .ov-hero .lead{max-width:34ch;margin-top:18px}
 .ov-hero .sec-head,.ov-panels .sec-head{margin:0}.ov-hero .lead .info{width:16px;height:16px}
+.ov-levels{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
 .ov-next{display:flex;flex-direction:column;gap:6px}
 .ov-next .btn{height:40px;justify-content:space-between;width:100%;text-decoration:none}
 .ov-next .btn .n{font-family:var(--f-mono);font-size:var(--t-xs);opacity:.8}
@@ -90,11 +91,20 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
       <span class="row"><span>${esc(GATE[a.gate] || H.pretty(a.gate))}</span><span class="n mono">${fmt(a.count)}</span></span>
       ${a.command ? `<span class="cmd">${esc(a.command)}</span>` : ''}</button>`).join('');
 
+  /* Tier and autonomy level as two small badges (the level statement of the payload); a click opens the levels page. */
+  function levelBadges() {
+    const ls = O.level_statement;
+    if (!ls) return '';
+    const tier = ls.tier || 'tier not declared';
+    const unconfirmed = ls.human_confirmed ? '' : ' · not human-confirmed';
+    return `<p class="ov-levels"><a class="chip" href="levels.html" title="How this study runs">Tier: ${esc(tier)}</a> <a class="chip" href="levels.html" title="How this study runs">Autonomy: ${esc(ls.autonomy_level)}${esc(unconfirmed)}</a></p>`;
+  }
   main.innerHTML = `
 <section class="ov-hero">
   <div>
     ${H.header({ kicker: `Living review · ${H.term('protocol')}`, title: H.pretty(H.RF.slug), level: 1 })}
     <p class="lead">${fmt(lead.included)} papers made it through ${H.term('screened', 'screening')}. ${hum.coded ? share(sharePct) + ' of the systems run with no human in the loop.' : ''}${H.info(`<b>What it shows</b>The headline result of the review so far.<p><span class=k>How it's computed.</span> ${fmt(lead.included)} is the number included in the screening flow, out of ${fmt(lead.identified)} records identified. The share is the ${fmt(hum.none)} papers with human role "none" divided by the ${fmt(hum.coded)} papers that have a human role coded (${fmt(hum.not_coded)} not coded are left out): ${sharePct}%.</p><p>${esc((O.methods || {}).human_role || '')}</p>`, 'How these figures are computed')}</p>
+    ${levelBadges()}
   </div>
   <nav class="ov-next" aria-label="Next actions">
     <a class="btn primary" href="corpus.html">Browse papers <span class="n">${fmt(lead.included)}</span></a>
