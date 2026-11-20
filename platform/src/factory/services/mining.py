@@ -50,6 +50,7 @@ from factory.services.agreement import Outcome, final_outcomes
 from factory.services.call_memo import entering, memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
+from factory.services.dedup import absorbed_ids
 from factory.services.document_read import default_conversion
 from factory.services.extraction import (
     ExtractBatchContent,
@@ -103,7 +104,8 @@ _BATCH = 500
 
 def _outcome_works(project: Project, stage: ScreeningStage) -> Iterator[str]:
     outcomes = final_outcomes(project, stage=stage)
-    yield from sorted(w for w, o in outcomes.items() if o is Outcome.INCLUDED)
+    absorbed = absorbed_ids(project)  # a merged duplicate is mined as its primary, once
+    yield from sorted(w for w, o in outcomes.items() if o is Outcome.INCLUDED and w not in absorbed)
 
 
 def _corpus_works(project: Project) -> Iterator[str]:

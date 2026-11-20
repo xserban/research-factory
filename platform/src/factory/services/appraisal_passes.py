@@ -82,6 +82,7 @@ def appraisal_population(project: Project) -> list[str]:
     """The works to appraise, sorted: those included at the last declared screening stage (full
     text when the protocol declares it, else title/abstract) that have a conversion. Read-only;
     the caller syncs the index."""
+    from factory.services.dedup import absorbed_ids
     from factory.services.document_read import default_conversion, promoted_works
     from factory.services.extraction import extraction_population
 
@@ -89,7 +90,8 @@ def appraisal_population(project: Project) -> list[str]:
     if protocol is None:
         return []
     if protocol.spec.full_text_screening is not None:
-        works = extraction_population(project)
+        absorbed = absorbed_ids(project)  # a duplicate merged later is appraised as its primary
+        works = [w for w in extraction_population(project) if w not in absorbed]
     else:
         works = sorted(promoted_works(project))
     return [w for w in works if default_conversion(project, w) is not None]
