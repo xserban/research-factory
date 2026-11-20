@@ -209,3 +209,7 @@ Recommended DECIDE as written, no conflict with a Decided entry, no real choice;
 10, 11, 12, 13, 27, 28, 30, 31, 33, 34, 35, 54, 76, 77, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 104, 105, 106, 107, 108, 109, 110, 111, 112, 114, 115, 116, 117, 120, 126, 128, 131, 135, 137, 140, 148, 149, 150, 151, 152, 153, 154, 155, C-1
 
 Notes for the apply step: 82 and 136 are decided together (Q7); 116 before 9 (Q9); C-1 receives a real number when applied (the next free number after 155, 156 unless another entry is added first); 128 requires the slice 4b spec text to be amended in the same change; 79 item 2 stays recorded as withdrawn by 81; 14 only if Q4 is answered A.
+
+## Outcome
+
+Accepted in full on 2026-11-20 (all recommendations); applied in 678c995e (decisions) and 433aa280 (slice 4b spec, decision 128). Result: 150 Decided, 1 Superseded (14), 5 Open (16, 19, 20, 21, 132), 0 Proposed; C-1 is now decision 156.
