@@ -114,6 +114,8 @@ class Stop:
     event_id: str | None
     figure_id: str | None
     of: str | None = None
+    document_id: str | None = None
+    primary_id: str | None = None
 
     @classmethod
     def make(
@@ -131,10 +133,12 @@ class Stop:
         label: str | None = None,
         figure_id: str | None = None,
         event_id: str | None = None,
+        document_id: str | None = None,
+        primary_id: str | None = None,
     ) -> Stop:
         return cls(
             stage, STAGES.index(stage), iso(ts), actor_kind, actor, model, outcome, criterion,
-            text, quote, label, event_id, figure_id,
+            text, quote, label, event_id, figure_id, None, document_id, primary_id,
         )  # fmt: skip
 
 
@@ -174,7 +178,16 @@ def _stop(work_id: str, s: TrailStep) -> Stop | None:
     crit = str(d["criterion"]).rsplit(":", 1)[-1] if "criterion" in d else None
 
     def make(stage: str, outcome: str, **kw: Any) -> Stop:
-        return Stop.make(stage, s.at, outcome, event_id=s.event_id, **kw)
+        doc, prim = d.get("document"), d.get("primary")
+        return Stop.make(
+            stage,
+            s.at,
+            outcome,
+            event_id=s.event_id,
+            document_id=str(doc) if doc else None,
+            primary_id=str(prim) if prim else None,
+            **kw,
+        )
 
     if s.kind == "found":
         method = str(d.get("method", ""))
@@ -506,7 +519,8 @@ def journey_index(
     extra: Mapping[str, Sequence[Stop]] | None = None,
 ) -> dict[str, Any]:
     """Stop lists to embed in a static page: per work (the included works, or `all`) a list of
-    `[stage index, ts, actor kind, model, outcome, criterion, text, quote, event id]` over own
+    `[stage index, ts, actor kind, model, outcome, criterion, text, quote, event id, document
+    id, primary id]` over own
     stops (the `build_stops` list, `extra` included), texts and quotes cut to `text_limit`.
     `bytes` is the compact JSON size of `works`."""
     if scope not in ("included", "all"):
@@ -525,6 +539,8 @@ def journey_index(
                 _cut(s.text, text_limit),
                 _cut(s.quote, text_limit),
                 s.event_id,
+                s.document_id,
+                s.primary_id,
             ]
             for s in build_stops(i, trails.get(i, ()), extra.get(i, ()))
         ]

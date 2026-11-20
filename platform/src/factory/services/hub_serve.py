@@ -6,41 +6,49 @@ Invariants:
 - Read-only except `snowball_add`, which records one `inbox.link_added` as the local human through
   `inbox.add_links` (the researcher supplies a work). Everything else reads the project and writes
   only under `<project>/site/hub-ui/`.
-- One fingerprint covers every payload: the event log (count and greatest id per event type, summed)
-  and the hub code (`code_hash`: the `hub_*` services and the served assets). Finer per-payload keys
-  were not cheap: a payload reads through shared inputs (flow ledger, graph, layers) that span most
-  event types. The one exception is a payload listed in `hub_build.PAYLOAD_EVENTS` (the Landscape:
-  a 26 to 60 s read): its key is the count and greatest id of the event types it names plus the
-  hub code and the technique code, so a feed, runner or page event never rebuilds it. A payload on
-  disk is served only when its recorded fingerprint is the current one.
-- Prewarm (on unless `FACTORY_HUB_PREWARM=0`): every payload is queued once per fingerprint, in
-  the order a researcher is likely to open them, grids last; a request for one jumps the queue.
-  The fingerprint is checked at most every `WATCH_SECONDS`. A payload on disk for an older
-  fingerprint is served as `Stale` (200 with `X-Hub-Stale`) while the fresh one is built.
-- Payloads are built on demand by one worker thread, one build at a time, all stale payloads that
-  were asked for sharing one `HubContext` (the flow ledger takes about 80 s on the pilot). A request
-  never waits for a build: it gets `Building` (the server answers 503 with `Retry-After`). A payload
-  that failed at a fingerprint is not tried again until the fingerprint changes or
-  `FAILED_RETRY_SECONDS` pass.
-- The disk file `<name>.json` is written first, then `<name>.fp`; a payload without a matching
-  `.fp` is stale.
+- Every payload has its own fingerprint: the count and greatest id of the event types it reads
+  (`hub_build.PAYLOAD_INPUTS`; a payload with no entry reads every event; the Landscape pair reads
+  `hub_build.PAYLOAD_EVENTS` and adds the technique code) plus the hub code (`code_hash`: the
+  `hub_*` services and the served assets). A payload on disk is current only when its recorded
+  fingerprint
+  is its own current one, so an event a payload does not read leaves it fresh.
+- Builders never run in the server process. A build is a child process (`spawn_builder`: `factory
+  hub build --payloads-only --only <batch>` at a lower CPU priority, same environment) that writes
+  each payload and its `.json.gz` into a scratch directory under the cache; the service moves the
+  files in (gzip, json, then `.fp`) and records the fingerprint taken before the child started.
+- Prewarm (on unless `FACTORY_HUB_PREWARM=0`): every payload not current is queued once per
+  fingerprint, in the order a researcher is likely to open them, grids last; a request for one
+  jumps the queue. The fingerprints are checked at most every `WATCH_SECONDS`.
+- One worker thread, one child at a time. It takes up to `BATCH_MAX` queued payloads after a short
+  `BATCH_WINDOW` (the payloads of one page arrive together) so they share one context in the
+  child (the flow ledger takes about 80 s on the pilot). A request never waits for a build: it gets
+  `Building` (503 with `Retry-After`), or the older file as `Stale` (200 with `X-Hub-Stale`). Both
+  carry the ETag of the fingerprint the file was built for, so a browser keeps and revalidates
+  them. A payload whose child failed at a fingerprint is not tried again until the fingerprint
+  changes or `FAILED_RETRY_SECONDS` pass; the exit code and the last stderr lines are logged.
+- The `.json.gz` and `.json` of a payload are written before its `.fp`; a payload without a
+  matching `.fp` is stale.
 - No function here calls a model or the network.
 """
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+import zipfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import Any, Final
 
@@ -50,7 +58,6 @@ from factory.inbox.links import parse_link
 from factory.model.screening import Channel
 from factory.model.work_ids import WORK_ID_RE
 from factory.services import (
-    call_memo,
     hub_build,
     hub_costs,
     hub_landscape,
@@ -105,6 +112,14 @@ PREWARM_ORDER: Final = (
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the
 mining data is loaded); it comes last in a prewarm."""
+BATCH_WINDOW: float = 0.3
+"""Seconds the worker waits, before it starts a child, for the other payloads of the same page."""
+BATCH_MAX: Final = 4
+"""Payloads one child builds (they share its context); a request waits for the child running."""
+BUILD_NICE: Final = 10
+"""CPU niceness of the child, so a build never starves the server or other work."""
+CHILD_TIMEOUT: Final = 4 * 3600.0
+POLL_SECONDS: Final = 1.0
 PAYLOAD_NAME: Final = re.compile(r"^[a-z][a-z0-9_.-]{0,80}$")
 SNOWBALL_NOTE: Final = "added to the snowball from the hub (Foundations)"
 _LINK_ORDER: Final = ("doi", "arxiv", "openalex", "pmid", "pmcid")
@@ -134,6 +149,13 @@ class Asset:
     content_type: str
     immutable: bool
     """True when the request named the current version: cacheable for a year."""
+    gz: bytes = b""
+    """The body gzipped, compressed once per process (empty for a type that does not compress)."""
+
+
+@cache
+def _gzipped_asset(name: str, version: str) -> bytes:
+    return gzip.compress(hub_ui.asset_bytes(name), 9, mtime=0)
 
 
 def asset(name: str, version: str | None) -> Asset | None:
@@ -141,7 +163,11 @@ def asset(name: str, version: str | None) -> Asset | None:
     found = hub_ui.ASSETS.get(name)
     if found is None:
         return None
-    return Asset(hub_ui.asset_bytes(name), found[1], version == hub_ui.asset_version())
+    current = hub_ui.asset_version()
+    gz = (
+        _gzipped_asset(name, current) if found[1].startswith(("text/", "application/json")) else b""
+    )
+    return Asset(hub_ui.asset_bytes(name), found[1], version == current, gz)
 
 
 # ---------------------------------------------------------------- fingerprint
@@ -158,9 +184,9 @@ def code_hash() -> str:
 
 
 def fingerprint(project: Project, name: str | None = None) -> str:
-    """The version of payload `name`: for most payloads (and for `None`) the event log head and the
-    hub code; for a payload in `hub_build.PAYLOAD_EVENTS`, the head of its own event types, the hub
-    code and the technique code.
+    """The version of payload `name`: the head of the event types it reads (`hub_build.reads`) and
+    the hub code; for a payload in `hub_build.PAYLOAD_EVENTS` the technique code too. `None` is
+    every event.
 
     Reads the projected index (`type_counts`), not the log files: every writer projects on write,
     so the index is current whenever an event has landed."""
@@ -175,10 +201,16 @@ def _fingerprint_of(counts: TypeCounts, name: str | None) -> str:
             f"|technique:{hub_landscape.code_stamp()}"
         )
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
-    total = sum(n for n, _ in counts.values())
-    last = max((m for _, m in counts.values()), default="")
+    hits = [v for t, v in counts.items() if name is None or hub_build.reads(name, t)]
+    total = sum(n for n, _ in hits)
+    last = max((m for _, m in hits), default="")
     raw = f"events:{total}:{last}|code:{code_hash()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def key_of(name: str) -> str | None:
+    """The fingerprint key of a queue entry: grids follow the mining payload."""
+    return "mining" if name == GRIDS or name.startswith(hub_mining.GRID_PREFIX) else name
 
 
 # ---------------------------------------------------------------- payloads
@@ -188,13 +220,18 @@ def _fingerprint_of(counts: TypeCounts, name: str | None) -> str:
 class Ready:
     body: bytes
     etag: str
+    gzip: bool = False
+    """True when `body` is gzip-compressed (asked for with `get(..., gzip=True)`)."""
 
 
 @dataclass(frozen=True)
 class Stale:
-    """The payload as built for an older fingerprint, served while the fresh one is built."""
+    """The payload as built for an older fingerprint, served while the fresh one is built; `etag`
+    names the fingerprint it was built for."""
 
     body: bytes
+    etag: str
+    gzip: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,6 +261,88 @@ def known_name(name: str) -> bool:
     )
 
 
+def child_command(project: Project, names: Sequence[str], out: Path) -> list[str]:
+    """The child that builds `names` into `out`: `nice` as a command, not `preexec_fn` (code run
+    between fork and exec in a threaded server can deadlock the child). The environment is the
+    server's, so `FACTORY_ROOT` and the like reach it."""
+    return [
+        "nice",
+        "-n",
+        str(BUILD_NICE),
+        sys.executable,
+        "-c",
+        "from factory.cli.main import app; app()",
+        "--root",
+        str(project.settings.root),
+        "hub",
+        "build",
+        project.paths.slug,
+        "--out",
+        str(out),
+        "--only",
+        ",".join(names),
+        "--payloads-only",
+    ]
+
+
+_LIVE: set[subprocess.Popen[bytes]] = set()
+"""Children running now; `PayloadService.stop` ends them so none outlives the server."""
+
+
+def stop_children() -> None:
+    for proc in list(_LIVE):
+        proc.terminate()
+
+
+def _spawn_subprocess(
+    project: Project, names: Sequence[str], out: Path, poll: Callable[[], None]
+) -> tuple[int, str]:
+    """Run the child to its end, calling `poll` about every `POLL_SECONDS` meanwhile; its exit code
+    and the last lines of its stderr (-1 when it could not start or was stopped at the timeout)."""
+    log = out / "child.log"
+    started = time.monotonic()
+    try:
+        with log.open("wb") as sink:
+            proc = subprocess.Popen(
+                child_command(project, names, out),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=sink,
+            )
+            _LIVE.add(proc)
+            code: int | None = None
+            while code is None:
+                try:
+                    code = proc.wait(POLL_SECONDS)
+                except subprocess.TimeoutExpired:
+                    poll()
+                    if time.monotonic() - started > CHILD_TIMEOUT:
+                        proc.kill()
+                        proc.wait()
+                        _LIVE.discard(proc)
+                        return -1, f"stopped after {CHILD_TIMEOUT:.0f} s"
+            _LIVE.discard(proc)
+    except OSError as exc:
+        return -1, f"could not start: {exc}"
+    lines = log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    return code, "\n".join(lines[-12:])
+
+
+spawn_builder: Callable[[Project, Sequence[str], Path, Callable[[], None]], tuple[int, str]] = (
+    _spawn_subprocess
+)
+"""Runs one build child; replaced in tests by an in-process build."""
+
+
+def accepts_gzip(header: str | None) -> bool:
+    """Whether an `Accept-Encoding` header allows gzip (a `q=0` refuses it)."""
+    for part in (header or "").split(","):
+        token, _, params = part.partition(";")
+        if token.strip().lower() in {"gzip", "x-gzip", "*"}:
+            return params.replace(" ", "").lower() not in {"q=0", "q=0.0", "q=0.00", "q=0.000"}
+    return False
+
+
 class PayloadService:
     """One project's payload cache and its on-demand builder (see the module docstring)."""
 
@@ -234,48 +353,63 @@ class PayloadService:
         self._cond = threading.Condition()
         self._queue: list[str] = []
         self._current: str | None = None
+        self._building: set[str] = set()
         self._done = 0
         self._started: float | None = None
         self._failed: dict[str, tuple[str, float]] = {}  # name -> (fingerprint, time of failure)
         self._unknown: dict[str, str] = {}
-        self._ctx: tuple[str, hub_build.HubContext] | None = None
+        self._gz_memo: dict[str, tuple[str, bytes]] = {}
         self._worker: threading.Thread | None = None
         self._watcher: threading.Thread | None = None
         self._stop = threading.Event()
-        self._prewarmed: str | None = None  # the fingerprint a prewarm was last queued for
+        self._prewarmed: tuple[tuple[str, str], ...] | None = None  # the keys last queued for
 
     # -- reading
 
-    def _read_stale(self, name: str) -> bytes | None:
-        """The payload on disk whatever fingerprint it was built for (None when there is none)."""
+    def _recorded(self, name: str) -> str | None:
+        """The fingerprint the payload on disk was built for (None when there is no record)."""
         try:
-            return (self._dir / f"{name}.json").read_bytes()
+            return (self._dir / f"{name}.fp").read_text(encoding="utf-8").strip() or None
         except OSError:
             return None
 
+    def _on_disk(self, name: str, fp: str) -> bool:
+        """Whether `name` is on disk at fingerprint `fp` (reads the small record, not the file)."""
+        return self._recorded(name) == fp and (self._dir / f"{name}.json").is_file()
+
+    def _load(self, name: str, etag: str, want_gz: bool) -> tuple[bytes, bool] | None:
+        """The file of `name` (gzipped when asked: the one the build wrote, else compressed here
+        once per ETag); None when there is none."""
+        if want_gz:
+            try:
+                return (self._dir / f"{name}.json.gz").read_bytes(), True
+            except OSError:
+                pass
+        try:
+            raw = (self._dir / f"{name}.json").read_bytes()
+        except OSError:
+            return None
+        if not want_gz:
+            return raw, False
+        memo = self._gz_memo.get(name)
+        if memo is None or memo[0] != etag:
+            memo = (etag, gzip.compress(raw, 6, mtime=0))
+            self._gz_memo[name] = memo
+        return memo[1], True
+
     def is_fresh(self, name: str) -> bool:
-        """Whether `name` is on disk at the current fingerprint."""
-        return known_name(name) and self._read(name, fingerprint(self._project)) is not None
+        """Whether `name` is on disk at its current fingerprint."""
+        return known_name(name) and self._on_disk(name, fingerprint(self._project, key_of(name)))
 
     def status(self) -> dict[str, dict[str, Any]]:
         """Per payload: `fresh` (on disk at its current fingerprint), `built_at` (UTC time of the
         file on disk, None when none) and `error` (the build failed at the current fingerprint).
-        Reads the index head and file times only; builds and writes nothing."""
+        Reads the index head, the small `.fp` records and file times only."""
         counts = type_counts(self._project)
-        heads: dict[str | None, str] = {}
-
-        def head(name: str) -> str:
-            key = name if name in hub_build.PAYLOAD_EVENTS else None
-            if key not in heads:
-                heads[key] = _fingerprint_of(counts, key)
-            return heads[key]
-
         out: dict[str, dict[str, Any]] = {}
-        names: list[str] = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
-        names += [n for n in hub_build.BUILDERS if n not in names]
-        for name in names:
-            fp = head(name)
-            row: dict[str, Any] = {"fresh": self._read(name, fp) is not None, "built_at": None}
+        for name in self._names():
+            fp = _fingerprint_of(counts, name)
+            row: dict[str, Any] = {"fresh": self._on_disk(name, fp), "built_at": None}
             try:
                 stamp = (self._dir / f"{name}.json").stat().st_mtime
                 row["built_at"] = datetime.fromtimestamp(stamp, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -288,38 +422,48 @@ class PayloadService:
             out[name] = row
         return out
 
-    def _read(self, name: str, fp: str) -> bytes | None:
-        try:
-            if (self._dir / f"{name}.fp").read_text(encoding="utf-8").strip() != fp:
-                return None
-            return (self._dir / f"{name}.json").read_bytes()
-        except OSError:
-            return None
+    @staticmethod
+    def _names() -> list[str]:
+        names: list[str] = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
+        return names + [n for n in hub_build.BUILDERS if n not in names]
 
-    def get(self, name: str) -> Answer:
-        """The payload `name` at the current fingerprint, or what is happening to it."""
+    def get(self, name: str, gzip: bool = False) -> Answer:
+        """The payload `name` at its current fingerprint, or what is happening to it. With `gzip`
+        the body is the compressed file and the answer says so."""
         if not known_name(name):
             return Unknown()
-        fp = fingerprint(self._project, name)
+        fp = fingerprint(self._project, key_of(name))
         if self._unknown.get(name) == fp:
             return Unknown()
-        body = self._read(name, fp)
-        if body is not None:
-            return Ready(body, f'"{fp}"')
-        old = self._read_stale(name)
+        if self._on_disk(name, fp):
+            loaded = self._load(name, f'"{fp}"', gzip)
+            if loaded is not None:
+                return Ready(loaded[0], f'"{fp}"', loaded[1])
+        stale = self._stale(name, gzip)
         with self._cond:
             failed = self._failed.get(name)
             if failed is not None and failed[0] == fp:
                 if self._clock() - failed[1] < FAILED_RETRY_SECONDS:
-                    return Failed(name) if old is None else Stale(old)
+                    return Failed(name) if stale is None else stale
                 del self._failed[name]  # the window has passed: build it again
-            if name != self._current:
+            if name not in self._building:
                 if name in self._queue:
                     self._queue.remove(name)
                 self._queue.insert(0, name)  # a request jumps the queue
             self._ensure_worker()
             self._cond.notify_all()
-            return Building(self._progress()) if old is None else Stale(old)
+            return Building(self._progress()) if stale is None else stale
+
+    def _stale(self, name: str, want_gz: bool) -> Stale | None:
+        """The file on disk for an older fingerprint, tagged with the one it was built for."""
+        try:
+            stamp = (self._dir / f"{name}.json").stat().st_mtime_ns
+        except OSError:
+            return None
+        recorded = self._recorded(name)
+        tag = f'"{recorded}"' if recorded else f'"s-{stamp:x}"'
+        loaded = self._load(name, tag, want_gz)
+        return None if loaded is None else Stale(loaded[0], tag, loaded[1])
 
     def _progress(self) -> dict[str, Any]:
         return {
@@ -332,7 +476,7 @@ class PayloadService:
     # -- prewarm
 
     def prewarm(self) -> None:
-        """Queue every payload now and again whenever the fingerprint changes (a no-op when the
+        """Queue every payload now and again whenever a fingerprint changes (a no-op when the
         env switch is off). The first pass runs here; later checks run on a daemon thread."""
         if os.environ.get(PREWARM_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
             return
@@ -342,8 +486,9 @@ class PayloadService:
             self._watcher.start()
 
     def stop(self) -> None:
-        """Stop the fingerprint watch (a build in progress finishes)."""
+        """Stop the fingerprint watch and end the build child, if one is running."""
         self._stop.set()
+        stop_children()
 
     def _watch(self) -> None:
         while not self._stop.wait(WATCH_SECONDS):
@@ -353,29 +498,30 @@ class PayloadService:
                 _LOG.warning("hub prewarm check failed: %s", exc)
 
     def prewarm_check(self) -> bool:
-        """Queue the payloads that are not current when the fingerprint is new since the last
-        check; cheap otherwise (the fingerprint only). True when anything was queued."""
-        fp = fingerprint(self._project)
+        """Queue the payloads that are not current when a fingerprint is new since the last
+        check; cheap otherwise (one index read). True when anything was queued."""
+        counts = type_counts(self._project)
+        fps = {n: _fingerprint_of(counts, n) for n in self._names()}
+        grid_fp = _fingerprint_of(counts, "mining")
+        snapshot = (*sorted(fps.items()), (GRIDS, grid_fp))
         with self._cond:
-            if self._prewarmed == fp:
+            if self._prewarmed == snapshot:
                 return False
-            self._prewarmed = fp
-        names: list[str] = [n for n in PREWARM_ORDER if n in hub_build.BUILDERS]
-        names += [n for n in hub_build.BUILDERS if n not in names]
-        names = [n for n in names if self._read(n, fp) is None]
+            self._prewarmed = snapshot
+        names = [n for n in self._names() if not self._on_disk(n, fps[n])]
         grids = sorted(self._dir.glob("grid-*.fp")) if self._dir.is_dir() else []
-        if not grids or any(g.read_text(encoding="utf-8").strip() != fp for g in grids):
+        if not grids or any(g.read_text(encoding="utf-8").strip() != grid_fp for g in grids):
             names.append(GRIDS)
         with self._cond:
             for name in names:
-                if name not in self._queue and name != self._current:
+                if name not in self._queue and name not in self._building:
                     self._queue.append(name)
             if self._queue:
                 self._ensure_worker()
                 self._cond.notify_all()
         return bool(names)
 
-    # -- building
+    # -- building (the worker thread supervises children; no builder code runs here)
 
     def _ensure_worker(self) -> None:
         if self._worker is None or not self._worker.is_alive():
@@ -393,56 +539,81 @@ class PayloadService:
                 if not self._queue:
                     self._current = None
                     self._started = None
-                    self._ctx = None
                     self._worker = None
                     return
-                name = self._queue[0]
-                self._current = name
+                end = time.monotonic() + BATCH_WINDOW  # the page's other payloads arrive now
+                while (left := end - time.monotonic()) > 0:
+                    self._cond.wait(left)
+                batch = self._queue[:BATCH_MAX]
+                self._building = set(batch)
+                self._current = batch[0]
             try:
-                self._build(name)
+                self._build_batch(batch)
+            except Exception as exc:  # the worker outlives one broken batch
+                _LOG.exception("hub payload batch %s failed: %s", batch, exc)
             finally:
                 with self._cond:
-                    self._queue.remove(name)
-                    self._done += 1
+                    for name in batch:
+                        if name in self._queue:
+                            self._queue.remove(name)
+                    self._done += len(batch)
                     self._current = None
+                    self._building = set()
 
-    def _context(self, fp: str) -> hub_build.HubContext:
-        if self._ctx is None or self._ctx[0] != fp:
-            self._ctx = (fp, hub_build.HubContext(self._project))
-        return self._ctx[1]
-
-    def _write(self, name: str, payload: dict[str, Any], fp: str) -> None:
-        text = hub_build.dumps(payload)
+    def _install(self, out: Path, name: str, fp: str) -> bool:
+        """Move the files a child wrote for `name` into the cache (gzip, json, then the record);
+        False when the child has not finished it."""
+        if not (out / "data" / f"{name}.json").is_file():
+            return False
         self._dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._dir / f"{name}.json.tmp"
-        tmp.write_text(text + "\n", encoding="utf-8")
-        tmp.replace(self._dir / f"{name}.json")
+        for suffix in (".json.gz", ".json"):
+            src = out / "data" / f"{name}{suffix}"
+            if src.is_file():
+                src.replace(self._dir / f"{name}{suffix}")
+            elif suffix == ".json.gz":
+                (self._dir / f"{name}{suffix}").unlink(missing_ok=True)
         (self._dir / f"{name}.fp").write_text(fp + "\n", encoding="utf-8")
+        return True
 
-    def _build(self, name: str) -> None:
-        fp = fingerprint(
-            self._project, name
-        )  # taken first: an event landing meanwhile reads as stale
-        context_fp = fingerprint(self._project)  # one shared context per log head, whatever the key
+    def _build_batch(self, batch: list[str]) -> None:
+        # fingerprints are taken first: an event landing meanwhile reads as stale
+        fps = {n: fingerprint(self._project, key_of(n)) for n in batch}
+        self._dir.mkdir(parents=True, exist_ok=True)
+        out = Path(tempfile.mkdtemp(prefix="build-", dir=self._dir.parent))
+        done: set[str] = set()
+
+        def install() -> None:
+            for name in batch:
+                if name in done:
+                    continue
+                if name == GRIDS:
+                    for found in sorted((out / "data").glob("grid-*.json")):
+                        if self._install(out, found.stem, fps[GRIDS]):
+                            done.add(GRIDS)
+                elif self._install(out, name, fps[name]):
+                    done.add(name)
+
         try:
-            ctx = self._context(context_fp)
-            if name == GRIDS:
-                for grid, body in ctx.grids.items():
-                    self._write(grid, body, fp)
-                return
-            if name in hub_build.BUILDERS:
-                with call_memo.entering():  # one reading of each shared derivation per payload
-                    payload = hub_build.BUILDERS[name](ctx)
-            else:
-                grids = ctx.grids
-                if name not in grids:
-                    self._unknown[name] = fp
-                    return
-                payload = grids[name]
-            self._write(name, payload, fp)
-        except Exception as exc:  # one broken payload never stops the others
-            _LOG.exception("hub payload %s failed to build: %s", name, exc)
-            self._failed[name] = (fp, self._clock())
+            (out / "data").mkdir()
+            only = ["grid" if n == GRIDS else n for n in batch]
+            code, tail = spawn_builder(self._project, only, out, install)
+            install()
+            missing = [n for n in batch if n not in done]
+            if missing:
+                _LOG.error(
+                    "hub payload child exited %s; no payload for %s; last output:\n%s",
+                    code,
+                    ", ".join(missing),
+                    tail,
+                )
+            with self._cond:
+                for name in missing:
+                    if code == 0 and name.startswith(hub_mining.GRID_PREFIX):
+                        self._unknown[name] = fps[name]  # the child built the rest: no such grid
+                    elif code != 0 or name != GRIDS:
+                        self._failed[name] = (fps[name], self._clock())
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- trace
@@ -527,12 +698,44 @@ def source_file(project: Project, document_id: str, kind: str) -> tuple[bytes, s
     return hub_sources.document_file(project, document_id, kind)
 
 
+def study_file(project: Project, registration_id: str) -> tuple[bytes, str, str] | None:
+    """A registered study file (stored blob) by registration id: (body, content type, name)."""
+    return hub_sources.study_file(project, registration_id)
+
+
 def ops_file(project: Project, rel: str) -> hub_costs.OpsFile | None:
     """A file of the project's `ops/` folder (see `hub_costs.read_ops_file`)."""
     return hub_costs.read_ops_file(project, rel)
 
 
 _WIKI_LOCK = threading.Lock()
+SKIPPED_LINKS = "SKIPPED-LINKS.txt"
+
+
+def _zip_vault(vault: Path, root: Path, dest: Path) -> str:
+    """Zip `vault` into `dest`. A symlink whose target is a file inside the project folder
+    `root` is stored as that file's content; one pointing outside the project, or to nothing, is
+    left out and listed in `SKIPPED-LINKS.txt` (WK-8). Returns the zip path."""
+    base = root.resolve()
+    skipped: list[str] = []
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(vault.rglob("*")):
+            rel = path.relative_to(vault).as_posix()
+            if path.is_symlink():
+                target = path.resolve()
+                if target.is_file() and target.is_relative_to(base):
+                    zf.write(target, rel)
+                else:
+                    skipped.append(rel)
+            elif path.is_file():
+                zf.write(path, rel)
+        if skipped:
+            zf.writestr(
+                SKIPPED_LINKS,
+                "Links left out of this archive because they point outside the project "
+                "folder or to a missing file:\n" + "\n".join(skipped) + "\n",
+            )
+    return str(dest)
 
 
 def wiki_zip(project: Project) -> Path:
@@ -552,7 +755,7 @@ def wiki_zip(project: Project) -> Path:
             vault = work / "vault"
             vault.mkdir()
             _build_wiki(project, vault)
-            made = shutil.make_archive(str(work / "wiki"), "zip", root_dir=vault)
+            made = _zip_vault(vault, project.paths.dir, work / "wiki.zip")
             for old in cache.glob("wiki-*.zip"):
                 old.unlink(missing_ok=True)
             Path(made).replace(target)

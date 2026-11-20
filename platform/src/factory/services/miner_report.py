@@ -25,6 +25,7 @@ from factory.mining.calibration import SAMPLE_FLOOR, thresholds
 from factory.mining.compile import compile_miner
 from factory.mining.score import CalibrationScore, score
 from factory.model.extraction import MinerScope
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.extraction import (
     ExtractionRow,
@@ -52,21 +53,38 @@ class MinerCalibrationReport:
     """Why the calibration cannot pass whatever the score (a sample below the mode's floor)."""
 
 
+@memoised
+def _task_events(project: Project) -> dict[str, tuple[int, frozenset[str]]]:
+    """task id -> (rows recorded, input blobs of its recorded or rejected events), from one scan of
+    the log (memoised within a call-memo scope: every calibration reads it)."""
+    verified: dict[str, int] = {}
+    blobs: dict[str, set[str]] = {}
+    for event in read_typed(
+        project.paths.events_dir, project.catalog, ("extraction.recorded", "extraction.rejected")
+    ):
+        task = event.payload.get("task_id")
+        if not isinstance(task, str):
+            continue
+        if event.type == "extraction.recorded":
+            verified[task] = verified.get(task, 0) + 1
+        if event.type in ("extraction.recorded", "extraction.rejected") and event.input_blob:
+            blobs.setdefault(task, set()).add(event.input_blob)
+    return {
+        t: (verified.get(t, 0), frozenset(blobs.get(t, ()))) for t in verified.keys() | blobs.keys()
+    }
+
+
 def _submitted(project: Project, tasks: frozenset[str]) -> tuple[int, int]:
     """`(verified, submitted)` rows of the calibration pass: the rows recorded, and the rows of the
     distinct calls that recorded them or had every row rejected (each such event carries its
     call's input)."""
+    per_task = _task_events(project)
     verified = 0
     blobs: set[str] = set()
-    for event in read_typed(
-        project.paths.events_dir, project.catalog, ("extraction.recorded", "extraction.rejected")
-    ):
-        if event.payload.get("task_id") not in tasks:
-            continue
-        if event.type == "extraction.recorded":
-            verified += 1
-        if event.type in ("extraction.recorded", "extraction.rejected") and event.input_blob:
-            blobs.add(event.input_blob)
+    for task in tasks:
+        count, found = per_task.get(task, (0, frozenset()))
+        verified += count
+        blobs |= found
     submitted = 0
     for blob in blobs:
         body = project.blobs.get_json(blob)

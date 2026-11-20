@@ -5,6 +5,7 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -353,6 +354,7 @@ class Index:
         self._owner: int | None = None  # that thread's ident while it holds it
         self._snapshot = False  # set and read only by the owner
         self._clean = False  # owner only: the index holds the whole log, for this hold
+        self._frozen: ContextVar[bool] = ContextVar("index_frozen", default=False)
         self._on_exclusive = on_exclusive
         self._on_write_lock = on_write_lock
 
@@ -362,7 +364,7 @@ class Index:
         Inside `snapshot()` it applies nothing: the snapshot synced on entry and holds only the
         shared lock, under which this process must not write.
         """
-        if self._in_snapshot():
+        if self._in_snapshot() or self._frozen.get():
             return SyncResult(applied=0, rebuilt=False)
         with self._locked():
             if self._clean:
@@ -376,6 +378,25 @@ class Index:
         While a hold lasts, a `sync()` after one that found the log fully applied reads nothing
         (no other writer can append under the write lock); every append inside a hold calls this."""
         self._clean = False
+
+    @contextmanager
+    def frozen_sync(self) -> Iterator[None]:
+        """Sync once, then make `sync()` a no-op until the block exits, without holding any lock.
+
+        For a long read-only build (the hub) whose services each call `sync()`: every call scans
+        the event files, which costs about 30 ms on the pilot and was repeated hundreds of times.
+        Invariant: the build reads the log as of the one sync; events appended meanwhile are seen
+        by the next build. Nested blocks reuse the outer one. Only this thread's context is frozen.
+        """
+        if self._frozen.get():
+            yield
+            return
+        self.sync()
+        token = self._frozen.set(True)
+        try:
+            yield
+        finally:
+            self._frozen.reset(token)
 
     @contextmanager
     def snapshot(self) -> Iterator[None]:
