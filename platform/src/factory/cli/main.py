@@ -7150,6 +7150,13 @@ def leads_candidates_cmd(
     layer: Annotated[str, _LAYER_OPT] = "core",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Drop the on-disk lead cache first and recompute (see FACTORY_LEAD_CACHE).",
+        ),
+    ] = False,
     top: Annotated[
         int, typer.Option("--top", min=1, help="Candidates in the table (default 20).")
     ] = 20,
@@ -7171,6 +7178,7 @@ def leads_candidates_cmd(
             layer=layer,
             technique_min_works=technique_min_works,
             max_co_works=max_co_works,
+            refresh=refresh,
         )
     _engine_table(
         result,
@@ -7219,6 +7227,13 @@ def leads_queue_cmd(
     ] = "after",
     technique_min_works: Annotated[int, _TECH_MIN_OPT] = 3,
     max_co_works: Annotated[int, _CO_WORKS_OPT] = 0,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Drop the on-disk lead cache first and recompute (see FACTORY_LEAD_CACHE).",
+        ),
+    ] = False,
     full: Annotated[bool, _FULL_OPT] = False,
     show: Annotated[str | None, _SHOW_OPT] = None,
     format_: Annotated[str, _FORMAT_OPT] = "table",
@@ -7244,6 +7259,7 @@ def leads_queue_cmd(
             balance=balance,
             per_source_top=per_source_top,
             recorded=recorded,
+            refresh=refresh,
         )
     _engine_table(
         result,

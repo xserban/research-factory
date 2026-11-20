@@ -47,6 +47,7 @@ from factory.model.lead_engine import (
 )
 from factory.model.screening import PassLabel
 from factory.model.technique_graph import SUPPORTIVE, GapCandidate, Lens
+from factory.services import lead_cache
 from factory.services import technique_graph as tg
 from factory.services.call_memo import entering
 from factory.services.claims_digest import ABSENCE_TYPE, CLAIM_ORDER
@@ -523,13 +524,15 @@ def lead_candidates(
     layer: str = "core",
     technique_min_works: int = 3,
     max_co_works: int = 0,
+    refresh: bool = False,
 ) -> Candidates:
     """Observations to check, with the exact triggers a `lead_record` call accepts (see the module
     invariants). Every parameter is a runtime knob: `sources` (any of `SOURCES`), `per_source` (a
     cap per source, at least 1), `layer` (a work layer id or `all`), `technique_min_works` (works
     each approach of a combination or gap needs) and `max_co_works` (works that may already use
     both approaches of a combination). Refused with nothing computed: an unknown source or a
-    non-positive number (the field named)."""
+    non-positive number (the field named). The result is cached on disk (`lead_cache`: derived,
+    keyed by the last event, the code and these parameters); `refresh` drops the cache first."""
     unknown = sorted(set(sources) - set(SOURCES))
     if unknown or not sources:
         raise _refuse("sources", f"one or more of {', '.join(SOURCES)}: unknown {unknown}")
@@ -539,6 +542,19 @@ def lead_candidates(
         raise _refuse("technique_min_works", "must be at least 1")
     if max_co_works < 0:
         raise _refuse("max_co_works", "must not be negative")
+    cache = lead_cache.slot(
+        project,
+        lead_cache.candidate_params(
+            sources=sources,
+            per_source=per_source,
+            layer=layer,
+            min_works=technique_min_works,
+            max_co_works=max_co_works,
+        ),
+        refresh=refresh,
+    )
+    if (hit := cache.get()) is not None:
+        return hit
     wanted = set(sources)
     candidates: list[Candidate] = []
     skipped: list[Skipped] = []
@@ -575,17 +591,19 @@ def lead_candidates(
             )
     order = {s: i for i, s in enumerate(SOURCES)}
     candidates.sort(key=lambda c: order[c.source])  # stable: each source keeps its own order
-    return Candidates(
-        parameters={
-            "sources": tuple(sorted(wanted, key=order.__getitem__)),
-            "per_source": per_source,
-            "layer": layer,
-            "technique_min_works": technique_min_works,
-            "max_co_works": max_co_works,
-        },
-        totals={s: totals[s] for s in SOURCES if s in totals},
-        candidates=tuple(candidates),
-        skipped=tuple(skipped),
-        miners=tuple(miners),
-        absence_only_works=absence_only,
+    return cache.put(
+        Candidates(
+            parameters={
+                "sources": tuple(sorted(wanted, key=order.__getitem__)),
+                "per_source": per_source,
+                "layer": layer,
+                "technique_min_works": technique_min_works,
+                "max_co_works": max_co_works,
+            },
+            totals={s: totals[s] for s in SOURCES if s in totals},
+            candidates=tuple(candidates),
+            skipped=tuple(skipped),
+            miners=tuple(miners),
+            absence_only_works=absence_only,
+        )
     )

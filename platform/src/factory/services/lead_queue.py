@@ -56,6 +56,7 @@ from factory.model.lead_engine import (
     Verification,
 )
 from factory.model.technique_graph import SUPPORTIVE
+from factory.services import lead_cache
 from factory.services.chat_read import VerifyItem, chat_verify
 from factory.services.context import Project
 from factory.services.conversions import conversion_of
@@ -200,7 +201,12 @@ def _stale(project: Project, scope: str) -> frozenset[str]:
         hit = _STALE.get(key)
         if hit is not None and hit[0] == head:
             return hit[1]
-    found = frozenset(stale_extractions(project, scope=_scope_key(scope)))
+    disk = lead_cache.stale_get(project, scope, head)
+    found = (
+        disk if disk is not None else frozenset(stale_extractions(project, scope=_scope_key(scope)))
+    )
+    if disk is None:
+        lead_cache.stale_put(project, scope, head, found)
     with _GUARD:
         if len(_STALE) >= _STALE_MAX:
             _STALE.clear()
@@ -248,13 +254,14 @@ def _verify(project: Project, items: dict[str, _Item]) -> dict[str, bool]:
         for ext, item in items.items()
         if item.quote is not None and item.anchor is not None
     }
+    persisted = lead_cache.verified_load(project)
     with _GUARD:
         for ext, item in items.items():
             if item.quote is None or item.anchor is None:
                 out[ext] = False
                 continue
             key = keyed[ext]
-            if key is not None and key in _VERIFIED:
+            if key is not None and (key in _VERIFIED or lead_cache.verified_id(key) in persisted):
                 out[ext] = True
             else:
                 todo.append((ext, item, key))
@@ -266,6 +273,7 @@ def _verify(project: Project, items: dict[str, _Item]) -> dict[str, bool]:
                 for _, i, _ in todo
             ],
         )
+        accepted: list[str] = []
         with _GUARD:
             for (ext, _, key), res in zip(todo, results, strict=True):
                 out[ext] = res.status == "accepted"
@@ -273,6 +281,8 @@ def _verify(project: Project, items: dict[str, _Item]) -> dict[str, bool]:
                     if len(_VERIFIED) >= _VERIFIED_MAX:
                         _VERIFIED.clear()
                     _VERIFIED.add(key)
+                    accepted.append(lead_cache.verified_id(key))
+        lead_cache.verified_add(project, accepted)
     return out
 
 
@@ -569,6 +579,7 @@ def lead_queue(
     balance: bool = True,
     per_source_top: int | None = None,
     recorded: str = "after",
+    refresh: bool = False,
 ) -> Queue:
     """Candidates (`candidates`, else `lead_candidates` with the same `sources`, `per_source`,
     `layer`, `technique_min_works` and `max_co_works`) and, with `include_leads`, the open
@@ -594,6 +605,8 @@ def lead_queue(
     listed again in `leads`. Prior hits: only narrow hits (shared `item`, closed direction) are
     in the default order; broad hits are shown as `broad_prior_hits`."""
     _check(order_by, top, per_source, per_source_top, balance, recorded)
+    if refresh:
+        lead_cache.clear(project)  # candidates and verdicts both recompute (see `lead_cache`)
     fresh = candidates or lead_candidates(
         project,
         sources=sources,
