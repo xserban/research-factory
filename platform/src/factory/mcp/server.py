@@ -346,7 +346,8 @@ def build_server(
 
     @server.tool()
     def project_status(project: str) -> dict[str, JsonValue]:
-        """Report a project's rigor mode, event counts, task queue state, derived `stage` (null to
+        """Report a project's rigor mode, `tier` (null: not declared), `autonomy_level`, event
+        counts, task queue state, derived `stage` (null to
         a session that has joined a pass) and `human`: what waits on the researcher, each with the
         command that does it. Imports, conversion and gate decisions are the researcher's acts on
         the CLI: relay the command, there is no tool for them."""
