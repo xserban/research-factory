@@ -3,8 +3,8 @@
 
 `derive_catalog` is pure: it takes the tool list, the skill directory and the decision log and
 returns a `Catalog`. Nothing is typed by hand except the lifecycle labels. The tool list comes
-from the built MCP server (`collect_tools`, the only adapter; it imports `factory.mcp` lazily,
-as `run_costs` already does for `unit_cap`). Flags are mechanical and shown for the researcher
+from the built MCP server (`collect_tools`, the only adapter; it builds the server through
+`tool_source`, which an interface fills). Flags are mechanical and shown for the researcher
 to judge; a check that cannot be derived is `None` in `Catalog.skipped` with its reason.
 
 Invariants: every listed tool appears once in `Catalog.tools` and in exactly one of its stages (a
@@ -28,6 +28,7 @@ from typing import Final
 
 from factory.config import Settings
 from factory.model.base import StrictModel
+from factory.services import tool_source
 from factory.services.access import GATED_AGENT_ACTS, HUMAN_ONLY, TOOL_PERMISSIONS, Permission
 
 LIFECYCLE: Final[tuple[tuple[str, str, str], ...]] = (
@@ -309,9 +310,7 @@ def collect_tools(settings: Settings) -> tuple[list[ToolSpec], int]:
     """Build the real MCP server (offline: no call is made) and list its tools and prompts."""
     import json
 
-    from factory.mcp.server import build_server
-
-    server = build_server(settings)
+    server = tool_source.build(settings)
 
     async def listing() -> tuple[list[ToolSpec], int]:
         tools = await server.list_tools()

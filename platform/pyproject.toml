@@ -115,12 +115,6 @@ source_modules = [
     "factory.services", "factory.sources", "factory.views", "factory.writing",
 ]
 forbidden_modules = ["factory.mcp", "factory.cli"]
-# Known exceptions (2026-11-17), to be removed by moving the shared names below mcp:
-#   site_catalog lists the MCP tools by building the server; run_costs reads the units-file name.
-ignore_imports = [
-    "factory.services.site_catalog -> factory.mcp.server",
-    "factory.services.run_costs -> factory.mcp.unit_cap",
-]
 
 [[tool.importlinter.contracts]]
 name = "The MCP server does not depend on the CLI"
