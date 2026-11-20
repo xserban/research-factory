@@ -923,3 +923,77 @@ def test_a_v2_request_has_one_sheet_and_writers_write_to_it_only(
     sh.record_arguments(
         project, _agent(20), opened.sheet_id, [_arg(w[0], "against")], run_id=against
     )
+
+
+# ------------------------------------------------------------------- role gates, ended runs
+
+
+def _refused_as_run(call: Any) -> None:
+    with pytest.raises(FactoryValidationError) as err:
+        call()
+    fields = [i.field for i in err.value.issues]
+    assert "run" in fields, fields  # the role gate itself, whatever else the payload gets wrong
+
+
+def test_an_ended_role_run_can_no_longer_write(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    w = sorted(world)
+    request = _request(project)
+    sheet, stages = _play_all(project, v2_env, world, request)
+    assert stages == [
+        "spar2-search", "spar2-read", "spar2-read", "spar2-against", "spar2-for",
+        "spar2-critic", "spar2-cover",
+    ]  # fmt: skip
+    runs = [
+        str(r[0])
+        for r in _rows(project, "SELECT run_id FROM runner_runs ORDER BY started_event_id")
+    ]
+    arg = sh.view_sheet(project, sheet).arguments[0].argument_id
+    section = chat_sections(project, w[0]).sections[0].anchor
+    reading = [sv.ReadingInput(ANCHOR, QUOTE, "for", "w")]
+    _refused_as_run(lambda: _search(project, world, request, runs[0], n=40))
+    _refused_as_run(
+        lambda: sv.record_reading(project, _agent(41), runs[1], w[0], reading, [section])
+    )
+    _refused_as_run(
+        lambda: sh.record_arguments(
+            project, _agent(42), sheet, [_arg(w[0], "against")], run_id=runs[3]
+        )
+    )
+    _refused_as_run(lambda: sh.close_section(project, _agent(43), sheet, "for", run_id=runs[4]))
+    _refused_as_run(
+        lambda: sv.record_checks(project, _agent(44), runs[5], [sv.CheckInput(arg, "holds", "x")])
+    )
+    _refused_as_run(lambda: sv.record_coverage(project, _agent(45), runs[6], []))
+
+
+def test_a_role_run_cannot_write_through_another_roles_recorder(
+    project: Project, v2_env: FakeLauncher, world: list[str]
+) -> None:
+    w = sorted(world)
+    first = _request(project)
+    sheet_a, _ = _play_all(project, v2_env, world, first)
+    real = sh.view_sheet(project, sheet_a).arguments[0].argument_id  # a REAL argument id
+    section = chat_sections(project, w[0]).sections[0].anchor
+    reading = [sv.ReadingInput(ANCHOR, QUOTE, "for", "w")]
+    second = _request(project)
+    run = sv.advance(project, second, launcher=v2_env)
+    assert run is not None
+    checks = [sv.CheckInput(real, "holds", "x")]
+    # the searcher: neither checks, reads nor sweeps
+    _refused_as_run(lambda: sv.record_checks(project, _agent(1), run, checks))
+    _refused_as_run(lambda: sv.record_reading(project, _agent(1), run, w[0], reading, [section]))
+    _refused_as_run(lambda: sv.record_coverage(project, _agent(1), run, []))
+    sheet, critic = _play_to_critic(project, v2_env, world, second, started=run)
+    # the critic: neither reads nor sweeps
+    _refused_as_run(lambda: sv.record_reading(project, _agent(2), critic, w[0], reading, [section]))
+    _refused_as_run(lambda: sv.record_coverage(project, _agent(2), critic, []))
+    ids = [a.argument_id for a in sh.view_sheet(project, sheet).arguments]
+    sv.record_checks(project, _agent(3), critic, [sv.CheckInput(i, "holds", "ok") for i in ids])
+    _end(v2_env, critic)
+    cover = _open_run(project)
+    # the coverage sweeper: neither checks nor reads
+    _refused_as_run(lambda: sv.record_checks(project, _agent(4), cover, checks))
+    _refused_as_run(lambda: sv.record_reading(project, _agent(4), cover, w[0], reading, [section]))
+    _end(v2_env, cover)
