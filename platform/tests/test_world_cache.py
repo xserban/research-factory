@@ -1,6 +1,7 @@
 """The test-world snapshot cache restores an identical, independent world (tests/world_cache.py)."""
 
 import threading
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -171,3 +172,52 @@ def test_restored_world_has_one_lock_holder(tmp_path: Path) -> None:
     worker.join(timeout=10)
     assert not worker.is_alive(), "the host guard waits on a lock this process already holds"
     assert outcome == [None]
+
+
+def test_function_capturing_a_container_is_keyed_by_its_value(tmp_path: Path) -> None:
+    """Fixtures build `rows_for` closures over dicts: equal values share a snapshot."""
+    built: list[str] = []
+
+    @snapshot_world
+    def build(project: Project, answer: Callable[[], str]) -> None:
+        built.append(answer())
+
+    def answering(table: dict[str, str]) -> Callable[[], str]:
+        return lambda: table["key"]
+
+    build(_project(tmp_path / "a"), answering({"key": "one"}))
+    build(_project(tmp_path / "b"), answering({"key": "one"}))
+    assert built == ["one"]
+    build(_project(tmp_path / "c"), answering({"key": "two"}))
+    assert built == ["one", "two"]
+
+
+def test_build_that_writes_to_a_captured_container_is_never_restored(tmp_path: Path) -> None:
+    """A captured list can be a side channel: a restore could not repeat the write."""
+    builds = 0
+
+    def noting(seen: list[str]) -> Callable[[], None]:
+        return lambda: seen.append("seen")
+
+    @snapshot_world
+    def build(project: Project, note: Callable[[], None]) -> None:
+        note()
+
+    first: list[str] = []
+    second: list[str] = []
+    build(_project(tmp_path / "a"), noting(first))
+    build(_project(tmp_path / "b"), noting(second))
+    builds = len(first) + len(second)
+    assert first == ["seen"]
+    assert second == ["seen"]
+    assert builds == 2
+
+
+def test_first_build_of_a_process_is_shared(tmp_path: Path) -> None:
+    """Bindings that change by themselves must not split a world's key (`_LAZY_*`)."""
+    before = _counts("_build")
+    _build(_project(tmp_path / "a"), "Primary lazy?")
+    _build(_project(tmp_path / "b"), "Primary lazy?")
+    after = _counts("_build")
+    assert after.get("miss", 0) == before.get("miss", 0) + 1
+    assert after.get("hit", 0) == before.get("hit", 0) + 1
