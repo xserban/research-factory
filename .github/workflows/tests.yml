@@ -2,8 +2,8 @@ name: Tests
 
 # The offline test suite (the same selection as a local run: `-m 'not network and not slow'`),
 # split into four shards of test files and run in parallel with pytest-xdist inside each shard.
-# Report-only at first: the jobs do not fail the build (`continue-on-error`) until the known
-# failures are cleaned up; then drop that line and make `static` and `tests` required checks.
+# Required: `static` and the four `tests` shards are required checks on main (branch protection),
+# so a failure blocks the merge. They were report-only until the first fully green run (2026-11-20).
 # The slowest 25 tests of every shard are printed in the run summary, to find the cost.
 #
 # Tiers: a pull request runs only the tests its change can reach (scripts/affected_tests.py: the
@@ -65,7 +65,6 @@ jobs:
     name: ruff + mypy --strict
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -83,7 +82,6 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

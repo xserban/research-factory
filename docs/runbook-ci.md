@@ -1,7 +1,7 @@
 # Runbook: tests in CI and the pull-request flow
 
-Status: report-only until the known failures are cleaned up (decision pending; target two weeks
-after the first green run).
+Status: required. `static` and the four `tests` shards are required checks on main (branch
+protection); report-only until the first fully green run on 2026-11-20. SonarCloud stays advisory.
 
 ## What runs where
 | When | What | Where |
@@ -32,8 +32,11 @@ is the next step if the first timings show the import graph is too coarse.
    and `tests`). Until then a red check is information, not a block.
 5. Never push to main directly after the switch; the local `main` is updated by fetching.
 
-## Known failures (report-only list, 2026-11-20)
-`test_hypothesis_review::test_nothing_waiting_and_no_second_serving`,
-`test_hypotheses::test_conclusion_needs_an_evaluation_and_a_human`,
-`test_registry_ownership::test_every_protocol_section_has_one_owner` (`pending_tolerance` has no
-owner). Each fails identically on main.
+## Known failures
+None. The three tests that failed on main on 2026-11-20 were fixed (a missing registry owner and
+two stale tests), together with the failures the first full runs found.
+
+## If a check is red
+Read the run summary (the failing tests and the 25 slowest), then `gh run view <id> --log`. Fix on
+the branch and push; the run restarts. A flaky test is a bug in the test: fix the cause, do not
+re-run until green.
