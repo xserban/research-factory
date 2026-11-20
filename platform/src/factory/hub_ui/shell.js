@@ -179,6 +179,7 @@ function mount(opts){
         <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span id="projSwitch" class="proj-sw" hidden></span>
+        <a id="classicHub" class="btn" hidden title="The classic hub, served beside this one">&larr; Classic hub</a>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${THEMES.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
@@ -192,6 +193,8 @@ function mount(opts){
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
   if (HUB.served) projectSwitcher($('#projSwitch'));
+  /* served only: the classic hub lives at the prefix this hub sits under (<prefix>/ui/ → <prefix>/) */
+  if (HUB.served) { const a = $('#classicHub'); a.href = location.pathname.replace(/\/ui(\/.*)?$/, '/'); a.hidden = false; }
   document.querySelectorAll('[data-palette]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openPalette();}));
   const tp=$('#themePick'); tp.value=document.documentElement.dataset.theme||'dark'; tp.onchange=()=>setTheme(tp.value);
   document.addEventListener('keydown', e=>{
