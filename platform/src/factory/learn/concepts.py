@@ -1,0 +1,57 @@
+"""The short list of ideas that the whole tutorial rests on."""
+
+from factory.learn.model import Concept
+
+CONCEPTS: tuple[Concept, ...] = (
+    Concept(
+        "events",
+        "Events are the source of truth",
+        "Every act is an event appended to a log. Nothing is edited or deleted; a correction "
+        "supersedes. The database is a copy that can be rebuilt from the log, and every count "
+        "you see is computed from it.",
+    ),
+    Concept(
+        "no-model",
+        "The platform never calls a model",
+        "Claude reads and judges through tools. The platform stores, checks quotes and numbers, "
+        "and counts. Each judgement records the model, the skill version and the exact input.",
+    ),
+    Concept(
+        "modes",
+        "Exploratory, pilot and systematic",
+        "You choose the mode once, at creation. Exploratory has few gates and is for mapping a "
+        "field. Pilot adds two passes, your labels and advisory agreement. Systematic enforces "
+        "all of it. Exploratory outputs are labelled and are not evidence.",
+    ),
+    Concept(
+        "gates",
+        "Human gates",
+        "Some acts are yours alone: selecting choices, confirming the search review, labelling "
+        "samples, resolving disagreements, admitting a miner, rating arguments. Agents propose. "
+        "The status command lists what waits for you, each with its command.",
+    ),
+    Concept(
+        "holdout",
+        "Held-out seeds",
+        "Some of the papers you name are held back. They measure whether the search finds papers "
+        "it was never shown. Agents cannot see which seeds are held out, so do not ask them.",
+    ),
+    Concept(
+        "layers",
+        "Layers",
+        "Rows from uncalibrated miners, interpretations, taxonomies and the technique landscape "
+        "carry a layer label. They are shown beside the evidence and never counted in a report.",
+    ),
+    Concept(
+        "sessions",
+        "One Claude session per pass",
+        "Screening, extraction, mining and contribution items are read twice. Each pass needs its "
+        "own Claude session, and a session that joined a pass cannot call other tools.",
+    ),
+    Concept(
+        "look",
+        "Where to look",
+        "The status command names the stage and your queue. The check command lists what is "
+        "wrong. The trace command follows a sentence to its source. The hub shows the rest.",
+    ),
+)

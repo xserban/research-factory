@@ -33,6 +33,7 @@ NEW_PAGES = (
     "platform",
     "contradictions",
     "chat",
+    "learn",
 )
 CORE = {
     "shell",
@@ -242,6 +243,7 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "living",
         "costs",
         "platform",
+        "learn",
         "kit",
     ]
     for spec in hub_ui.PAGES.values():

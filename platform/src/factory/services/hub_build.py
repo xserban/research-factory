@@ -37,6 +37,7 @@ from factory.services import (
     hub_findings,
     hub_graph,
     hub_landscape,
+    hub_learn,
     hub_lenses,
     hub_living,
     hub_method,
@@ -661,6 +662,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "costs": hub_costs.build,
     "write": hub_write.build,
     "platform": hub_platform.build,
+    "learn": hub_learn.build,
 }
 
 # Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes

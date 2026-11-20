@@ -61,6 +61,7 @@ BAR_CSS: Final = (
     ".hubbar .rf-prog.on{opacity:1;width:80%;transition:width 8s cubic-bezier(.1,.6,.2,1)}"
     "@media (prefers-reduced-motion:reduce){.hubbar .rf-prog.on{width:100%;opacity:.7;transition:none}}"
     "button[data-rf-busy]{cursor:progress}"
+    ".hubbar a.rf-switch{border:1px solid var(--hb-acc);color:var(--hb-acc);border-radius:4px;padding:2px 8px;margin-left:8px}"
 )
 
 
@@ -111,7 +112,7 @@ CHROME_SCRIPT: Final = f"<script>{CHROME_JS}</script>"
 
 _HIDE_TABS: Final = (
     "<script>if(location.pathname.indexOf('/p/')!==0)"
-    "document.querySelectorAll('.hubbar a').forEach(function(a){a.hidden=true})</script>"
+    "document.querySelectorAll('.hubbar a:not(.rf-switch)').forEach(function(a){a.hidden=true})</script>"
 )
 """For a bar inside a project hub: its tabs point at main-hub pages, so they are hidden when the
 hub is served alone (the single-project server has no such pages)."""

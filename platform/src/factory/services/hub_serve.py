@@ -108,6 +108,7 @@ PREWARM_ORDER: Final = (
     "costs",
     "write",
     "platform",
+    "learn",
 )
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the

@@ -237,6 +237,7 @@ def test_unit_cap_bounds_are_the_runners(world: Project) -> None:  # noqa: F811
 def test_page_cards_lead_with_the_pipeline_and_skip_the_kit() -> None:
     ids = [c["id"] for c in hpl.page_cards()]
     assert "pipeline" in ids and "kit" not in ids
+    assert "learn" in ids  # a blurb for the Start here page
     assert all(c["blurb"] for c in hpl.page_cards())
 
 

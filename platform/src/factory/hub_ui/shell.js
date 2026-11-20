@@ -95,6 +95,7 @@ const PAGES = [
   ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
   ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Chat with papers','chat.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
+  ['Start','Start here','learn.html'],
   ['Design','Brand kit','kit.html'],
 ];
 
@@ -109,6 +110,7 @@ const ICON = {
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
   chat:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
+  learn:'<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5M9 8h6M9 12h6"/>',
   kit:'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   graph:'<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 6"/>',
   landscape:'<path d="M3 18l5-8 4 4 4-7 5 11z"/><path d="M3 21h18"/>',
@@ -172,6 +174,7 @@ function mount(opts){
       ${nav.map(n=>n[0]==='-'?'<span class="rail-sep" aria-hidden="true"></span>':n[0]==='group'?`<span class="rail-grp">${esc(n[1])}</span>`:`<a href="${n[2]}" ${n[0]===page?'aria-current="page"':''}>${svgI(n[0])}${esc(n[1])}</a>`).join('')}
       <a href="#" data-palette>${svgI('search')}All pages</a>
       <span class="spacer"></span>
+      <a href="learn.html" ${page==='learn'?'aria-current="page"':''}>${svgI('learn')}Start here</a>
       <a href="kit.html" ${page==='kit'?'aria-current="page"':''}>${svgI('kit')}Kit</a>
     </nav>
     <div>
@@ -179,6 +182,7 @@ function mount(opts){
         <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span id="projSwitch" class="proj-sw" hidden></span>
+        <a id="classicHub" class="btn" hidden title="The classic hub, served beside this one">&larr; Classic hub</a>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${THEMES.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
@@ -192,6 +196,8 @@ function mount(opts){
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
   if (HUB.served) projectSwitcher($('#projSwitch'));
+  /* served only: the classic hub lives at the prefix this hub sits under (<prefix>/ui/ → <prefix>/) */
+  if (HUB.served) { const a = $('#classicHub'); a.href = location.pathname.replace(/\/ui(\/.*)?$/, '/'); a.hidden = false; }
   document.querySelectorAll('[data-palette]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openPalette();}));
   const tp=$('#themePick'); tp.value=document.documentElement.dataset.theme||'dark'; tp.onchange=()=>setTheme(tp.value);
   document.addEventListener('keydown', e=>{

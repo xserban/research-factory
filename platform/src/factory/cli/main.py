@@ -46,6 +46,7 @@ from factory.cli.team import (
     review_app,
     workspace_cmd,
 )
+from factory.cli.tour import tour_cmd
 from factory.clock import Clock, SystemClock
 from factory.config import Settings
 from factory.document.optional import converter_infos, override_registry
@@ -629,6 +630,7 @@ app.add_typer(review_app)
 protocol_app.command("record")(protocol_record_cmd)
 protocol_app.command("amend")(protocol_amend_cmd)
 protocol_app.command("deviation")(protocol_deviation_cmd)
+app.command("tour")(tour_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)

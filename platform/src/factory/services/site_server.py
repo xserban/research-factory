@@ -99,6 +99,7 @@ from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
     hub_chat,
+    hub_learn,
     hub_serve,
     site_auth,
     site_backlog,
@@ -1407,7 +1408,10 @@ def _handler_class(
                 return
             rest = unquote(url[len(UI_PREFIX) + 1 :])
             if rest in ("", "index.html") or (rest.endswith(".html") and "/" not in rest):
-                text = hub_serve.page_text("overview" if rest in ("", "index.html") else rest[:-5])
+                index = rest in ("", "index.html")
+                text = hub_serve.page_text(
+                    hub_learn.landing_page(slot.project) if index else rest[:-5]
+                )
                 if text is None:
                     self._deny(404, "not found")
                     return
