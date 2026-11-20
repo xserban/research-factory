@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
 
@@ -25,7 +26,7 @@ from factory.services.selection import SelectionSpec
 from tests.cli_helpers import _env
 from tests.extraction_helpers import screened, world  # noqa: F401
 from tests.helpers import install_skill
-from tests.test_runner import FakeLauncher
+from tests.test_runner import FakeLauncher, FakeProcess
 
 ANCHOR, QUOTE = "s3.p1", "Lorem ipsum"
 
@@ -35,13 +36,25 @@ def act(role: str) -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
-def v2_env(project: Project, monkeypatch: pytest.MonkeyPatch) -> FakeLauncher:
+def v2_env(project: Project, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeLauncher]:
     install_skill(project.settings, "rf-spar-v2", "SPAR V2 SKILL BODY")
     monkeypatch.setattr(runner, "claude_path", lambda: "/usr/bin/claude")
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
     launcher = FakeLauncher()
     monkeypatch.setattr(runner, "default_launcher", launcher)
-    return launcher
+
+    # A fake role process ends by itself after 10 s (FakeProcess.wait), which closes its run. A
+    # test that serves a reader after the searcher's run must not race that timer (the test took
+    # 12.7 s on a CI runner: the reader's run was closed before it was served). Hold every
+    # process until the test releases it or ends.
+    def held_wait(self: FakeProcess) -> int:
+        self.done.wait(300)
+        return self.code
+
+    monkeypatch.setattr(FakeProcess, "wait", held_wait)
+    yield launcher
+    for process in launcher.processes:
+        process.release()
 
 
 async def _call(
