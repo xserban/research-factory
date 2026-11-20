@@ -39,7 +39,8 @@ Invariants:
   coordinator (`spar_v2.advance`), which names the request and role (`RoleAssignment`); the start
   writes `spar.role_started` with `runner.started`. After a run ends, the watcher advances a begun
   v2 request to its next role; a failed role stops the chain.
-- The stages `frame`, `gather`, `acquire`, `write`, `conduct-verify` and `conduct-audit` (plan
+- The stages `frame`, `gather`, `acquire`, `write`, `understand`, `develop-lead`, `develop-draft`,
+  `develop-critic`, `maintain`, `conduct-verify` and `conduct-audit` (plan
   tiers-and-autonomy C8) are started only by the conductor (`services/conductor.py`): one unit per
   run, Sonnet, an allow-list that leaves out the gate acts of the stage (no confirm, release,
   amend or PRESS review), and the verifier and auditor read only. Their pending unit is the
@@ -446,6 +447,92 @@ STAGES.update(
             unit="write step",
             fixed_cap=1,
         ),
+        "understand": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-lineage",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}contribution_status",
+                f"{_P}relation_list",
+                f"{_P}relation_propose",
+                f"{_P}idea_list",
+                f"{_P}idea_propose",
+            ),
+            kinds=(),
+            unit="understand step",
+            fixed_cap=1,
+        ),
+        # The develop step is three runs in three sessions (the engine's independence rule): the
+        # lead author, the drafter and the critic. None may decide a lead or register.
+        "develop-lead": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-hypothesis-engine",
+            role="lead-author",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}claims_digest",
+                f"{_P}lead_candidates",
+                f"{_P}lead_queue",
+                f"{_P}lead_stats",
+                f"{_P}lead_list",
+                f"{_P}lead_record",
+                f"{_P}hypothesis_list",
+            ),
+            kinds=(),
+            unit="develop step (leads)",
+            fixed_cap=1,
+        ),
+        "develop-draft": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-hypothesis-engine",
+            role="drafter",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}claims_digest",
+                f"{_P}lead_list",
+                f"{_P}hypothesis_list",
+                f"{_P}hypothesis_view",
+                f"{_P}hypothesis_draft",
+            ),
+            kinds=(),
+            unit="develop step (drafts)",
+            fixed_cap=1,
+        ),
+        "develop-critic": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-critic",
+            role="critic",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}hypothesis_review_next",
+                f"{_P}hypothesis_review",
+                f"{_P}hypothesis_view",
+            ),
+            kinds=(),
+            unit="develop step (review)",
+            fixed_cap=1,
+        ),
+        "maintain": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-living",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}watch_status",
+                f"{_P}watch_run",
+                f"{_P}feed_status",
+                f"{_P}feed_list",
+                f"{_P}feed_run",
+                f"{_P}digest_get",
+            ),
+            kinds=(),
+            unit="maintain step",
+            fixed_cap=1,
+        ),
         "conduct-verify": StageSpec(
             model="claude-sonnet-5-5",
             skill="rf-conductor",
@@ -466,7 +553,19 @@ STAGES.update(
         ),
     }
 )
-CONDUCT_STAGES: Final = ("frame", "gather", "acquire", "write", "conduct-verify", "conduct-audit")
+CONDUCT_STAGES: Final = (
+    "frame",
+    "gather",
+    "acquire",
+    "write",
+    "understand",
+    "develop-lead",
+    "develop-draft",
+    "develop-critic",
+    "maintain",
+    "conduct-verify",
+    "conduct-audit",
+)
 """The stages the conductor starts; their pending unit is its current step (`conductor.pending`).
 `screen` and `extract` are also conductor steps but keep their own work-queue pending units."""
 CHAT_STAGES: Final = ("spar", "ask")

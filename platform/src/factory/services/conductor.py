@@ -66,19 +66,48 @@ STEP_STAGE: Final[Mapping[str, str]] = {
     "acquire": "acquire",
     "extract": "extract",
     "write": "write",
+    "understand": "understand",
+    "develop": "develop-lead",
+    "maintain": "maintain",
 }
-"""The lifecycle ids of a plan the conductor can run, and the runner stage of each."""
+"""The lifecycle ids of a plan the conductor can run, and the runner stage of each (for `develop`
+the first of its three role stages: `_DEVELOP_STAGES`)."""
+
+_DEVELOP_STAGES: Final[Mapping[str, str]] = {
+    "lead": "develop-lead",
+    "drafter": "develop-draft",
+    "critic": "develop-critic",
+}
+"""The runner stage of each role run of the develop step: lead author, drafter and critic are
+three runs in three sessions. None of them may decide a lead or register a hypothesis (those
+gates are the researcher's and stay out of every allow-list: v1 never lets an agent pass them)."""
 
 STEP_GATES: Final[Mapping[str, tuple[str, ...]]] = {
     "frame": ("protocol.ready", "protocol.press_confirm"),
     "gather": ("import.resolution_confirm",),
     "extract": ("mine.resolve",),
     "write": ("writing.release", "manuscript.citation_confirm"),
+    "develop": ("hypotheses.register",),
 }
-"""The gates that close in a step. A gate id no policy names is `human` (`presets.preset`), so an
+"""The gates that close after a step (`hypotheses.lead_decide` closes inside `develop`: see
+`_ROLE_GATES`). `understand` and `maintain` close none: relations and ideas are confirmed by the
+researcher on the command line, outside the step.
+
+The gates that close in a step. A gate id no policy names is `human` (`presets.preset`), so an
 id listed here that does not exist yet (`protocol.press_confirm`) fails safe: the conductor
 waits."""
 
+_GATE_EVENT_TYPES: Final[Mapping[str, tuple[str, ...]]] = {
+    "hypotheses.lead_decide": ("lead.decided",),
+    "hypotheses.register": ("hypothesis.registered",),
+}
+"""Gates closed by one exact event type (a namespace would also match the agents' own drafts)."""
+_ROLE_GATES: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
+    ("develop", "drafter"): ("hypotheses.lead_decide",),
+}
+"""Gates that must be closed before a role run of a step starts: a drafter works only from a
+promoted lead, and promoting is the researcher's act. A human-only gate here makes the conductor
+wait before the role run, not after the step."""
 _GATE_EVENT_NAMESPACES: Final[Mapping[str, tuple[str, ...]]] = {"writing.release": ("draft",)}
 _QUEUE_UNITS: Final = ("screen", "extract")
 """Steps whose pending units are a work queue: with nothing pending the step is complete."""
@@ -218,9 +247,17 @@ def _policy_kinds(project: Project, stage_id: str) -> dict[str, PolicyKind]:
     return {g: effective_policy(project, g).kind for g in STEP_GATES.get(stage_id, ())}
 
 
+def effective_kind(project: Project, gate_id: str) -> PolicyKind:
+    from factory.services.gates import effective_policy
+
+    return effective_policy(project, gate_id).kind
+
+
 def roles_of(project: Project, stage_id: str, level: AutonomyLevel) -> tuple[ConductorRole, ...]:
     """The role runs of a step: always the proposer; a verifier and an auditor, each its own run,
     when the level is not `attended` and an agent may close some gate of the step."""
+    if stage_id == "develop":
+        return ("lead", "drafter", "critic")
     kinds = _policy_kinds(project, stage_id)
     if level is not AutonomyLevel.ATTENDED and any(
         k is not PolicyKind.HUMAN for k in kinds.values()
@@ -230,6 +267,8 @@ def roles_of(project: Project, stage_id: str, level: AutonomyLevel) -> tuple[Con
 
 
 def _stage_of(stage_id: str, role: ConductorRole) -> str:
+    if stage_id == "develop":
+        return _DEVELOP_STAGES[role]
     if role == "verifier":
         return "conduct-verify"
     if role == "auditor":
@@ -262,8 +301,10 @@ def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
     if after is None:
         return False
     names = (gate_id.split(".")[0], *_GATE_EVENT_NAMESPACES.get(gate_id, ()))
+    exact = _GATE_EVENT_TYPES.get(gate_id)
     return any(
-        e.actor.kind == "human" and e.type.split(".")[0] in names
+        e.actor.kind == "human"
+        and (e.type in exact if exact is not None else e.type.split(".")[0] in names)
         for e in read_all(project.paths.events_dir, project.catalog)
         if e.id > after
     )
@@ -311,6 +352,14 @@ def _decide(
         roles = roles_of(project, stage_id, level)
         todo = next((r for r in roles if (index, r) not in closed), None)
         if todo is not None:
+            pre = [
+                g
+                for g in _ROLE_GATES.get((stage_id, todo), ())
+                if effective_kind(project, g) is PolicyKind.HUMAN
+                and not gate_closed(project, stage_id, g)
+            ]
+            if pre:
+                waiting_gate = pre[0]
             position = (index, stage_id, todo)
             break
         human = [g for g, k in _policy_kinds(project, stage_id).items() if k is PolicyKind.HUMAN]

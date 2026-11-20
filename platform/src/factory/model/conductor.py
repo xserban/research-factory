@@ -25,7 +25,9 @@ from factory.model.screening import NonBlank
 
 CONDUCTOR_ID_RE = rf"^cnd_{ULID_RE}$"
 
-ConductorRole = Literal["proposer", "verifier", "auditor"]
+ConductorRole = Literal["proposer", "verifier", "auditor", "lead", "drafter", "critic"]
+"""`lead`, `drafter` and `critic` are the three runs of the develop step (the hypothesis engine's
+independence rule: three distinct sessions)."""
 StepOutcome = Literal["complete", "failed", "lost"]
 PauseReason = Literal[
     "failed-run",

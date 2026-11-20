@@ -168,7 +168,7 @@ def _events(project: Project, kind: str) -> list[Any]:
 
 def test_begin_refuses_and_writes_nothing(project: Project) -> None:
     with pytest.raises(FactoryValidationError):
-        conductor.begin_conductor(project, plan("understand"))  # no runner stage: never skipped
+        conductor.begin_conductor(project, plan("no-such-stage"))  # no runner stage: never skipped
     with pytest.raises(FactoryValidationError):
         conductor.begin_conductor(project, plan("frame", skipped=("frame",)))
     wrong = FPlan(Tier.DEEP, (FStage("frame"),), FLimits())
@@ -449,6 +449,111 @@ def test_the_stages_are_declared_without_the_gate_acts() -> None:
         counts_before={"conduct-verify": 1},
         command=("c",),
     )
+
+
+# ------------------------------------------------------------------- understand, develop, maintain
+
+LATER = ("understand", "develop", "maintain")
+HUMAN_ONLY_ACTS = re.compile(
+    r"lead_decide|hypothesis_register|miner_(admit|register)|_confirm|_release|_resolve|_decide"
+    r"|protocol_(amend|record)|review_decide|reference_decide|relation_decide|idea_decide"
+)
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        ("frame", "gather", "screen", "acquire", "extract", "develop", "write"),  # deep
+        ("frame", "gather", "screen", "acquire", "extract", *LATER, "write"),  # pilot, systematic
+    ],
+)
+def test_the_later_stages_now_begin(project: Project, stages: tuple[str, ...]) -> None:
+    run = conductor.begin_conductor(project, plan(*stages))
+    assert run.steps == stages
+
+
+def test_a_stage_without_a_spec_is_still_refused(project: Project) -> None:
+    with pytest.raises(FactoryValidationError):
+        conductor.begin_conductor(project, plan("develop", "no-such-stage"))
+    assert _events(project, "conductor.started") == []
+
+
+def test_understand_and_maintain_start_one_run_each(project: Project, fake: FakeRunner) -> None:
+    conductor.begin_conductor(project, plan("understand", "maintain"))
+    assert drive(project, fake).state == "finished"
+    assert fake.stages == ["understand", "maintain"]
+    assert runner.STAGES["understand"].skill == "rf-lineage"
+    assert runner.STAGES["maintain"].skill == "rf-living"
+    assert {
+        "mcp__factory__relation_propose",
+        "mcp__factory__idea_propose",
+    } <= set(runner.STAGES["understand"].tools)
+    assert {
+        "mcp__factory__watch_run",
+        "mcp__factory__feed_run",
+        "mcp__factory__digest_get",
+    } <= set(runner.STAGES["maintain"].tools)
+
+
+def test_develop_is_three_runs_in_three_sessions(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import factory.services.gates as gates
+
+    monkeypatch.setattr(gates, "effective_policy", policy(PolicyKind.AGENT))
+    conductor.begin_conductor(project, plan("develop"))
+    assert drive(project, fake).state == "finished"
+    assert fake.stages == ["develop-lead", "develop-draft", "develop-critic"]
+    assert len({c[2] for c in fake.calls}) == 3
+    roles = [e.payload["role"] for e in _events(project, "conductor.step_started")]
+    assert roles == ["lead", "drafter", "critic"]
+    assert [runner.STAGES[k].role for k in fake.stages] == ["lead-author", "drafter", "critic"]
+    assert {runner.STAGES[k].skill for k in fake.stages} == {"rf-hypothesis-engine", "rf-critic"}
+
+
+def test_develop_waits_for_a_human_to_promote_leads_before_the_drafter(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import factory.services.gates as gates
+
+    monkeypatch.setattr(gates, "effective_policy", policy(PolicyKind.HUMAN))
+    conductor.begin_conductor(project, plan("develop"))
+    status = drive(project, fake, gate_closed=lambda *_a: False)
+    assert status.state == "waiting" and status.gate_id == "hypotheses.lead_decide"
+    assert fake.stages == ["develop-lead"]
+    opened: set[str] = {"hypotheses.lead_decide"}
+    status = drive(project, fake, gate_closed=lambda _p, _s, g: g in opened)
+    assert status.state == "waiting" and status.gate_id == "hypotheses.register"
+    assert fake.stages == ["develop-lead", "develop-draft", "develop-critic"]
+    opened.add("hypotheses.register")
+    assert drive(project, fake, gate_closed=lambda _p, _s, g: g in opened).state == "finished"
+    assert fake.stages.count("develop-critic") == 1
+
+
+def test_a_human_gate_of_a_later_step_does_not_skip_the_step(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import factory.services.gates as gates
+
+    monkeypatch.setattr(gates, "effective_policy", policy(PolicyKind.HUMAN))
+    conductor.begin_conductor(project, plan("develop", "maintain"))
+    drive(project, fake, gate_closed=lambda *_a: False)
+    assert "maintain" not in fake.stages
+
+
+def test_no_later_stage_allow_list_holds_a_human_only_act() -> None:
+    for key in ("understand", "develop-lead", "develop-draft", "develop-critic", "maintain"):
+        assert key in runner.CONDUCT_STAGES
+        names = [t.removeprefix("mcp__factory__") for t in runner.STAGES[key].tools]
+        assert not [n for n in names if HUMAN_ONLY_ACTS.search(n)], key
+        assert "hypothesis_review" not in names or key == "develop-critic"
+    assert HUMAN_ONLY_ACTS.search("lead_decide") and HUMAN_ONLY_ACTS.search("hypothesis_register")
+    assert "hypothesis_review" not in {
+        t.removeprefix("mcp__factory__")
+        for k in ("develop-lead", "develop-draft")
+        for t in runner.STAGES[k].tools
+    }
+    assert conductor.STEP_GATES["develop"] == ("hypotheses.register",)
 
 
 def test_a_conductor_stage_cannot_be_started_by_hand(project: Project) -> None:
