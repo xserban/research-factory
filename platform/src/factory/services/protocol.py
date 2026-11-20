@@ -872,13 +872,43 @@ def list_deviations(project: Project) -> list[DeviationRecorded]:
     ]
 
 
+def _author_session(project: Project) -> str | None:
+    """The session that recorded the current protocol version (the latest `protocols` row's
+    event), or None when there is none."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT e.session FROM events e WHERE e.id = "
+                "(SELECT event_id FROM protocols ORDER BY event_id DESC LIMIT 1)"
+            )
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
+def _needs_separate_reviewer(project: Project) -> bool:
+    """A PRESS review must come from another session than the protocol's author in `pilot` and
+    `systematic` projects and under any autonomy level but `attended`; exploratory attended
+    projects keep the old rule."""
+    from factory.model.levels import AutonomyLevel
+    from factory.model.rigor import RigorMode
+    from factory.services.project import project_levels
+
+    levels = project_levels(project)
+    return (
+        levels.rigor_mode is not RigorMode.EXPLORATORY
+        or levels.autonomy_level is not AutonomyLevel.ATTENDED
+    )
+
+
 def press_review(
     project: Project,
     actor: Actor,
     protocol_id: str,
     findings: Sequence[PressFinding],
 ) -> str:
-    """Record an agent's PRESS review of the current protocol, and return its review id."""
+    """Record an agent's PRESS review of the current protocol, and return its review id. In a
+    pilot or systematic project, or at a non-attended level, the session must differ from the
+    one that recorded the current protocol version (refused on `session`, nothing written)."""
     issues: list[ValidationIssue] = []
     if actor.kind != "agent":
         issues.append(ValidationIssue("actor", "a PRESS review is written by an agent"))
@@ -886,6 +916,18 @@ def press_review(
         current = current_protocol(project)
         if current is None or current.protocol_id != protocol_id:
             issues.append(ValidationIssue("protocol_id", "must be the current protocol"))
+        elif (
+            actor.kind == "agent"
+            and _needs_separate_reviewer(project)
+            and actor.session == _author_session(project)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "session",
+                    "same-session-as-author: the PRESS review must come from another "
+                    "session than the one that recorded the protocol",
+                )
+            )
         if issues:
             raise FactoryValidationError(issues)
         review_id = project.ids.new("prs")

@@ -18,7 +18,7 @@ from factory.services.human_queue import Gate, HumanItem, HumanQueue, human_queu
 from factory.services.project import init_project, project_status
 from factory.services.protocol import press_review
 from factory.sources.registry import SourceFactory
-from tests.helpers import SESSION, ready_protocol
+from tests.helpers import SESSION, ready_protocol, reviewer_of
 from tests.portfolio_helpers import fresh, ta_world
 from tests.test_agreement import _ready
 from tests.test_audit import _agree, _population
@@ -39,7 +39,7 @@ def test_press_confirmation_awaits_a_human(
 ) -> None:
     protocol_id = ready_protocol(project, agent, human, mock_sources, press=False)
     finding = PressFinding(element=PressElement.TEXT_WORDS, finding="Add.", severity="minor")
-    press_review(project, agent, protocol_id, (finding,))
+    press_review(project, reviewer_of(agent), protocol_id, (finding,))
     item = _items(human_queue(project))[(Gate.PRESS_CONFIRMATION, None)]
     assert item.count == 1
     assert item.command == "factory --project demo protocol confirm-press <review-id>"

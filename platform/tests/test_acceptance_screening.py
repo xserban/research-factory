@@ -37,6 +37,7 @@ from tests.helpers import (
     openalex_item,
     pilot_protocol_spec,
     record_pilot_question,
+    reviewer_of,
 )
 
 pytestmark = pytest.mark.slow  # acceptance suite: dev runs deselect with -m "not slow"
@@ -160,7 +161,7 @@ def _ready_pilot(
     finding = PressFinding(
         element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
     )
-    review_id = press_review(project, agent, protocol_id, (finding,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
     confirm_press(project, human, review_id, ("Accepted.",))
 
 
