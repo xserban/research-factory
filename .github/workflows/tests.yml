@@ -77,6 +77,23 @@ jobs:
       - run: uv run mypy --strict src
       - run: uv run lint-imports
 
+  map-fresh:
+    name: map-fresh (advisory)
+    # Advisory: docs/MAP.md is regenerated after a merge, so a pull request is often stale by design.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: platform/uv.lock
+      - run: uv sync --frozen
+      - name: docs/MAP.md matches scripts/gen_map.py (commit line ignored)
+        working-directory: .
+        run: uv run --project platform python scripts/check_map_fresh.py
+
   tests:
     name: tests (shard ${{ matrix.shard }} of 4)
     needs: plan

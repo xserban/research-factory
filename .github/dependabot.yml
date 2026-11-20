@@ -1,0 +1,22 @@
+# Weekly, grouped, small pull-request limit. Dependabot pull requests are reviewed like any change;
+# none merges automatically. Optional extras are part of platform/pyproject.toml and so included.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/platform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns: ["*"]
