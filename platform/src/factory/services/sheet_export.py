@@ -230,11 +230,14 @@ def export_sheet(project: Project, sheet_id: str) -> str:
             ]
             if a.linked_claim:
                 k = a.linked_claim
-                out += [
-                    f"Linked claim `{a.claim_row_key}` "
-                    f"({escape(k.claim_type)}, {escape(k.about)}): {escape(k.quote)}",
-                    "",
-                ]
+                note = sheets_service.claim_link_note(k)
+                flag = f" ({note})" if note else ""
+                detail = (
+                    ""
+                    if k.missing
+                    else f" ({escape(k.claim_type)}, {escape(k.about)}): {escape(k.quote)}"
+                )
+                out += [f"Linked claim `{a.claim_row_key}`{detail}{flag}", ""]
     out += ["## References", "", *refs, ""]
     out += _footer(
         project,
