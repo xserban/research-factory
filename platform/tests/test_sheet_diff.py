@@ -48,6 +48,11 @@ def chat_env(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "_factory_executable", lambda: "/venv/bin/factory")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_staleness_memo() -> None:
+    sd.clear_staleness_cache()
+
+
 def _total(project: Project) -> int:
     project.index.sync()
     with project.index.connect() as conn:
@@ -124,6 +129,7 @@ def test_stale_when_the_selection_gains_or_loses_a_paper(
         )
         conn.execute(text("UPDATE sheets SET selection_digest = 'older'"))
         conn.commit()
+    sd.clear_staleness_cache()  # the index was edited here without an event
     result = sd.sheet_staleness(project, sheet)  # the paper is in the selection now: added
     assert result.stale is True and gone in result.works_added
     assert any("added" in r for r in result.reasons)
@@ -136,6 +142,7 @@ def test_stale_when_the_selection_gains_or_loses_a_paper(
             {"s": sheet},
         )
         conn.commit()
+    sd.clear_staleness_cache()
     again = sd.sheet_staleness(project, sheet)
     assert "wrk_GONE" in again.works_removed and any("removed" in r for r in again.reasons)
 
@@ -183,6 +190,64 @@ def _served_state(project: Project, agent: Actor, world: list[str]) -> pp.MinerW
     return pp.load_miner_work_state(project, "m-claims", version, sorted(world))
 
 
+def test_the_staleness_payload_names_removed_papers_with_titles(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    sheet = _closed_sheet(project, agent, world)
+    with project.index.exclusive(), project.index.connect() as conn:
+        conn.execute(
+            text("INSERT INTO sheet_candidates VALUES (:s, 'rf:gone', 1, '[]', '[]', 0)"),
+            {"s": sheet},
+        )
+        conn.commit()
+    sd.clear_staleness_cache()
+    removed = hub_chat.sheet_view(project, sheet)["staleness"]["works_removed"]
+    assert removed == [{"work_id": "rf:gone", "title": ""}]
+
+
+def test_two_sheet_views_without_new_events_compute_the_fingerprint_once(
+    project: Project, agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sheet = _closed_sheet(project, agent, world)
+    calls: list[int] = []
+    real = sd.sheets_service.claims_fingerprint
+
+    def counting(proj: Project, works: Any) -> dict[str, str]:
+        calls.append(len(list(works)))
+        return real(proj, works)
+
+    monkeypatch.setattr(sd.sheets_service, "claims_fingerprint", counting)
+    first = hub_chat.sheet_view(project, sheet)["staleness"]
+    second = hub_chat.sheet_view(project, sheet)["staleness"]
+    assert first == second and first["stale"] is False
+    assert len(calls) == 1
+    _closed_sheet(project, agent, world)  # a new event ends the memo (and opening fingerprints)
+    seen = len(calls)
+    hub_chat.sheet_view(project, sheet)
+    assert len(calls) == seen + 1
+
+
+def test_the_fingerprint_follows_the_row_content_not_only_its_key(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    state = _served_state(project, agent, world)
+    target = sorted(world)[0]
+    row = state.rows[target][0]
+    fields = {k: (v[0], v[1], v[2], "another quote") for k, v in row.fields.items()}
+    edited = dataclasses.replace(
+        state, rows={**state.rows, target: [dataclasses.replace(row, fields=fields)]}
+    )
+    seen: list[dict[str, str]] = []
+    for st in (state, edited):
+        orig = sh.load_miner_work_state
+        sh.load_miner_work_state = lambda *a, _st=st, **k: _st  # type: ignore[assignment]
+        try:
+            seen.append(sh.claims_fingerprint(project, [target]))
+        finally:
+            sh.load_miner_work_state = orig  # type: ignore[assignment]
+    assert seen[0] != seen[1]
+
+
 @pytest.mark.parametrize("change", ["new-version", "new-row", "reopened"])
 def test_stale_by_a_changed_served_row(
     project: Project,
@@ -209,6 +274,7 @@ def test_stale_by_a_changed_served_row(
         return dataclasses.replace(real_state, rows=rows, emptied=emptied)
 
     monkeypatch.setattr(sd.sheets_service, "load_miner_work_state", altered)
+    sd.clear_staleness_cache()  # the served state was altered here without an event
     result = sd.sheet_staleness(project, sheet)
     assert result.stale is True and result.rows_changed == (target,)
 
@@ -336,6 +402,41 @@ def test_a_respar_request_refuses_a_mode_that_differs_from_its_sheet(
     assert runner.wait(run_id, 10)
 
 
+def test_a_respar_run_cannot_open_another_hypothesis_or_selection_spec(
+    project: Project, agent: Actor, agent_other: Actor, human: Actor, world: list[str]
+) -> None:
+    old = _closed_sheet(project, agent, world)
+    request = _respar(project, human, old).request_id
+    launcher = FakeLauncher()
+    run_id = runner.start_run(project, "spar", launcher=launcher, unit_cap=1)
+    cr.take_next(project, agent_other, run_id)
+    before = _total(project)
+    with pytest.raises(FactoryValidationError) as err:
+        sh.open_sheet(
+            project, agent_other, "Reflection hurts", SPEC, _props(world), request_id=request
+        )
+    assert [i.field for i in err.value.issues] == ["hypothesis"]
+    other = SelectionSpec(exclude=[sorted(world)[-1]])
+    with pytest.raises(FactoryValidationError) as err2:
+        sh.open_sheet(
+            project, agent_other, "Reflection helps", other, _props(world), request_id=request
+        )
+    assert [i.field for i in err2.value.issues] == ["selection"]
+    assert _total(project) == before
+    # the same hypothesis (spacing aside) and the same spec open it
+    sh.open_sheet(
+        project,
+        agent_other,
+        " Reflection helps ",
+        SelectionSpec(),
+        _props(world),
+        request_id=request,
+    )
+    for process in launcher.processes:
+        process.release()
+    assert runner.wait(run_id, 10)
+
+
 def test_respar_cli_takes_the_hypothesis_from_the_sheet(
     project: Project, agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -405,6 +506,81 @@ def test_carry_over_is_a_suggestion_and_writes_no_rating(
     assert kept.new.rating is None  # the new argument is still unrated
     assert sh.view_sheet(project, new).coverage.unrated == 2
     assert "earlier sheet" in diff.suggestion_label and "not a rating" in diff.suggestion_label
+
+
+def _quoted_sheet(
+    project: Project, agent: Actor, world: list[str], quotes: tuple[str, ...], claim: str = "c"
+) -> str:
+    """A closed sheet whose against-section holds one argument per quote, all on the first work
+    at the same anchor; the for-section holds one plain argument on the second work."""
+    works = sorted(world)
+    sheet = sh.open_sheet(project, agent, "Reflection helps", SPEC, _props(world)).sheet_id
+    sh.record_arguments(
+        project,
+        agent,
+        sheet,
+        [
+            sh.ArgumentInput("against", works[0], ANCHOR, q, f"{claim}-{q}", "moderate")
+            for q in quotes
+        ],
+    )
+    sh.close_section(project, agent, sheet, "against")
+    sh.record_arguments(project, agent, sheet, [_arg(works[1], "for")])
+    sh.close_section(project, agent, sheet, "for")
+    return sheet
+
+
+def _against(diff: sd.SheetDiff) -> list[sd.KeptArgument]:
+    return [k for k in diff.kept if k.new.stance == "against"]
+
+
+def test_a_different_quote_at_the_same_anchor_is_changed_not_suggested(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    old = _quoted_sheet(project, agent, world, (QUOTES[0],), "old")
+    new = _quoted_sheet(project, agent, world, (QUOTES[1],), "new")
+    sh.rate_argument(
+        project, human, sh.view_sheet(project, old).arguments[0].argument_id, "weak", "thin"
+    )
+    [kept] = _against(sd.sheet_diff(project, old, new))
+    assert kept.suggested_rating is None and kept.suggested_note is None
+    assert kept.changed is True
+    assert kept.old_rating == "weak"  # shown as context only
+    assert kept.old.quote == QUOTES[0] and kept.new.quote == QUOTES[1]
+    page = hub_chat._diff(project, old, new)
+    [row] = [k for k in page["kept"] if k["stance"] == "against"]
+    assert row["suggested_rating"] is None and row["changed"] is True
+    assert row["old_rating"] == "weak" and row["old_claim"] == f"old-{QUOTES[0]}"
+    assert row["old_quote"] == QUOTES[0] and row["claim"] == f"new-{QUOTES[1]}"
+
+
+def test_an_equal_quote_up_to_spacing_and_case_is_suggested_with_the_old_claim_carried(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    old = _quoted_sheet(project, agent, world, (QUOTES[0],), "old")
+    new = _quoted_sheet(project, agent, world, (QUOTES[0],), "new")
+    sh.rate_argument(
+        project, human, sh.view_sheet(project, old).arguments[0].argument_id, "weak", "thin"
+    )
+    [kept] = _against(sd.sheet_diff(project, old, new))
+    assert kept.suggested_rating == "weak" and kept.changed is False
+    [row] = [k for k in hub_chat._diff(project, old, new)["kept"] if k["stance"] == "against"]
+    assert row["old_claim"] == f"old-{QUOTES[0]}" and row["changed"] is False
+
+
+def test_same_anchor_duplicates_pair_by_quote_before_order(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    a, b = QUOTES[0], QUOTES[1]
+    old = _quoted_sheet(project, agent, world, (a, b))
+    new = _quoted_sheet(project, agent, world, (b, a))
+    first = sh.view_sheet(project, old).arguments[0]
+    assert first.quote == a
+    sh.rate_argument(project, human, first.argument_id, "wrong", "")
+    pairs = _against(sd.sheet_diff(project, old, new))
+    assert all(k.old.quote == k.new.quote and not k.changed for k in pairs)
+    [carried] = [k for k in pairs if k.suggested_rating]
+    assert carried.new.quote == a and carried.suggested_rating == "wrong"
 
 
 def test_accepting_a_suggestion_posts_a_human_rating_through_the_existing_route(
@@ -551,11 +727,13 @@ def test_the_page_shows_the_panels_escaped_and_posts_through_the_existing_routes
     for _ in range(3):
         stripped = re.sub(r"esc\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", "ESC", stripped)
     bare = re.findall(
-        r"(?<![\w.])\b(?:k|d|st|stale|w|row)\."
-        r"(?:quote|claim|title|note|text|suggested_note|reason|reasons)\b"
+        r"(?<![\w.])(?<!if \()\b(?:k|d|st|stale|w|row)\."
+        r"(?:quote|claim|title|note|text|rating|suggested_rating|suggested_note|old_claim"
+        r"|old_quote|old_note|old_rating|reason|reasons)\b"
         r"(?!\s*[?&|=!])",
         stripped,
     )
-    assert not bare, bare
+    assert not bare, bare  # only the exact `if (k.rating)` / `if (k.suggested_rating)` tests pass
+    assert "else if (k.suggested_rating)" in src and "else if (k.changed)" in src
     # nothing in the diff panel writes a rating without a click: the only post is in a handler
     assert json.dumps(src).count("chat-rate-argument") >= 1

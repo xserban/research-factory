@@ -195,4 +195,7 @@ def sheets_diff_cmd(
         if k.suggested_rating is not None:
             note = f" ({k.suggested_note})" if k.suggested_note else ""
             typer.echo(f"    suggested from the earlier sheet: {k.suggested_rating}{note}")
+        elif k.changed:
+            was = f"; earlier rating {k.old_rating} (context only)" if k.old_rating else ""
+            typer.echo(f"    changed at the same place: the quote differs{was}")
     typer.echo(diff.suggestion_label)

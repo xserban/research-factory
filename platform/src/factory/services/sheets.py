@@ -70,7 +70,7 @@ from factory.services.chat_candidates import (
     chat_candidates,
 )
 from factory.services.chat_read import VerifyItem, chat_verify
-from factory.services.chat_requests import check_result_request, respar_parent
+from factory.services.chat_requests import check_result_request, respar_parent, respar_terms
 from factory.services.context import Project
 from factory.services.paper_profile import (
     RawMinerRow,
@@ -241,10 +241,11 @@ def _sheet_row(project: Project, sheet_id: str) -> dict[str, Any] | None:
 
 def claims_fingerprint(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
     """Per work, a 12-hex hash of what the m-claims miner serves for it now: the served row keys
-    with their versions and whether the work is reviewed-empty, gold-empty or only newer-version.
-    A new row, a new version or a reopened work changes the hash. Read-only; the same hash for
-    the same served state (it names no time). Without a listed claims miner every work gets the
-    hash of the empty state."""
+    with their versions and a hash of each row's fields (a row key names the content only for
+    keyed packs, so an edited quote under an unchanged key is caught here), and whether the work
+    is reviewed-empty, gold-empty or only newer-version. A new row, a new version, an edited row
+    or a reopened work changes the hash. Read-only; the same hash for the same served state (it
+    names no time). Without a listed claims miner every work gets the hash of the empty state."""
     unique = list(dict.fromkeys(work_ids))
     version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
     state = (
@@ -254,7 +255,16 @@ def claims_fingerprint(project: Project, work_ids: Sequence[str]) -> dict[str, s
     for work in unique:
         served: dict[str, Any] = {"rows": [], "flags": []}
         if state is not None:
-            served["rows"] = sorted((r.row_key, r.version) for r in state.rows.get(work, []))
+            served["rows"] = sorted(
+                (
+                    r.row_key,
+                    r.version,
+                    hashlib.sha256(
+                        canonical_json({k: list(v) for k, v in r.fields.items()})
+                    ).hexdigest()[:8],
+                )
+                for r in state.rows.get(work, [])
+            )
             served["flags"] = [
                 name
                 for name, group in (
@@ -313,6 +323,20 @@ def open_sheet(
         check_result_request(project, actor, request_id, "spar", opens_mode=mode)
     except FactoryValidationError as err:
         issues.extend(err.issues)
+    terms = None if request_id is None else respar_terms(project, request_id)
+    if terms is not None:
+        # a re-spar repeats the sheet over today's papers: same hypothesis, same selection spec
+        # (the spec may resolve to other works now; that is the point)
+        if " ".join(hypothesis.split()) != " ".join(terms[1].split()):
+            issues.append(
+                ValidationIssue("hypothesis", f"a re-spar of {terms[0]} keeps its hypothesis")
+            )
+        if canonical_json(spec.model_dump(mode="json")) != canonical_json(
+            terms[2].model_dump(mode="json")
+        ):
+            issues.append(
+                ValidationIssue("selection", f"a re-spar of {terms[0]} keeps its selection spec")
+            )
     if issues:
         raise FactoryValidationError(issues)
     result = chat_candidates(project, spec, proposals, mode=mode, tier1_cap=tier1_cap)

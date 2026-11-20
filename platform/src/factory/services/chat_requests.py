@@ -216,6 +216,22 @@ def respar_parent(project: Project, request_id: str) -> str | None:
     return None if row is None or not row[1] else str(row[0])
 
 
+def respar_terms(project: Project, request_id: str) -> tuple[str, str, SelectionSpec] | None:
+    """`(parent, hypothesis, selection spec)` of a re-spar request; None for any other request.
+    Read-only; the caller has synced the index."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT parent, hypothesis, selection, respar FROM chat_requests"
+                " WHERE request_id = :r"
+            ),
+            {"r": request_id},
+        ).first()
+    if row is None or not row[3]:
+        return None
+    return str(row[0]), str(row[1] or ""), SelectionSpec.model_validate(json.loads(row[2]))
+
+
 def request_chat(
     project: Project,
     actor: Actor,

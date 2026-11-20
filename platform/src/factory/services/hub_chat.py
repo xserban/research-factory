@@ -327,7 +327,7 @@ def _staleness(project: Project, sheet_id: str) -> dict[str, Any]:
         "stale": st.stale,
         "reasons": list(st.reasons),
         "works_added": [{"work_id": w, "title": _title(project, w)} for w in st.works_added],
-        "works_removed": list(st.works_removed),
+        "works_removed": [{"work_id": w, "title": _title(project, w)} for w in st.works_removed],
         "rows_changed": [{"work_id": w, "title": _title(project, w)} for w in st.rows_changed],
         "claims_checked": st.claims_checked,
     }
@@ -350,6 +350,10 @@ def _diff(project: Project, old_id: str, new_id: str) -> dict[str, Any]:
                 "new_argument_id": k.new.argument_id,
                 "old_argument_id": k.old.argument_id,
                 "old_claim": k.old.claim,
+                "old_quote": k.old.quote,
+                "changed": k.changed,
+                "old_rating": k.old_rating,
+                "old_note": k.old_note or "",
                 "suggested_rating": k.suggested_rating,
                 "suggested_note": k.suggested_note or "",
             }

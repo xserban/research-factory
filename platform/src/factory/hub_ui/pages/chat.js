@@ -188,6 +188,7 @@ HUB.load(['shell', 'chat']).then(d => {
     return `<div class="ch-stale"><h3>Changed since this sheet opened ${H.info('Computed now from today’s papers and claims. The sheet itself is unchanged: this is a prompt to spar again, not a verdict.', 'About staleness')}</h3>
       <ul>${(s.reasons || []).map(r => `<li>${esc(r)}</li>`).join('')}</ul>
       ${(s.works_added || []).length ? `<div class="meta">Papers added: ${names(s.works_added)}</div>` : ''}
+      ${(s.works_removed || []).length ? `<div class="meta">Papers removed: ${names(s.works_removed)}</div>` : ''}
       ${(s.rows_changed || []).length ? `<div class="meta">Claims rows changed for: ${names(s.rows_changed)}</div>` : ''}
       ${s.claims_checked ? '' : '<div class="meta">This sheet predates claims tracking; only the selection was checked.</div>'}</div>`;
   }
@@ -197,12 +198,14 @@ HUB.load(['shell', 'chat']).then(d => {
     const keptItem = k => {
       let sugg = '';
       if (k.rating) sugg = `<div class="ch-sugg">You already rated this one: ${esc(k.rating)}.</div>`;
-      else if (k.suggested_rating) sugg = `<div class="ch-sugg">Rating suggested from the earlier sheet: <b>${esc(k.suggested_rating)}</b>${k.suggested_note ? ' · ' + esc(k.suggested_note) : ''}. It is not your rating until you accept it. <button type="button" class="btn" data-accept="${esc(k.new_argument_id)}" data-rating="${esc(k.suggested_rating)}" data-note="${esc(k.suggested_note || '')}" ${HUB.served ? '' : 'disabled'}>Accept this rating</button><span class="meta" data-amsg aria-live="polite"></span></div>`;
+      else if (k.changed) sugg = `<div class="ch-sugg">Changed at the same place: the quote is not the earlier one, so no rating is suggested.${k.old_rating ? ' Earlier rating, for context only: ' + esc(k.old_rating) + (k.old_note ? ' · ' + esc(k.old_note) : '') + '.' : ''}</div>`;
+      else if (k.suggested_rating) sugg = `<div class="ch-sugg">Rating suggested from the earlier sheet (same quote): <b>${esc(k.suggested_rating)}</b>${k.suggested_note ? ' · ' + esc(k.suggested_note) : ''}. It is not your rating until you accept it. <button type="button" class="btn" data-accept="${esc(k.new_argument_id)}" data-rating="${esc(k.suggested_rating)}" data-note="${esc(k.suggested_note || '')}" ${HUB.served ? '' : 'disabled'}>Accept this rating</button><span class="meta" data-amsg aria-live="polite"></span></div>`;
       else sugg = '<div class="ch-sugg">The earlier sheet had no rating for this argument.</div>';
-      return `<li><b>${esc(k.stance)}</b> ${esc(k.title || k.work_id)} <span class="meta mono">${esc(k.anchor)}</span><div>${esc(k.claim)}</div>${sugg}</li>`;
+      const before = `<div class="ch-before meta">Earlier sheet: ${esc(k.old_claim)}<blockquote class="ch-quote">${esc(k.old_quote)}</blockquote></div>`;
+      return `<li><b>${esc(k.stance)}</b> ${esc(k.title || k.work_id)} <span class="meta mono">${esc(k.anchor)}</span><div>${esc(k.claim)}</div><blockquote class="ch-quote">${esc(k.quote)}</blockquote>${before}${sugg}</li>`;
     };
     const c = d.counts || {};
-    return `<div class="ch-diff"><h3>Compared with the earlier sheet ${H.info('Arguments are matched by paper, anchor and stance. A rating you gave the earlier argument is only suggested here; nothing is rated until you accept it.', 'About the comparison')}</h3>
+    return `<div class="ch-diff"><h3>Compared with the earlier sheet ${H.info('Arguments are matched by paper, anchor and stance; a rating is suggested only when the quote is the same. A rating you gave the earlier argument is only suggested here; nothing is rated until you accept it.', 'About the comparison')}</h3>
       <div class="meta"><b class="num">${fmt(c.added || 0)}</b> added · <b class="num">${fmt(c.dropped || 0)}</b> dropped · <b class="num">${fmt(c.kept || 0)}</b> kept · earlier sheet <a href="#sheet=${encodeURIComponent(d.old)}" data-result="${esc(d.old)}">${esc(d.old)}</a></div>
       <p class="note">${esc(d.label || '')}</p>
       <div class="h3">Added</div><ul>${(d.added || []).map(item).join('') || '<li class="meta">None.</li>'}</ul>
