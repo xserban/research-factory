@@ -329,6 +329,13 @@ def _version_key(version: str) -> int | None:
     return int(version) if version.isascii() and version.isdigit() else None
 
 
+def version_order_blocks(holder: Holder, version: str) -> bool:
+    """True when `version` and the stored version are both integers and `version` is older
+    (decision 157): the index is never rebuilt backwards."""
+    mine, theirs = _version_key(version), _version_key(holder.version)
+    return mine is not None and theirs is not None and mine < theirs
+
+
 def holder_blocks(
     holder: Holder,
     version: str,
@@ -341,18 +348,25 @@ def holder_blocks(
 ) -> bool:
     """Whether `holder` forbids a process running projection `version` to rebuild the index.
 
-    The open question of IDEA-62, decided here: inside the window an older version never
-    rebuilds over a newer one, and a newer version always may (the newer code is where the line
-    is heading; the older process is the stray one). Versions that are not both integers have no
-    order, so each refuses the other inside the window.
+    Invariant (decision 157, amending IDEA-62): when both versions are integers, a process whose
+    version is older than the stored one is always blocked, whatever the age of the hold, the
+    liveness, host or pid of the holder, or whether the index carries a marker (`held_at` None);
+    a newer version always may rebuild (the newer code is where the line is heading; the older
+    process is the stray one). The only escape is a zero window, which turns the guard off.
 
-    Never blocks: the same version; an unmarked index (built before the marker existed); a hold
-    older than `window` (a holder that crashed on another host ages out); this very process; a
-    holder on this host whose process is gone (a crash frees the index at once); a zero window; a
-    `held_at` more than a window ahead of `now` (clock skew or a damaged value must not hold the
-    index for ever).
+    Versions that are not both integers have no order, so the IDEA-62 window rule applies to
+    them: each refuses the other inside the window, and is never blocked by an unmarked index, a
+    hold older than `window` (a holder that crashed on another host ages out), this very process,
+    a holder on this host whose process is gone, or a `held_at` more than a window ahead of `now`
+    (clock skew or a damaged value must not hold the index for ever).
+
+    Never blocks: the same version; a zero window.
     """
-    if holder.version == version or holder.held_at is None or window <= timedelta(0):
+    if holder.version == version or window <= timedelta(0):
+        return False
+    if version_order_blocks(holder, version):
+        return True
+    if holder.held_at is None:
         return False
     age = now - holder.held_at
     if age >= window or -age > window:
@@ -648,8 +662,10 @@ class Index:
         return None if stored is None else _holder(stored[0])
 
     def _guard(self) -> Holder | None:
-        """Refuse to rebuild while another code line holds the index (IDEA-62, `holder_blocks`);
-        otherwise return the stored marker. Callers hold the write lock."""
+        """Refuse to rebuild over a newer integer version (decision 157: never backwards, however
+        old or dead the holder, marked or not) or, for unordered versions, while another code line
+        holds the index inside the window (IDEA-62, `holder_blocks`); otherwise return the stored
+        marker. Callers hold the write lock."""
         holder = self._stored_holder()
         if holder is None or not holder_blocks(
             holder,
@@ -661,7 +677,14 @@ class Index:
             alive=_pid_alive,
         ):
             return holder
-        assert holder.held_at is not None  # holder_blocks is False without it
+        if version_order_blocks(holder, self._projection.version):
+            raise IndexHeldError(
+                f"index {self._db_path} is at projection version {holder.version}; this process "
+                f"runs older version {self._projection.version} from {self._code} and will not "
+                f"rebuild it backwards (decision 157). Restart it on the current code, or set "
+                f"FACTORY_INDEX_HOLD_MINUTES=0 for a deliberate rollback."
+            )
+        assert holder.held_at is not None  # unordered blocking needs a marker
         until = format_ts(holder.held_at + self._hold_window)
         raise IndexHeldError(
             f"index {self._db_path} is held by projection version {holder.version} "
@@ -773,7 +796,9 @@ class Index:
     def _build(self) -> int:
         """Build a fresh DB beside the live one, then atomically swap it in.
 
-        Refused (`IndexHeldError`) while another code line holds the index (IDEA-62)."""
+        Refused (`IndexHeldError`) when the stored version is a newer integer than this process's
+        (decision 157: never rebuilt backwards), or while another code line holds the index with
+        an unordered version (IDEA-62)."""
         stored = self._guard()
         events, offsets = self._read_everything()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
