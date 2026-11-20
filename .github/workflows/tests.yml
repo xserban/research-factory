@@ -1,0 +1,143 @@
+name: Tests
+
+# The offline test suite (the same selection as a local run: `-m 'not network and not slow'`),
+# split into four shards of test files and run in parallel with pytest-xdist inside each shard.
+# Report-only at first: the jobs do not fail the build (`continue-on-error`) until the known
+# failures are cleaned up; then drop that line and make `static` and `tests` required checks.
+# The slowest 25 tests of every shard are printed in the run summary, to find the cost.
+#
+# Tiers: a pull request runs only the tests its change can reach (scripts/affected_tests.py: the
+# import graph plus a small always-run set; suite-wide files select everything); every push to
+# main, the nightly run and a manual run execute the whole suite. The nightly run adds the `slow`
+# suites (acceptance and scale files excluded from a normal run).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"  # nightly, 03:00 UTC: everything, including the slow suites
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: platform
+
+jobs:
+  plan:
+    name: which tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      slow: ${{ steps.pick.outputs.slow }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: pick
+        working-directory: .
+        run: |
+          slow=false
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 scripts/affected_tests.py --base "origin/${{ github.base_ref }}" > plan.txt
+          else
+            echo "mode=all" > plan.txt
+            [ "${{ github.event_name }}" = "schedule" ] && slow=true
+          fi
+          mode=$(head -1 plan.txt | cut -d= -f2)
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "slow=$slow" >> "$GITHUB_OUTPUT"
+          { echo "### Plan: $mode"; if [ "$mode" = touched ]; then echo "$(($(wc -l < plan.txt) - 1)) test files"; fi; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: plan.txt
+
+  static:
+    name: ruff + mypy --strict
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: platform/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run mypy --strict src
+      - run: uv run lint-imports
+
+  tests:
+    name: tests (shard ${{ matrix.shard }} of 4)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: platform/uv.lock
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+          path: platform
+      - name: Pick this shard's files
+        # Round-robin over the sorted file list (all, or the planned ones): stable, and
+        # neighbouring (related, similarly heavy) files land in different shards.
+        run: |
+          if [ "${{ needs.plan.outputs.mode }}" = touched ]; then
+            tail -n +2 plan.txt | sort > all.txt
+          else
+            ls tests/test_*.py | sort > all.txt
+          fi
+          awk -v s=${{ matrix.shard }} 'NR % 4 == s' all.txt > shard.txt
+          echo "files in this shard: $(wc -l < shard.txt)"
+      - name: Run
+        run: |
+          [ -s shard.txt ] || { echo "nothing to run in this shard"; exit 0; }
+          marker="not network and not slow"
+          [ "${{ needs.plan.outputs.slow }}" = true ] && marker="not network"
+          uv run pytest $(cat shard.txt) -q -p no:cacheprovider -n auto --dist loadfile \
+            -m "$marker" --durations=25 --junitxml=junit-${{ matrix.shard }}.xml
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Shard ${{ matrix.shard }}"
+            python3 - <<'PY'
+          import re, sys, xml.etree.ElementTree as ET
+          try:
+              s = ET.parse("junit-${{ matrix.shard }}.xml").getroot()
+              s = s if s.tag == "testsuite" else s[0]
+              print(f"tests {s.get('tests')}, failures {s.get('failures')}, errors {s.get('errors')}, skipped {s.get('skipped')}, {float(s.get('time', 0)):.0f} s")
+              for c in s.iter("testcase"):
+                  if c.find("failure") is not None or c.find("error") is not None:
+                      print(f"- FAILED {c.get('classname')}::{c.get('name')}")
+          except Exception as e:
+              print("no report:", e)
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.shard }}
+          path: platform/junit-${{ matrix.shard }}.xml
+          retention-days: 14
