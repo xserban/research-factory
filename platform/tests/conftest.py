@@ -285,3 +285,15 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
         return
     for (builder, outcome), count in sorted(world_cache.STATS.items()):
         terminalreporter.write_line(f"world cache: {builder} {outcome}: {count}")
+
+
+@pytest.fixture(autouse=True)
+def _round_decision_off(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The older snowball round tests predate the rule that a real round cites a selected
+    decision; the rule is switched off for them. A test that lists `enforce_round_decision` runs
+    with it on (`tests/test_snowball_round_decision.py`)."""
+    if "enforce_round_decision" in request.fixturenames:
+        return
+    from factory.services import snowball
+
+    monkeypatch.setattr(snowball, "bind", lambda project, level, ids, **kw: tuple(ids or ()))
