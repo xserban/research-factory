@@ -1,5 +1,7 @@
 # Hub v2 fix list (collected from build reports; worked in the fix round)
 
+Status: merged (worked in the fix rounds of IDEA-97, merged into main 2026-11-18)
+
 1. Journeys: "references extracted" and "cited by corpus" stops not fed (`extra`); stops carry no event id (TrailStep lacks it); trace ids only for screening.
 2. Lenses payload: `adoption.cells` empty on the pilot build (adoption records not reaching lenses); chain and adoption cells carry no work ids; only one matrix pair server-side (JS computes the others: move to the service, all pairs of the DNA dims); icicle lacks dimension names.
 3. Findings: no full value distributions for the no_human, full_lifecycle, iterative_loop and compare cards; stage rows lack per-paper quotes; rule titles typed in the page (move to the payload).

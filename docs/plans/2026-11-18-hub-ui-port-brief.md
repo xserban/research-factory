@@ -1,5 +1,7 @@
 # Hub v2 page port brief (binding for every page task)
 
+Status: merged (binding brief of IDEA-97, merged into main 2026-11-18)
+
 Plan: `docs/plans/2026-11-18-hub-ui.md`. Copy rules: `docs/hub-copy-guide.md` (binding: short human titles, ⓘ panels, terms, no machine phrasing).
 
 ## What you change

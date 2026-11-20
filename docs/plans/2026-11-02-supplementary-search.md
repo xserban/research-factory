@@ -1,5 +1,7 @@
 # Supplementary Search Implementation Plan (slice 1, sub-plan 5a of 5)
 
+Status: merged (slice 1 sub-plan 5a, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** After screening, the platform chases citations backward and forward from the works whose outcome is `promote`, admits explained seed misses by ID lookup, and feeds every new record through dedup and both screening passes, so that every supplementary record is a separate, provenance-tagged run (R-24, R-25; slice-1 flow 10, acceptance 15).

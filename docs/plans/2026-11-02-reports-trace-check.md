@@ -1,5 +1,7 @@
 # Reports, Trace and Check Implementation Plan (slice 1, sub-plan 5b of 5)
 
+Status: merged (slice 1 sub-plan 5b, implemented per CLAUDE.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every reported number is derived from events: the PRISMA 2020 flow, the PRISMA-S search report, and a methods statement that discloses automation. `trace` walks from any ID back to the question and forward to its decisions. `check` lists broken links, gate failures and, with `--promote-to`, the gaps for a stricter mode. A final acceptance file covers slice-1 acceptance 1–22 (flow 11; R-01, R-05, R-24, R-25, R-60).

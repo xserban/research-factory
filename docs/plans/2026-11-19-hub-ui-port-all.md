@@ -1,5 +1,7 @@
 # Hub v2 — port of every old-hub page (IDEA-97, second part)
 
+Status: merged (IDEA-97 second part, hub v2 responsiveness stack merged into main 2026-11-20)
+
 Date: 2026-11-19. Parent plan: `docs/plans/2026-11-18-hub-ui.md`. Acceptance list: `docs/plans/2026-11-18-hub-ui-parity.md` (347 elements, IDs such as `LC-3`).
 
 ## Goal

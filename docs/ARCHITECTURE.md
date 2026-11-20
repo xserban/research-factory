@@ -37,7 +37,7 @@ Four rules shape every module:
 | Layer | Packages | Rule |
 | --- | --- | --- |
 | Kernel | `events/` (envelope, catalog, writer, reader, validation, blobs), `model/` (pydantic payloads and specs), `index/` (tables and fold handlers), `config.py`, `clock.py`, `canonical.py`, `errors.py` | No business rules. `model/` holds one module per entity family; every event type is registered in `events/catalog.py` with its payload model and schema version. |
-| Services | `services/*.py` (about 210 modules) | All orchestration and every guard. A service takes a `Project` (`services/context.py`), reads the index, validates, and records events. |
+| Services | `services/*.py` (over 300 modules; `docs/MAP.md` lists them) | All orchestration and every guard. A service takes a `Project` (`services/context.py`), reads the index, validates, and records events. |
 | Module declarations | `services/modules/*.py` against `modules/contract.py`, `modules/registry.py`, `modules/presets.py` | Declarations only; behaviour stays in the services (§5). |
 | Pure helpers | `consolidation/`, `document/` (anchors, quotes), `evidence/`, `exports/`, `extraction/`, `hypotheses/`, `imports/` (parsers), `inbox/`, `intuition/`, `lineage/`, `living/`, `mining/`, `packs/`, `quality/`, `references/`, `regions/`, `views/`, `writing/` | No I/O, no project state, no clock. Each states its rule in its module docstring (e.g. `lineage/classify.py`: the stated/inferred rule). Services call them; they never call services. |
 | Adapters | `sources/` (literature APIs, polite HTTP client), `sources/fulltext/` (acquisition routes), `document/` converters | The only code that reaches the network or external tools. Tests stub them; network tests carry the `network` marker. |

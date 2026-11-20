@@ -1,5 +1,7 @@
 # Plan: reference parser v2 (initials-first authors) and a better Crossref title query
 
+Status: merged (IDEA-89 follow-up, decision 131; backlog statuses to be confirmed)
+
 Date: 2026-11-17 · Branch: `refparse-v2` · Follows: IDEA-89, decision 130 · Decision: 131 (proposed)
 
 ## Goal
