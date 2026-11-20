@@ -58,7 +58,7 @@ from factory.model.protocol import (
 from factory.model.reviews import ReviewKind
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.services.context import Project
 from factory.services.decision_binding import bind
 from factory.services.gates import gate_issues, indexed_rigor_mode
@@ -72,6 +72,7 @@ from factory.services.protocol_rules import (
 from factory.services.question import QuestionVersion, current_question, get_question
 from factory.services.reviews import require_protocol_change
 from factory.services.seeds import all_seeds
+from factory.services.validation_profile import enforcement_for
 from factory.sources.registry import default_sources, window_filter_sources
 
 
@@ -1016,7 +1017,10 @@ def exploratory_search_notice(project: Project) -> str | None:
     """The notice a search carries while the rigor mode has the protocol gate off, else None.
     It changes no rule: `search_authorization` is unchanged; this only makes the absence visible."""
     project.index.sync()
-    if enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF:
+    if (
+        enforcement_for(project, "protocol.ready", mode=indexed_rigor_mode(project))
+        is Enforcement.OFF
+    ):
         return EXPLORATORY_SEARCH_NOTICE
     return None
 
@@ -1062,7 +1066,8 @@ def search_authorization(
     """
     import_issues = _import_issues(project, spec, import_id)
     if spec.purpose is QueryPurpose.PROBE or (
-        enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF
+        enforcement_for(project, "protocol.ready", mode=indexed_rigor_mode(project))
+        is Enforcement.OFF
     ):
         return import_issues
     current = current_protocol(project)

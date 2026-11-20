@@ -38,7 +38,7 @@ from factory.events.envelope import Actor
 from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningStage
 from factory.model.screening import AuditLabelled, AuditSampled, Channel, ScreeningPhase
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.services import audit_core, passes
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.audit_core import AuditPopulation
@@ -55,6 +55,7 @@ from factory.services.screening_stats import (
 )
 from factory.services.seeds import _rigor_mode
 from factory.services.stages import require_pass_stage, screening_plan
+from factory.services.validation_profile import enforcement_for
 from factory.services.work_ref import resolve_work_id
 
 
@@ -255,7 +256,8 @@ def audit_report(
         rates.false_exclusion,
         AUDIT_ERROR_CEILING,
         enforced=(
-            enforcement(_rigor_mode(project), "screening.audit_ceiling") is Enforcement.ENFORCED
+            enforcement_for(project, "screening.audit_ceiling", mode=_rigor_mode(project))
+            is Enforcement.ENFORCED
         ),
     )
     return AuditReport(
