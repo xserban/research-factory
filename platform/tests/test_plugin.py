@@ -27,6 +27,7 @@ SKILLS = (
     "rf-intuition",
     "rf-lineage",
     "rf-mine",
+    "rf-miner-suggest",
     "rf-probe",
     "rf-protocol",
     "rf-references",
@@ -549,3 +550,33 @@ def test_rf_deep_names_existing_tools_labels_the_note_and_marks_human_gates() ->
         assert needed in text, needed
     human = text.split("## Human gates", 1)[1].split("\n## ", 1)[0]
     assert "PRESS confirmation" in human and "audit label" in human
+
+
+def test_rf_miner_suggest_names_existing_tools_and_marks_human_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-miner-suggest" / "SKILL.md").read_text("utf-8")
+    server = (REPO_ROOT / "platform" / "src" / "factory" / "mcp" / "server.py").read_text("utf-8")
+    for tool in (
+        "project_status",
+        "question_view",
+        "miner_list",
+        "mine_status",
+        "decision_suggest",
+        "miner_register",
+        "protocol_record",
+        "protocol_amend",
+        "miner_calibration_label",
+    ):
+        assert f"`{tool}`" in text, tool
+        assert f"    def {tool}(" in server, tool
+    for needed in (
+        "exploratory, unvalidated, agent-proposed",
+        "agent-proposed schema",
+        "factory mine request",
+        "factory miner admit",
+        "not-stated",
+        "## Human gates",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    human = text.split("## Human gates", 1)[1].split("\n## ", 1)[0]
+    assert "admission" in human and "ticking" in human
