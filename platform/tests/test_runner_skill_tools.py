@@ -52,8 +52,16 @@ STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
         "spar_coverage_record": "the coverage role records the sweep",
     },
     "spar2-cover": {"spar_reading_record": "a reader records readings"},
+    "acquire": {
+        "screen_next": "screening is the screen stage's; the conductor's acquire step fetches",
+        "screen_record": "screening is the screen stage's; the conductor's acquire step fetches",
+    },
 }
 """Per stage key (a skill shared by two stages), the tools that stage does not allow."""
+
+CONDUCTOR_STAGES = runner.CONDUCT_STAGES
+"""The conductor's stages serve no queue (their unit is the conductor's step), so they need no
+`_next` tool."""
 
 
 def _stage_specs() -> list[tuple[str, runner.StageSpec]]:
@@ -87,4 +95,6 @@ def test_every_tool_a_skill_names_is_allowed_or_excluded_with_a_reason(
 
 def test_the_next_tool_of_each_stage_is_allowed() -> None:
     for key, spec in _stage_specs():
+        if key in CONDUCTOR_STAGES:
+            continue
         assert any(t.endswith("_next") for t in spec.tools), key

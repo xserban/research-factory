@@ -21,6 +21,7 @@ from factory.cli.answers import answers_app
 from factory.cli.bench import bench_app
 from factory.cli.brief import brief_app
 from factory.cli.chat import chat_app
+from factory.cli.conductor import conductor_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
@@ -606,6 +607,7 @@ app.add_typer(pages_app)
 app.add_typer(sheets_app)
 app.add_typer(answers_app)
 app.add_typer(chat_app)
+app.add_typer(conductor_app)
 app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)

@@ -117,12 +117,19 @@ RUNNER_SPEC = ModuleSpec(
             "runner.finished",
             "runner.pipeline_started",
             "runner.pipeline_finished",
+            "conductor.started",
+            "conductor.step_started",
+            "conductor.step_finished",
+            "conductor.paused",
+            "conductor.finished",
         ),
         tables=("runner_runs", "runner_pipelines"),
         note=(
             "Headless runner (plan feed-hub H5, decision 119): the platform starts the installed "
             "`claude` executable for one stage; both events are system acts, and every judgement "
-            "is written through MCP with the agent's provenance."
+            "is written through MCP with the agent's provenance. The `conductor.*` events (plan "
+            "tiers-and-autonomy C8) are system acts of the lifecycle conductor, derived from the "
+            "log without a table."
         ),
     ),
 )
