@@ -10,6 +10,9 @@ protection); report-only until the first fully green run on 2026-11-20. SonarClo
 | Every push to main | `static` and the whole offline suite (`-m 'not network and not slow'`), four shards in parallel, pytest-xdist inside each | GitHub |
 | Nightly 03:00 UTC | the whole suite including the `slow` suites (acceptance and scale files) | GitHub |
 | Weekly | quality report (radon, vulture, pip-audit, scc) | GitHub, `weekly-quality.yml` |
+| Every pull request | `map-fresh` (advisory, `continue-on-error`): `scripts/check_map_fresh.py` regenerates `docs/MAP.md` in memory and compares it, ignoring the commit line; stale is expected before the post-merge regeneration | GitHub, `tests.yml` |
+| Pull request touching `platform/pyproject.toml`, `platform/uv.lock` or workflows; Mondays 05:00 UTC; manual | dependency audit (pip-audit of the exported lock), report-only: summary and artifact `pip-audit`, never fails the run | GitHub, `security.yml` |
+| Weekly (Dependabot) | grouped update pull requests for uv (`/platform`) and GitHub Actions, at most 3 and 2 open; reviewed like any change, never auto-merged | `.github/dependabot.yml` |
 | Locally, before a branch is opened as a pull request | the touched files one at a time (`pt.sh`), mypy and ruff | the machine |
 
 ## How a change is selected
@@ -40,3 +43,12 @@ two stale tests), together with the failures the first full runs found.
 Read the run summary (the failing tests and the 25 slowest), then `gh run view <id> --log`. Fix on
 the branch and push; the run restarts. A flaky test is a bug in the test: fix the cause, do not
 re-run until green.
+
+## Quality trend file
+`scripts/quality_trend.py` appends one JSON line to `docs/quality-trend.jsonl`: date, commit, tests
+collected, ruff findings, mypy errors, Python file, module and test-file counts (null where a tool
+was skipped; `--fast` skips test collection and mypy). Run it by hand from the repository root
+(`uv run --project platform python scripts/quality_trend.py`) when a trend point is wanted, for
+example at a plan's merge; it only counts. The file holds one seed line; further lines are added
+deliberately, not by CI. Where the history lives long term (repository, data branch, hub page) is
+still open (IDEA-94).

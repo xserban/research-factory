@@ -261,7 +261,8 @@ def head_commit() -> str:
         return "unknown"
 
 
-def main() -> None:
+def render() -> tuple[str, str]:
+    """Return the MAP text and a one-line summary of the counts; writes nothing."""
     registry = default_modules()
     catalog = default_catalog()
     projection = default_projection()
@@ -475,16 +476,37 @@ def main() -> None:
         w(f"| `{skill}` | {description} | {code(sorted(named))} |")
     w("")
 
-    OUT.write_text("\n".join(lines))
-    print(
-        textwrap.dedent(
-            f"""\
-            wrote {rel(OUT)}: {len(registry.modules())} modules, {len(catalog.names())} events,
-            {len(table_names)} tables, {len(services)} services, {len(tools)} tools,
-            {len(commands)} commands, {len(skill_map)} skills"""
-        )
+    summary = textwrap.dedent(
+        f"""\
+        {len(registry.modules())} modules, {len(catalog.names())} events,
+        {len(table_names)} tables, {len(services)} services, {len(tools)} tools,
+        {len(commands)} commands, {len(skill_map)} skills"""
     )
+    return "\n".join(lines), summary
+
+
+_COMMIT_LINE = re.compile(r"^Generated at commit `[^`]*`", re.MULTILINE)
+
+
+def normalise(text: str) -> str:
+    """The MAP text with the commit hash blanked: the only part that differs between runs."""
+    return _COMMIT_LINE.sub("Generated at commit `-`", text)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    text, summary = render()
+    if "--check" in args:
+        current = OUT.read_text() if OUT.exists() else ""
+        if normalise(current) != normalise(text):
+            print(f"{rel(OUT)} is stale: regenerate with scripts/gen_map.py", file=sys.stderr)
+            return 1
+        print(f"{rel(OUT)} is fresh")
+        return 0
+    OUT.write_text(text)
+    print(f"wrote {rel(OUT)}: {summary}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
