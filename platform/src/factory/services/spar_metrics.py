@@ -10,13 +10,15 @@ Measures (conventions, stated here and in the hub's explanations):
   and shown as "—"; a percentage is always shown with its n.
 - Groups: stance, candidate source, strength, model, engine (v1 or v2) and v2 role. An argument is
   counted under every source that proposed its work on the sheet (`sheet_candidates.sources`), so
-  the source rows add up to more than the total. The role of a v2 argument is its stance role
-  (the against or the for run wrote it); a v1 argument has no role.
+  the source rows add up to more than the total; one whose work has no candidate row counts under
+  `unknown`. The role of a v2 argument is its stance (derived: arguments do not record their run);
+  a v1 argument has no role.
 - Critic against researcher (v2): the latest `sheet.argument_checked` verdict of an argument is
   compared with the researcher's rating on the mapping holds=sound, overreaches=weak, misread=wrong
   (a convention, not a finding). Raw agreement is the share on the diagonal; Cohen's kappa is
   shown only from `MIN_KAPPA_N` (10) compared arguments and is None when chance agreement is 1.
-- `since` keeps ratings given on or after that date (ISO prefix); unrated arguments stay.
+- `since` keeps ratings given on or after that date (ISO prefix); arguments rated earlier are left
+  out (not counted as unrated); unrated arguments stay.
 """
 
 from __future__ import annotations
@@ -44,8 +46,10 @@ MEASURES = {
     "unrated": "Arguments you have not rated yet; they are counted but not part of the share.",
     "source": "Which kind of search proposed the paper; an argument whose paper came from several "
     "sources counts under each, so these rows add up to more than the total.",
-    "role": "In the agentic spar, the role that wrote the argument (the case against or the case "
-    "for); the plain spar has no roles.",
+    "role": "In the agentic spar, a v2 role is the stance of the argument (against or for), "
+    "derived because arguments do not record their run; the plain spar has no roles.",
+    "since": "With a start date, arguments rated before it are left out (not counted as "
+    "unrated); unrated arguments stay.",
     "agreement": "How often the critic's verdict matches your rating, counting holds as sound, "
     "overreaches as weak and misread as wrong; a raw share, with kappa from 10 comparisons.",
     "answers": "Your sentence ratings on answers, by the model that wrote them, with the same "
@@ -194,7 +198,7 @@ def precision(
         _bump(dims["engine"], engine, bucket)
         if engine == "v2":
             _bump(dims["role"], str(r["stance"]), bucket)
-        for source in sorted({s for s in str(r["sources"] or "").split(",") if s}):
+        for source in sorted({s for s in str(r["sources"] or "").split(",") if s}) or ["unknown"]:
             _bump(dims["source"], source, bucket)
         if bucket in RATINGS and r["verdict"] in VERDICT_TO_RATING:
             cell = cross.setdefault(str(r["verdict"]), {})

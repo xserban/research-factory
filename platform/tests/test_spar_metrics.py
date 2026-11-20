@@ -256,3 +256,48 @@ def test_the_chat_page_renders_the_precision_section_escaped() -> None:
     assert "ch-precision" in src and "paintPrecision" in src
     assert "esc(x.key)" in src and "esc(x.precision_text)" in src and "esc(v)" in src
     assert "pages/chat.js" in hub_ui.ASSETS and "chat" in hub_ui.PAGES["chat"].payloads
+
+
+def test_an_argument_whose_paper_has_no_candidate_falls_under_unknown_source(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    w = sorted(world)
+    sheet = sh.open_sheet(
+        project, agent, "Reflection helps", SPEC, [C(w[0], "claims", "against", ANCHOR, QUOTE)]
+    ).sheet_id
+    sh.record_arguments(
+        project,
+        agent,
+        sheet,
+        [_arg(w[0], "against", "strong", "c0"), _arg(w[1], "against", "weak", "c1")],
+    )
+    got = sm.precision(project)
+    assert _row(got.arguments["source"], "unknown").unrated == 1
+    assert _row(got.arguments["source"], "claims").unrated == 1
+
+
+def test_the_hub_precision_is_cached_on_the_event_log_signature(
+    project: Project, agent: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = _build(project, agent, world)
+    calls: list[int] = []
+    real = sm.precision
+
+    def counting(*a: object, **k: object) -> sm.Precision:
+        calls.append(1)
+        return real(*a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sm, "precision", counting)
+    hub_chat._PRECISION.clear()
+    first = hub_chat.precision_payload(project)
+    first["arguments"]["all"].clear()  # a caller's change must not reach the cache
+    second = hub_chat.precision_payload(project)
+    assert len(calls) == 1 and second["arguments"]["all"]
+    _rate(project, ids[:1], ["sound"])
+    assert hub_chat.precision_payload(project)["arguments"]["all"][0]["rated"] == 1
+    assert len(calls) == 2
+
+
+def test_the_texts_say_what_role_since_and_sheet_mean() -> None:
+    assert "stance of the argument" in sm.MEASURES["role"]
+    assert "left out" in sm.MEASURES["since"]

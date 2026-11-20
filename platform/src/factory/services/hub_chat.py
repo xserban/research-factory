@@ -286,8 +286,28 @@ def _metric_row(r: spar_metrics.Row) -> dict[str, Any]:
     }
 
 
+_PRECISION: dict[str, tuple[tuple[int, float], dict[str, Any]]] = {}
+
+
 def precision_payload(project: Project) -> dict[str, Any]:
-    """The Precision section: the computed tables of `spar_metrics`, with their texts."""
+    """The Precision section: the computed tables of `spar_metrics`, with their texts. Cached on
+    the event-log signature like `_lists`; a deep copy is returned."""
+    key = str(project.paths.dir)
+    signature = event_log_signature(project)
+    with _LISTS_LOCK:
+        hit = _PRECISION.get(key)
+        if hit is not None and hit[0] == signature:
+            return copy.deepcopy(hit[1])
+    payload = _precision_payload(project)
+    with _LISTS_LOCK:
+        _PRECISION.pop(key, None)
+        _PRECISION[key] = (signature, payload)
+        while len(_PRECISION) > _LISTS_KEPT:
+            del _PRECISION[next(iter(_PRECISION))]
+    return copy.deepcopy(payload)
+
+
+def _precision_payload(project: Project) -> dict[str, Any]:
     got = spar_metrics.precision(project)
     ag = got.agreement
     return {

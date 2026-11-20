@@ -249,10 +249,20 @@ def _table(title: str, rows: tuple[spar_metrics_service.Row, ...]) -> list[str]:
 def precision_cmd(
     ctx: typer.Context,
     sheet: Annotated[
-        list[str] | None, typer.Option("--sheet", help="Only this sheet; repeatable.")
+        list[str] | None,
+        typer.Option(
+            "--sheet", help="Only this sheet; repeatable. Answer sentences are not filtered by it."
+        ),
     ] = None,
     since: Annotated[
-        str | None, typer.Option("--since", help="Only ratings given on or after this date.")
+        str | None,
+        typer.Option(
+            "--since",
+            help=(
+                "Only ratings given on or after this date; arguments rated earlier are left out "
+                "(not counted as unrated)."
+            ),
+        ),
     ] = None,
 ) -> None:
     """Your ratings summarised: sound, weak and wrong by stance, source, strength, model, engine

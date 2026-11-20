@@ -258,7 +258,7 @@ HUB.load(['shell', 'chat']).then(d => {
       (g.n ? `<table class="ch-prec"><thead><tr><th>Critic said</th><th>You: sound</th><th>weak</th><th>wrong</th></tr></thead><tbody>${rows}</tbody></table>` : '') +
       `<div class="meta">${fmt(g.n)} compared · agreement ${g.raw === null || g.raw === undefined ? '—' : esc(String(g.raw)) + '%'} · kappa ${g.kappa === null || g.kappa === undefined ? '—' : esc(String(g.kappa))}</div>`;
     main.querySelector('#ch-precision').innerHTML =
-      tbl('All arguments', A.all, ms.precision) + tbl('By stance', A.stance) + tbl('By source', A.source, ms.source) +
+      tbl('All arguments', A.all, (ms.precision || '') + ' ' + (ms.since || '')) + tbl('By stance', A.stance) + tbl('By source', A.source, ms.source) +
       tbl('By strength', A.strength) + tbl('By model', A.model) + tbl('By engine', A.engine) + tbl('By role', A.role, ms.role) +
       agree + tbl('Answer sentences by model', (P.answers || {}).model, ms.answers);
   }
