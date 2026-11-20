@@ -177,8 +177,8 @@ def _to_for_writer(
 ) -> tuple[str, str, str, str]:
     """Play search, readers (all planned) and the against writer; returns request, sheet, the
     against writer's run (ended) and the for writer's open run."""
-    from tests.test_spar_v2 import _agent, _arg, _end, _open_run, _read, _request, _search
     from factory.services import sheets as sh
+    from tests.test_spar_v2 import _agent, _arg, _end, _open_run, _read, _request, _search
 
     w = sorted(world)
     request = _request(project)
@@ -201,7 +201,7 @@ def _to_for_writer(
 async def test_a_bound_for_writer_run_cannot_read_the_sheet_tools(
     settings: Settings, project: Project, clock: FixedClock, world: list[str], v2_env: FakeLauncher
 ) -> None:
-    request, sheet, against, writer = _to_for_writer(project, v2_env, world)
+    _, sheet, against, writer = _to_for_writer(project, v2_env, world)
     cap = UnitCap(1, writer)
     for tool, extra in (("sheet_view", {"sheet_id": sheet}), ("sheet_list", {})):
         out = await _call(settings, clock, cap, tool, **extra)

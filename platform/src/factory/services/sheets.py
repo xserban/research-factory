@@ -402,9 +402,7 @@ def record_arguments(
             )
         )
         try:
-            v2 = check_sheet_run(
-                project, run_id, row["request_id"], (stance,), sheet_id=sheet_id
-            )
+            v2 = check_sheet_run(project, run_id, row["request_id"], (stance,), sheet_id=sheet_id)
             if v2 and stance == "for" and _wrote_against(project, sheet_id, actor.session):
                 # a v2 case for is another session's whatever the mode: not only in prepare
                 issues.append(
