@@ -27,7 +27,9 @@ RUNNER_RUN_ID_RE = rf"^rnr_{ULID_RE}$"
 BlobRef = Annotated[str, StringConstraints(pattern=BLOB_REF_RE)]
 RUNNER_PIPELINE_ID_RE = rf"^rpl_{ULID_RE}$"
 STAGE_KEY_RE = (
-    r"^(screen|extract|appraise|contributions|intuition|mine:m-[a-z0-9]+(?:-[a-z0-9]+)*)$"
+    r"^(screen|extract|appraise|contributions|intuition|spar|ask"
+    r"|spar2-(?:search|read|against|for|critic|cover)"
+    r"|mine:m-[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )
 """A stage key: a fixed stage, or `mine:<miner id>` (one stage per registered miner)."""
 

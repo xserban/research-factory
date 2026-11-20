@@ -37,9 +37,11 @@ from factory.model.findings import (
     ContradictionDecided,
     ContradictionInput,
     ContradictionProposed,
+    parse_row_ref,
 )
 from factory.packs import NON_COMPARABLE_KEYS
 from factory.services.cards import effective_card_props, property_family
+from factory.services.chat_read import VerifyItem, chat_verify
 from factory.services.context import Project
 from factory.services.contributions import contribution_item
 from factory.services.evidence_report import EvidenceRow, agent_evidence, evidence_report
@@ -47,11 +49,17 @@ from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows, key_value
 from factory.services.hypothesis_gates import effective_plan
 from factory.services.matching import subject_works
+from factory.services.paper_profile import (
+    RawMinerRow,
+    listed_miner_versions,
+    load_miner_work_rows,
+)
 from factory.services.properties import resolve_property
 from factory.services.protocol import current_protocol
 from factory.services.references import included_works
 
 LIMIT_MAX = 500
+CLAIMS_MINER = "m-claims"
 _PLACES = Decimal("0.0001")
 
 
@@ -216,6 +224,9 @@ class _Ref(StrictModel):
     quote: str
     live: bool
     anchor: str | None = None
+    """Set for a row ref only: the anchor of the row's quote, which is verified when proposed."""
+    about: str | None = None
+    """Set for a row ref only: the row's plain `about` value, when it has one."""
 
 
 _MINER_QUOTE_FIELDS = ("quote", "claim_quote")
@@ -256,10 +267,36 @@ def _miner_row(project: Project, ref: str) -> _Ref | None:
     return _Ref(work_id=str(head[0]), quote=text_, live=head[1] is None, anchor=anchor)
 
 
-def _lookup(project: Project, ref: str) -> _Ref | None:
+class ServedRows:
+    """The m-claims rows served now, loaded once per work for the life of one object.
+
+    One object serves one call (a listing, a page build): the listed version is read once and each
+    work's state is loaded on first use, so a pair list costs one load per work, not per pair.
+    `prefetch` loads several works in one call."""
+
+    def __init__(self, project: Project) -> None:
+        self._project = project
+        self.version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
+        self._rows: dict[str, list[RawMinerRow]] = {}
+
+    def prefetch(self, work_ids: Collection[str]) -> None:
+        missing = sorted(w for w in work_ids if w not in self._rows)
+        if self.version is None or not missing:
+            return
+        rows, _ = load_miner_work_rows(self._project, CLAIMS_MINER, self.version, missing)
+        for work in missing:
+            self._rows[work] = list(rows.get(work, []))
+
+    def rows(self, work_id: str) -> list[RawMinerRow]:
+        self.prefetch([work_id])
+        return self._rows.get(work_id, [])
+
+
+def _lookup(project: Project, ref: str, served: ServedRows | None = None) -> _Ref | None:
     """The work, stored quote and liveness of a claim or contribution item; None when `ref` names
-    no such row or the row carries no quote. Contradiction proposals use this lookup only: a miner
-    row is not a claim."""
+    no such row or the row carries no quote."""
+    if (parsed := parse_row_ref(ref)) is not None:
+        return _row_lookup(project, *parsed, served or ServedRows(project))
     if ref.startswith("clm_"):
         with project.index.connect() as conn:
             row = conn.execute(
@@ -276,6 +313,23 @@ def _lookup(project: Project, ref: str) -> _Ref | None:
     if item is None or not item.quote:
         return None
     return _Ref(work_id=item.work_id, quote=item.quote, live=item.live)
+
+
+def _row_lookup(project: Project, work_id: str, row_key: str, served: ServedRows) -> _Ref | None:
+    """The m-claims row `row_key` of the work as served now (listed version, else the older
+    fallback): its quote and anchor. None when no such row is served, or it has no quote or
+    anchor. A served row is live."""
+    row = next((r for r in served.rows(work_id) if r.row_key == row_key), None)
+    entry = None if row is None else row.fields.get("claim_quote")
+    if entry is None:
+        return None
+    value, _unit, anchor, quote = entry
+    shown = str(quote or value or "")
+    if not shown.strip() or not anchor:
+        return None
+    about = row.fields.get("about") if row is not None else None
+    plain = " ".join(str(about[0]).split()) if about is not None else ""
+    return _Ref(work_id=work_id, quote=shown, live=True, anchor=str(anchor), about=plain or None)
 
 
 def ref_source(project: Project, ref: str) -> tuple[str, str | None] | None:
@@ -316,7 +370,8 @@ def propose_contradiction(
     ref_a, ref_b = sorted((item.ref_a, item.ref_b))
     with project.index.exclusive():
         project.index.sync()
-        found = {r: _lookup(project, r) for r in (item.ref_a, item.ref_b)}
+        served = ServedRows(project)
+        found = {r: _lookup(project, r, served) for r in (item.ref_a, item.ref_b)}
         named = (("ref_a", item.ref_a), ("ref_b", item.ref_b))
         issues = [ValidationIssue(n, "ref-unknown") for n, r in named if found[r] is None]
         if issues:
@@ -326,6 +381,8 @@ def propose_contradiction(
         issues = [ValidationIssue(n, "ref-not-live") for n, r in named if not known[r].live]
         if not issues and a.work_id == b.work_id:
             issues = [ValidationIssue("ref_b", "same-work")]
+        verdicts = _verify_rows(project, named, known)
+        issues += verdicts[0]
         if issues:
             raise FactoryValidationError(issues)
         with project.index.connect() as conn:
@@ -345,6 +402,12 @@ def propose_contradiction(
             quote_a=a.quote,
             quote_b=b.quote,
             note=item.note,
+            anchor_a=a.anchor,
+            anchor_b=b.anchor,
+            conversion_a=verdicts[1].get(ref_a),
+            conversion_b=verdicts[1].get(ref_b),
+            about_a=a.about,
+            about_b=b.about,
         )
         input_blob = (
             project.blobs.put_json(item.model_dump(mode="json")) if actor.kind == "agent" else None
@@ -361,6 +424,28 @@ def propose_contradiction(
             ]
         )
     return contradiction_id, existing is None
+
+
+def _verify_rows(
+    project: Project, named: tuple[tuple[str, str], ...], known: Mapping[str, _Ref]
+) -> tuple[list[ValidationIssue], dict[str, str]]:
+    """A row ref's quote must be in its anchor of the work's pinned conversion. Returns the
+    issues and, per verified ref, the conversion id the quote was verified against."""
+    todo = [(n, r, known[r]) for n, r in named if known[r].anchor is not None]
+    verdicts = chat_verify(
+        project, [VerifyItem(v.work_id, v.anchor or "", v.quote) for _, _, v in todo]
+    )
+    issues = [
+        ValidationIssue(n, f"quote-not-verified: {v.status}")
+        for (n, _, _), v in zip(todo, verdicts, strict=True)
+        if v.status != "accepted"
+    ]
+    pinned = {
+        r: v.conversion_id
+        for (_, r, _), v in zip(todo, verdicts, strict=True)
+        if v.status == "accepted" and v.conversion_id is not None
+    }
+    return issues, pinned
 
 
 def _proposers(project: Project, contradiction_id: str) -> set[str]:
@@ -418,12 +503,19 @@ def decide_contradiction(
         return event.id
 
 
-def _state(project: Project, row: Any) -> ContradictionState:
+def _state(project: Project, row: Any, served: ServedRows) -> ContradictionState:
+    """`rejected` first; `stale` when a ref is gone or not live, or a row ref is served with a
+    quote or anchor other than the one the pair stored."""
     if row.decision == "reject":
         return "rejected"
-    for ref in (row.ref_a, row.ref_b):
-        found = _lookup(project, str(ref))
+    for ref, quote, anchor in (
+        (row.ref_a, row.quote_a, row.anchor_a),
+        (row.ref_b, row.quote_b, row.anchor_b),
+    ):
+        found = _lookup(project, str(ref), served)
         if found is None or not found.live:
+            return "stale"
+        if found.anchor is not None and (found.quote, found.anchor) != (quote, anchor):
             return "stale"
     return "confirmed" if row.decision == "confirm" else "inferred"
 
@@ -434,26 +526,39 @@ def list_contradictions(
     states: Collection[str] = ("confirmed",),
     limit: int = PAGE,
     after: str | None = None,
+    served: ServedRows | None = None,
 ) -> list[ContradictionView]:
     """Contradictions by id whose state is in `states`, one page after the cursor `after`.
     `inferred`: proposed and undecided; `confirmed` / `rejected`: the latest human decision;
-    `stale`: not rejected and a ref is no longer live. Reads page in SQL."""
+    `stale`: not rejected and a ref is no longer live, or a row ref is served with another quote or
+    anchor than the pair stored. Reads page in SQL; `served` shares the m-claims rows already
+    loaded (one load per work per call)."""
     project.index.sync()
+    served = served or ServedRows(project)
     out: list[ContradictionView] = []
     cursor = after or ""
     while True:
         with project.index.connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT contradiction_id, ref_a, ref_b, work_a, work_b, decision, event_id "
+                    "SELECT contradiction_id, ref_a, ref_b, work_a, work_b, decision, event_id, "
+                    "quote_a, quote_b, anchor_a, anchor_b "
                     "FROM contradictions WHERE contradiction_id > :after "
                     "ORDER BY contradiction_id LIMIT :n"
                 ),
                 {"after": cursor, "n": PAGE},
             ).all()
+        served.prefetch(
+            {
+                w
+                for r in rows
+                for ref, w in ((r.ref_a, r.work_a), (r.ref_b, r.work_b))
+                if parse_row_ref(str(ref)) is not None and r.decision != "reject"
+            }
+        )
         for row in rows:
             cursor = str(row.contradiction_id)
-            state = _state(project, row)
+            state = _state(project, row, served)
             if state in states:
                 out.append(
                     ContradictionView(

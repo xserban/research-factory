@@ -281,9 +281,8 @@ def test_calibration_work_gold_else_calibration_rows(
     for work in gold:
         assert [r.status for r in found[work]] == ["gold"]
         assert found[work][0].fields["direction"][0] == "lower"
-    for work in plain:
-        assert [r.status for r in found[work]] == ["calibration"]
-        assert found[work][0].fields["direction"][0] == "higher"
+    for work in plain:  # an empty gold label is a decision: no rows, not the calibration rows
+        assert found[work] == []
     [profile] = paper_profiles(project, gold[:1])
     assert [r.status for r in profile.rows] == ["gold"]
 
@@ -419,3 +418,63 @@ def test_work_with_only_newer_version_rows_is_reported_not_served_not_missing(
     assert profile.rows == () and profile.missing_miners == ()
     assert profile.newer_version_only == ((VISION_NAME, 1),)
     assert f"newer-version-only: {VISION_NAME}" in render_profile(profile)
+
+
+def test_empty_gold_label_is_a_decision_not_a_gap(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works, name = _sample(project, agent, human, labelled=2)
+    state = pp.load_miner_work_state(project, name, 1, works)
+    assert state.gold_empty == frozenset(works[2:])
+    assert all(state.rows[w] == [] for w in works[2:])
+    assert [r.status for r in state.rows[works[0]]] == ["gold"]
+    assert state.gold_empty.isdisjoint(state.emptied | state.newer)
+    [profile] = paper_profiles(project, works[2:3])
+    assert profile.rows == () and profile.missing_miners == ()
+    assert profile.gold_empty == ((name, 1),)
+    assert f"gold-empty: {name}" in render_profile(profile)
+    [plain] = paper_profiles(project, works[:1])
+    assert plain.gold_empty == () and "gold-empty" not in render_profile(plain)
+
+
+def test_production_rows_win_over_empty_gold(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    works, name = _sample(project, agent, human, labelled=0)
+    mine_pass(project, mina, A, lambda w: [mine_row("lower")])
+    real = live_rows
+    donor = real(project, PassLabel.A, scope=MinerScope(name))[0]
+
+    def serving(*args: object, **kwargs: object) -> list:  # type: ignore[type-arg]
+        found = real(*args, **kwargs)  # type: ignore[arg-type]
+        if args[1:2] == (PassLabel.A,):  # a production row of the first sampled work
+            found = [*found, donor.model_copy(update={"work_id": works[0]})]
+        return found
+
+    monkeypatch.setattr(pp, "live_rows", serving)
+    state = pp.load_miner_work_state(project, name, 1, works)
+    assert works[0] not in state.gold_empty
+    assert [r.status for r in state.rows[works[0]]] == ["pass-a-only"]
+    assert state.gold_empty == frozenset(works[1:])
+
+
+def test_gold_empty_work_gets_no_older_version_fallback(
+    project: Project,
+    agent: Actor,
+    human: Actor,
+    mina: Actor,
+    world: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    works, name = _sample(project, agent, human, labelled=0)
+    # live pass A rows exist only at an older version (0) than the listed one (1)
+    mine_pass(project, mina, A, lambda w: [mine_row("lower")])
+    _relabel(project, monkeypatch, {}, 0)
+    state = pp.load_miner_work_state(project, name, 1, works)
+    assert state.gold_empty == frozenset(works)
+    assert all(state.rows[w] == [] for w in works)

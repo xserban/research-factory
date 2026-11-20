@@ -20,8 +20,40 @@ NOT_ALLOWED: dict[str, dict[str, str]] = {
         "concept_propose": "proposing concepts is out of scope for a headless run",
         "concept_link": "linking concepts is out of scope for a headless run",
     },
+    "rf-chat": {
+        "contradiction_propose": "the Contradictions mode is attended; no runner stage serves it",
+        "lead_record": "a lead needs the researcher's balance; no headless run records one",
+    },
+    "rf-spar-v2": {
+        "lead_record": "a lead needs the researcher's balance; no role run records one",
+        "answer_record": "an answer is the ask stage's; no spar role writes one",
+    },
 }
 """Per skill, the tool names the skill mentions that the run does not allow, with the reason."""
+
+STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
+    "spar": {"answer_record": "an answer is written by the ask stage"},
+    "ask": {},
+    "spar2-search": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-read": {"spar_coverage_record": "the coverage role records the sweep"},
+    "spar2-against": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-for": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-critic": {
+        "spar_reading_record": "a reader records readings",
+        "spar_coverage_record": "the coverage role records the sweep",
+    },
+    "spar2-cover": {"spar_reading_record": "a reader records readings"},
+}
+"""Per stage key (a skill shared by two stages), the tools that stage does not allow."""
 
 
 def _stage_specs() -> list[tuple[str, runner.StageSpec]]:
@@ -44,7 +76,7 @@ def test_every_tool_a_skill_names_is_allowed_or_excluded_with_a_reason(
 ) -> None:
     text = (SKILLS_DIR / spec.skill / "SKILL.md").read_text(encoding="utf-8")
     allowed = {t.removeprefix(PREFIX) for t in spec.tools}
-    excluded = NOT_ALLOWED.get(spec.skill, {})
+    excluded = {**NOT_ALLOWED.get(spec.skill, {}), **STAGE_NOT_ALLOWED.get(key, {})}
     found = mentioned(text)
     assert found, f"{spec.skill}: the parser found no tool name"
     missing = sorted(found - allowed - set(excluded))

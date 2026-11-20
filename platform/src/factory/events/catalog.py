@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 
+from factory.model.answers import AnswerRated, AnswerRecorded
 from factory.model.appraisal_events import (
     AppraisalAuditLabelled,
     AppraisalAuditSampled,
@@ -21,6 +22,7 @@ from factory.model.cards import (
     PropertyUnmerged,
 )
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
+from factory.model.chat_requests import ChatRequested, ChatRequestTaken
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
 from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
 from factory.model.curation import CurationDecided, CurationProposed
@@ -216,8 +218,15 @@ from factory.model.seed import (
 from factory.model.sheets import (
     SheetArgumentRated,
     SheetArgumentRecorded,
+    SheetBalanceRecorded,
     SheetOpened,
     SheetSectionClosed,
+)
+from factory.model.spar_v2 import (
+    SheetArgumentChecked,
+    SparCoverageRecorded,
+    SparReadingRecorded,
+    SparRoleStarted,
 )
 from factory.model.task import TaskClaimed, TaskCompleted, TaskCreated, TaskReleased
 from factory.model.taxonomies import (
@@ -323,6 +332,15 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("sheet.argument_recorded", SheetArgumentRecorded, 1))
     catalog.register(EventType("sheet.section_closed", SheetSectionClosed, 1))
     catalog.register(EventType("sheet.argument_rated", SheetArgumentRated, 1))
+    catalog.register(EventType("chat.answer_recorded", AnswerRecorded, 1))
+    catalog.register(EventType("chat.answer_rated", AnswerRated, 1))
+    catalog.register(EventType("sheet.balance_recorded", SheetBalanceRecorded, 1))
+    catalog.register(EventType("chat.requested", ChatRequested, 1))
+    catalog.register(EventType("chat.request_taken", ChatRequestTaken, 1))
+    catalog.register(EventType("spar.role_started", SparRoleStarted, 1))
+    catalog.register(EventType("spar.reading_recorded", SparReadingRecorded, 1))
+    catalog.register(EventType("sheet.argument_checked", SheetArgumentChecked, 1))
+    catalog.register(EventType("spar.coverage_recorded", SparCoverageRecorded, 1))
     catalog.register(EventType("file.registered", FileRegistered, 1))
     catalog.register(EventType("miner.calibration_drawn", MinerCalibrationDrawn, 1))
     catalog.register(EventType("miner.calibration_labelled", MinerCalibrationLabelled, 1))

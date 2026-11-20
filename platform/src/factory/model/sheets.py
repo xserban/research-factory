@@ -13,6 +13,9 @@ Invariants:
   after the section against is closed (`SheetSectionClosed`). In `prepare` mode a session that
   recorded an argument against records none for.
 - A rating is a human act (`SheetArgumentRated`); the latest rating of an argument stands.
+- The balance of a sheet is the researcher's (`SheetBalanceRecorded`, human actor only), written
+  once both sections are closed; the latest stands and earlier ones are history. No agent writes,
+  computes or suggests it.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 
 from factory.model.base import StrictModel
+from factory.model.chat_requests import REQUEST_ID_RE
 from factory.model.identity import ULID_RE
 
 SHEET_ID_RE = rf"^sht_{ULID_RE}$"
@@ -30,11 +34,14 @@ SHA256_HEX_RE = r"^[0-9a-f]{64}$"
 HYPOTHESIS_MAX = 2000
 CLAIM_MAX = 600
 NOTE_MAX = 600
+BALANCE_MAX = 4000
+BALANCE_NOTE_MAX = 1000
 
 Mode = Literal["explore", "prepare"]
 Section = Literal["against", "for"]
 Strength = Literal["strong", "moderate", "weak"]
 Rating = Literal["sound", "weak", "wrong"]
+Lean = Literal["against", "mixed", "for", "undecided"]
 
 
 class SheetCandidate(StrictModel):
@@ -58,6 +65,15 @@ class SheetOpened(StrictModel):
     candidates: tuple[SheetCandidate, ...]
     tier1_cap: int = Field(ge=1)
     supersedes: str | None = Field(default=None, pattern=SHEET_ID_RE)
+    request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
+    """The chat request this sheet answers (`chat.requested`), when a headless run opened it."""
+    respar_of: str | None = Field(default=None, pattern=SHEET_ID_RE)
+    """The earlier sheet this one re-spars (N7): set by the platform from the request's parent,
+    never by the agent. Old events lack it."""
+    claims_fingerprint: dict[str, str] | None = None
+    """Per work of the selection, a short hash of the claims rows served when the sheet opened
+    (`sheets.claims_fingerprint`), so a later change of those rows is computed, not remembered.
+    Old events lack it: their claims are not checked."""
 
 
 class SheetArgumentRecorded(StrictModel):
@@ -81,6 +97,8 @@ class SheetArgumentRecorded(StrictModel):
 class SheetSectionClosed(StrictModel):
     sheet_id: str = Field(pattern=SHEET_ID_RE)
     section: Section
+    request_id: str | None = Field(default=None, pattern=REQUEST_ID_RE)
+    """The chat request this closing answers: the case for of a Prepare follow-up request."""
 
 
 class SheetArgumentRated(StrictModel):
@@ -88,3 +106,13 @@ class SheetArgumentRated(StrictModel):
     sheet_id: str = Field(pattern=SHEET_ID_RE)
     rating: Rating
     note: str = Field(default="", max_length=NOTE_MAX)
+
+
+class SheetBalanceRecorded(StrictModel):
+    """The researcher's own weighing of a sheet whose two sections are closed."""
+
+    sheet_id: str = Field(pattern=SHEET_ID_RE)
+    text: str = Field(min_length=1, max_length=BALANCE_MAX)
+    lean: Lean | None = None
+    note: str | None = Field(default=None, max_length=BALANCE_NOTE_MAX)
+    """What further evidence would be needed, in the researcher's words."""

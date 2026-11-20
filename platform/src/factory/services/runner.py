@@ -27,6 +27,18 @@ Invariants:
   It uses the miner stage's declared model and tools (`mine_next`, `mine_record`, `document_read`
   and the two reads) and the same cap on units; refused when no miner has a need. The runner
   records no human act: requests and layer moves are the researcher's, made before the run.
+- The stages `spar` and `ask` (spar-night N3) answer chat requests (`services/chat_requests.py`):
+  skill `rf-chat`, one request per run (`StageSpec.fixed_cap`; a cap asked for is overridden),
+  pending units are the open requests of the kind, and the run takes its request with
+  `chat_request_next`. They are not pipeline stages. The runner records no human act: the request
+  is the researcher's, made before the run.
+- The stages `spar2-search`, `spar2-read`, `spar2-against`, `spar2-for`, `spar2-critic` and
+  `spar2-cover` (spar-night N6) are the role runs of the agentic spar (`services/spar_v2.py`): skill
+  `rf-spar-v2`, one unit per run, Sonnet. Each has its own allow-list that leaves out what the role
+  must not do (no role rates, writes a balance or records a lead). They are started only by the
+  coordinator (`spar_v2.advance`), which names the request and role (`RoleAssignment`); the start
+  writes `spar.role_started` with `runner.started`. After a run ends, the watcher advances a begun
+  v2 request to its next role; a failed role stops the chain.
 - Stages: `screen`, `extract`, `appraise`, `contributions`, `intuition` and `mine:<miner id>`; the
   derivation of which apply and the pipeline over them are in `factory.services.pipeline`. The
   child's MCP config carries `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID`: the MCP server then refuses
@@ -113,6 +125,9 @@ class StageSpec:
     miner: str | None = None
     miner_version: int | None = None
     """For a `mine:<id>` stage: the miner and the version the protocol lists."""
+    fixed_cap: int | None = None
+    """When set, the stage's cap: a run serves exactly this many units whatever cap was asked
+    (the chat stages serve one request per run)."""
 
 
 STAGES: Final[dict[str, StageSpec]] = {
@@ -184,7 +199,168 @@ STAGES: Final[dict[str, StageSpec]] = {
         kinds=(),
         unit="target interpreted",
     ),
+    "spar": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-chat",
+        role="sparrer",
+        tools=(
+            "mcp__factory__selection_resolve",
+            "mcp__factory__claims_digest",
+            "mcp__factory__corpus_search",
+            "mcp__factory__chat_sections",
+            "mcp__factory__chat_verify",
+            "mcp__factory__paper_profiles",
+            "mcp__factory__chat_candidates",
+            "mcp__factory__chat_request_next",
+            "mcp__factory__chat_request_view",
+            "mcp__factory__document_read",
+            "mcp__factory__sheet_open",
+            "mcp__factory__sheet_argue",
+            "mcp__factory__sheet_close",
+            "mcp__factory__sheet_view",
+            "mcp__factory__answer_view",  # a follow-up reads its parent
+        ),
+        kinds=(),
+        unit="spar request answered",
+        fixed_cap=1,
+    ),
+    "ask": StageSpec(
+        model="claude-sonnet-5-5",
+        skill="rf-chat",
+        role="asker",
+        tools=(
+            "mcp__factory__selection_resolve",
+            "mcp__factory__claims_digest",
+            "mcp__factory__corpus_search",
+            "mcp__factory__chat_sections",
+            "mcp__factory__chat_verify",
+            "mcp__factory__paper_profiles",
+            "mcp__factory__chat_candidates",
+            "mcp__factory__chat_request_next",
+            "mcp__factory__chat_request_view",
+            "mcp__factory__document_read",
+            "mcp__factory__answer_record",
+            "mcp__factory__answer_view",
+            "mcp__factory__sheet_view",  # a follow-up reads its parent
+        ),
+        kinds=(),
+        unit="ask request answered",
+        fixed_cap=1,
+    ),
 }
+_P: Final = "mcp__factory__"
+_SPAR2_READ: Final = (
+    f"{_P}spar_role_next",
+    f"{_P}chat_sections",
+    f"{_P}chat_verify",
+    f"{_P}document_read",
+)
+_SPAR2_WRITER: Final = (
+    f"{_P}spar_role_next",
+    f"{_P}spar_readings_view",
+    f"{_P}claims_digest",
+    f"{_P}chat_verify",
+    f"{_P}document_read",
+    f"{_P}sheet_argue",
+    f"{_P}sheet_close",
+)
+STAGES.update(
+    {
+        "spar2-search": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="searcher",
+            tools=(
+                f"{_P}spar_role_next",
+                f"{_P}selection_resolve",
+                f"{_P}claims_digest",
+                f"{_P}corpus_search",
+                f"{_P}chat_candidates",
+                f"{_P}paper_profiles",
+                f"{_P}chat_sections",
+                f"{_P}chat_verify",
+                f"{_P}document_read",
+                f"{_P}sheet_open",
+                f"{_P}sheet_view",
+            ),
+            kinds=(),
+            unit="candidate list recorded",
+            fixed_cap=1,
+        ),
+        "spar2-read": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="reader",
+            tools=(*_SPAR2_READ, f"{_P}spar_reading_record"),
+            kinds=(),
+            unit="paper read",
+            fixed_cap=1,
+        ),
+        "spar2-against": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="writer-against",
+            tools=_SPAR2_WRITER,
+            kinds=(),
+            unit="case against written",
+            fixed_cap=1,
+        ),
+        "spar2-for": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="writer-for",
+            tools=_SPAR2_WRITER,
+            kinds=(),
+            unit="case for written",
+            fixed_cap=1,
+        ),
+        "spar2-critic": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="critic",
+            tools=(*_SPAR2_READ, f"{_P}sheet_view", f"{_P}sheet_check"),
+            kinds=(),
+            unit="sheet checked",
+            fixed_cap=1,
+        ),
+        "spar2-cover": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-spar-v2",
+            role="coverage",
+            tools=(
+                f"{_P}spar_role_next",
+                f"{_P}spar_readings_view",
+                f"{_P}claims_digest",
+                f"{_P}paper_profiles",
+                f"{_P}chat_sections",
+                f"{_P}document_read",
+                f"{_P}sheet_view",
+                f"{_P}spar_coverage_record",
+            ),
+            kinds=(),
+            unit="coverage swept",
+            fixed_cap=1,
+        ),
+    }
+)
+CHAT_STAGES: Final = ("spar", "ask")
+"""The stages that answer chat requests (`services/chat_requests.py`): one request per run; their
+pending units are the open requests of the stage's kind."""
+SPAR2_PREFIX: Final = "spar2-"
+SPAR2_STAGES: Final = tuple(k for k in STAGES if k.startswith(SPAR2_PREFIX))
+"""The role stages of the agentic spar (`services/spar_v2.py`); their pending units are the v2
+requests whose next role they are."""
+
+
+@dataclass(frozen=True)
+class RoleAssignment:
+    """The request, role and paper (readers) a role run is started for."""
+
+    request_id: str
+    role: str
+    work_id: str | None = None
+
+
 MINE_PREFIX: Final = "mine:"
 MINING_STAGE: Final = "mining"
 """The alias stage that runs the first miner with an open mining need (see the module docstring)."""
@@ -325,7 +501,126 @@ def _skill_text(project: Project, skill: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
+_CHAT_PROMPT: Final = (
+    "You are an unattended headless run of stage `{stage}` for the Research Factory project "
+    "`{slug}`. Nobody answers questions during this run: ask the researcher nothing, wait for "
+    "nothing, and make no step of the skill depend on a reply. The researcher's order is a "
+    "recorded request; the steps of the skill that agree the wording, the selection and the mode "
+    "with the researcher are already done in it.\n\n"
+    "Parameters for every factory call: project `{slug}`, role `{role}`, model `{model}`, "
+    "skill `{skill}`.\n\n"
+    "Start by calling `chat_request_next`. It serves the oldest open request of kind `{stage}` "
+    "and marks it taken by this run: `request_id`, `{field}`, `selection` (`layers`, `include`, "
+    "`exclude`: pass them as they are to `selection_resolve`, `claims_digest`, `corpus_search` "
+    "and the other tools), `parent` and `note`. If `batch` is null, say so and stop. Then follow "
+    "exactly the skill's {mode_name} procedure below, as in its section `Unattended run`.\n\n"
+    "{extra}"
+    "Record the result with `request_id` set to the served `request_id` in `{record}`. "
+    "Rate nothing and write no balance or verdict: the researcher does. When you have recorded "
+    "the result, finish with a short summary: the request id, the {result} id, what the "
+    "{result} contains, the gaps and unread tiers, and any refusal or `blocked` text verbatim.\n\n"
+    "Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. A "
+    "unit is one {unit}. The server refuses further units with `cap-reached` once the limit is "
+    "served: then stop. Use no other tools.\n\n"
+    "=== SKILL {skill} ===\n{skill_text}"
+)
+_SPAR_EXTRA: Final = (
+    "Mode: Explore, unless the request's `mode` is `prepare`. In Explore one session writes both "
+    "cases: `sheet_open` (with `request_id`), `sheet_argue` against, `sheet_close` against, "
+    "`sheet_argue` for, `sheet_close` for. In Prepare, the case for must come from a session "
+    "that wrote no argument against, so a Prepare request is one of two kinds. With no `parent`: "
+    "open the sheet in mode `prepare` (with `request_id`), write only the case against, close "
+    "the section `against` and stop; the case for is a second request. With a `parent` that is "
+    "a sheet whose case against is closed: do not open a sheet; read the parent with "
+    "`sheet_view`, argue only the case for into it with `sheet_argue` (its `sheet_id` is the "
+    "parent), and close `for` with `sheet_close`, passing `request_id`. Outside Prepare a "
+    "`parent`, a sheet or an answer, is an earlier result you read first (`sheet_view` or "
+    "`answer_view`) and take into account; the new sheet stands on its own.\n\n"
+)
+_ASK_EXTRA: Final = (
+    "A `parent`, a sheet or an answer, is an earlier result you read first (`answer_view` or "
+    "`sheet_view`) and take into account: pass it as `parent` to `answer_record`. The request has "
+    "no mode.\n\n"
+)
+
+
+def _chat_prompt(project: Project, stage: str, spec: StageSpec, unit_cap: int) -> str:
+    spar = stage == "spar"
+    return _CHAT_PROMPT.format(
+        stage=stage,
+        slug=project.paths.slug,
+        role=spec.role,
+        model=spec.model,
+        skill=spec.skill,
+        field="hypothesis` and `mode" if spar else "question",
+        mode_name="Spar" if spar else "Ask",
+        extra=_SPAR_EXTRA if spar else _ASK_EXTRA,
+        record="`sheet_open` or `sheet_close`" if spar else "`answer_record`",
+        result="sheet" if spar else "answer",
+        unit_cap=unit_cap,
+        unit=spec.unit,
+        skill_text=_skill_text(project, spec.skill),
+    )
+
+
+_SPAR2_PROMPT: Final = (
+    "You are one role session of the agentic spar, stage `{stage}` (the role `{role}`), for the "
+    "Research Factory project `{slug}`. Nobody answers questions during this run: ask the "
+    "researcher nothing and wait for nothing. Other roles ran or will run as separate sessions; "
+    "you do only your own role, as the section `{section}` of the skill says.\n\n"
+    "Parameters for every factory call: project `{slug}`, role `{role}`, model `{model}`, "
+    "skill `{skill}`.\n\n"
+    "{assigned}"
+    "Start by calling `spar_role_next`: it serves your assignment (the hypothesis, the selection, "
+    "the sheet and what your role needs); you pass no request id anywhere, the platform derives "
+    "it from this run. Rate nothing, write no balance or verdict on the hypothesis, record no "
+    "lead: the researcher does. Copy quotes exactly and verify them. When you have recorded "
+    "your result, finish with a short summary: what you recorded, the gaps and any refusal "
+    "verbatim.\n\n"
+    "Limit: stop after {unit_cap} units. A unit is one {unit}. The server refuses further units "
+    "with `cap-reached` once the limit is served: then stop. Use no other tools.\n\n"
+    "=== SKILL {skill} ===\n{skill_text}"
+)
+
+
+def _spar2_prompt(
+    project: Project,
+    stage: str,
+    spec: StageSpec,
+    unit_cap: int,
+    assignment: RoleAssignment | None,
+) -> str:
+    assigned = ""
+    if assignment is not None:
+        assigned = f"This run is assigned the chat request `{assignment.request_id}`"
+        if assignment.work_id is not None:
+            assigned += f", paper `{assignment.work_id}`"
+        assigned += ".\n\n"
+    return _SPAR2_PROMPT.format(
+        stage=stage,
+        role=spec.role,
+        section=stage.removeprefix(SPAR2_PREFIX),
+        slug=project.paths.slug,
+        model=spec.model,
+        skill=spec.skill,
+        assigned=assigned,
+        unit_cap=unit_cap,
+        unit=spec.unit,
+        skill_text=_skill_text(project, spec.skill),
+    )
+
+
+def _prompt(
+    project: Project,
+    stage: str,
+    spec: StageSpec,
+    unit_cap: int,
+    assignment: RoleAssignment | None = None,
+) -> str:
+    if stage in SPAR2_STAGES:
+        return _spar2_prompt(project, stage, spec, unit_cap, assignment)
+    if stage in CHAT_STAGES:
+        return _chat_prompt(project, stage, spec, unit_cap)
     slug = project.paths.slug
     parameters = f"project `{slug}`, pass_label `A`, role `{spec.role}`, model `{spec.model}`, "
     miner = ""
@@ -402,14 +697,19 @@ def build_command(
     claude: str = "claude",
     run_id: str | None = None,
     prompt_override: str | None = None,
+    assignment: RoleAssignment | None = None,
 ) -> tuple[list[str], dict[str, JsonValue], str]:
     """`(argv, mcp config, prompt)` for one run of `stage`. Pure: starts and writes nothing.
     `prompt_override` is used in place of the built prompt (a resumed run's recorded prompt)."""
     spec = stage_spec(project, stage)
+    if spec.fixed_cap is not None:
+        unit_cap = spec.fixed_cap
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
         raise _refuse("unit_cap", f"must be between 1 and {MAX_UNIT_CAP}")
     prompt = (
-        prompt_override if prompt_override is not None else _prompt(project, stage, spec, unit_cap)
+        prompt_override
+        if prompt_override is not None
+        else _prompt(project, stage, spec, unit_cap, assignment)
     )
     argv = [
         claude,
@@ -465,6 +765,14 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
     """The pending units of `stage` (pass A): per task kind for `screen` and `extract`; for the
     other stages (`factory.services.pipeline.pending_by_stage`) one count under the stage key."""
     stage = resolve_stage(project, stage)
+    if stage in CHAT_STAGES:
+        from factory.services.chat_requests import open_count
+
+        return {stage: open_count(project, stage)}
+    if stage in SPAR2_STAGES:
+        from factory.services.spar_v2 import pending_by_role
+
+        return {stage: pending_by_role(project, stage.removeprefix(SPAR2_PREFIX))}
     spec = STAGES.get(stage)
     if spec is None or not spec.kinds:
         if not is_stage_key(stage):
@@ -767,6 +1075,12 @@ def _advance_after(project: Project) -> None:
         advance(project, sources=dict(default_sources()), fetchers=default_routes(project.settings))
     except Exception:
         _LOG.exception("the automatic steps after run %s failed", project.paths.slug)
+    try:
+        from factory.services.spar_v2 import advance_open
+
+        advance_open(project)  # the next role of a v2 spar whose chain was begun
+    except Exception:
+        _LOG.exception("advancing the v2 spar of %s failed", project.paths.slug)
 
 
 class RunRecord(StrictModel):
@@ -843,6 +1157,7 @@ def start_run(
     pipeline: bool = False,
     resumes: str | None = None,
     prompt_override: str | None = None,
+    assignment: RoleAssignment | None = None,
 ) -> str:
     """Start one run of `stage`; returns its `run_id` once the process is started and recorded.
 
@@ -855,9 +1170,19 @@ def start_run(
     new run is a new run (the earlier run's events are never edited) that reuses the earlier
     run's recorded prompt, tools and model, and names it in `runner.started`. `unit_cap` then
     defaults to the earlier run's. `prompt_override` replaces the built prompt (and is what a
-    resume passes after reading the blob)."""
+    resume passes after reading the blob).
+
+    A role stage of the agentic spar (`spar2-*`) is started only with its `assignment`, by the
+    coordinator (`spar_v2.advance`); the assignment must be the request's next role, and the start
+    writes `spar.role_started` in the same batch as `runner.started`."""
     stage = resolve_stage(project, stage)
     spec = stage_spec(project, stage)
+    if (stage in SPAR2_STAGES) != (assignment is not None) or (
+        assignment is not None and stage != f"{SPAR2_PREFIX}{assignment.role}"
+    ):
+        raise _refuse(
+            "stage", "a spar2 role run is started for its request by `factory chat advance`"
+        )
     from factory.services.mining import use_is_exploratory
 
     exploratory = (
@@ -872,6 +1197,8 @@ def start_run(
             raise _refuse("resumes", f"{resumes} is not a run of this project")
         if earlier.stage != stage:
             raise _refuse("resumes", f"{resumes} ran stage {earlier.stage!r}, not {stage!r}")
+        if spec.fixed_cap is not None:
+            raise _refuse("resumes", "a chat request is not resumed; order it again")
         if earlier.outcome == "complete":
             from factory.services.usage_limit import limit_stop
 
@@ -881,6 +1208,8 @@ def start_run(
     _require_calibrated_mine(project, spec)
     if unit_cap is None:
         unit_cap = DEFAULT_UNIT_CAP if earlier is None else earlier.unit_cap
+    if spec.fixed_cap is not None:
+        unit_cap = spec.fixed_cap  # a chat stage serves one request per run
     if earlier is not None and prompt_override is None:
         prompt_override = _resumed_prompt(project, earlier, spec, unit_cap)
     if not 1 <= unit_cap <= MAX_UNIT_CAP:
@@ -904,6 +1233,10 @@ def start_run(
         counts = pending_units(project, stage)
         if sum(counts.values()) == 0:
             raise _refuse("stage", f"no pending unit for stage {stage!r}")
+        if assignment is not None:
+            from factory.services.spar_v2 import check_assignment
+
+            check_assignment(project, assignment.request_id, assignment.role, assignment.work_id)
         run_id = project.ids.new("rnr")
         folder = _run_dir(project, run_id)
         mcp_path = folder / "mcp.json"
@@ -915,6 +1248,7 @@ def start_run(
             claude=claude,
             run_id=run_id,
             prompt_override=prompt_override,
+            assignment=assignment,
         )
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "starting").write_text(str(time.time()), encoding="utf-8")
@@ -934,7 +1268,20 @@ def start_run(
             exploratory=exploratory,
         )
         with project.writing():  # mint under the lock (slice 5 ruling 3)
-            project.record([project.events.make("runner.started", started, project.system_actor())])
+            batch = [project.events.make("runner.started", started, project.system_actor())]
+            if assignment is not None:
+                from factory.index.spar_v2 import Slot
+                from factory.services.spar_v2 import role_started_event
+
+                batch.append(
+                    role_started_event(
+                        project,
+                        assignment.request_id,
+                        run_id,
+                        Slot(assignment.role, assignment.work_id),
+                    )
+                )
+            project.record(batch)
         launch = launcher or default_launcher
         try:
             wrapped = ["sh", "-c", _WRAPPER, "sh", str(folder / "exit"), *argv]

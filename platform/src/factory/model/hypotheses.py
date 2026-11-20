@@ -36,6 +36,7 @@ from factory.model.hypothesis_plan import DECIMAL_RE
 from factory.model.identity import ULID_RE
 from factory.model.lineage import IDEA_ID_RE
 from factory.model.screening import NonBlank
+from factory.model.sheets import SHEET_ID_RE
 from factory.model.work_ids import WORK_ID_RE
 from factory.modules.contract import PolicyKind
 from factory.packs import UnitFamily
@@ -82,6 +83,7 @@ class TriggerKind(StrEnum):
     LEAD = "lead"
     HYPOTHESIS = "hypothesis"
     DIRECTION = "direction"
+    SHEET = "sheet"
 
 
 BUILDER_KINDS = frozenset({TriggerKind.MATCH, TriggerKind.CONFLICT, TriggerKind.GAP})
@@ -103,6 +105,7 @@ _REF_PATTERNS: dict[TriggerKind, str] = {
     TriggerKind.LEAD: LEAD_ID_RE,
     TriggerKind.HYPOTHESIS: HYP_ID_RE,
     TriggerKind.DIRECTION: DIRECTION_ID_RE,
+    TriggerKind.SHEET: SHEET_ID_RE,
 }
 
 

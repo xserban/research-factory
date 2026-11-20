@@ -198,9 +198,12 @@ function paintBar(ws) {
   const dp = new URLSearchParams(); for (const k of ['layer', 'human', 'technique', 'year']) if (one(k)) dp.set(k, one(k));
   const ids = ws.map(w => w.id), sel = [...ST.sel];
   const pathIds = (sel.length ? sel : ids).slice(0, 20);
+  const chatIds = (sel.length ? sel : ids), layerOne = one('layer');
+  const chatLinks = chatIds.length ? ` · <a href="${esc(HUB.chatHref({include: chatIds, only: true}))}" title="${chatIds.length > 60 ? 'The first 60 papers go into the basket; the Chat page says so.' : 'Open the Chat page with these papers in its basket.'}">Chat with these (${fmt(Math.min(chatIds.length, 60))})</a>` : '';
+  const layerLink = layerOne ? ` · <a href="${esc(HUB.chatHref({layers: [layerOne]}))}">Chat with the whole layer: ${esc(H.layerLabel(layerOne))}</a>` : '';
   $('#cbar').innerHTML = `<span class="cnt">${fmt(ws.length)} of ${fmt(W.length)} papers</span>${chips.map(c => `<button type="button" class="chip" ${c[1]} title="Remove this filter">${esc(c[0])} <span class="x">×</span></button>`).join('')}
     ${chips.length ? '<button type="button" class="chip" data-x="all">Clear all</button>' : ''}<span class="sp"></span>
-    <a href="explore.html#${ex}">Explore these in rings</a> · <a href="data.html#${dp}">See their data</a>${pathIds.length && (sel.length || ids.length <= 20) ? ` · <a href="flow.html#lanes=${encodeURIComponent(pathIds.join(','))}">See their paths</a>` : ''}`;
+    <a href="explore.html#${ex}">Explore these in rings</a> · <a href="data.html#${dp}">See their data</a>${pathIds.length && (sel.length || ids.length <= 20) ? ` · <a href="flow.html#lanes=${encodeURIComponent(pathIds.join(','))}">See their paths</a>` : ''}${chatLinks}${layerLink}`;
   const n = ST.sel.size, over = n > 200;
   $('#xgo').textContent = `Export selected (${n})`; $('#xgo').disabled = !n || over;
   $('#xmsg').textContent = over ? `${fmt(n)} selected; an export takes at most 200. Clear some or narrow the filter.` : ($('#xmsg').dataset.keep || '');
@@ -219,7 +222,7 @@ function rowHTML(w) {
   return `<div class="cr" role="button" tabindex="-1" data-id="${esc(w.id)}" aria-selected="${ST.sel.has(w.id)}"><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${ST.sel.has(w.id) ? 'checked' : ''} aria-label="Select this paper" title="Select"><div class="cm">
     <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}${w.not_read_yet ? ' <span class="meta" title="Included, but no miner has read it yet.">(not read yet)</span>' : ''}</div>
     <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}${w.layer_source === 'moved' ? `<span title="${esc('Moved to this layer by the researcher' + (w.layer_miner ? '; the miner said ' + H.layerLabel(w.layer_miner) : ''))}">moved by the researcher</span>` : ''}</div>
-    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span></div></div>`;
+    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span><a class="chatadd meta" href="${esc(HUB.chatHref({include: [w.id], only: true}))}" title="Open the Chat page with this paper in its basket">Add to chat</a></div></div>`;
 }
 function viewList(ws) {
   VIS = []; let h = '';
@@ -346,7 +349,7 @@ function detailHTML(w) {
   const s = w.sum || {}, o = OUT[w.slug] || [], i = INN[w.slug] || [], P = d.shell.slug || 'PROJECT';
   const L = l => l.map(x => slugMap.get(x)).filter(Boolean).map(x => `<li><a data-open="${esc(x.id)}">${esc(x.title)}</a> <span class="meta">${esc(dateOf(x))}</span></li>`).join('') || '<li class="meta">None found yet.</li>';
   const src = w.layer_source === 'moved' ? ` (moved by the researcher${w.layer_miner ? '; the miner said ' + esc(H.layerLabel(w.layer_miner)) : ''})` : w.layer_source === 'miner' ? ' (from the miner)' : '';
-  const links = [w.doi ? `<a href="https://doi.org/${esc(w.doi)}" target="_blank" rel="noopener">DOI</a>` : '', w.arxiv ? `<a href="https://arxiv.org/abs/${esc(w.arxiv)}" target="_blank" rel="noopener">arXiv</a>` : '', `<a href="flow.html#lanes=${encodeURIComponent(w.id)}">See its path</a>`].filter(Boolean).join(' · ');
+  const links = [w.doi ? `<a href="https://doi.org/${esc(w.doi)}" target="_blank" rel="noopener">DOI</a>` : '', w.arxiv ? `<a href="https://arxiv.org/abs/${esc(w.arxiv)}" target="_blank" rel="noopener">arXiv</a>` : '', `<a href="flow.html#lanes=${encodeURIComponent(w.id)}">See its path</a>`, `<a href="${esc(HUB.chatHref({include: [w.id], only: true}))}">Spar with this paper</a>`].filter(Boolean).join(' · ');
   return `<div style="display:flex;justify-content:space-between;align-items:center"><span class="meta"><i class="dot" style="background:${colorOf('layer', w._d.layer[0])}"></i> ${esc(H.layerLabel(w._d.layer[0]))}${src}</span><button type="button" class="btn" id="cdClose">Close <span class="kbd">Esc</span></button></div>
   <h2 class="display" style="font-size:28px;margin:14px 0 8px">${hl(w.title)}</h2>
   <p class="meta">${esc((w.authors || []).join(', ') || 'No author recorded')} · ${esc(dateOf(w))}${w.venue ? ' · ' + esc(w.venue) : ''}${w.cited_by != null ? ' · cited by ' + w.cited_by + ' elsewhere' : ''}</p>
@@ -443,6 +446,7 @@ $('#xgo').onclick = () => {
   $('#xmsg').dataset.keep = 'Saved work-ids.txt. To get the documents, run: ' + cmd; paintBar(W.filter(w => ok(w))); };
 const cv = $('#cv');
 cv.addEventListener('click', e => {
+  if (e.target.closest('a.chatadd')) return; /* a plain link to the Chat page: no server write */
   if (e.target.closest('input.xs')) { const c = e.target.closest('input.xs'); c.checked ? ST.sel.add(c.dataset.id) : ST.sel.delete(c.dataset.id); c.closest('.cr').setAttribute('aria-selected', c.checked); paintBar(W.filter(w => ok(w))); return; }
   const r = e.target.closest('.cr, .td, .card2'); if (r && r.dataset.id) { if (r.classList.contains('cr')) { ST.cur = VIS.indexOf(r.dataset.id); mark(); } openWork(idMap.get(r.dataset.id)); } });
 document.addEventListener('mouseover', e => { const t = e.target.closest('.td'); if (t) return HUB.tip(t.dataset.tt, e); const n = e.target.closest('[data-dna]'); if (n) HUB.tipHtml(tipDNA(idMap.get(n.dataset.dna)), e); });

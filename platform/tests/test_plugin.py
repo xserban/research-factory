@@ -31,6 +31,7 @@ SKILLS = (
     "rf-run",
     "rf-screen",
     "rf-search",
+    "rf-spar-v2",
     "rf-technique-bounce",
     "rf-verify",
     "rf-write",
@@ -366,3 +367,45 @@ def test_hypothesis_engine_names_its_tools_and_gates() -> None:
         "--show <candidate_id>",
     ):
         assert needed in text, needed
+
+
+def test_rf_chat_passes_the_digest_claim_key_to_sheet_argue() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split())
+    assert "pass that claim's row key as `claim_row_key`" in lowered
+    assert "key=" in lowered and "copy the text after" in lowered
+
+
+def test_rf_chat_has_a_contradictions_mode() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split())
+    assert "## Contradictions" in text
+    for needed in (
+        "contradiction_propose",
+        "different papers",
+        "row:<work_id>#<row_key>",
+        "never decide",
+    ):
+        assert needed in lowered, needed
+
+
+def test_rf_chat_has_an_unattended_run_section() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-chat" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split()).lower()
+    assert "## Unattended run" in text
+    assert "`chat_request_next`" in text and "never ask the researcher anything" in lowered
+    assert "`request_id`" in text and "the researcher rates and writes the balance" in lowered
+    assert "explore unless the request says `prepare`" in lowered
+
+
+def test_rf_spar_v2_has_one_section_per_role_and_the_never_rules() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-spar-v2" / "SKILL.md").read_text("utf-8")
+    lowered = " ".join(text.split()).lower()
+    for role in ("search", "read", "against", "for", "critic", "cover"):
+        assert f"\n## {role}\n" in text, role
+    assert "`spar_role_next`" in text and "pass no request id" in lowered
+    assert "`spar_reading_record`" in text and "`spar_coverage_record`" in text
+    assert "`sheet_check`" in text and "not a rating" in lowered
+    assert "never rate an argument, write the balance" in lowered
+    assert "wrote no argument against" in lowered
+    assert "ask nothing, wait for nothing" in lowered

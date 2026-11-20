@@ -129,9 +129,10 @@ def test_render_format_and_size(
     digest = claims_digest(project, SelectionSpec())
     text = render_claims_digest(digest)
     assert "## P01 " + digest.papers[0].work_id in text
+    key = digest.papers[0].rows[0].row_key
     assert (
-        '- limitation | a | higher | empirical | strong: "Lorem ipsum" [s3.p1] '
-        '[conditions: "sit amet" [s3.p1]] (pass-a-only)'
+        f"- [P01.c1 key={key}] limitation | a | higher | empirical | strong: "
+        '"Lorem ipsum" [s3.p1] [conditions: "sit amet" [s3.p1]] (pass-a-only)'
     ) in text
     assert digest.size.chars == len(text)
     assert digest.size.est_tokens == -(-len(text) // 4)
@@ -188,12 +189,17 @@ def test_calibration_works_use_gold_else_calibration_rows(
     digest = claims_digest(project, SelectionSpec())
     by_work = {p.work_id: p for p in digest.papers}
     assert [(r.claim_type, r.status) for r in by_work[works[0]].rows] == [("limitation", "gold")]
-    for work in works[1:]:
-        assert [(r.claim_type, r.status) for r in by_work[work].rows] == [
-            ("finding", "calibration")
-        ]
-        assert by_work[work].gap is None
-    assert "(gold)" in render_claims_digest(digest)
+    for work in works[1:]:  # an empty gold label: the researcher's "no claims", not a gap
+        assert by_work[work].rows == () and by_work[work].gap == "gold-empty"
+    assert digest.gold_empty == len(works) - 1
+    assert not {c for c, _ in digest.gaps} & {by_work[w].code for w in works}
+    text = render_claims_digest(digest)
+    assert "(gold)" in text
+    assert "no claims (researcher)" in text
+    assert f"no claims (researcher): {len(works) - 1}" in text.splitlines()[0]
+    for block in text.split("\n\n")[1:]:
+        if any(w in block for w in works[1:]):
+            assert block.rstrip().endswith("no claims (researcher)") and "GAP" not in block
 
 
 def test_pass_b_reviewed_to_empty_is_a_gap_not_pass_a_only(
@@ -244,3 +250,40 @@ def test_newer_version_only_is_a_stated_gap(
     assert first.work_id == order[0] and first.rows == ()
     assert first.gap == "newer-version-only"
     assert "GAP: only rows of a newer version" in render_claims_digest(digest)
+
+
+def test_every_claim_carries_the_key_and_version_sheets_validates(
+    project: Project, agent: Actor, mina: Actor, world: list[str]
+) -> None:
+    from factory.services.sheets import _claim_keys
+
+    order = _mine(
+        project,
+        agent,
+        mina,
+        {0: [claim_row("limitation", QUOTES[0]), claim_row("finding", QUOTES[1])]},
+        world,
+    )
+    digest = claims_digest(project, SelectionSpec())
+    first = digest.papers[0]
+    assert {r.row_key: r.version for r in first.rows} == _claim_keys(project, order[0])
+    text = render_claims_digest(digest)
+    for n, row in enumerate(first.rows, start=1):
+        assert f"[P01.c{n} key={row.row_key}]" in text
+
+
+def test_older_and_gold_rows_carry_their_keys(
+    project: Project, agent: Actor, mina: Actor, world: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.model.extraction import MinerScope
+    from factory.services import paper_profile as pp
+    from factory.services.extraction import live_rows
+    from factory.services.sheets import _claim_keys
+
+    order = _mine(project, agent, mina, {0: [claim_row("finding")]}, world)
+    live = live_rows(project, scope=MinerScope("m-claims"))
+    monkeypatch.setattr(pp, "_row_versions", lambda _p, _n: {r.extraction_id: 0 for r in live})
+    digest = claims_digest(project, SelectionSpec())
+    [row] = digest.papers[0].rows
+    assert row.version == 0 and _claim_keys(project, order[0]) == {row.row_key: 0}
+    assert f"[P01.c1 key={row.row_key}]" in render_claims_digest(digest)

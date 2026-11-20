@@ -23,6 +23,9 @@ Invariants:
 - Coverage is computed from the folded rows (`view_sheet`): works per tier and per source, works
   with arguments per stance, tier-1 works without any argument, ratings. Strength is labelled as
   the writer's judgement; nothing here states a balance.
+- The balance (`record_balance`) is the researcher's: refused for any other actor and until both
+  sections are closed; the latest stands, earlier ones are history. Nothing here computes,
+  suggests or judges it, and no MCP tool writes it.
 - Held-out handling is that of the tools that call this module (scrub of every reply).
 """
 
@@ -42,15 +45,19 @@ from factory.events.envelope import Actor
 from factory.mining.spec import Population
 from factory.model.sheets import (
     ARGUMENT_ID_RE,
+    BALANCE_MAX,
+    BALANCE_NOTE_MAX,
     CLAIM_MAX,
     HYPOTHESIS_MAX,
     NOTE_MAX,
     SHEET_ID_RE,
+    Lean,
     Mode,
     Rating,
     Section,
     SheetArgumentRated,
     SheetArgumentRecorded,
+    SheetBalanceRecorded,
     SheetCandidate,
     SheetOpened,
     SheetSectionClosed,
@@ -63,15 +70,24 @@ from factory.services.chat_candidates import (
     chat_candidates,
 )
 from factory.services.chat_read import VerifyItem, chat_verify
+from factory.services.chat_requests import check_result_request, respar_parent, respar_terms
 from factory.services.context import Project
-from factory.services.paper_profile import listed_miner_versions, load_miner_work_rows
+from factory.services.paper_profile import (
+    RawMinerRow,
+    listed_miner_versions,
+    load_miner_work_rows,
+    load_miner_work_state,
+)
 from factory.services.selection import SelectionSpec, resolve_selection_cached
+from factory.services.spar_v2 import check_sheet_run
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
     "BALANCE_LABEL",
     "ArgumentInput",
     "ArgumentView",
+    "BalanceView",
+    "LinkedClaim",
     "SheetCoverage",
     "SheetInfo",
     "SheetView",
@@ -80,6 +96,7 @@ __all__ = [
     "open_sheet",
     "rate_argument",
     "record_arguments",
+    "record_balance",
     "view_sheet",
 ]
 
@@ -118,6 +135,19 @@ class SheetInfo:
     actor: str
     session: str | None
     ts: str
+    respar_of: str | None = None
+    """The earlier sheet this one re-spars (N7), or None."""
+
+
+@dataclass(frozen=True)
+class LinkedClaim:
+    """The m-claims row an argument rests on, as served now: type, about, quote and the version
+    it is served from."""
+
+    claim_type: str
+    about: str
+    quote: str
+    version: int
 
 
 @dataclass(frozen=True)
@@ -137,6 +167,12 @@ class ArgumentView:
     model: str | None
     rating: str | None
     rating_note: str | None
+    linked_claim: LinkedClaim | None = None
+    """None without a `claim_row_key`, or when the row is no longer served."""
+    check_verdict: str | None = None
+    """The critic's latest check of a v2 sheet (holds, overreaches, misread), an agent's reading
+    and never a rating; None when unchecked."""
+    check_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,12 +193,26 @@ class SheetCoverage:
 
 
 @dataclass(frozen=True)
+class BalanceView:
+    """The researcher's current balance of a sheet (the latest recorded)."""
+
+    text: str
+    lean: str | None
+    note: str | None
+    actor: str
+    ts: str
+
+
+@dataclass(frozen=True)
 class SheetView:
     info: SheetInfo
     arguments: tuple[ArgumentView, ...]
     coverage: SheetCoverage
     balance_label: str = BALANCE_LABEL
     selection: dict[str, Any] = field(default_factory=dict)
+    balance: BalanceView | None = None
+    balance_history: int = 0
+    """How many balances the researcher has recorded for the sheet (the latest is `balance`)."""
 
 
 def _issue(field_name: str, message: str) -> FactoryValidationError:
@@ -179,6 +229,7 @@ def _spec_of(raw: dict[str, Any]) -> SelectionSpec:
         layers=list(raw.get("layers", [])),
         include=list(raw.get("include", [])),
         exclude=list(raw.get("exclude", [])),
+        closed=raw.get("closed", False) is True,
         population=Population(raw.get("population", Population.INCLUDED_FT.value)),
     )
 
@@ -191,6 +242,45 @@ def _sheet_row(project: Project, sheet_id: str) -> dict[str, Any] | None:
             .first()
         )
     return None if row is None else dict(row)
+
+
+def claims_fingerprint(project: Project, work_ids: Sequence[str]) -> dict[str, str]:
+    """Per work, a 12-hex hash of what the m-claims miner serves for it now: the served row keys
+    with their versions and a hash of each row's fields (a row key names the content only for
+    keyed packs, so an edited quote under an unchanged key is caught here), and whether the work
+    is reviewed-empty, gold-empty or only newer-version. A new row, a new version, an edited row
+    or a reopened work changes the hash. Read-only; the same hash for the same served state (it
+    names no time). Without a listed claims miner every work gets the hash of the empty state."""
+    unique = list(dict.fromkeys(work_ids))
+    version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
+    state = (
+        None if version is None else load_miner_work_state(project, CLAIMS_MINER, version, unique)
+    )
+    out: dict[str, str] = {}
+    for work in unique:
+        served: dict[str, Any] = {"rows": [], "flags": []}
+        if state is not None:
+            served["rows"] = sorted(
+                (
+                    r.row_key,
+                    r.version,
+                    hashlib.sha256(
+                        canonical_json({k: list(v) for k, v in r.fields.items()})
+                    ).hexdigest()[:8],
+                )
+                for r in state.rows.get(work, [])
+            )
+            served["flags"] = [
+                name
+                for name, group in (
+                    ("emptied", state.emptied),
+                    ("newer", state.newer),
+                    ("gold-empty", state.gold_empty),
+                )
+                if work in group
+            ]
+        out[work] = hashlib.sha256(canonical_json(served)).hexdigest()[:12]
+    return out
 
 
 def _digest(candidates: Candidates) -> tuple[str, tuple[SheetCandidate, ...]]:
@@ -218,11 +308,15 @@ def open_sheet(
     mode: Mode = "explore",
     tier1_cap: int = TIER1_CAP,
     supersedes: str | None = None,
+    request_id: str | None = None,
+    run_id: str | None = None,
 ) -> SheetOpened:
     """Open a sheet over the selection of `spec`: run `chat_candidates` on `proposals` and record
     the computed table. Raises `FactoryValidationError` (nothing written) for a system or human
     actor, an empty or over-long hypothesis, a `supersedes` that is no sheet, or any issue of the
-    candidates check."""
+    candidates check. `run_id` is the headless run of the session (the MCP server passes its own):
+    a sheet of a v2 request is opened only by the open searcher run of that request, and a v2 role
+    run opens no other sheet (`spar_v2.check_sheet_run`)."""
     _require_agent(actor)
     issues: list[ValidationIssue] = []
     hypothesis = hypothesis.strip()
@@ -233,10 +327,31 @@ def open_sheet(
     project.index.sync()
     if supersedes is not None and _sheet_row(project, supersedes) is None:
         issues.append(ValidationIssue("supersedes", f"{supersedes}: no such sheet"))
+    try:
+        check_result_request(project, actor, request_id, "spar", opens_mode=mode)
+        check_sheet_run(project, run_id, request_id, ("search",), opening=True)
+    except FactoryValidationError as err:
+        issues.extend(err.issues)
+    terms = None if request_id is None else respar_terms(project, request_id)
+    if terms is not None:
+        # a re-spar repeats the sheet over today's papers: same hypothesis, same selection spec
+        # (the spec may resolve to other works now; that is the point)
+        if " ".join(hypothesis.split()) != " ".join(terms[1].split()):
+            issues.append(
+                ValidationIssue("hypothesis", f"a re-spar of {terms[0]} keeps its hypothesis")
+            )
+        if canonical_json(spec.model_dump(mode="json")) != canonical_json(
+            terms[2].model_dump(mode="json")
+        ):
+            issues.append(
+                ValidationIssue("selection", f"a re-spar of {terms[0]} keeps its selection spec")
+            )
     if issues:
         raise FactoryValidationError(issues)
     result = chat_candidates(project, spec, proposals, mode=mode, tier1_cap=tier1_cap)
     digest, table = _digest(result)
+    respar_of = None if request_id is None else respar_parent(project, request_id)
+    fingerprint = claims_fingerprint(project, [c.work_id for c in table])
     sheet_id = project.ids.new("sht")
     payload = SheetOpened(
         sheet_id=sheet_id,
@@ -248,6 +363,9 @@ def open_sheet(
         candidates=table,
         tier1_cap=tier1_cap,
         supersedes=supersedes,
+        request_id=request_id,
+        respar_of=respar_of,
+        claims_fingerprint=fingerprint,
     )
     blob = project.blobs.put_json(
         {
@@ -314,10 +432,16 @@ def _wrote_against(project: Project, sheet_id: str, session: str | None) -> bool
 
 
 def record_arguments(
-    project: Project, actor: Actor, sheet_id: str, arguments: Sequence[ArgumentInput]
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    arguments: Sequence[ArgumentInput],
+    *,
+    run_id: str | None = None,
 ) -> list[SheetArgumentRecorded]:
     """Record the arguments of one section of a sheet, all or none (see the module invariants).
-    Every argument of a call has the same stance."""
+    Every argument of a call has the same stance. On a sheet of a v2 request only the open writer
+    run of that stance (`run_id`) records."""
     _require_agent(actor)
     project.index.sync()
     row = _sheet_row(project, sheet_id)
@@ -338,6 +462,17 @@ def record_arguments(
                 row, stance, actor.session, _wrote_against(project, sheet_id, actor.session)
             )
         )
+        try:
+            v2 = check_sheet_run(project, run_id, row["request_id"], (stance,), sheet_id=sheet_id)
+            if v2 and stance == "for" and _wrote_against(project, sheet_id, actor.session):
+                # a v2 case for is another session's whatever the mode: not only in prepare
+                issues.append(
+                    ValidationIssue(
+                        "session", "the case for is written by a session that wrote none against"
+                    )
+                )
+        except FactoryValidationError as err:
+            issues.extend(err.issues)
     selection = resolve_selection_cached(project, _spec_of(_loads(row["selection"])))
     if selection.digest != row["selection_digest"]:
         issues.append(
@@ -506,16 +641,56 @@ def _claim_keys(project: Project, work_id: str) -> dict[str, int]:
     return {r.row_key: r.version for r in rows.get(work_id, [])}
 
 
+def _linked_claims(project: Project, work_id: str) -> dict[str, LinkedClaim]:
+    """The m-claims rows served for the work, by row key (same source as `_claim_keys`)."""
+    version = dict(listed_miner_versions(project)).get(CLAIMS_MINER)
+    if version is None:
+        return {}
+    rows, _ = load_miner_work_rows(project, CLAIMS_MINER, version, [work_id])
+
+    def shown(row: RawMinerRow, name: str, *, quoted: bool = False) -> str:
+        entry = row.fields.get(name)
+        if entry is None:
+            return ""
+        value, _unit, _anchor, quote = entry
+        return " ".join(str(quote if quoted and quote else value).split())
+
+    return {
+        r.row_key: LinkedClaim(
+            shown(r, "claim_type"),
+            shown(r, "about"),
+            shown(r, "claim_quote", quoted=True),
+            r.version,
+        )
+        for r in rows.get(work_id, [])
+    }
+
+
 def close_section(
-    project: Project, actor: Actor, sheet_id: str, section: str
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    section: str,
+    *,
+    request_id: str | None = None,
+    run_id: str | None = None,
 ) -> SheetSectionClosed:
     """Close a section of a sheet: `against` once, then `for` once. Refused (nothing written) for
     a non-agent actor, an unknown sheet or section, a section already closed, and `for` before
-    `against` is closed."""
+    `against` is closed. `request_id` (section `for` only) names the Prepare follow-up request,
+    whose parent is this sheet, that this closing answers. On a sheet of a v2 request only the open
+    writer run of that section (`run_id`) closes it, and no `request_id` is named."""
     _require_agent(actor)
     if section not in get_args(Section):
         raise _issue("section", f"{section}: must be against or for")
-    payload = SheetSectionClosed(sheet_id=sheet_id, section=section)
+    if request_id is not None and section != "for":
+        raise _issue("request_id", "only the section for answers a follow-up request")
+    project.index.sync()
+    early = _sheet_row(project, sheet_id)
+    if early is not None:
+        check_sheet_run(project, run_id, early["request_id"], (section,), sheet_id=sheet_id)
+    check_result_request(project, actor, request_id, "spar", parent=sheet_id)
+    payload = SheetSectionClosed(sheet_id=sheet_id, section=section, request_id=request_id)
     with project.index.exclusive():
         project.index.sync()
         row = _sheet_row(project, sheet_id)
@@ -570,6 +745,48 @@ def rate_argument(
     return payload
 
 
+def record_balance(
+    project: Project,
+    actor: Actor,
+    sheet_id: str,
+    body: str,
+    lean: str | None = None,
+    note: str | None = None,
+) -> SheetBalanceRecorded:
+    """The researcher's balance of a sheet whose two sections are closed; the latest stands.
+    Refused (nothing written) for anyone but a human, an unknown sheet, a sheet with a section
+    still open, an empty or over-long text or note, or an unknown lean."""
+    if actor.kind != "human":
+        raise _issue("actor", "the balance is the researcher's act")
+    issues: list[ValidationIssue] = []
+    body = body.strip()
+    if not body or len(body) > BALANCE_MAX:
+        issues.append(ValidationIssue("text", f"a balance has 1 to {BALANCE_MAX} characters"))
+    if lean is not None and lean not in get_args(Lean):
+        issues.append(ValidationIssue("lean", f"{lean}: must be against, mixed, for or undecided"))
+    if note is not None and len(note) > BALANCE_NOTE_MAX:
+        issues.append(ValidationIssue("note", f"a note has at most {BALANCE_NOTE_MAX} characters"))
+    if issues:
+        raise FactoryValidationError(issues)
+    with project.index.exclusive():
+        project.index.sync()
+        row = _sheet_row(project, sheet_id)
+        if row is None:
+            raise _issue("sheet_id", f"{sheet_id}: no such sheet")
+        if not (row["against_closed"] and row["for_closed"]):
+            raise _issue("sheet_id", "close both sections of the sheet before the balance")
+        payload = SheetBalanceRecorded(
+            sheet_id=sheet_id,
+            text=body,
+            lean=lean,
+            note=note.strip() if note and note.strip() else None,
+        )
+        project.record(
+            [project.events.make("sheet.balance_recorded", payload, actor, refs=(sheet_id,))]
+        )
+    return payload
+
+
 def list_sheets(project: Project) -> list[SheetInfo]:
     """Every sheet, oldest first."""
     project.index.sync()
@@ -601,6 +818,7 @@ def _info(row: dict[str, Any], arguments: int) -> SheetInfo:
         actor=row["actor"],
         session=row["session"],
         ts=row["ts"],
+        respar_of=row["respar_of"],
     )
 
 
@@ -616,7 +834,11 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
         found = (
             conn.execute(
                 text(
-                    "SELECT a.*, r.rating AS rating, r.note AS rating_note FROM sheet_arguments a "
+                    "SELECT a.*, r.rating AS rating, r.note AS rating_note, "
+                    "(SELECT c.verdict FROM argument_checks c WHERE c.argument_id = a.argument_id "
+                    "ORDER BY c.event_id DESC LIMIT 1) AS check_verdict, "
+                    "(SELECT c.reason FROM argument_checks c WHERE c.argument_id = a.argument_id "
+                    "ORDER BY c.event_id DESC LIMIT 1) AS check_reason FROM sheet_arguments a "
                     "LEFT JOIN sheet_ratings r ON r.argument_id = a.argument_id "
                     "WHERE a.sheet_id = :s ORDER BY a.event_id"
                 ),
@@ -633,6 +855,10 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             .mappings()
             .all()
         )
+    linked: dict[str, dict[str, LinkedClaim]] = {}
+    for a in found:
+        if a["claim_row_key"] and a["work_id"] not in linked:
+            linked[a["work_id"]] = _linked_claims(project, a["work_id"])
     arguments = tuple(
         ArgumentView(
             argument_id=a["argument_id"],
@@ -650,6 +876,11 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             model=a["model"],
             rating=a["rating"],
             rating_note=a["rating_note"],
+            linked_claim=(
+                linked.get(a["work_id"], {}).get(a["claim_row_key"]) if a["claim_row_key"] else None
+            ),
+            check_verdict=a["check_verdict"],
+            check_reason=a["check_reason"],
         )
         for a in found
     )
@@ -676,8 +907,31 @@ def view_sheet(project: Project, sheet_id: str) -> SheetView:
             1 for c in cands if "claims" not in str(c["sources"]).split(",")
         ),
     )
+    with project.index.connect() as conn:
+        balances = (
+            conn.execute(
+                text("SELECT * FROM sheet_balances WHERE sheet_id = :s ORDER BY event_id"),
+                {"s": sheet_id},
+            )
+            .mappings()
+            .all()
+        )
+    latest = balances[-1] if balances else None
     return SheetView(
-        _info(row, len(arguments)), arguments, coverage, selection=_loads(row["selection"])
+        _info(row, len(arguments)),
+        arguments,
+        coverage,
+        selection=_loads(row["selection"]),
+        balance=None
+        if latest is None
+        else BalanceView(
+            text=latest["text"],
+            lean=latest["lean"],
+            note=latest["note"],
+            actor=latest["actor"],
+            ts=latest["ts"],
+        ),
+        balance_history=len(balances),
     )
 
 

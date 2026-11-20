@@ -235,4 +235,4 @@ def test_projection_never_opens_library(project: Project) -> None:
 
 
 def test_projection_version_bumped() -> None:
-    assert PROJECTION_VERSION == "88"
+    assert PROJECTION_VERSION == "94"

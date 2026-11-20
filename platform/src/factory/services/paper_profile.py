@@ -19,7 +19,12 @@ Invariants:
   neither, and in a calibration sample of the listed VERSION of the miner (calibrations of other
   versions never count), takes the researcher's gold rows (status `gold`, non-empty labels of any
   such calibration), else the calibration session's rows (status `calibration`). A work with none
-  of these is in `missing_miners`. Rows of the one status are never mixed for a work and miner.
+  of these is in `missing_miners`. GOLD-EMPTY: a work with no production row whose gold label in a
+  calibration of the listed VERSION is empty (and no non-empty gold label) is a decision of the
+  researcher, "this paper has none of these claims": it gets no rows, not even the calibration
+  session's, and no older-version fallback; the miner is in `gold_empty`, neither in
+  `missing_miners` nor a gap. Production rows (final, pass A) still win over it. Rows of the one
+  status are never mixed for a work and miner.
 - Versions: rows are read at the listed version of the miner (their `schema_ref`). A work with NO
   row of the listed version from any source above, that pass B has not reviewed to empty, falls
   back to the rows of the newest older version of the same miner that has rows for it, taking the
@@ -75,6 +80,7 @@ __all__ = [
     "QUOTED_MINERS",
     "QUOTE_CHARS",
     "VALUE_CHARS",
+    "MinerWorkState",
     "PaperProfile",
     "ProfileRow",
     "RawMinerRow",
@@ -84,6 +90,7 @@ __all__ = [
     "load_miner_rows",
     "load_miner_work_report",
     "load_miner_work_rows",
+    "load_miner_work_state",
     "paper_profiles",
     "profile_size",
     "render_profile",
@@ -119,7 +126,9 @@ class ProfileRow:
 class PaperProfile:
     """Everything the listed miners found in one work. `missing_miners` are the listed
     `(name, version)` with no row at all for the work; `reviewed_empty` those whose pass B
-    reviewed the work and ended with no final row (their pass A rows are not served)."""
+    reviewed the work and ended with no final row (their pass A rows are not served);
+    `gold_empty` those where the researcher's gold label of the listed version is empty (no
+    claims, by decision; not a gap)."""
 
     work_id: str
     title: str
@@ -130,6 +139,7 @@ class PaperProfile:
     newer_version_only: tuple[tuple[str, int], ...] = ()
     """Listed miners whose only rows for the work are of a newer version than the listed one;
     not served, not counted missing."""
+    gold_empty: tuple[tuple[str, int], ...] = ()
 
 
 def profile_size(text: str) -> int:
@@ -301,16 +311,18 @@ def _calibration_units(
 
 def _gold_and_calibration(
     project: Project, name: str, version: int, scope: MinerScope, work_ids: Sequence[str]
-) -> tuple[dict[str, list[RawMinerRow]], dict[str, list[RawMinerRow]]]:
+) -> tuple[dict[str, list[RawMinerRow]], dict[str, list[RawMinerRow]], set[str]]:
     """The researcher's gold rows and the calibration session's rows of the works that are in a
     calibration sample of `name` at `version` (calibrations of other versions are ignored), each
-    read once for all of them. An empty gold label is no gold. Within the matching calibrations
-    the latest one with gold (or rows) for a work gives that work's rows."""
+    read once for all of them. Within the matching calibrations the latest one with gold (or rows)
+    for a work gives that work's rows. The third part is the works with an EMPTY gold label and no
+    non-empty one: the researcher's "no claims" (see `GOLD-EMPTY` in the module invariants)."""
     units = _calibration_units(project, name, version, work_ids)
     gold: dict[str, list[RawMinerRow]] = {}
     plain: dict[str, list[RawMinerRow]] = {}
+    empty: set[str] = set()
     if not units:
-        return gold, plain
+        return gold, plain, empty
     order: list[str] = []
     for cids in units.values():
         order.extend(c for c in cids if c not in order)
@@ -319,6 +331,8 @@ def _gold_and_calibration(
         for work, labelled in calibration_labels(project, cid).items():
             if work in mine and labelled:
                 gold[work] = [_raw("gold", r.row_key, r.fields, version) for r in labelled]
+            elif work in mine:
+                empty.add(work)
         apart = calibration_task_ids(project, scope, cid)
         fresh: dict[str, list[RawMinerRow]] = {}
         for row in live_rows(project, None, scope=scope, calibration=True):
@@ -327,7 +341,7 @@ def _gold_and_calibration(
                     _raw("calibration", row.row_key, row.fields, version)
                 )
         plain.update(fresh)
-    return gold, plain
+    return gold, plain, empty - set(gold)
 
 
 def _reviewed_by_pass_b(project: Project, scope: MinerScope, work_ids: Sequence[str]) -> set[str]:
@@ -350,9 +364,30 @@ def load_miner_work_rows(
     return rows, emptied
 
 
+@dataclass(frozen=True)
+class MinerWorkState:
+    """What `load_miner_work_state` found: `rows` of every work, and the works `emptied` (pass B
+    reviewed to empty), `newer` (only rows of a newer version) and `gold_empty` (the researcher's
+    empty gold label of the listed version: no claims, by decision). The three sets are disjoint
+    and every work in them has no rows."""
+
+    rows: dict[str, list[RawMinerRow]]
+    emptied: frozenset[str]
+    newer: frozenset[str]
+    gold_empty: frozenset[str]
+
+
 def load_miner_work_report(
     project: Project, name: str, version: int, work_ids: Sequence[str]
 ) -> tuple[dict[str, list[RawMinerRow]], frozenset[str], frozenset[str]]:
+    """`load_miner_work_state` without its `gold_empty` part."""
+    state = load_miner_work_state(project, name, version, work_ids)
+    return state.rows, state.emptied, state.newer
+
+
+def load_miner_work_state(
+    project: Project, name: str, version: int, work_ids: Sequence[str]
+) -> MinerWorkState:
     """`load_miner_rows` and, besides, the works that pass B reviewed to empty: those with no
     final row although pass B has opened and the work's passes are current. Such a work has no
     rows (its pass A rows, which pass B did not confirm, and the calibration rows are not
@@ -365,7 +400,13 @@ def load_miner_work_report(
 
     The third part lists the works left with no row whose only live rows are of a version newer
     than `version`: they are not served (the listed version is the reader's contract) and are
-    reported, so a caller states the gap instead of calling the work unmined."""
+    reported, so a caller states the gap instead of calling the work unmined.
+
+    The fourth part (`gold_empty`) is the works, with no final or live pass A row of `version`,
+    whose gold label in a calibration of `version` is empty and which have no non-empty gold label
+    there. The researcher recorded that the paper has none of these claims: it is served no rows
+    (not the calibration session's) and the older-version fallback is not applied to it. It is
+    not a gap of the unknown kind. Production rows win over it, as over any gold."""
     unique = list(dict.fromkeys(work_ids))
     scope = MinerScope(name)
     finals: dict[str, list[RawMinerRow]] = {w: [] for w in unique}
@@ -393,8 +434,9 @@ def load_miner_work_report(
     older = sorted(
         {v for v in set(live) | _calibration_versions(project, name) if v < version}, reverse=True
     )
+    gold_empty: set[str] = set()
     for tried in [version, *older]:
-        needy = [w for w in open_works if not rows[w]]
+        needy = [w for w in open_works if not rows[w] and w not in gold_empty]
         if not needy:
             break
         if tried != version:
@@ -402,13 +444,18 @@ def load_miner_work_report(
                 rows[w] = list(live.get(tried, {}).get(w, []))
             needy = [w for w in needy if not rows[w]]
         if needy:
-            gold, plain = _gold_and_calibration(project, name, tried, scope, needy)
+            gold, plain, empty = _gold_and_calibration(project, name, tried, scope, needy)
             for w in needy:
+                if tried == version and w in empty:
+                    gold_empty.add(w)
+                    continue
                 rows[w] = choose_rows([], gold.get(w, []), plain.get(w, []))
     newer = frozenset(
-        w for w in open_works if not rows[w] and any(v > version and w in live[v] for v in live)
+        w
+        for w in open_works
+        if not rows[w] and w not in gold_empty and any(v > version and w in live[v] for v in live)
     )
-    return rows, emptied, newer
+    return MinerWorkState(rows, emptied, newer, frozenset(gold_empty))
 
 
 def load_miner_rows(
@@ -419,7 +466,9 @@ def load_miner_rows(
     else, unless pass B has reviewed the work to empty (no rows then; see `load_miner_work_rows`),
     its live pass A rows (`pass-a-only`); else, for a work in a calibration sample of `version`
     of the miner, the researcher's gold rows (`gold`, a non-empty label of any such calibration),
-    else the calibration session's rows (`calibration`). The sources are never mixed for one work
+    else the calibration session's rows (`calibration`); an empty gold label of the listed
+    version serves no rows at all (`load_miner_work_state`, `gold_empty`). The sources are never
+    mixed for one work
     (`choose_rows`). Unscrubbed, unsorted beyond the reader's order. Read-only; the caller has
     synced the index."""
     return load_miner_work_rows(project, name, version, work_ids)[0]
@@ -448,12 +497,16 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
     seen: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     emptied: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     newer_only: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
+    gold_empty: dict[str, set[tuple[str, int]]] = {w: set() for w in unique}
     for name, version in listed:
         spec = registered_miner(project, name, version)
         if spec is None:
             continue
         names = _names_of(project, spec)
-        loaded, reviewed, newer = load_miner_work_report(project, name, version, unique)
+        state = load_miner_work_state(project, name, version, unique)
+        loaded, reviewed, newer = state.rows, state.emptied, state.newer
+        for work_id in state.gold_empty:
+            gold_empty[work_id].add((name, version))
         for work_id in reviewed:
             emptied[work_id].add((name, version))
         for work_id in newer:
@@ -493,9 +546,11 @@ def _paper_profiles(project: Project, work_ids: Sequence[str]) -> list[PaperProf
                     if m not in seen[work_id]
                     and m not in emptied[work_id]
                     and m not in newer_only[work_id]
+                    and m not in gold_empty[work_id]
                 ),
                 tuple(m for m in listed if m in emptied[work_id]),
                 tuple(m for m in listed if m in newer_only[work_id]),
+                tuple(m for m in listed if m in gold_empty[work_id]),
             )
         )
     return profiles
@@ -505,7 +560,8 @@ def render_profile(profile: PaperProfile) -> str:
     """The profile as plain text: a header line `work_id · year · title`, then one line per miner
     (and status) `miner [status]: field=value; field=value | next row` (`miner [status] (v1): ...`
     for rows served from an older version than the listed one), ordered by miner name,
-    then version; a line `missing: ...` lists the listed miners without rows. Pure."""
+    then version; a line `missing: ...` lists the listed miners without rows, `gold-empty: ...`
+    those for which the researcher recorded no claims (no rows by decision; not missing). Pure."""
     lines = [f"{profile.work_id} · {profile.year or 'n.d.'} · {profile.title}"]
     groups: dict[tuple[str, int, str], list[ProfileRow]] = {}
     for row in sorted(profile.rows, key=lambda r: (r.miner, r.version, r.row_key)):
@@ -520,4 +576,6 @@ def render_profile(profile: PaperProfile) -> str:
         lines.append("reviewed-empty: " + ", ".join(n for n, _ in profile.reviewed_empty))
     if profile.newer_version_only:
         lines.append("newer-version-only: " + ", ".join(n for n, _ in profile.newer_version_only))
+    if profile.gold_empty:
+        lines.append("gold-empty: " + ", ".join(n for n, _ in profile.gold_empty))
     return "\n".join(lines)
