@@ -2220,14 +2220,27 @@ def snowball_plan_cmd(
 def snowball_run_cmd(
     ctx: typer.Context,
     direction: Annotated[str, typer.Argument(help="backward or forward.")],
+    decision: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--decision",
+            help="A selected plan decision on the subject snowball-<direction>-<round_no>; "
+            "pilot and systematic projects need it (the researcher's recorded go-ahead).",
+        ),
+    ] = None,
 ) -> None:
-    """Record and run a round (the researcher's go-ahead is this command)."""
+    """Record and run a round; pilot and systematic need a selected decision (--decision)."""
     state = _state(ctx)
     parsed = _round_direction(direction)
     with _reporting_errors():
         project = _resolve_project(state)
         result = snowball_service.snowball_round(
-            project, project.human_actor(), parsed, sources=dict(default_sources()), dry_run=False
+            project,
+            project.human_actor(),
+            parsed,
+            sources=dict(default_sources()),
+            dry_run=False,
+            decision_ids=decision,
         )
     for line in render.round_result_lines(result):
         typer.echo(line)

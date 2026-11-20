@@ -104,7 +104,7 @@ jobs:
           if [ "${{ needs.plan.outputs.mode }}" = touched ]; then
             tail -n +2 plan.txt | sort > all.txt
           else
-            ls tests/test_*.py | sort > all.txt
+            find tests -name 'test_*.py' -not -path '*/__pycache__/*' | sort > all.txt
           fi
           awk -v s=${{ matrix.shard }} 'NR % 4 == s' all.txt > shard.txt
           echo "files in this shard: $(wc -l < shard.txt)"

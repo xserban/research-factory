@@ -61,3 +61,20 @@ def test_a_package_import_does_not_tie_its_importers_together(tmp_path: Path) ->
     probe.write_text("from pkg import a\n")
     found = module._imports(probe, "t", {"pkg.a", "pkg.b", "pkg"})
     assert found == {"pkg.a"}
+
+
+def test_every_selected_path_exists_and_subfolders_are_kept() -> None:
+    module = _load()
+    tests_dir = SCRIPT.parent.parent / "platform" / "tests"
+    for changed in (
+        ["platform/src/factory/services/finders.py"],
+        ["platform/src/factory/document/quotes.py"],
+        ["docs/backlog.md"],
+        ["plugin/skills/rf-run/SKILL.md"],
+    ):
+        mode, names = module.select(changed)
+        assert mode == "touched"
+        missing = [n for n in names if not (tests_dir / n).is_file()]
+        assert missing == [], (changed, missing)
+    nested = [n for n in module.all_test_files() if "/" in n]
+    assert nested and all((tests_dir / n).is_file() for n in nested)

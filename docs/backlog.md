@@ -1099,3 +1099,24 @@ Status: not built (job G1 of 2026-11-20 stopped after the five smaller items).
 **Why:** the framing, seed, probe and search steps run only as MCP tools today (flow review, `ops/review-2026-11-20/stages-0-4.md`, gap 5).
 **Rigour notes:** human-attributed acts like the existing ones; read-only ones in `CLI_READS`; no logic outside services; mock-source tests for search.
 **Open questions:** JSON spec parsing for the question and the seed lists; source adapters for `search run`; the actor and decision-id handling.
+
+### IDEA-118 — Absorbed works in audit and agreement draws and in Discovery totals
+Status: open question (job C1 of 2026-11-20; decision 159 proposed).
+**What:** after a dedup merge made after full-text screening, audit and agreement draws still count the absorbed work's existing rows, and the Discovery `FT_INCLUDED` totals may count a record against its primary (an attempted fix changed totals from 12 to 10 and was reverted because the cause was not understood). Decide whether these denominators count the primary once or each record.
+**Why:** one paper can contribute rows twice to an agreement or audit sample, and a total can double count.
+**Rigour notes:** reading (views, report) keeps the rows per decision 92 item 9; sampling and totals are denominators and should be canonical; no change to the PRISMA/flow numbers.
+**Open questions:** which denominators are recorded populations and which are work to do; whether Discovery counts records or works.
+
+### IDEA-119 — Bind a snowball decision to the round's plan
+Status: not built (decision 158 binds to direction and round number only).
+**What:** the dry run produces a digest of the planned round (direction, seed works, queries); the decision's items must contain it, so a selection authorises exactly that plan and the check compares them.
+**Why:** today the selection is a recorded human go-ahead, not a review of the plan; an agent can write vague items.
+**Rigour notes:** no new event type; the digest is computed by the platform (no model); a stale digest (plan changed since) is refused.
+**Open questions:** what the digest covers; how the human sees the plan when selecting (the decision items carry it).
+
+### IDEA-120 — Manuscript citation confirmation: align the preset and the service
+Status: open question (decision 162 proposed; found by job G4).
+**What:** the pilot preset's policy for `manuscript.citation_confirm` is `agent_audit`, but `decide_citation` refuses every non-human actor in every mode. Accept human-only and change the preset, or let a second session confirm in pilot like the reference-link and import gates.
+**Why:** the preset and the code disagree; the tests pin the code.
+**Rigour notes:** a citation is checked against its source; human-only is the safer side.
+**Open questions:** none besides the choice.

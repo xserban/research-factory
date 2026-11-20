@@ -583,6 +583,9 @@ class SnowballRoundStarted(StrictModel):
     tolerated_pending: tuple[WorkId, ...] = ()
     """Sorted ordinary works pending or unextracted when the round started, within the protocol's
     `pending_tolerance` (decision 138). Left out of the event while empty."""
+    decision_ids: tuple[str, ...] = ()
+    """The selected `plan` decisions (subject `snowball-<direction>-<round_no>`) the round
+    implements; required in `pilot` and `systematic`. Left out of the event while empty."""
 
     @model_serializer(mode="wrap")
     def _omit_empty_selection(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -594,6 +597,8 @@ class SnowballRoundStarted(StrictModel):
             data.pop("backward_selection", None)
         if not self.tolerated_pending:
             data.pop("tolerated_pending", None)
+        if not self.decision_ids:
+            data.pop("decision_ids", None)
         return data
 
     @model_validator(mode="after")

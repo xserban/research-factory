@@ -9,6 +9,7 @@ from factory.services.skills import skill_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS = (
+    "rf-acquire",
     "rf-appraise",
     "rf-cards",
     "rf-chat",
@@ -433,3 +434,29 @@ def test_rf_search_run_names_its_tools_and_gates() -> None:
     assert "held-out" in never and "Never decide a human gate" in never
     run = (REPO_ROOT / "plugin" / "skills" / "rf-run" / "SKILL.md").read_text("utf-8")
     assert "rf-search-run" in run
+
+
+def test_rf_acquire_names_its_tools_and_gates() -> None:
+    text = (REPO_ROOT / "plugin" / "skills" / "rf-acquire" / "SKILL.md").read_text("utf-8")
+    assert _frontmatter("rf-acquire")["stage"] == "[acquire]"
+    for needed in (
+        "library_adoptable",
+        "library_adopt",
+        "fulltext_fetch",
+        "fulltext_status",
+        "inbox_add",
+        "inbox_resolve",
+        "document_read",
+        "chat_verify",
+        "factory document convert",
+        "factory fulltext import",
+        "full-text screening is not planned in the protocol",
+        "## Human-only acts",
+        "## Never",
+        "## Done when",
+    ):
+        assert needed in text, needed
+    never = text.split("## Never", 1)[1].split("\n## ", 1)[0]
+    assert "held-out" in never and "executable" in never
+    run = (REPO_ROOT / "plugin" / "skills" / "rf-run" / "SKILL.md").read_text("utf-8")
+    assert "rf-acquire" in run
