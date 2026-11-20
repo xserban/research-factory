@@ -52,6 +52,11 @@ STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
         "spar_coverage_record": "the coverage role records the sweep",
     },
     "spar2-cover": {"spar_reading_record": "a reader records readings"},
+    "develop-lead": {"hypothesis_review_next": "the independent review is the critic's own run"},
+    "develop-draft": {
+        "lead_record": "a lead is the lead author's; the drafter works from promoted leads",
+        "hypothesis_review_next": "the independent review is the critic's own run",
+    },
     "acquire": {
         "screen_next": "screening is the screen stage's; the conductor's acquire step fetches",
         "screen_record": "screening is the screen stage's; the conductor's acquire step fetches",
@@ -73,7 +78,7 @@ def mentioned(text: str) -> set[str]:
     ending `_next`, `_record`, `_status`, `_list`, `_propose`, `_link`, or `document_read`."""
     names = {m for m in re.findall(PREFIX + r"([a-z_]+)", text)}
     for name in re.findall(r"`([a-z][a-z_]*)(?:\(|`)", text):
-        if name == "document_read" or name.endswith(TOOL_SUFFIXES):
+        if name in ("document_read", "digest_get") or name.endswith(TOOL_SUFFIXES):
             names.add(name)
     return names
 
