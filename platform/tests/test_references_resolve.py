@@ -167,10 +167,10 @@ def test_second_agent_confirm_in_pilot_only(
     # the proposer's own session cannot confirm
     with pytest.raises(FactoryValidationError):
         _decide(project, agent, extraction, 1, Decision.CONFIRM)
-    monkeypatch.setattr(reference_resolve, "indexed_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
-    with pytest.raises(FactoryValidationError):
-        _decide(project, checker, extraction, 1, Decision.CONFIRM)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(reference_resolve, "indexed_rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
+        with pytest.raises(FactoryValidationError):
+            _decide(project, checker, extraction, 1, Decision.CONFIRM)
     _decide(project, checker, extraction, 1, Decision.CONFIRM)
     item = _item(project, 1)
     assert item.state is LinkState.RESOLVED and item.confidence == "confirmed"
