@@ -36,7 +36,7 @@ def _level(monkeypatch: pytest.MonkeyPatch, level: AutonomyLevel) -> None:
     monkeypatch.setattr(
         project_service,
         "project_levels",
-        lambda project: SimpleNamespace(autonomy_level=level),
+        lambda project: SimpleNamespace(autonomy_level=level, tier=None, rigor_mode=None),
         raising=False,
     )
 
