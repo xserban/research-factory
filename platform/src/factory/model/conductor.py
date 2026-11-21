@@ -26,12 +26,13 @@ from factory.model.screening import NonBlank
 CONDUCTOR_ID_RE = rf"^cnd_{ULID_RE}$"
 
 ConductorRole = Literal[
-    "proposer", "second-pass", "verifier", "auditor", "lead", "drafter", "critic"
+    "proposer", "second-pass", "verifier", "auditor", "lead", "drafter", "critic", "automatic"
 ]
 """`lead`, `drafter` and `critic` are the three runs of the develop step (the hypothesis engine's
 independence rule: three distinct sessions). `second-pass` is the run that opens the second,
 independent pass of a step whose plan asks for one (extraction pass B), in a session and with a
-model of its own."""
+model of its own. `automatic` is the role of the deterministic step between `acquire` and the
+full-text screening (resolve, fetch, convert): the platform runs it as the system, with no run."""
 StepOutcome = Literal["complete", "failed", "lost"]
 PauseReason = Literal[
     "failed-run",
@@ -54,6 +55,9 @@ class ConductorStarted(StrictModel):
     max_minutes: int = Field(ge=1)
     max_runs: int = Field(ge=1)
     max_units_per_run: int = Field(ge=1)
+    automatic_limit: int | None = Field(default=None, ge=1)
+    """The works the `automatic` step may take on (the plan's `acquire.max_included`); None when
+    the plan sets none (the step then uses `max_units_per_run`)."""
     second_pass_steps: tuple[NonBlank, ...] = ()
     """The steps whose plan asks for a second pass (a `second-pass` role run after the proposer)."""
     plan_blob: Annotated[str, Field(pattern=BLOB_REF_RE)]
@@ -66,7 +70,8 @@ class ConductorStepStarted(StrictModel):
     step: int = Field(ge=0)
     stage_id: NonBlank
     role: ConductorRole
-    run_id: str = Field(pattern=RUNNER_RUN_ID_RE)
+    run_id: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
+    """None for the `automatic` step, which starts no run."""
     attempt: int = Field(ge=1)
 
 

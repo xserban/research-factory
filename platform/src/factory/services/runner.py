@@ -154,6 +154,21 @@ STAGES: Final[dict[str, StageSpec]] = {
         ),
         unit="record screened",
     ),
+    # The full-text phase of `screen` as a run of its own (the conductor starts it after
+    # `acquire`): the same skill, model and tools, the full-text task kind only.
+    "screen-ft": StageSpec(
+        model="claude-haiku-5-5",
+        skill="rf-screen",
+        role="screener",
+        tools=(
+            "mcp__factory__screen_next",
+            "mcp__factory__screen_record",
+            "mcp__factory__document_read",
+            "mcp__factory__project_status",
+        ),
+        kinds=(task_kind(ScreeningStage.FULL_TEXT, PassLabel.A),),
+        unit="record screened (full text)",
+    ),
     "extract": StageSpec(
         model="claude-sonnet-5-5",
         skill="rf-extract",
@@ -879,7 +894,19 @@ def _prompt(
             "that a human or another role closes; if a tool refuses, report the refusal "
             "verbatim and stop.\n\n"
         )
-    if spec.skill == "rf-screen":
+    if stage == "screen-ft":
+        from factory.services.screening import SCREEN_BATCH  # screening imports much
+
+        extra = (
+            "Screening order for this run: the skill says full-text mode runs only when the "
+            "researcher asks; for this run that is overridden, the researcher has asked for it. "
+            "Title and abstract screening is done. Screen at full text only: call `screen_next` "
+            'with `stage="full-text"` and follow the skill\'s full-text mode until it serves no '
+            f"batch. It is pass A, and a batch of up to {SCREEN_BATCH} records is {SCREEN_BATCH} "
+            "units. If it serves no batch because of a `blocked` reason, report it verbatim and "
+            "stop.\n\n"
+        )
+    elif spec.skill == "rf-screen":
         from factory.services.screening import SCREEN_BATCH  # screening imports much
 
         extra = (
@@ -1036,10 +1063,13 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
         return {stage: unit_pending(project, stage) or 0}
     pending = pending_work(project)
     counts = {kind: pending.get(kind, 0) for kind in spec.kinds}
-    if stage == "screen":  # a screening task is made only when `screen_next` serves the record
-        for kind, screening_stage in zip(
-            spec.kinds, (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT), strict=True
-        ):
+    if stage in ("screen", "screen-ft"):  # a task is made only when `screen_next` serves it
+        phases = (
+            (ScreeningStage.FULL_TEXT,)
+            if stage == "screen-ft"
+            else (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT)
+        )
+        for kind, screening_stage in zip(spec.kinds, phases, strict=True):
             servable, blocked = _screen_servable(project, screening_stage)
             counts[kind] = servable if blocked else max(counts[kind], servable)
     if stage == "extract":  # a task is made only when a session asks for the unit

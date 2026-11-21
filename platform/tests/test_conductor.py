@@ -18,7 +18,7 @@ from factory.clock import FixedClock
 from factory.config import Settings
 from factory.errors import FactoryValidationError
 from factory.index.default import default_projection
-from factory.model.conductor import ConductorStarted
+from factory.model.conductor import ConductorStarted, ConductorStepStarted
 from factory.model.levels import Tier
 from factory.model.runner import STAGE_KEY_RE, RunnerStarted
 from factory.modules.contract import GatePolicy, PolicyKind
@@ -28,6 +28,8 @@ from factory.services.project import init_project
 from tests.helpers import SESSION
 
 STEPS = ("frame", "gather", "screen", "acquire", "extract", "write")
+RUN_STEPS = ("frame", "gather", "screen", "acquire", "automatic", "extract", "write")
+"""`begin_conductor` adds the `automatic` step right after `acquire`."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class FStage:
     skipped: bool = False
     note: str = ""
     second_pass: bool = False
+    phase: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,18 @@ class FakeRunner:
     @property
     def stages(self) -> list[str]:
         return [c[0] for c in self.calls]
+
+
+@pytest.fixture(autouse=True)
+def automatic_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
+    """Stands for the platform's deterministic step (`default_automatic`): records the calls."""
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        conductor,
+        "default_automatic",
+        lambda project, limit: calls.append((project.paths.slug, limit)),
+    )
+    return calls
 
 
 @pytest.fixture
@@ -153,7 +168,7 @@ def policy(kind: PolicyKind) -> Callable[..., GatePolicy]:
 
 def test_begin_writes_one_started_event_with_the_budget(project: Project) -> None:
     run = conductor.begin_conductor(project, plan(*STEPS, "understand", skipped=("understand",)))
-    assert run.steps == STEPS and run.budget == conductor.Budget(60, 20, 30)
+    assert run.steps == RUN_STEPS and run.budget == conductor.Budget(60, 20, 30)
     [event] = _events(project, "conductor.started")
     assert event.actor.kind == "system" and event.input_blob is not None
     started = ConductorStarted.model_validate(event.payload)
@@ -191,7 +206,7 @@ def test_status_without_a_conductor(project: Project) -> None:
 def test_every_step_advances_in_order_to_finished(project: Project, fake: FakeRunner) -> None:
     conductor.begin_conductor(project, plan(*STEPS))
     status = drive(project, fake)
-    assert status.state == "finished" and status.steps_done == len(STEPS)
+    assert status.state == "finished" and status.steps_done == len(RUN_STEPS)
     # screen and extract are work-queue steps with nothing pending (the real counts): no run
     assert fake.stages == ["frame", "gather", "acquire", "write"]
     assert [c[1] for c in fake.calls] == [30, 30, 30, 30]
@@ -203,6 +218,73 @@ def test_queue_steps_run_when_work_is_idleing(project: Project, fake: FakeRunner
     conductor.begin_conductor(project, plan("screen"))
     status = conductor.advance(project, start_run=fake.start_run, pending=_busy, gate_closed=_open)
     assert status.state == "running" and fake.stages == ["screen"]
+
+
+def _phased() -> FPlan:
+    return FPlan(
+        Tier.BRIEF,
+        (
+            FStage("gather"),
+            FStage("screen", phase="title-abstract"),
+            FStage("acquire"),
+            FStage("screen", phase="full-text"),
+            FStage("extract"),
+        ),
+        FLimits(),
+    )
+
+
+def test_screen_runs_twice_around_acquire_with_its_own_step_keys(
+    project: Project, fake: FakeRunner
+) -> None:
+    run = conductor.begin_conductor(project, _phased())
+    assert run.steps == (
+        "gather",
+        "screen:title-abstract",
+        "acquire",
+        "automatic",
+        "screen:full-text",
+        "extract",
+    )
+    asked: list[str] = []
+
+    def pending(_p: Project, stage: str) -> dict[str, int]:
+        asked.append(stage)
+        return {stage: 1 if stage.startswith("screen") else 0}
+
+    for _ in range(12):
+        status = conductor.advance(
+            project, start_run=fake.start_run, pending=pending, gate_closed=_open,
+            escalate=lambda *_a: None,
+        )  # fmt: skip
+        if status.state in ("finished", "paused", "waiting"):
+            break
+    assert status.state == "finished"
+    # the full-text screen is a run of its own, after acquire; extract has nothing pending
+    assert fake.stages == ["gather", "screen", "acquire", "screen-ft"]
+    assert "screen" in asked and "screen-ft" in asked
+    started = [
+        ConductorStepStarted.model_validate(e.payload)
+        for e in _events(project, "conductor.step_started")
+    ]
+    assert [e.stage_id for e in started] == [
+        "gather", "screen:title-abstract", "acquire", "automatic", "screen:full-text",
+    ]  # fmt: skip
+
+
+def test_a_phased_screen_step_without_pending_work_completes_without_a_run(
+    project: Project, fake: FakeRunner
+) -> None:
+    conductor.begin_conductor(project, _phased())
+    status = drive(project, fake)
+    assert status.state == "finished" and fake.stages == ["gather", "acquire"]
+
+
+def test_screen_ft_pending_is_the_full_text_queue_only(project: Project) -> None:
+    pending = runner.pending_units(project, "screen-ft")
+    assert list(pending) == [runner.STAGES["screen-ft"].kinds[0]]
+    assert runner.STAGES["screen-ft"].tools == runner.STAGES["screen"].tools
+    assert runner.STAGES["screen-ft"].skill == "rf-screen"
 
 
 def test_one_run_at_a_time(project: Project, fake: FakeRunner) -> None:
@@ -472,7 +554,9 @@ HUMAN_ONLY_ACTS = re.compile(
 )
 def test_the_later_stages_now_begin(project: Project, stages: tuple[str, ...]) -> None:
     run = conductor.begin_conductor(project, plan(*stages))
-    assert run.steps == stages
+    assert run.steps == tuple(
+        x for s in stages for x in ((s, "automatic") if s == "acquire" else (s,))
+    )
 
 
 def test_a_stage_without_a_spec_is_still_refused(project: Project) -> None:
@@ -588,7 +672,7 @@ def test_a_second_pass_is_a_separate_run_after_the_proposer(
 ) -> None:
     run = conductor.begin_conductor(project, second_plan())
     started = ConductorStarted.model_validate(_events(project, "conductor.started")[0].payload)
-    assert started.second_pass_steps == ("extract",) and run.steps == STEPS
+    assert started.second_pass_steps == ("extract",) and run.steps == RUN_STEPS
     status = drive(project, fake)
     assert status.state == "finished"
     # `extract` has nothing pending for pass A (no run), but pass B is opened by its own run
@@ -633,3 +717,82 @@ def test_a_plan_without_limits_has_the_default_budget(project: Project) -> None:
     run = conductor.begin_conductor(project, second_plan(unlimited=True))
     assert run.budget.max_runs == conductor.UNCAPPED_RUNS
     assert run.budget.max_minutes == conductor.UNCAPPED_MINUTES
+
+
+# --------------------------------------------------------------------- the automatic step
+
+
+def test_the_automatic_step_runs_once_between_acquire_and_full_text(
+    project: Project, fake: FakeRunner
+) -> None:
+    order: list[str] = []
+    base = fake.start_run
+
+    def start(p: Project, stage: str, *, unit_cap: int) -> str:
+        order.append(stage)
+        return base(p, stage, unit_cap=unit_cap)
+
+    def automatic(_p: Project, limit: int) -> None:
+        order.append(f"automatic:{limit}")
+
+    plan_ = FPlan(
+        Tier.BRIEF,
+        (
+            FStage("gather"),
+            FStage("screen", phase="title-abstract"),
+            FStage("acquire", caps={"max_included": 7}),
+            FStage("screen", phase="full-text"),
+        ),
+        FLimits(),
+    )
+    conductor.begin_conductor(project, plan_)
+    for _ in range(12):
+        status = conductor.advance(
+            project, start_run=start, pending=_busy, gate_closed=_open, automatic=automatic,
+            escalate=lambda *_a: None,
+        )  # fmt: skip
+        if status.state == "finished":
+            break
+    assert status.state == "finished"
+    assert order == ["gather", "screen", "acquire", "automatic:7", "screen-ft"]
+    steps = [
+        (e.payload["role"], e.payload.get("run_id"))
+        for e in _events(project, "conductor.step_started")
+    ]
+    assert ("automatic", None) in steps
+    assert {e.actor.kind for e in _events(project, "conductor.step_finished")} == {"system"}
+    # it is no run: the budget counts the four runs only
+    assert status.runs == 4
+
+
+def test_a_plan_without_acquire_has_no_automatic_step(project: Project, fake: FakeRunner) -> None:
+    run = conductor.begin_conductor(project, plan("frame", "gather"))
+    assert "automatic" not in run.steps
+    drive(project, fake)
+    assert fake.stages == ["frame", "gather"]
+
+
+def test_a_failing_automatic_step_pauses_and_retries_once_per_advance(
+    project: Project, fake: FakeRunner
+) -> None:
+    calls: list[int] = []
+
+    def boom(_p: Project, limit: int) -> None:
+        calls.append(limit)
+        raise RuntimeError("network down")
+
+    conductor.begin_conductor(project, plan("acquire", "write"))
+    kw: dict[str, Any] = dict(
+        start_run=fake.start_run, pending=_idle, gate_closed=_open, escalate=lambda *_a: None
+    )
+    status = conductor.advance(project, automatic=boom, **kw)  # acquire starts
+    status = conductor.advance(project, automatic=boom, **kw)  # acquire closed; automatic fails
+    assert status.state == "paused" and status.reason == "failed-run"
+    assert calls == [30] and fake.stages == ["acquire"]
+    again = conductor.advance(project, automatic=boom, **kw)
+    assert again.state == "paused" and calls == [30]  # not retried without `retry`
+    ok = conductor.advance(project, retry=True, automatic=lambda *_a: None, **kw)
+    assert ok.state in ("running", "finished")
+    drive(project, fake)
+    assert fake.stages == ["acquire", "write"]
+    assert {e.actor.kind for e in _events(project, "conductor.paused")} == {"system"}

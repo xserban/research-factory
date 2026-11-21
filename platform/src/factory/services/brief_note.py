@@ -194,7 +194,7 @@ def _caps(tier: Tier | None) -> tuple[NoteCap, ...]:
     for stage in plan.stages:
         if not stage.skipped:
             caps += [
-                NoteCap(label=f"{stage.stage_id}: {name}", value=value)
+                NoteCap(label=f"{stage.label}: {name}", value=value)
                 for name, value in stage.caps.items()
             ]
     return tuple(caps)

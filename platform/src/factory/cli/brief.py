@@ -68,7 +68,7 @@ def plan_lines(plan: TierPlan) -> list[str]:
     for s in plan.stages:
         caps = ", ".join(f"{k}={v}" for k, v in s.caps.items())
         state = "skipped" if s.skipped else (caps or "uncapped")
-        lines.append(f"  {s.stage_id:<10} {s.skill:<14} {state}")
+        lines.append(f"  {s.label:<10} {s.skill:<14} {state}")
         if s.note and not s.skipped:
             lines.append(f"             {s.note}")
     skipped = skipped_steps(plan.tier)
