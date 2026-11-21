@@ -68,9 +68,10 @@ SourcesFor = Callable[..., Mapping[str, SourceFactory]]
 
 SKILL = "rf-brief@1a2b3c4d"
 MECHANICAL_HUMAN_ATTRIBUTED = {"document.converted", "document.conversion_failed"}
-STEPS = ("frame", "gather", "screen", "acquire", "extract", "extract-b", "write")
-"""The runs the conductor starts on the stock brief plan: `extract-b` is the second-pass run of
-the extract step (a separate run and session; the plan's `second_pass` data asks for it)."""
+STEPS = ("frame", "gather", "screen", "acquire", "screen-ft", "extract", "extract-b", "write")
+"""The runs the conductor starts on the stock brief plan: `screen` is title/abstract screening,
+`screen-ft` the full-text phase after `acquire`, `extract-b` the second-pass run of the extract
+step (a separate run and session; the plan's `second_pass` data asks for it)."""
 HUMAN_GATES = {
     "protocol.ready",
     "protocol.press_confirm",
@@ -142,6 +143,10 @@ class Scripted:
     runs: list[tuple[str, str]] = field(default_factory=list)
     sessions: dict[str, set[str]] = field(default_factory=dict)
     done: set[str] = field(default_factory=set)
+    automatic_calls: list[int] = field(default_factory=list)
+    """The limits the conductor's deterministic step was called with (it starts no run)."""
+    extracted: int = 0
+    """The tasks pass A was served (non-zero only if works reached full-text inclusion)."""
     note: str = ""
     _next: int = 0
 
@@ -205,15 +210,24 @@ class Scripted:
             assert result.rejected == [], result.rejected
 
     def _acquire(self, run: str) -> None:
-        self.actor(run)  # the acquiring agent's session; fetching and converting are the platform's
+        self.actor(run)  # the acquiring agent's session: it fetches (the MCP fetch tool)
         for work in promoted_works(self.project):
             fetched_document(self.project, work, ARTICLE)
-        run_convert(self.project, make_registry(StubConverter()))
+
+    def automatic(self, project: Project, limit: int) -> None:
+        """The conductor's deterministic step (the platform, no model): converts the fetched
+        documents. Conversion has no MCP tool, so no scripted agent does it."""
+        assert project is self.project and limit >= 1
+        self.automatic_calls.append(limit)
+        run_convert(project, make_registry(StubConverter()))
+
+    def _screen_ft(self, run: str) -> None:
+        # The conductor's second `screen` run, after `acquire`: full text, in a session of its own.
+        _service_screen_to_end(self.project, self.actor(run), PassLabel.A, lambda _w: None)
 
     def _extract(self, run: str) -> None:
-        # Full-text screening to the end in one session, then extraction pass A in a second.
-        # (No conductor step screens full text after `acquire`: reported as a gap by lane L15.)
-        _service_screen_to_end(self.project, self.actor(run), PassLabel.A, lambda _w: None)
+        # Extraction pass A only: it screens nothing, so its population exists because the
+        # full-text run above promoted the works.
         self._extract_pass(run, PassLabel.A, "claude-opus-5-5")
 
     def _extract_b(self, run: str) -> None:
@@ -227,6 +241,8 @@ class Scripted:
             batch = extract_next(self.project, extractor, label).batch
             if batch is None:
                 break
+            if label is PassLabel.A:
+                self.extracted += 1
             claims = [claim_input()] if label is PassLabel.A else []
             result = extract_record(
                 self.project, extractor, batch.task_id, [_r()], claims, finish=True
@@ -288,6 +304,7 @@ def skeleton(
             project,
             start_run=scripted.start_run,
             pending=scripted.pending,
+            automatic=scripted.automatic,
             gate_closed=lambda _p, stage, gate: (stage, gate) in closed,
             escalate=lambda *_a: None,
         )
@@ -319,8 +336,9 @@ def test_the_conductor_runs_every_step_and_writes_system_events_only(skeleton: S
     assert {e.actor.kind for e in ours} == {"system"}
     by_type = [e.type for e in ours]
     assert by_type.count("conductor.started") == 1
-    assert by_type.count("conductor.step_started") == len(STEPS)
-    assert by_type.count("conductor.step_finished") == len(STEPS)
+    # one more event pair than runs: the deterministic `automatic` step starts no run
+    assert by_type.count("conductor.step_started") == len(STEPS) + 1
+    assert by_type.count("conductor.step_finished") == len(STEPS) + 1
     assert by_type.count("conductor.finished") == 1
     # No human act inside the conductor's window: the conductor never confirms anything.
     started = next(e for e in events if e.type == "conductor.started")
@@ -334,6 +352,37 @@ def test_the_conductor_runs_every_step_and_writes_system_events_only(skeleton: S
     assert all(e.actor.model and e.actor.skill for e in agent_events)
 
 
+def test_full_text_is_screened_by_its_own_run_between_acquire_and_extract(
+    skeleton: Skeleton,
+) -> None:
+    project, scripted = skeleton.project, skeleton.runner
+    stages = [stage for stage, _ in scripted.runs]
+    assert stages.index("acquire") < stages.index("screen-ft") < stages.index("extract")
+    started = [
+        e.payload["stage_id"] for e in _events(project) if e.type == "conductor.step_started"
+    ]
+    assert started == [
+        "frame", "gather", "screen:title-abstract", "acquire", "automatic", "screen:full-text",
+        "extract", "extract", "write",
+    ]  # fmt: skip
+    runs = dict(scripted.runs)
+    decisions = [
+        e
+        for e in _events(project)
+        if e.type == "screening.decision_recorded" and e.payload.get("stage") == "full-text"
+    ]
+    assert decisions
+    assert {e.actor.session for e in decisions} == scripted.sessions[runs["screen-ft"]]
+    assert scripted.automatic_calls == [20]  # once, bounded by the plan's `acquire.max_included`
+    order = [e.payload["stage_id"] for e in _events(project) if e.type == "conductor.step_started"]
+    assert (
+        order.index("acquire") + 1
+        == order.index("automatic") + 0
+        == order.index("screen:full-text") - 1
+    )
+    assert scripted.extracted > 0  # the extract step had a population only because of that run
+
+
 def test_every_run_has_sessions_of_its_own(skeleton: Skeleton) -> None:
     project, scripted = skeleton.project, skeleton.runner
     assert len(scripted.sessions) == len(STEPS)
@@ -343,7 +392,11 @@ def test_every_run_has_sessions_of_its_own(skeleton: Skeleton) -> None:
     seen = {e.actor.session for e in _events(project) if e.actor.kind == "agent"}
     assert seen <= set(used)
     assert len(seen) >= 4
-    started = [e.payload["run_id"] for e in _events(project) if e.type == "conductor.step_started"]
+    started = [
+        e.payload["run_id"]
+        for e in _events(project)
+        if e.type == "conductor.step_started" and e.payload["role"] != "automatic"
+    ]
     assert started == [run for _, run in scripted.runs]
 
 

@@ -28,7 +28,33 @@ STAGES = tuple(s for s in STAGE_IDS if s != "cross")
 def test_every_plan_lists_the_catalog_stages_in_order(tier: Tier) -> None:
     plan = plan_for(tier)
     assert plan.tier is tier
-    assert tuple(s.stage_id for s in plan.stages) == STAGES
+    assert tuple(s.stage_id for s in plan.stages if s.phase != "full-text") == STAGES
+
+
+@pytest.mark.parametrize("tier", list(Tier))
+def test_every_plan_screens_full_text_right_after_acquire(tier: Tier) -> None:
+    plan = plan_for(tier)
+    keys = [s.step_key for s in plan.stages]
+    assert keys.index("screen:title-abstract") < keys.index("acquire")
+    assert keys[keys.index("acquire") + 1] == "screen:full-text"
+    assert plan.stage("screen").phase == "title-abstract"
+    assert plan.stage("screen", "full-text").phase == "full-text"
+    assert keys.count("screen:full-text") == 1
+
+
+def test_a_plan_rejects_a_misplaced_or_unknown_phase() -> None:
+    from pydantic import ValidationError
+
+    from factory.tiers.model import StagePlan, TierPlan
+
+    plan = plan_for(Tier.BRIEF)
+    with pytest.raises(ValidationError):
+        StagePlan(stage_id="extract", skill="x", phase="full-text")
+    moved = [s for s in plan.stages if s.phase != "full-text"]
+    ft = plan.stage("screen", "full-text")
+    moved.insert(1, ft)  # before `gather`'s successor, not after `acquire`
+    with pytest.raises(ValidationError):
+        TierPlan(**{**plan.model_dump(), "stages": tuple(moved)})
 
 
 @pytest.mark.parametrize("tier", [Tier.PILOT, Tier.SYSTEMATIC])
@@ -38,6 +64,7 @@ def test_pilot_and_systematic_have_no_caps_and_skip_nothing(tier: Tier) -> None:
     assert plan.limits is None
     assert skipped_steps(tier) == ()
     assert report_label(tier) == ""
+    assert plan.stage("screen", "full-text").phase == "full-text"
 
 
 def test_brief_caps_are_the_ruled_ones() -> None:
@@ -86,6 +113,9 @@ def test_skipped_steps_are_computed_from_the_plan() -> None:
     ):
         assert expected in steps
     assert "write: skipped" not in steps
+    # the one-pass full-text phase is reported as its own line, not as a skipped phase
+    assert "screen (full text): passes capped at 1" in steps
+    assert not any(line.endswith("full text): skipped") for line in steps)
     assert "understand: skipped" in skipped_steps(Tier.DEEP)
     assert "develop: skipped" not in skipped_steps(Tier.DEEP)
     assert report_label(Tier.BRIEF).startswith("quick review, skipped: ")

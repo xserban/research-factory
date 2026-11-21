@@ -155,6 +155,7 @@ def _plan(project: Project) -> dict[str, Any]:
         "stages": [
             {
                 "stage_id": s.stage_id,
+                **({} if s.phase is None else {"phase": s.phase}),
                 "skill": s.skill,
                 "caps": dict(s.caps),
                 "skipped": s.skipped,

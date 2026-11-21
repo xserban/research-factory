@@ -17,18 +17,18 @@ def plan_for(tier: Tier) -> TierPlan:
 
 def _differences(stage: StagePlan, reference: StagePlan) -> list[str]:
     if stage.skipped and not reference.skipped:
-        return [f"{stage.stage_id}: skipped"]
+        return [f"{stage.label}: skipped"]
     out: list[str] = []
     for key, value in stage.caps.items():
         if reference.caps.get(key) == value:
             continue
         label = key.replace("_", " ")
         if value == 0:
-            out.append(f"{stage.stage_id}: no {label}")
+            out.append(f"{stage.label}: no {label}")
         elif key.endswith("_only"):
-            out.append(f"{stage.stage_id}: {label}")
+            out.append(f"{stage.label}: {label}")
         else:
-            out.append(f"{stage.stage_id}: {label} capped at {value}")
+            out.append(f"{stage.label}: {label} capped at {value}")
     return out
 
 
@@ -38,7 +38,7 @@ def skipped_steps(tier: Tier) -> tuple[str, ...]:
     reference = PLANS[Tier.SYSTEMATIC]
     out: list[str] = []
     for stage in PLANS[tier].stages:
-        out.extend(_differences(stage, reference.stage(stage.stage_id)))
+        out.extend(_differences(stage, reference.stage(stage.stage_id, stage.phase)))
     return tuple(out)
 
 

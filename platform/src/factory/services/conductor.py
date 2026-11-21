@@ -63,6 +63,8 @@ STEP_STAGE: Final[Mapping[str, str]] = {
     "frame": "frame",
     "gather": "gather",
     "screen": "screen",
+    "screen:title-abstract": "screen",
+    "screen:full-text": "screen-ft",
     "acquire": "acquire",
     "extract": "extract",
     "write": "write",
@@ -70,8 +72,10 @@ STEP_STAGE: Final[Mapping[str, str]] = {
     "develop": "develop-lead",
     "maintain": "maintain",
 }
-"""The lifecycle ids of a plan the conductor can run, and the runner stage of each (for `develop`
-the first of its three role stages: `_DEVELOP_STAGES`)."""
+"""The steps of a plan the conductor can run, and the runner stage of each (for `develop` the first
+of its three role stages: `_DEVELOP_STAGES`). A step is a stage id, or `<stage id>:<phase>` for the
+`screen` stage of a plan that screens full text after `acquire` (`StagePlan.step_key`); the bare
+`screen` is the step of a log or plan without phases and screens both phases in one run."""
 
 SECOND_PASS_STAGE: Final[Mapping[str, str]] = {"extract": "extract-b"}
 """The runner stage of the `second-pass` run of a step (extraction pass B)."""
@@ -112,7 +116,12 @@ _ROLE_GATES: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
 promoted lead, and promoting is the researcher's act. A human-only gate here makes the conductor
 wait before the role run, not after the step."""
 _GATE_EVENT_NAMESPACES: Final[Mapping[str, tuple[str, ...]]] = {"writing.release": ("draft",)}
-_QUEUE_UNITS: Final = ("screen", "extract")
+_QUEUE_UNITS: Final = ("screen", "screen:title-abstract", "screen:full-text", "extract")
+_PENDING_STAGE: Final[Mapping[str, str]] = {
+    "screen:title-abstract": "screen",
+    "screen:full-text": "screen-ft",
+}
+"""The runner stage whose work queue a queue step waits on (the step itself when not listed)."""
 """Steps whose pending units are a work queue: with nothing pending the step is complete."""
 
 _STARTING: ContextVar[tuple[PendingUnits, GateClosed] | None] = ContextVar(
@@ -133,6 +142,18 @@ class StageLike(Protocol):
     def skill(self) -> str: ...
     @property
     def note(self) -> str: ...
+
+
+def step_key(stage: StageLike) -> str:
+    """The step identity of a plan stage: its id, plus `:<phase>` when it has a phase (a plan type
+    without the field has none)."""
+    phase = getattr(stage, "phase", None)
+    return stage.stage_id if phase is None else f"{stage.stage_id}:{phase}"
+
+
+def stage_of_step(step: str) -> str:
+    """The lifecycle stage id of a step key (`screen:full-text` is stage `screen`)."""
+    return step.split(":", 1)[0]
 
 
 class LimitsLike(Protocol):
@@ -196,6 +217,10 @@ class ConductorStatus(StrictModel):
 
 
 StartRun = Callable[..., str]
+Automatic = Callable[[Project, int], None]
+"""The deterministic step between `acquire` and full-text screening: takes the project and the
+limit of works; raises to fail. The default is `default_automatic`."""
+AUTOMATIC_STEP: Final = "automatic"
 PendingUnits = Callable[[Project, str], dict[str, int]]
 GateClosed = Callable[[Project, str, str], bool]
 Escalate = Callable[[Project, str, str], None]
@@ -247,6 +272,8 @@ def _open_run(trail: _Trail) -> ConductorStepStarted | None:
     finished = {e.payload.get("run_id") for e in trail.payloads("step_finished")}
     for event in reversed(trail.payloads("step_started")):
         payload = ConductorStepStarted.model_validate(event.payload)
+        if payload.run_id is None:  # an `automatic` step runs in `advance`, never left open
+            return None
         if payload.run_id not in finished:
             return payload
         return None
@@ -256,7 +283,8 @@ def _open_run(trail: _Trail) -> ConductorStepStarted | None:
 def _policy_kinds(project: Project, stage_id: str) -> dict[str, PolicyKind]:
     from factory.services.gates import effective_policy
 
-    return {g: effective_policy(project, g).kind for g in STEP_GATES.get(stage_id, ())}
+    gates = STEP_GATES.get(stage_of_step(stage_id), ())
+    return {g: effective_policy(project, g).kind for g in gates}
 
 
 def effective_kind(project: Project, gate_id: str) -> PolicyKind:
@@ -271,6 +299,9 @@ def roles_of(
     """The role runs of a step: always the proposer; the `second-pass` run right after it when the
     plan asks for one (whatever the level); a verifier and an auditor, each its own run, when the
     level is not `attended` and an agent may close some gate of the step."""
+    stage_id = stage_of_step(stage_id)
+    if stage_id == AUTOMATIC_STEP:
+        return ("automatic",)
     if stage_id == "develop":
         return ("lead", "drafter", "critic")
     first: tuple[ConductorRole, ...] = ("proposer", "second-pass") if second_pass else ("proposer",)
@@ -283,10 +314,12 @@ def roles_of(
 
 
 def _stage_of(stage_id: str, role: ConductorRole) -> str:
+    if stage_id not in STEP_STAGE:
+        stage_id = stage_of_step(stage_id)
     if stage_id == "develop":
         return _DEVELOP_STAGES[role]
     if role == "second-pass":
-        return SECOND_PASS_STAGE[stage_id]
+        return SECOND_PASS_STAGE[stage_of_step(stage_id)]
     if role == "verifier":
         return "conduct-verify"
     if role == "auditor":
@@ -330,7 +363,7 @@ def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
 
 @dataclass(frozen=True)
 class _Decision:
-    kind: Literal["finished", "running", "start", "pause", "wait", "complete-empty"]
+    kind: Literal["finished", "running", "start", "pause", "wait", "complete-empty", "automatic"]
     step: int | None = None
     stage_id: str | None = None
     role: ConductorRole | None = None
@@ -341,7 +374,8 @@ class _Decision:
 
 
 def _runs_started(trail: _Trail) -> int:
-    return len(trail.payloads("step_started"))
+    """The runs started: the `automatic` step is no run and does not count."""
+    return sum(1 for e in trail.payloads("step_started") if e.payload["role"] != "automatic")
 
 
 def _minutes(project: Project, trail: _Trail) -> float:
@@ -412,6 +446,8 @@ def _decide(
             "lost-run" if outcome == "lost" else "failed-run",
             detail=f"the {role} run of {stage_id} {outcome}; advance with retry",
         )
+    if role == "automatic":  # no process: neither the run budget nor a queue applies
+        return _Decision("automatic", index, stage_id, role)
     if _runs_started(trail) >= meta.max_runs:
         return _Decision(
             "pause", index, stage_id, role, "budget", detail=f"{meta.max_runs} runs started"
@@ -423,7 +459,7 @@ def _decide(
     if (
         role == "proposer"
         and stage_id in _QUEUE_UNITS
-        and sum(pending(project, stage_id).values()) == 0
+        and sum(pending(project, _PENDING_STAGE.get(stage_id, stage_id)).values()) == 0
     ):
         return _Decision("complete-empty", index, stage_id, role)
     return _Decision("start", index, stage_id, role)
@@ -462,6 +498,7 @@ def _plan_blob(project: Project, plan: PlanLike, steps: Sequence[str]) -> str:
         "stages": [
             {
                 "stage_id": s.stage_id,
+                **({"phase": phase} if (phase := getattr(s, "phase", None)) is not None else {}),
                 "skill": s.skill,
                 "skipped": s.skipped,
                 "caps": dict(s.caps),
@@ -478,9 +515,30 @@ def _plan_blob(project: Project, plan: PlanLike, steps: Sequence[str]) -> str:
                 "max_runs": plan.limits.max_runs,
             }
         ),
-        "second_pass": [s.stage_id for s in plan.stages if _second_pass(s) and not s.skipped],
+        "second_pass": [step_key(s) for s in plan.stages if _second_pass(s) and not s.skipped],
     }
     return project.blobs.put(canonical_json(view))
+
+
+def default_automatic(project: Project, limit: int) -> None:
+    """The platform's deterministic steps for the works acquired so far, as the system: resolve,
+    fetch (`work_queue.advance`, the same sources and routes as the runner's automatic steps) and
+    convert the live documents of promoted works with the default converters. No model."""
+    from factory.document.registry import default_converters
+    from factory.services import work_queue
+    from factory.services.document_convert import convert_documents
+    from factory.services.fulltext import MAX_LIMIT
+    from factory.sources.fulltext.registry import default_routes
+    from factory.sources.registry import default_sources
+
+    work_queue.advance(
+        project,
+        sources=dict(default_sources()),
+        fetchers=default_routes(project.settings),
+        convert=True,
+        limit=max(1, min(limit, MAX_LIMIT)),
+    )
+    convert_documents(project, default_converters())
 
 
 def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
@@ -493,14 +551,19 @@ def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
     levels = project_levels(project)
     if levels.tier is not None and levels.tier != plan.tier:
         raise _refuse("plan", f"the project declared tier {levels.tier.value}, not {plan.tier}")
-    live = [s.stage_id for s in plan.stages if not s.skipped]
+    live = [step_key(s) for s in plan.stages if not s.skipped]
     unsupported = [s for s in live if s not in STEP_STAGE]
     if unsupported:
         raise _refuse("plan", f"no runner stage for: {', '.join(unsupported)}")
     if not live:
         raise _refuse("plan", "every stage of the plan is skipped")
-    second = tuple(s.stage_id for s in plan.stages if not s.skipped and _second_pass(s))
-    unsupported = [s for s in second if s not in SECOND_PASS_STAGE]
+    automatic_limit: int | None = None
+    if "acquire" in live:  # resolve, fetch and convert run once after it, before full text
+        live.insert(live.index("acquire") + 1, AUTOMATIC_STEP)
+        acquire = next(s for s in plan.stages if s.stage_id == "acquire")
+        automatic_limit = acquire.caps.get("max_included") or None
+    second = tuple(step_key(s) for s in plan.stages if not s.skipped and _second_pass(s))
+    unsupported = [s for s in second if stage_of_step(s) not in SECOND_PASS_STAGE]
     if unsupported:
         raise _refuse("plan", f"no second-pass runner stage for: {', '.join(unsupported)}")
     limits = plan.limits
@@ -521,6 +584,7 @@ def begin_conductor(project: Project, plan: PlanLike) -> ConductorRun:
         max_minutes=budget.max_minutes,
         max_runs=budget.max_runs,
         max_units_per_run=budget.max_units_per_run,
+        automatic_limit=automatic_limit,
         second_pass_steps=second,
         plan_blob=blob,
     )
@@ -567,12 +631,15 @@ def advance(
     pending: PendingUnits | None = None,
     gate_closed: GateClosed | None = None,
     escalate: Escalate | None = None,
+    automatic: Automatic | None = None,
 ) -> ConductorStatus:
     """Take the open conductor run one step further and return its status. First closes the
     conductor's own open run when the runner has recorded its outcome; then decides from the log
     (stop rules before anything is started) and starts at most one role run. `retry` lets a failed
-    or lost role run be started again, as a new run in a new session. The four callables are the
-    seams of the tests (a fake runner); the defaults are the runner and the deferred queue."""
+    or lost role run be started again, as a new run in a new session. The five callables are the
+    seams of the tests (a fake runner); the defaults are the runner and the deferred queue, and
+    `default_automatic` for the deterministic step after `acquire` (run here, once, as the system:
+    an exception is a failed step and pauses the conductor)."""
     trail = _load(project)
     if trail is None:
         return conductor_status(project)
@@ -582,6 +649,7 @@ def advance(
     closer = gate_closed or default_gate_closed
     open_run = _open_run(trail)
     if open_run is not None:
+        assert open_run.run_id is not None
         outcome = runner.run_outcome(project, open_run.run_id)
         if outcome is not None:
             _write(
@@ -613,8 +681,50 @@ def advance(
         )
         return advance(
             project, retry=retry, start_run=start_run, pending=pending,
-            gate_closed=gate_closed, escalate=escalate,
+            gate_closed=gate_closed, escalate=escalate, automatic=automatic,
         )  # fmt: skip
+    if decision.kind == "automatic":
+        assert decision.step is not None and decision.stage_id is not None
+        attempts = 1 + sum(
+            1 for e in trail.payloads("step_started") if e.payload["step"] == decision.step
+        )
+        _write(
+            project,
+            "step_started",
+            ConductorStepStarted(
+                conductor_id=meta.conductor_id,
+                step=decision.step,
+                stage_id=decision.stage_id,
+                role="automatic",
+                attempt=attempts,
+            ),
+        )
+        failure: str | None = None
+        try:
+            (automatic or default_automatic)(project, meta.automatic_limit or _unit_cap(meta))
+        except Exception as exc:  # a failed step, as a failed run
+            failure = f"{type(exc).__name__}: {exc}"
+        _write(
+            project,
+            "step_finished",
+            ConductorStepFinished(
+                conductor_id=meta.conductor_id,
+                step=decision.step,
+                stage_id=decision.stage_id,
+                role="automatic",
+                outcome="complete" if failure is None else "failed",
+            ),
+        )
+        if failure is None:
+            return advance(
+                project, retry=retry, start_run=start_run, pending=pending,
+                gate_closed=gate_closed, escalate=escalate, automatic=automatic,
+            )  # fmt: skip
+        decision = _Decision(
+            "pause", decision.step, decision.stage_id, "automatic", "failed-run",
+            detail=f"the automatic step failed ({failure}); advance with retry",
+        )  # fmt: skip
+        trail = _load(project) or trail
     if decision.kind == "finished":
         _write(
             project,
@@ -742,7 +852,8 @@ def conductor_status(
         )
     )
     state: Literal["running", "waiting", "paused"] = (
-        "running" if decision.kind in ("running", "start", "complete-empty", "finished")
+        "running"
+        if decision.kind in ("running", "start", "complete-empty", "finished", "automatic")
         else "waiting" if decision.kind == "wait" else "paused"
     )  # fmt: skip
     lines = [f"conductor {meta.conductor_id}: {meta.tier} at {meta.autonomy_level}"]

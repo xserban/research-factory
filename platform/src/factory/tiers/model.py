@@ -37,6 +37,12 @@ from factory.services.site_catalog import STAGE_IDS
 PLAN_STAGE_IDS: tuple[str, ...] = tuple(s for s in STAGE_IDS if s != "cross")
 """The stages a tier plan lists, in lifecycle order."""
 
+PHASE_TITLE_ABSTRACT: str = "title-abstract"
+PHASE_FULL_TEXT: str = "full-text"
+PHASES: tuple[str, ...] = (PHASE_TITLE_ABSTRACT, PHASE_FULL_TEXT)
+"""The two phases of the `screen` stage. A plan that screens full text lists `screen` twice: the
+title/abstract phase before `acquire`, the full-text phase right after it."""
+
 
 class StagePlan(StrictModel):
     stage_id: str
@@ -48,11 +54,26 @@ class StagePlan(StrictModel):
     """The step needs a second, independent pass (a separate run, session and model) to be
     complete: extraction pass B, which a work needs opened before it is final. Data, so the
     conductor starts it whatever the autonomy level; it is no human act and lowers no gate."""
+    phase: str | None = None
+    """None for every stage but `screen`; `screen` carries a phase in a plan that screens full text
+    (the same stage id then appears twice, once per phase)."""
+
+    @property
+    def step_key(self) -> str:
+        """The step identity the conductor uses: the stage id, plus `:<phase>` when it has one."""
+        return self.stage_id if self.phase is None else f"{self.stage_id}:{self.phase}"
+
+    @property
+    def label(self) -> str:
+        """The stage as a report line names it ('screen (full text)' for the full-text phase)."""
+        return f"{self.stage_id} (full text)" if self.phase == PHASE_FULL_TEXT else self.stage_id
 
     @model_validator(mode="after")
     def _known(self) -> Self:
         if self.stage_id not in PLAN_STAGE_IDS:
             raise ValueError(f"unknown stage id {self.stage_id!r}")
+        if self.phase is not None and (self.stage_id != "screen" or self.phase not in PHASES):
+            raise ValueError(f"phase {self.phase!r} is not a phase of stage {self.stage_id!r}")
         if any(v < 0 for v in self.caps.values()):
             raise ValueError("a cap is a whole number of at least 0")
         return self
@@ -155,12 +176,24 @@ class TierPlan(StrictModel):
 
     @model_validator(mode="after")
     def _all_stages_once(self) -> Self:
-        if tuple(s.stage_id for s in self.stages) != PLAN_STAGE_IDS:
+        """Every stage once in lifecycle order; `screen` may be split into its two phases, the
+        full-text one right after `acquire`."""
+        phases = [s.phase for s in self.stages if s.stage_id == "screen"]
+        if phases not in ([None], [PHASE_TITLE_ABSTRACT, PHASE_FULL_TEXT]):
+            raise ValueError("`screen` is listed once, or once per phase (title-abstract first)")
+        if tuple(s.stage_id for s in self.stages if s.phase != PHASE_FULL_TEXT) != PLAN_STAGE_IDS:
             raise ValueError("a plan lists every stage once, in lifecycle order")
+        if len(phases) == 2:
+            ids = [s.stage_id for s in self.stages]
+            last = len(ids) - 1 - ids[::-1].index("screen")
+            if last == 0 or ids[last - 1] != "acquire":
+                raise ValueError("the full-text `screen` phase follows `acquire` directly")
         return self
 
-    def stage(self, stage_id: str) -> StagePlan:
+    def stage(self, stage_id: str, phase: str | None = None) -> StagePlan:
+        """The stage `stage_id` (for `screen` in two phases: the one of `phase`, by default the
+        title/abstract one)."""
         for s in self.stages:
-            if s.stage_id == stage_id:
+            if s.stage_id == stage_id and (phase is None or s.phase == phase or s.phase is None):
                 return s
         raise KeyError(stage_id)
