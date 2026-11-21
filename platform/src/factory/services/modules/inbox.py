@@ -28,6 +28,7 @@ SPEC = ModuleSpec(
         tables=(
             "inbox_items",
             "inbox_resolutions",
+            "inbox_hints",
         ),
     ),
     protocol_sections=("supplied_links",),

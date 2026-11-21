@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from factory.services.capture_hints import WorkOrigin, origins_of
 from factory.services.citations import cited_by_counts
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
@@ -96,6 +97,15 @@ def layer_fields(wl: WorkLayer | None) -> dict[str, str]:
         "layer_source": wl.source,
         "layer_miner": wl.miner_layer or "",
     }
+
+
+def origin_fields(origin: WorkOrigin | None) -> dict[str, str]:
+    """The origin keys of one work in the payload (IDEA-81): `origin` is `inbox` or `feed` and
+    `origin_channel` the capturing channel, both empty for a work that came by search or seed.
+    Computed from events (`capture_hints.origins_of`); the explorer filters on `origin`."""
+    if origin is None:
+        return {"origin": "", "origin_channel": ""}
+    return {"origin": origin.kind, "origin_channel": origin.channel}
 
 
 @dataclass(frozen=True)
@@ -217,6 +227,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
         return out
 
     layers = layers_of(project)
+    origins = origins_of(project)
     works: list[dict[str, Any]] = []
     for wid in sorted(works_data):
         d = works_data[wid]
@@ -275,6 +286,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 "n_design": len(design),
                 "doc": doc,
                 **layer_fields(layers.get(wid)),
+                **origin_fields(origins.get(wid)),
             }
         )
     from factory.services.site_layers import LAYER_ORDER  # site_layers imports this module

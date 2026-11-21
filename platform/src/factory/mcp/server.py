@@ -209,6 +209,7 @@ from factory.services.context import Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
+from factory.services.hint_input import HintInput
 from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.lab import Lab, lab_exists, open_lab
 from factory.services.lead_candidates import lead_candidates as lead_candidates_service
@@ -233,6 +234,15 @@ _SYSTEM_CLOCK = SystemClock()
 _FIELD_NAMES = {"text": "query"}  # QuerySpec calls the query text `text`; the tool calls it `query`
 
 
+class _HintItem(StrictModel):
+    """A relayed human's capture hints (IDEA-81): a layer, a category, notes for the miners."""
+
+    layer: str | None = None
+    category: str | None = None
+    taxonomy: str | None = None
+    miner_notes: str | None = None
+
+
 class _LinkItem(StrictModel):
     """One `inbox_add` item as sent: the link, a relayed human note, or an agent's basis."""
 
@@ -240,6 +250,7 @@ class _LinkItem(StrictModel):
     note: str | None = None
     basis: Basis | None = None
     page: bool = False
+    hints: _HintItem | None = None
 
 
 class _ProbeQuery(StrictModel):
@@ -1481,13 +1492,16 @@ def build_server(
         model: str | None = None,
         skill: str | None = None,
     ) -> dict[str, JsonValue]:
-        """Capture links (arXiv, DOI or OpenAlex) as inbox items: each `{link, note?, basis?}`.
+        """Capture links (arXiv, DOI or OpenAlex) as inbox items: each `{link, note?, basis?,
+        hints?}`.
         `channel="agent"`: an agent proposes the link and must give `basis`, either
         `{"kind": "document", "document_id": "doc_...", "anchor": "..."}` for a citing span it
         read or `{"kind": "knowledge"}`; it gives no note. `channel="mcp"`: a human's link relayed
         verbatim, with an optional note and no basis. `page: true` on an item keeps an http(s) link
         with no identifier as a publisher page, whose `citation_doi` is read once at resolve.
-        Offline; each item is written or rejected
+        `hints` (`channel="mcp"` only: the human's own `{layer?, category?, taxonomy?,
+        miner_notes?}`, a layer of the current scheme and a taxonomy category) is recorded with
+        the human's name and time; screeners never see it. Offline; each item is written or rejected
         on its own. Refused to a session that has joined a pass; a session that captures a link
         cannot later screen. Screeners never see how a work was found."""
 
@@ -1510,7 +1524,18 @@ def build_server(
                         (
                             index,
                             inbox_service.LinkInput(
-                                parsed.link, parsed.note, parsed.basis, parsed.page
+                                parsed.link,
+                                parsed.note,
+                                parsed.basis,
+                                parsed.page,
+                                None
+                                if parsed.hints is None
+                                else HintInput(
+                                    parsed.hints.layer,
+                                    parsed.hints.category,
+                                    parsed.hints.taxonomy,
+                                    parsed.hints.miner_notes,
+                                ),
                             ),
                         )
                     )

@@ -35,6 +35,9 @@ _LAYER_ID_RE = r"^[a-z][a-z0-9-]{0,31}$"
 """Same pattern as `factory.model.references.LAYER_ID_RE`, repeated because that module imports the
 protocol model, which imports this one."""
 _LayerId = Annotated[str, StringConstraints(pattern=_LAYER_ID_RE)]
+_ORIGIN_RE = r"^(inbox|feed)(:(cli|mcp|elicit))?$"
+"""An origin tag of a work (IDEA-81): how it entered the corpus, optionally with the channel."""
+_Origin = Annotated[str, StringConstraints(pattern=_ORIGIN_RE)]
 
 
 class ImportedFrom(StrictModel):
@@ -87,6 +90,13 @@ class MinerUse(StrictModel):
     """True lets the researcher's mining requests add works beyond `layers`. Omitted when false."""
     order: Literal["id", "by-layer"] = "id"
     """`by-layer` serves works by ring, then work id. Omitted when `id`."""
+    origins: tuple[_Origin, ...] = ()
+    """Only works whose computed origin tag (`services.capture_hints.origins_of`) is one of these
+    are mined automatically (empty: no origin filter). Omitted from serialisation when empty."""
+    hint_context: bool = False
+    """True serves the researcher's capture hints (layer, category, notes) to this miner as context
+    on its production tasks. Defaults OFF because a hint can anchor the miner; a miner that ever
+    had it on is not scored against hints (`capture_hints.hint_agreement`). Omitted when false."""
     exploratory: bool = False
     """Declared by a protocol amendment, whose reason is the record (IDEA-69). True allows
     production mining passes of a version whose calibration has not passed; its rows carry no
@@ -109,6 +119,10 @@ class MinerUse(StrictModel):
             out.pop("on_demand", None)
         if self.order == "id":
             out.pop("order", None)
+        if not self.origins:
+            out.pop("origins", None)
+        if not self.hint_context:
+            out.pop("hint_context", None)
         if not self.exploratory:
             out.pop("exploratory", None)
         return out
