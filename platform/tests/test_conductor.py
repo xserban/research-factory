@@ -539,8 +539,8 @@ def test_the_stages_are_declared_without_the_gate_acts() -> None:
 # ------------------------------------------------------------------- understand, develop, maintain
 
 LATER = ("understand", "develop", "maintain")
-HUMAN_ONLY_ACTS = re.compile(
-    r"lead_decide|hypothesis_register|miner_(admit|register)|_confirm|_release|_resolve|_decide"
+HUMAN_ONLY_ACTS = re.compile(  # `selection_resolve` is a read of the corpus selection, no act
+    r"lead_decide|hypothesis_register|miner_(admit|register)|_confirm|_release|(?<!selection)_resolve|_decide"
     r"|protocol_(amend|record)|review_decide|reference_decide|relation_decide|idea_decide"
 )
 
