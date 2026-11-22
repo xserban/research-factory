@@ -810,3 +810,16 @@ def test_every_runner_stage_key_is_accepted_by_the_stage_key_pattern() -> None:
     assert bad == []
     bad_conduct = sorted(k for k in runner.CONDUCT_STAGES if not re.match(STAGE_KEY_RE, k))
     assert bad_conduct == []
+
+
+def test_a_gate_closes_only_by_its_own_act_event_of_a_human() -> None:
+    """Finding I3: a human `import.*` event does not close `import.resolution_confirm`; the
+    gate's act event does, and only from a human actor. An unknown gate id never closes."""
+    gate = "import.resolution_confirm"
+    assert conductor.gate_act_closes(gate, "import.resolution_decided", "human")
+    assert not conductor.gate_act_closes(gate, "import.resolution_decided", "agent")
+    assert not conductor.gate_act_closes(gate, "import.recorded", "human")
+    assert conductor.gate_act_closes("hypotheses.lead_decide", "lead.decided", "human")
+    assert not conductor.gate_act_closes("no.such_gate", "no.such_gate", "human")
+    assert conductor.gate_act_closes("protocol.ready", "protocol.recorded", "human")
+    assert not conductor.gate_act_closes("protocol.ready", "protocol.press_reviewed", "human")

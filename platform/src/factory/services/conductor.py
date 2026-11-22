@@ -104,18 +104,12 @@ The gates that close in a step. A gate id no policy names is `human` (`presets.p
 id listed here that does not exist yet (`protocol.press_confirm`) fails safe: the conductor
 waits."""
 
-_GATE_EVENT_TYPES: Final[Mapping[str, tuple[str, ...]]] = {
-    "hypotheses.lead_decide": ("lead.decided",),
-    "hypotheses.register": ("hypothesis.registered",),
-}
-"""Gates closed by one exact event type (a namespace would also match the agents' own drafts)."""
 _ROLE_GATES: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
     ("develop", "drafter"): ("hypotheses.lead_decide",),
 }
 """Gates that must be closed before a role run of a step starts: a drafter works only from a
 promoted lead, and promoting is the researcher's act. A human-only gate here makes the conductor
 wait before the role run, not after the step."""
-_GATE_EVENT_NAMESPACES: Final[Mapping[str, tuple[str, ...]]] = {"writing.release": ("draft",)}
 _QUEUE_UNITS: Final = ("screen", "screen:title-abstract", "screen:full-text", "extract")
 _PENDING_STAGE: Final[Mapping[str, str]] = {
     "screen:title-abstract": "screen",
@@ -335,11 +329,31 @@ def _trust_pauses(project: Project) -> list[str]:
     return [str(t.gate_id) for t in module.trust_ledger(project) if t.state == "pause"]
 
 
+_CHECK_ACTS: Final[Mapping[str, tuple[str, ...]]] = {
+    "protocol.ready": ("protocol.recorded", "protocol.amended"),
+}
+"""The one step gate that is a check, not a declared gate: a recorded or amended protocol closes
+it."""
+
+
+def gate_act_closes(gate_id: str, event_type: str, actor_kind: str) -> bool:
+    """Whether an event closes `gate_id`: a human actor and one of the gate's own act events
+    (`GateSpec.act_events`, the module declarations). A gate the registry does not know is never
+    closed here: it stays human (decision 84.6) and waits."""
+    from factory.services.modules.default import default_modules
+
+    try:
+        acts = default_modules().gate(gate_id).act_events
+    except KeyError:
+        acts = _CHECK_ACTS.get(gate_id, ())
+    return actor_kind == "human" and event_type in acts
+
+
 def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
     """Whether a human has acted on `gate_id` since the step's proposer finished: a human-actor
-    event of the gate's namespace after the last `conductor.step_finished` of the step. A v1
-    heuristic read from the events (the gate acts are the researcher's, made outside the
-    conductor); L3's deferred queue can replace it."""
+    event of one of the gate's own act event types (`gate_act_closes`) after the last
+    `conductor.step_finished` of the step. A namespace match is not enough: another human event
+    of the same module (an import, a draft) does not close the gate."""
     trail = _load(project)
     if trail is None:
         return False
@@ -351,11 +365,8 @@ def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
     )
     if after is None:
         return False
-    names = (gate_id.split(".")[0], *_GATE_EVENT_NAMESPACES.get(gate_id, ()))
-    exact = _GATE_EVENT_TYPES.get(gate_id)
     return any(
-        e.actor.kind == "human"
-        and (e.type in exact if exact is not None else e.type.split(".")[0] in names)
+        gate_act_closes(gate_id, e.type, e.actor.kind)
         for e in read_all(project.paths.events_dir, project.catalog)
         if e.id > after
     )
