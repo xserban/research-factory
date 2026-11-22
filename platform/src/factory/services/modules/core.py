@@ -65,6 +65,7 @@ SPEC = ModuleSpec(
     ),
     checks=(
         CheckRule("broken-link", ("error", "error", "error")),
+        CheckRule("count-source-exploratory", ("warning", "error", "error")),
         CheckRule("missing-provenance", ("error", "error", "error")),
         CheckRule("gate-below-policy", ("warning", "warning", "error")),
         CheckRule("gate-audit-missing", (None, "warning", "error")),
