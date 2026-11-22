@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 import typer
 
+import factory.mcp.server  # noqa: F401  (registers the server builder for the tool catalog)
 from factory.services import site as site_service
 from factory.services import site_server as server_service
 

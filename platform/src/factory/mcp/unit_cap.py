@@ -32,11 +32,11 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from factory.errors import FactoryValidationError, ValidationIssue
+from factory.services.run_units import UNITS_FILE
 
 CAP_ENV = "FACTORY_UNIT_CAP"
 RUN_ENV = "FACTORY_RUN_ID"
 RUN_DIR_ENV = "FACTORY_RUN_DIR"
-UNITS_FILE = "units.json"
 
 
 class UnitCap:
