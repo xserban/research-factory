@@ -92,6 +92,7 @@ from factory.services.context import Project, list_projects, open_project
 from factory.services.core_works import core_marks, forward_core_sources, seed_core_works
 from factory.services.dedup_incremental import held_matches
 from factory.services.feed_events import feed_events
+from factory.services.hint_input import HintInput
 from factory.services.inbox import LinkInput, _refuse_actor, link_event, resolve_links
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
 from factory.services.ranking_model import Embedder
@@ -1022,12 +1023,14 @@ def send(
     *,
     note: FeedNote | None = None,
     ranking_id: str | None = None,
+    hints: HintInput | None = None,
 ) -> str:
     """Send a shown entry to the inbox as its arXiv link and return the inbox item id. Human only.
     The inbox item (channel CLI) and `feed.sent` are written in one batch under one lock, so
     neither exists without the other. Refused with nothing written for an unknown or unranked
     entry, a held one (`held`: held at fetch, or the corpus holds the paper at send time) and one
-    already sent (`already-sent`)."""
+    already sent (`already-sent`). Optional `hints` are the researcher's capture hints on the inbox
+    item (IDEA-81); invalid ones refuse the send with nothing written."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
     with project.writing():
@@ -1042,7 +1045,7 @@ def send(
             ).first()
         if sent is not None:
             raise _refuse("entry_id", "already-sent")
-        link = LinkInput(f"https://arxiv.org/abs/{entry_id}", note=note)
+        link = LinkInput(f"https://arxiv.org/abs/{entry_id}", note=note, hints=hints)
         added, item_id, issues = link_event(project, actor, link, Channel.CLI)
         if added is None or item_id is None:
             raise FactoryValidationError(issues)
@@ -1083,13 +1086,14 @@ def add(
     sources: Mapping[str, SourceFactory],
     note: FeedNote | None = None,
     ranking_id: str | None = None,
+    hints: HintInput | None = None,
 ) -> FeedAddResult:
     """One-click add: `send` the shown entry, then resolve exactly its inbox item. Human only.
     A refusal of the send raises as `send` does and writes nothing. Once the send has succeeded it
     is never rolled back: a lookup that fails, is refused by the gate or raises a refusal is
     reported in the result (`lookup-failed`, `refused`) and the item stays open for
     `factory inbox resolve`."""
-    item_id = send(project, actor, entry_id, note=note, ranking_id=ranking_id)
+    item_id = send(project, actor, entry_id, note=note, ranking_id=ranking_id, hints=hints)
     try:
         [outcome] = resolve_links(project, actor, sources=sources, item_ids=[item_id])
     except FactoryError as exc:

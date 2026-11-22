@@ -5,6 +5,9 @@ after any resolution other than `failed`, `withdrawn` after a withdrawal. `inbox
 keeps every attempt on an open item, failed ones included. `prioritised` is a human's listing
 hint (`inbox.prioritised`) and orders nothing but the researcher's listing.
 
+`inbox_hints` keeps the researcher's capture hints (IDEA-81) of an item: only a human capture's
+hints are kept (a hand-written agent event with hints changes nothing there).
+
 Handlers are total: a second capture under an existing id, and a resolution or withdrawal of an
 unknown or closed item, change nothing (the service refuses these before writing).
 """
@@ -37,6 +40,7 @@ WITHDRAWN = "withdrawn"
 class InboxTables:
     items: Table
     resolutions: Table
+    hints: Table
 
 
 def inbox_tables(metadata: MetaData) -> InboxTables:
@@ -70,7 +74,21 @@ def inbox_tables(metadata: MetaData) -> InboxTables:
         Column("work_id", String),
         Column("deviation_id", String),
     )
-    return InboxTables(items, resolutions)
+    hints = Table(
+        "inbox_hints",
+        metadata,
+        Column("item_id", String, primary_key=True),
+        Column("event_id", String, nullable=False),
+        Column("ts", String, nullable=False),
+        Column("actor_session", String, nullable=False),
+        Column("layer", String),
+        Column("scheme_version", Integer),
+        Column("category", String),
+        Column("taxonomy", String),
+        Column("taxonomy_version", Integer),
+        Column("miner_notes", String),
+    )
+    return InboxTables(items, resolutions, hints)
 
 
 def inbox_handlers(t: InboxTables) -> dict[str, Handler]:
@@ -97,6 +115,24 @@ def _added(t: InboxTables) -> Handler:
             if payload.basis is None
             else canonical_json(payload.basis.model_dump(mode="json")).decode()
         )
+        if payload.hints is not None and event.actor.kind == "human":
+            hints = payload.hints
+            conn.execute(
+                sqlite_insert(t.hints)
+                .values(
+                    item_id=payload.item_id,
+                    event_id=event.id,
+                    ts=event.ts.isoformat(),
+                    actor_session=event.actor.session,
+                    layer=hints.layer,
+                    scheme_version=hints.scheme_version,
+                    category=hints.category,
+                    taxonomy=hints.taxonomy,
+                    taxonomy_version=hints.taxonomy_version,
+                    miner_notes=hints.miner_notes,
+                )
+                .on_conflict_do_nothing(index_elements=["item_id"])
+            )
         conn.execute(
             sqlite_insert(t.items)
             .values(
