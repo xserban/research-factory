@@ -952,11 +952,11 @@ def test_forward_refused_without_chasable_work_or_with_unfit_text(
     project: Project, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     included = sorted(promoted_works(project))
-    monkeypatch.setattr(snowball, "_openalex_ids", lambda _p: {})
-    plan = plan_round(project, Direction.FORWARD)
-    assert [i.field for i in plan.state.refusals] == ["sources"]
-    assert plan.queries == [] and plan.unqueryable == included
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(snowball, "_openalex_ids", lambda _p: {})
+        plan = plan_round(project, Direction.FORWARD)
+        assert [i.field for i in plan.state.refusals] == ["sources"]
+        assert plan.queries == [] and plan.unqueryable == included
     bad = QuerySpec(
         source="openalex", kind=QueryKind.FILTER, text="cites:W1/x", purpose=QueryPurpose.CHASE
     )
@@ -1036,10 +1036,10 @@ def _crash_on_call(monkeypatch: pytest.MonkeyPatch, n: int) -> None:
 def test_round_with_missing_runs_skips_the_no_yield_stop(
     project: Project, agent: Actor, planned: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _crash_on_call(monkeypatch, 2)
-    with pytest.raises(RuntimeError):
-        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        _crash_on_call(patch, 2)
+        with pytest.raises(RuntimeError):
+            snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     _screen_new(project, agent, "exclude")
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]
@@ -1085,10 +1085,10 @@ def test_unqueried_round_does_not_stop_plan(
     def refuse(*args: Any, **kwargs: Any) -> str:
         raise FactoryValidationError([ValidationIssue("query", "refused")])
 
-    monkeypatch.setattr(snowball, "register_query", refuse)
-    with pytest.raises(FactoryValidationError):
-        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(snowball, "register_query", refuse)
+        with pytest.raises(FactoryValidationError):
+            snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     assert len(snowball.recorded_rounds(project)) == 1
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]

@@ -1,5 +1,13 @@
 """The MCP server. Tools parse input, call a service and format output; each call runs as the
-principal and session its transport names (`factory.mcp.sessions`)."""
+principal and session its transport names (`factory.mcp.sessions`).
+
+Pass sessions. A session that has joined a screening or extraction pass (or a miner pass) is kept
+apart from the tools that show results across passes: counts, agreement, the other pass's
+verdicts, the flow, reports, the held-out seeds and the answer key. Those tools, which say
+"Refused to a session that has joined a pass" in their docs, answer such a session with a
+`session` refusal and write nothing (R-20, decision 43). The refusal is not a fault: the pass
+session gets what it needs in its own batches, and the tool is used from a session that has not
+joined a pass (a separate Claude Code session; subagents share their parent's session)."""
 
 import json
 import os
@@ -175,7 +183,7 @@ from factory.services import probe as probe_service
 from factory.services import progress as progress_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
-from factory.services import pubmed_slices
+from factory.services import pubmed_slices, tool_source
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
@@ -6910,7 +6918,14 @@ def _refuse_pass_session(project: Project) -> None:
     surfaces or the answer key (R-20)."""
     if passes_service.is_pass_session(project, project.session):
         raise FactoryValidationError(
-            [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
+            [
+                ValidationIssue(
+                    "session",
+                    "this session has joined a pass and cannot use this tool: it shows results "
+                    "across passes (R-20). Use a session that has not joined a pass; a pass "
+                    "session gets what it needs in its own batches",
+                )
+            ]
         )
     human_pass_service.refuse_blind_reader(project, project.principal.user)
 
@@ -7396,3 +7411,6 @@ def _round_direction(value: str) -> Direction:
 
 def run(settings: Settings) -> None:
     build_server(settings).run("stdio")
+
+
+tool_source.register(build_server)

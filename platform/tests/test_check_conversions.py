@@ -194,20 +194,20 @@ def test_restore_batch_continues_past_store_error(
             raise OSError("disk full")
         return real_put(data)
 
-    monkeypatch.setattr(project.library, "put", put_once_failing)
-    first, second = conversions
-    assert first.markdown_hash != second.markdown_hash
-    summary = restore_conversions(project, make_registry())
+    with monkeypatch.context() as patch:
+        patch.setattr(project.library, "put", put_once_failing)
+        first, second = conversions
+        assert first.markdown_hash != second.markdown_hash
+        summary = restore_conversions(project, make_registry())
 
-    assert [(o.status, o.reason, o.conversion_id) for o in summary.outcomes] == [
-        ("failed", "store-error", None),
-        ("restored", None, second.conversion_id),
-    ]
-    assert summary.failed == 1
-    assert summary.restored == 1
-    assert not project.library.path(first.markdown_hash).exists()
+        assert [(o.status, o.reason, o.conversion_id) for o in summary.outcomes] == [
+            ("failed", "store-error", None),
+            ("restored", None, second.conversion_id),
+        ]
+        assert summary.failed == 1
+        assert summary.restored == 1
+        assert not project.library.path(first.markdown_hash).exists()
 
-    monkeypatch.undo()
     rerun = restore_conversions(project, make_registry())
 
     assert [(o.status, o.conversion_id) for o in rerun.outcomes] == [

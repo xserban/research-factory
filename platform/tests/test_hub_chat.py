@@ -340,17 +340,17 @@ def test_only_these_papers_is_recorded_closed_and_a_later_work_cannot_enter(
     picked = works[:-1]
     real = hub_chat.population_works  # type: ignore[attr-defined]
     # the last work "joins the population later": it is missing when the order is placed
-    monkeypatch.setattr(
-        hub_chat, "population_works", lambda p, pop: [w for w in real(p, pop) if w != works[-1]]
-    )
-    body = {
-        "kind": "ask",
-        "question": "Q?",
-        "start": False,
-        "selection": {"only": True, "include": picked},
-    }
-    hub_chat.order_chat(project, human, body)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            hub_chat, "population_works", lambda p, pop: [w for w in real(p, pop) if w != works[-1]]
+        )
+        body = {
+            "kind": "ask",
+            "question": "Q?",
+            "start": False,
+            "selection": {"only": True, "include": picked},
+        }
+        hub_chat.order_chat(project, human, body)
     [event] = [
         e for e in read_all(project.paths.events_dir, project.catalog) if e.type == "chat.requested"
     ]

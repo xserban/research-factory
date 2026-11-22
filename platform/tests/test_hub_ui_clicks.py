@@ -144,19 +144,24 @@ DRIVER = r"""<script>
 </script>
 """
 
-_CACHE: dict[str, Path] = {}
+_BUILT = pytest.StashKey[Path]()  # on the run's config: it ends with the run, no module state
 
 
 @pytest.fixture
-def built(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The static build of the mined world, made once per run (the first test builds it)."""
-    if "ui" not in _CACHE:
+def built(
+    request: pytest.FixtureRequest,
+    pytestconfig: pytest.Config,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """The static build of the mined world, made once per run (the first test builds it and
+    keeps it on the run's config; the parametrised pages then share one build)."""
+    if _BUILT not in pytestconfig.stash:
         project: Project = request.getfixturevalue("mined_world")
         out = tmp_path_factory.mktemp("clicks") / "ui"
         report = hb.build_static(project, out)
         assert not report.errors, report.errors
-        _CACHE["ui"] = out
-    return _CACHE["ui"]
+        pytestconfig.stash[_BUILT] = out
+    return pytestconfig.stash[_BUILT]
 
 
 def _instrument(src: Path, dst: Path) -> None:
