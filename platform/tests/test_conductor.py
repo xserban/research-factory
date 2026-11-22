@@ -796,3 +796,17 @@ def test_a_failing_automatic_step_pauses_and_retries_once_per_advance(
     drive(project, fake)
     assert fake.stages == ["acquire", "write"]
     assert {e.actor.kind for e in _events(project, "conductor.paused")} == {"system"}
+
+
+def test_every_runner_stage_key_is_accepted_by_the_stage_key_pattern() -> None:
+    """`RunnerStarted` validates the stage against `STAGE_KEY_RE`: a stage in the runner's table
+    that the pattern rejects would fail a real `start_run` while the fake runner hides it (the
+    `screen-ft` and `extract-b` omissions)."""
+    import re
+
+    from factory.model.runner import STAGE_KEY_RE
+
+    bad = sorted(k for k in runner.STAGES if not re.match(STAGE_KEY_RE, k))
+    assert bad == []
+    bad_conduct = sorted(k for k in runner.CONDUCT_STAGES if not re.match(STAGE_KEY_RE, k))
+    assert bad_conduct == []
