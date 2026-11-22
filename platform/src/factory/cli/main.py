@@ -213,6 +213,7 @@ from factory.services.commit import commit_hosted
 from factory.services.context import Principal, Project, list_projects, open_project
 from factory.services.extraction_agreement import Choice
 from factory.services.gate_status import gates_status
+from factory.services.hint_input import HintInput
 from factory.services.lead_candidates import lead_candidates as lead_candidates_service
 from factory.services.lead_queue import lead_queue as lead_queue_service
 from factory.services.lead_stats import lead_stats as lead_stats_service
@@ -1384,12 +1385,29 @@ def inbox_add(
             "--page", help="Treat a link with no identifier as a publisher page (citation_doi)."
         ),
     ] = False,
+    layer: Annotated[
+        str | None, typer.Option("--layer", help="Hint: a layer of the current scheme.")
+    ] = None,
+    category: Annotated[
+        str | None,
+        typer.Option("--category", help="Hint: a taxonomy category, dimension/category."),
+    ] = None,
+    taxonomy: Annotated[
+        str | None, typer.Option("--taxonomy", help="The taxonomy of --category, if ambiguous.")
+    ] = None,
+    miner_notes: Annotated[
+        str | None,
+        typer.Option("--miner-notes", help="Hint: a note addressed to the miners (at most 600)."),
+    ] = None,
 ) -> None:
-    """Capture links as inbox items. Offline; an unsupported link is reported and not written."""
+    """Capture links as inbox items. Offline; an unsupported link is reported and not written.
+    The hints (layer, category, notes for miners) are yours, recorded with your name and time;
+    screeners never see them."""
     state = _state(ctx)
     with _reporting_errors():
         project = _resolve_project(state)
-        items = [inbox_service.LinkInput(link, note=note, page=page) for link in links]
+        hints = HintInput(layer, category, taxonomy, miner_notes)
+        items = [inbox_service.LinkInput(link, note=note, page=page, hints=hints) for link in links]
         result = inbox_service.add_links(project, project.human_actor(), items, Channel.CLI)
     for item_id in result.written:
         typer.echo(f"captured {item_id}")

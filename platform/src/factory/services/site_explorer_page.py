@@ -76,7 +76,7 @@ FUTURE_OVERLAY/*LIGHT*/</style></head><body>
 <main><div id="side"></div><div id="view"><p class="dim rf-loading" id="rf-loading">Loading corpus…</p></div><div id="detail"></div></main>
 <script>
 const DATA=/*DATA*/null;
-const W=DATA.works,DIMS=DATA.dims.concat([{key:'layer',label:'Layer',src:'meta',field:'layer'}]);const LORD=DATA.layer_order||[];
+const W=DATA.works,DIMS=DATA.dims.concat([{key:'layer',label:'Layer',src:'meta',field:'layer'},{key:'origin',label:'Origin (inbox or feed)',src:'meta',field:'origin'}]);const LORD=DATA.layer_order||[];
 function lrank(v){if(v==='unlayered'||v==='pending')return [2,0,''];const i=LORD.indexOf(v);return i>=0?[0,i,'']:[1,0,v];}
 function lcmp(a,b){const x=lrank(a),y=lrank(b);return x[0]-y[0]||x[1]-y[1]||x[2].localeCompare(y[2]);}
 function layerBadge(w){const l=w.layer||'unlayered';const src=w.layer_source==='moved'?' (moved by the researcher'+(w.layer_miner?'; the miner said '+esc(w.layer_miner):'')+')':(w.layer_source==='miner'?' (from the miner)':'');return `<div class="dim">Layer <span class="lybadge">${esc(l)}</span>${src}</div>`;}

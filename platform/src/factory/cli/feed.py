@@ -25,6 +25,7 @@ from factory.services import feed as feed_service
 from factory.services import feed_read
 from factory.services.access import authorize_command
 from factory.services.context import Project, list_projects, open_project
+from factory.services.hint_input import HintInput
 from factory.services.ranking_model import Specter2Embedder
 from factory.sources.arxiv import ArxivSource
 from factory.sources.http import default_http
@@ -308,12 +309,31 @@ def feed_send_cmd(
     entry_id: EntryArg,
     project: ProjectOpt = None,
     note: Annotated[str | None, typer.Option("--note", help="A note for the inbox item.")] = None,
+    layer: Annotated[
+        str | None, typer.Option("--layer", help="Hint: a layer of the current scheme.")
+    ] = None,
+    category: Annotated[
+        str | None,
+        typer.Option("--category", help="Hint: a taxonomy category, dimension/category."),
+    ] = None,
+    taxonomy: Annotated[
+        str | None, typer.Option("--taxonomy", help="The taxonomy of --category, if ambiguous.")
+    ] = None,
+    miner_notes: Annotated[
+        str | None, typer.Option("--miner-notes", help="Hint: a note addressed to the miners.")
+    ] = None,
 ) -> None:
     """Send a shown entry to the inbox as its arXiv link. Human only."""
     note_value = _note(note)
     opened = _open(ctx, project)
     with _refusals():
-        item_id = feed_service.send(opened, opened.human_actor(), entry_id, note=note_value)
+        item_id = feed_service.send(
+            opened,
+            opened.human_actor(),
+            entry_id,
+            note=note_value,
+            hints=HintInput(layer, category, taxonomy, miner_notes),
+        )
     typer.echo(f"sent {entry_id} to the inbox as {item_id}")
     typer.echo("resolve it with `factory inbox resolve` once it is screened or dropped")
 
@@ -324,6 +344,19 @@ def feed_add_cmd(
     entry_id: EntryArg,
     project: ProjectOpt = None,
     note: Annotated[str | None, typer.Option("--note", help="A note for the inbox item.")] = None,
+    layer: Annotated[
+        str | None, typer.Option("--layer", help="Hint: a layer of the current scheme.")
+    ] = None,
+    category: Annotated[
+        str | None,
+        typer.Option("--category", help="Hint: a taxonomy category, dimension/category."),
+    ] = None,
+    taxonomy: Annotated[
+        str | None, typer.Option("--taxonomy", help="The taxonomy of --category, if ambiguous.")
+    ] = None,
+    miner_notes: Annotated[
+        str | None, typer.Option("--miner-notes", help="Hint: a note addressed to the miners.")
+    ] = None,
 ) -> None:
     """Send a shown entry to the inbox and look it up at once. Human only. The send stands even
     if the lookup fails or is refused; resolve it later with `factory inbox resolve`."""
@@ -336,6 +369,7 @@ def feed_add_cmd(
             entry_id,
             sources=dict(default_sources()),
             note=note_value,
+            hints=HintInput(layer, category, taxonomy, miner_notes),
         )
     typer.echo(f"sent {entry_id} to the inbox as {result.inbox_item_id}: {result.outcome}")
     if result.work_id is not None:

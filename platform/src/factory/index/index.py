@@ -124,6 +124,7 @@ OMITTED_WHEN_EMPTY: frozenset[str] = frozenset(
         "dedup_pair_decisions",
         "budgets",
         "task_usage",
+        "inbox_hints",
         "appraisal_answers",
         "appraisal_judgements",
         "appraisal_closures",
