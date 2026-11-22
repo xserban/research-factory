@@ -365,6 +365,21 @@ STAGES.update(
         ),
     }
 )
+_DEVELOP_READ: Final = (
+    f"{_P}corpus_search",
+    f"{_P}selection_resolve",
+    f"{_P}match_query",
+    f"{_P}finder_gaps",
+    f"{_P}finder_contradictions",
+    f"{_P}technique_challenges",
+    f"{_P}technique_combinations",
+    f"{_P}technique_gaps",
+    f"{_P}technique_neighbors",
+    f"{_P}chat_verify",
+)
+"""The reads the hypothesis engine's skill names for the lead author and the drafter (corpus and
+selection, the finders, the technique views, quote verification). Every one is a
+`project:read` tool: none writes an event or closes a gate."""
 _CONDUCT_READ: Final = (
     f"{_P}project_status",
     f"{_P}gate_status",
@@ -412,6 +427,7 @@ STAGES.update(
                 f"{_P}search_slice",
                 f"{_P}search_chase",
                 f"{_P}dedup_run",
+                f"{_P}dedup_merges",
                 f"{_P}snowball_round",
                 f"{_P}budget_status",
                 f"{_P}report_search",
@@ -431,6 +447,7 @@ STAGES.update(
                 f"{_P}document_status",
                 f"{_P}document_read",
                 f"{_P}inbox_list",
+                f"{_P}library_adoptable",
                 f"{_P}budget_status",
             ),
             kinds=(),
@@ -439,13 +456,14 @@ STAGES.update(
         ),
         "write": StageSpec(
             model="claude-sonnet-5-5",
-            skill="rf-write",  # `rf-brief` (lane L2) for a brief once it is merged
+            skill="rf-write",
             role="proposer",
             tools=(
                 f"{_P}project_status",
                 f"{_P}claims_digest",
                 f"{_P}document_read",
                 f"{_P}interpretation_list",
+                f"{_P}writing_outline",
                 f"{_P}report_evidence",
                 f"{_P}report_prisma",
                 f"{_P}report_methods",
@@ -453,6 +471,8 @@ STAGES.update(
                 f"{_P}export_bibliography",
                 f"{_P}draft_create",
                 f"{_P}draft_write",
+                f"{_P}draft_reorder",
+                f"{_P}draft_repin",
                 f"{_P}draft_next",
                 f"{_P}draft_list",
                 f"{_P}draft_status",
@@ -495,6 +515,7 @@ STAGES.update(
                 f"{_P}lead_list",
                 f"{_P}lead_record",
                 f"{_P}hypothesis_list",
+                *_DEVELOP_READ,
             ),
             kinds=(),
             unit="develop step (leads)",
@@ -512,6 +533,7 @@ STAGES.update(
                 f"{_P}hypothesis_list",
                 f"{_P}hypothesis_view",
                 f"{_P}hypothesis_draft",
+                *_DEVELOP_READ,
             ),
             kinds=(),
             unit="develop step (drafts)",

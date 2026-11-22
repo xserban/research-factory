@@ -144,6 +144,7 @@ CLI_READS: frozenset[str] = frozenset(
         "dashboard serve",
         "dashboard export",
         "bench level",
+        "conductor status",
     )
 )
 """Commands with no `TOOL_PERMISSIONS` row because they record no research fact. `rebuild` and

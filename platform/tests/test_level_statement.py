@@ -175,7 +175,7 @@ def test_statement_says_an_overturned_act_is_still_active(
         autonomy_level="supervised",
     )  # fmt: skip
     row = gate_trust.GateTrust("reference.link_confirm", 3, 2, 1, 0.5, "pause", 0, 0, None)
-    monkeypatch.setattr(gate_trust, "trust_ledger", lambda _p: (row,))
+    monkeypatch.setattr(level_statement, "trust_ledger", lambda _p: (row,))
     text = render_level_statement(build_statement(project, skipped=lambda _t: ()))
     assert (
         "overturned by a human review: reference.link_confirm (1); the act is still active" in text

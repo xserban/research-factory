@@ -14,15 +14,15 @@ Invariants:
   (or any run of the project: the runner refuses, and the refusal pauses with reason `refused`).
 - The stop rules are computed: a failed or lost run (retried only by `advance(retry=True)`, as a
   new run in a new session), a spent budget (`max_runs`, `max_minutes`), any gate whose trust state
-  is `pause`, and a human-only gate of a finished step (the conductor waits, escalates once to the
-  deferred queue when that exists, and never starts a run for it). A stage is never skipped.
+  is `pause`, and a human-only gate of a finished step (the conductor waits and never starts a run
+  for it; the human queue lists the waiting gate, computed from `conductor_status`). A stage is
+  never skipped.
 - The conductor records no human act and writes only `conductor.*` system events. The platform
   calls no model: a step is an outside process.
 """
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -262,6 +262,55 @@ def _closed_roles(trail: _Trail) -> set[tuple[int, str]]:
     return {(f.step, f.role) for f in done if f.outcome == "complete"}
 
 
+def queue_cap_reached(project: Project, step: str) -> bool:
+    """Whether the tier's cap on the works of a queue step is reached (the platform enforces only
+    the title/abstract `screen` cap: `screening.screen_cap_reached`)."""
+    if stage_of_step(step) != "screen" or step == "screen:full-text":
+        return False
+    from factory.services.screening import screen_cap_reached
+
+    return screen_cap_reached(project)
+
+
+def _more_to_run(project: Project, trail: _Trail, index: int, step: str) -> bool:
+    """Whether a queue step whose proposer run is complete must run again: the proposer's latest
+    run is the step's last outcome, it left units pending, it worked some off (fewer pending than
+    when it started) and the tier cap is not reached. A run's unit cap is below the tier cap, so one
+    run need not empty the queue; a run that made no progress (a stopping rule) does not repeat."""
+    if step not in _QUEUE_UNITS:
+        return False
+    finished = [
+        ConductorStepFinished.model_validate(e.payload)
+        for e in trail.payloads("step_finished")
+        if e.payload["step"] == index
+    ]
+    if not finished:
+        return False
+    last = finished[-1]
+    if last.role != "proposer" or last.outcome != "complete" or last.run_id is None:
+        return False
+    started = next(
+        (
+            ConductorStepStarted.model_validate(e.payload)
+            for e in reversed(trail.payloads("step_started"))
+            if e.payload.get("run_id") == last.run_id
+        ),
+        None,
+    )
+    if started is None or started.pending is None or last.pending is None:
+        return False
+    return 0 < last.pending < started.pending and not queue_cap_reached(project, step)
+
+
+def _effective_closed(project: Project, trail: _Trail) -> set[tuple[int, str]]:
+    """`_closed_roles`, minus the proposer of a queue step that must run again (`_more_to_run`)."""
+    closed = _closed_roles(trail)
+    for index, step in enumerate(trail.meta.steps):
+        if (index, "proposer") in closed and _more_to_run(project, trail, index, step):
+            closed.discard((index, "proposer"))
+    return closed
+
+
 def _open_run(trail: _Trail) -> ConductorStepStarted | None:
     finished = {e.payload.get("run_id") for e in trail.payloads("step_finished")}
     for event in reversed(trail.payloads("step_started")):
@@ -341,11 +390,9 @@ def draw_platform_audits(project: Project, stage_id: str) -> list[str]:
 
 
 def _trust_pauses(project: Project) -> list[str]:
-    try:
-        module: Any = importlib.import_module("factory.services.gate_trust")
-    except ModuleNotFoundError:
-        return []
-    return [str(t.gate_id) for t in module.trust_ledger(project) if t.state == "pause"]
+    from factory.services.gate_trust import trust_ledger  # gate_trust imports gates
+
+    return [str(t.gate_id) for t in trust_ledger(project) if t.state == "pause"]
 
 
 _CHECK_ACTS: Final[Mapping[str, tuple[str, ...]]] = {
@@ -427,7 +474,7 @@ def _decide(
         return _Decision(
             "running", open_run.step, open_run.stage_id, open_run.role, run_id=open_run.run_id
         )
-    closed = _closed_roles(trail)
+    closed = _effective_closed(project, trail)
     position: tuple[int, str, ConductorRole] | None = None
     waiting_gate: str | None = None
     for index, stage_id in enumerate(meta.steps):
@@ -466,7 +513,7 @@ def _decide(
         for e in trail.payloads("step_finished")
         if e.payload["step"] == index and e.payload["role"] == role
     ]
-    if last and not retry:
+    if last and last[-1].payload["outcome"] != "complete" and not retry:
         outcome = last[-1].payload["outcome"]
         return _Decision(
             "pause",
@@ -489,10 +536,14 @@ def _decide(
     if (
         role == "proposer"
         and stage_id in _QUEUE_UNITS
-        and sum(pending(project, _PENDING_STAGE.get(stage_id, stage_id)).values()) == 0
+        and _queue_pending(pending, project, stage_id) == 0
     ):
         return _Decision("complete-empty", index, stage_id, role)
     return _Decision("start", index, stage_id, role)
+
+
+def _queue_pending(pending: PendingUnits, project: Project, step: str) -> int:
+    return sum(pending(project, _PENDING_STAGE.get(step, step)).values())
 
 
 # ----------------------------------------------------------------------- the runner's pending
@@ -641,18 +692,6 @@ def _already_paused(trail: _Trail, d: _Decision) -> bool:
     return (p["reason"], p.get("step"), p.get("gate_id")) == (d.reason, d.step, d.gate_id)
 
 
-def _escalate_default(project: Project, gate_id: str, stage_id: str) -> None:
-    """Hand a waiting human gate to the deferred queue (lane L3) when it offers `escalate_waiting`;
-    before that the `conductor.paused` event is the waiting item."""
-    try:
-        module: Any = importlib.import_module("factory.services.human_queue")
-    except ModuleNotFoundError:  # pragma: no cover
-        return
-    hook = getattr(module, "escalate_waiting", None)
-    if hook is not None:
-        hook(project, gate_id, stage_id)
-
-
 def advance(
     project: Project,
     *,
@@ -667,7 +706,8 @@ def advance(
     conductor's own open run when the runner has recorded its outcome; then decides from the log
     (stop rules before anything is started) and starts at most one role run. `retry` lets a failed
     or lost role run be started again, as a new run in a new session. The five callables are the
-    seams of the tests (a fake runner); the defaults are the runner and the deferred queue, and
+    seams of the tests (a fake runner; `escalate` is a hook a caller may add, none by default); the
+    defaults are the runner and
     `default_automatic` for the deterministic step after `acquire` (run here, once, as the system:
     an exception is a failed step and pauses the conductor)."""
     trail = _load(project)
@@ -682,6 +722,7 @@ def advance(
         assert open_run.run_id is not None
         outcome = runner.run_outcome(project, open_run.run_id)
         if outcome is not None:
+            queue = open_run.role == "proposer" and open_run.stage_id in _QUEUE_UNITS
             _write(
                 project,
                 "step_finished",
@@ -692,6 +733,7 @@ def advance(
                     role=open_run.role,
                     run_id=open_run.run_id,
                     outcome=cast(StepOutcome, outcome),
+                    pending=_queue_pending(pend, project, open_run.stage_id) if queue else None,
                 ),
             )
             trail = _load(project) or trail
@@ -771,6 +813,11 @@ def advance(
         cap = _unit_cap(meta)
         if decision.role == "auditor":
             draw_platform_audits(project, decision.stage_id)
+        queue_before = (
+            _queue_pending(pend, project, decision.stage_id)
+            if decision.role == "proposer" and decision.stage_id in _QUEUE_UNITS
+            else None
+        )
         token = _STARTING.set((pend, closer))
         try:
             run_id = start(project, stage, unit_cap=cap)
@@ -795,14 +842,20 @@ def advance(
                     role=decision.role,
                     run_id=run_id,
                     attempt=attempts,
+                    pending=queue_before,
                 ),
             )
         finally:
             _STARTING.reset(token)
     if decision.kind in ("pause", "wait") and not _already_paused(trail, decision):
         assert decision.reason is not None
-        if decision.kind == "wait" and decision.gate_id is not None and decision.stage_id:
-            (escalate or _escalate_default)(project, decision.gate_id, decision.stage_id)
+        if (
+            escalate is not None
+            and decision.kind == "wait"
+            and decision.gate_id is not None
+            and decision.stage_id
+        ):
+            escalate(project, decision.gate_id, decision.stage_id)
         _write(
             project,
             "paused",
@@ -869,7 +922,7 @@ def conductor_status(
                 "refused",
                 detail=refusal.detail,
             )
-    closed = _closed_roles(trail)
+    closed = _effective_closed(project, trail)
     done_steps = sum(
         1
         for i in range(len(meta.steps))

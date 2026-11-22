@@ -539,8 +539,8 @@ def test_the_stages_are_declared_without_the_gate_acts() -> None:
 # ------------------------------------------------------------------- understand, develop, maintain
 
 LATER = ("understand", "develop", "maintain")
-HUMAN_ONLY_ACTS = re.compile(
-    r"lead_decide|hypothesis_register|miner_(admit|register)|_confirm|_release|_resolve|_decide"
+HUMAN_ONLY_ACTS = re.compile(  # `selection_resolve` is a read of the corpus selection, no act
+    r"lead_decide|hypothesis_register|miner_(admit|register)|_confirm|_release|(?<!selection)_resolve|_decide"
     r"|protocol_(amend|record)|review_decide|reference_decide|relation_decide|idea_decide"
 )
 
@@ -844,3 +844,187 @@ def test_the_conductor_draws_the_platform_audit_before_the_auditor_starts(
     assert drive(project, fake).state == "finished"
     assert drawn == [("write", 2)]  # after proposer and verifier, before the auditor run
     assert fake.stages == ["write", "conduct-verify", "conduct-audit"]
+
+
+# ------------------------------------------- a queue step runs again until its queue is empty
+
+
+class Queue:
+    """A work queue of `n` units that each fake run works off `per_run` of (the unit cap of the
+    run): the `pending` seam the conductor reads and the effect of the fake runner."""
+
+    def __init__(self, fake: FakeRunner, n: int, per_run: int | None = None) -> None:
+        self.left = n
+        self.per_run = per_run
+        self.runs = 0
+        self.fake = fake
+
+    def pending(self, _p: Project, stage: str) -> dict[str, int]:
+        return {stage: self.left if stage in ("screen", "screen-ft", "extract") else 0}
+
+    def start_run(self, project: Project, stage: str, *, unit_cap: int) -> str:
+        run_id = self.fake.start_run(project, stage, unit_cap=unit_cap)
+        if stage == "screen":
+            self.runs += 1
+            self.left = max(0, self.left - (unit_cap if self.per_run is None else self.per_run))
+        return run_id
+
+
+def _run_screen(project: Project, fake: FakeRunner, queue: Queue, limit: int = 30) -> Any:
+    status = None
+    for _ in range(limit):
+        status = conductor.advance(
+            project, start_run=queue.start_run, pending=queue.pending, gate_closed=_open,
+            escalate=lambda *_a: None,
+        )  # fmt: skip
+        if status.state in ("finished", "paused", "waiting"):
+            break
+    return status
+
+
+def test_a_queue_step_runs_again_while_units_are_pending_and_progress_is_made(
+    project: Project, fake: FakeRunner
+) -> None:
+    conductor.begin_conductor(project, plan("screen"))  # unit cap 30 per run
+    queue = Queue(fake, 70)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished"
+    assert fake.stages == ["screen", "screen", "screen"]  # 70 -> 40 -> 10 -> 0
+    assert queue.left == 0
+
+
+def test_a_queue_step_stops_when_a_run_made_no_progress(project: Project, fake: FakeRunner) -> None:
+    conductor.begin_conductor(project, plan("screen"))
+    queue = Queue(fake, 70, per_run=0)  # e.g. a stopping rule: units remain, nothing is served
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished" and fake.stages == ["screen"]
+
+
+def test_a_queue_step_stops_at_the_tier_cap(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conductor.begin_conductor(project, plan("screen"))
+    queue = Queue(fake, 500)
+    monkeypatch.setattr(conductor, "queue_cap_reached", lambda _p, _s: queue.runs >= 2)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished" and fake.stages == ["screen", "screen"]
+    assert queue.left == 440  # the cap, not the queue, ended the step
+
+
+def test_a_queue_step_stops_at_the_run_budget(project: Project, fake: FakeRunner) -> None:
+    conductor.begin_conductor(project, plan("screen", limits=FLimits(max_runs=2)))
+    queue = Queue(fake, 500)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "paused" and status.reason == "budget"
+    assert fake.stages == ["screen", "screen"]
+
+
+# ----------------------- a waiting human-only gate is an item of the human queue (read-only)
+
+
+def test_a_waiting_human_gate_is_a_human_queue_item_until_a_human_acts(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.human_queue import Gate, human_queue
+
+    acted = {"done": False}
+    monkeypatch.setattr(conductor, "default_gate_closed", lambda _p, _s, _g: acted["done"])
+    assert [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING] == []
+    conductor.begin_conductor(project, plan("frame"))
+    status = drive(project, fake, gate_closed=lambda *_a: False)
+    assert status.state == "waiting" and status.gate_id == "protocol.ready"
+    before = len(_events(project, "conductor.paused"))
+    [item] = [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING]
+    assert (item.count, item.stage) == (1, "frame")
+    assert item.command.startswith("factory --project demo protocol ")
+    assert len(_events(project, "conductor.paused")) == before  # read-only: nothing written
+    assert [i for i in human_queue(project, agent=True).items if i.gate is Gate.CONDUCTOR_WAITING]
+    acted["done"] = True  # the human act: the gate closes and the item goes
+    assert [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING] == []
+
+
+def test_the_conductor_calls_no_missing_escalation_hook() -> None:
+    import inspect
+
+    assert "escalate_waiting" not in inspect.getsource(conductor)
+
+
+# --------------------------- the run budget of a tier covers its whole plan at every autonomy level
+
+
+def _runs_a_full_plan_needs(project: Project, tier: Tier) -> int:
+    """The role runs of every live step of the tier's plan, as the conductor derives them (the
+    proposer, the second pass, the verifier and the auditor; `automatic` is no run)."""
+    from factory.model.levels import AutonomyLevel
+    from factory.tiers.resolve import plan_for
+
+    plan_ = plan_for(tier)
+    run = conductor.begin_conductor(project, plan_)
+    level = AutonomyLevel(run.autonomy_level)
+    second = {conductor.step_key(s) for s in plan_.stages if s.second_pass and not s.skipped}
+    return sum(
+        len([r for r in conductor.roles_of(project, step, level, second_pass=step in second)
+             if r != "automatic"])
+        for step in run.steps
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("tier", [Tier.BRIEF, Tier.DEEP])
+@pytest.mark.parametrize("level", ["attended", "supervised", "autonomous"])
+def test_the_run_limit_of_a_tier_covers_its_plan_at_each_level(
+    settings: Settings, clock: FixedClock, tier: Tier, level: str
+) -> None:
+    from factory.tiers.resolve import plan_for
+
+    project = init_project(
+        settings, "demo", None, session=SESSION, clock=clock, tier=tier.value, autonomy_level=level
+    )
+    needed = _runs_a_full_plan_needs(project, tier)
+    limits = plan_for(tier).limits
+    assert limits is not None
+    # one extra run of slack per queue step for the repeated run of a long queue is not counted
+    # here: the number is the plan alone, so that no tier pauses for budget before `write`
+    assert limits.max_runs >= needed, f"{tier.value} at {level}: {limits.max_runs} < {needed}"
+
+
+# ------------------------------------------ two advances race for one step: one run is started
+
+
+def test_a_second_advance_during_the_start_does_not_start_a_second_run(
+    project: Project, fake: FakeRunner
+) -> None:
+    """The window between the runner's start and the `conductor.step_started` write: a second
+    caller (here re-entrant, in life another process) decides to start the same step. The runner
+    refuses it, as the real one does for an open run of the project, so one run exists."""
+    from factory.errors import ValidationIssue
+
+    conductor.begin_conductor(project, plan("frame"))
+    started: list[str] = []
+    nested: list[conductor.ConductorStatus] = []
+
+    def start(p: Project, stage: str, *, unit_cap: int) -> str:
+        if started:  # the real runner refuses a start while a run of the project is open
+            raise FactoryValidationError([ValidationIssue("run", "a run of this project is open")])
+        run_id = fake.start_run(p, stage, unit_cap=unit_cap)
+        started.append(run_id)
+        fake.open.add(run_id)
+        nested.append(
+            conductor.advance(p, start_run=start, pending=_idle, gate_closed=_open,
+                              escalate=lambda *_a: None)
+        )  # fmt: skip
+        return run_id
+
+    outer = conductor.advance(
+        project, start_run=start, pending=_idle, gate_closed=_open, escalate=lambda *_a: None
+    )
+    assert len(started) == 1 and fake.stages == ["frame"]
+    assert nested[0].state == "paused" and nested[0].reason == "refused"
+    steps = [
+        e for e in _events(project, "conductor.step_started") if e.payload["role"] != "automatic"
+    ]
+    assert len(steps) == 1
+    assert outer.state == "running" and outer.run_id == started[0]
+    again = conductor.advance(
+        project, start_run=start, pending=_idle, gate_closed=_open, escalate=lambda *_a: None
+    )
+    assert again.state == "running" and len(started) == 1  # the open run is waited for

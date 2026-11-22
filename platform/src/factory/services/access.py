@@ -390,6 +390,8 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "cli:queue runs": Permission.PROJECT_READ,
     "cli:queue process": Permission.WORK_RUN,
     "cli:queue advance": Permission.WORK_RUN,
+    "cli:conductor start": Permission.WORK_RUN,
+    "cli:conductor advance": Permission.WORK_RUN,
     "cli:queue resume": Permission.WORK_RUN,
     "cli:resume": Permission.WORK_RUN,
     "cli:activity": Permission.PROJECT_READ,

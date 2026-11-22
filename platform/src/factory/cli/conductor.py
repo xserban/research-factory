@@ -1,21 +1,21 @@
 """`factory conductor start|advance|status` (plan tiers-and-autonomy, C8).
 
 It parses input, calls `services.conductor` and formats the answer. `start` takes the plan of the
-project's declared tier (`factory.tiers.resolve.plan_for`, lane L2); `advance` takes one step
+project's declared tier (`factory.tiers.resolve.plan_for`); `advance` takes one step
 (starts at most one outside `claude -p` run); `status` reads only. The helpers of `factory.cli.main`
 are imported inside the commands, because that module imports this one to register the group.
 """
 
 from __future__ import annotations
 
-import importlib
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.services import conductor as conductor_service
 from factory.services.project import project_levels
+from factory.tiers.resolve import plan_for
 
 conductor_app = typer.Typer(
     name="conductor",
@@ -41,13 +41,7 @@ def start_cmd(ctx: typer.Context) -> None:
         tier = project_levels(project).tier
         if tier is None:
             raise FactoryValidationError([ValidationIssue("tier", "the project declared no tier")])
-        try:
-            resolve: Any = importlib.import_module("factory.tiers.resolve")
-        except ModuleNotFoundError as exc:
-            raise FactoryValidationError(
-                [ValidationIssue("plan", "tier plans are not available in this build")]
-            ) from exc
-        run = conductor_service.begin_conductor(project, resolve.plan_for(tier))
+        run = conductor_service.begin_conductor(project, plan_for(tier))
     typer.echo(
         f"{run.conductor_id} started: {run.tier} at {run.autonomy_level}; steps "
         f"{', '.join(run.steps)}; budget {run.budget.max_runs} runs, "
