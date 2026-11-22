@@ -45,7 +45,7 @@ from factory.modules.contract import (
     GatePolicy,
     PolicyKind,
 )
-from factory.modules.presets import Enforcement
+from factory.modules.presets import Enforcement, preset, weaker
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core, passes
 from factory.services.access import gate_role_issues
@@ -172,6 +172,24 @@ def effective_policy(
                 break
     return resolve_policy(
         autonomy_level(project), mode or indexed_rigor_mode(project), gate_id, entry
+    )
+
+
+def lowered_by_level(project: Project) -> tuple[str, ...]:
+    """The decision gates whose policy in force is weaker than the rigor preset because the
+    autonomy level lowered it (`resolve_policy`); empty under `attended`. A protocol entry that
+    is itself weaker than the preset cannot sit under a non-attended level (it is clamped), so
+    any gate weaker than its preset here is the level's doing."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    if autonomy_level(project) is AutonomyLevel.ATTENDED:
+        return ()
+    mode = rigor_mode(project)
+    return tuple(
+        g.gate_id
+        for g in default_modules().gates()
+        if g.kind is GateKind.DECISION
+        and weaker(effective_policy(project, g.gate_id, mode=mode), preset(mode, g.gate_id))
     )
 
 

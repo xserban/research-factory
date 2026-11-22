@@ -23,7 +23,9 @@ from factory.events.reader import read_all, read_typed
 from factory.model.base import StrictModel
 from factory.model.levels import AutonomyLevel, Tier
 from factory.model.project import RigorMode
+from factory.modules.contract import GateKind
 from factory.services.context import Project
+from factory.services.gates import lowered_by_level
 from factory.services.project import project_levels
 from factory.services.tier_caps import cap_lines
 from factory.tiers.validation import validation_profile
@@ -56,6 +58,10 @@ class LevelStatement(StrictModel):
     steps_skipped: tuple[str, ...]
     agent_closed: tuple[AgentClosed, ...]
     human_confirmed: bool
+    person_reviewed: bool = True
+    """Whether any human decision, label or audit exists in the project (finding I5);
+    `human_confirmed` keeps its older meaning (no agent-closed act at `attended`)."""
+    validation_label: str | None = None
     lines: tuple[str, ...]
 
 
@@ -144,6 +150,24 @@ def _validation_lines(project: Project, tier: Tier, level: AutonomyLevel) -> lis
     return lines
 
 
+def _person_reviewed(project: Project) -> bool:
+    """Whether a human actor wrote any decision-gate act, label, audit or screening decision."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    types = {
+        act
+        for gate in default_modules().gates()
+        if gate.kind is GateKind.DECISION
+        for act in gate.act_events
+    }
+    types.update(_VALIDATION_TYPES)
+    types.add("gate.audit_labelled")
+    return any(
+        e.actor.kind == "human"
+        for e in read_typed(project.paths.events_dir, project.catalog, sorted(types))
+    )
+
+
 def level_statement(project: Project, *, skipped: SkippedSteps | None = None) -> LevelStatement:
     """The statement for `project`. `skipped` replaces the tier-plan resolver (tests inject a
     fake); it is called only for a project that declared a tier."""
@@ -163,13 +187,31 @@ def level_statement(project: Project, *, skipped: SkippedSteps | None = None) ->
     if steps:
         lines.append("skipped compared with a systematic review: " + "; ".join(steps))
     lines.extend(cap_lines(levels.tier))
+    lowered = lowered_by_level(project)
+    if lowered:
+        lines.append("preset lowered by autonomy level: " + ", ".join(lowered))
     if closed:
         lines.append(
             "gates closed by an agent: "
             + ", ".join(f"{c.gate_id} ({c.closed_by_agent})" for c in closed)
         )
+    overturned = [c for c in closed if c.overturned > 0]
+    if overturned:
+        lines.append(
+            "overturned by a human review: "
+            + ", ".join(f"{c.gate_id} ({c.overturned})" for c in overturned)
+            + "; the act is still active (an overturn writes a label, it does not undo the act)"
+        )
+    reasons = [f"{c.gate_id} ({c.reason})" for c in closed if c.reason]
+    if reasons:
+        lines.append("agent-closed gates not yet audited: " + ", ".join(reasons))
+    validation_label: str | None = None
     if levels.tier is not None:
+        validation_label = validation_profile(levels.tier, levels.autonomy_level).label
         lines.extend(_validation_lines(project, levels.tier, levels.autonomy_level))
+    reviewed = _person_reviewed(project)
+    if not reviewed:
+        lines.append("no person has reviewed this output")
     if not confirmed:
         lines.append("not human-confirmed: no person has confirmed the acts an agent closed")
     return LevelStatement(
@@ -179,6 +221,8 @@ def level_statement(project: Project, *, skipped: SkippedSteps | None = None) ->
         steps_skipped=steps,
         agent_closed=closed,
         human_confirmed=confirmed,
+        person_reviewed=reviewed,
+        validation_label=validation_label,
         lines=tuple(lines),
     )
 

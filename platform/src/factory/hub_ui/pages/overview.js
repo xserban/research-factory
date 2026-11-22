@@ -97,7 +97,7 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
     if (!ls) return '';
     const tier = ls.tier || 'tier not declared';
     const unconfirmed = ls.human_confirmed ? '' : ' · not human-confirmed';
-    return `<p class="ov-levels"><a class="chip" href="levels.html" title="How this study runs">Tier: ${esc(tier)}</a> <a class="chip" href="levels.html" title="How this study runs">Autonomy: ${esc(ls.autonomy_level)}${esc(unconfirmed)}</a></p>`;
+    return `<p class="ov-levels"><a class="chip" href="levels.html" title="How this study runs">Tier: ${esc(tier)}${esc(ls.validation_label ? ' · ' + ls.validation_label : '')}</a> <a class="chip" href="levels.html" title="How this study runs">Autonomy: ${esc(ls.autonomy_level)}${esc(unconfirmed)}</a></p>`;
   }
   main.innerHTML = `
 <section class="ov-hero">

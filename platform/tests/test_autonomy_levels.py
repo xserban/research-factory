@@ -267,3 +267,16 @@ def test_the_audit_stage_alone_may_label() -> None:
     for stage, spec in STAGES.items():
         has = "mcp__factory__gate_audit_label" in spec.tools
         assert has == (stage == "conduct-audit"), stage
+
+
+def test_autonomous_floor_never_goes_below_the_gates_own_floor() -> None:
+    """Decision 84.6: an `AUTONOMOUS_FLOOR` entry is at or above the gate's own floor (the
+    declared `GateSpec.floor`), and names a declared decision gate."""
+    from factory.modules.contract import GateKind
+    from factory.modules.presets import rank
+    from factory.services.modules.default import default_modules
+
+    declared = {g.gate_id: g for g in default_modules().gates() if g.kind is GateKind.DECISION}
+    for gate_id, floor in autonomy.AUTONOMOUS_FLOOR.items():
+        assert gate_id in declared, gate_id
+        assert rank(floor.kind) >= rank(declared[gate_id].floor), gate_id

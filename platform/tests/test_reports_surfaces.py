@@ -316,8 +316,14 @@ async def test_cli_report_prisma_matches_mcp_numbers(
     flow = runner.invoke(app, ["report", "prisma", "--json"], env=env)
     search = runner.invoke(app, ["report", "search", "--json"], env=env)
     assert flow.exit_code == 0 and search.exit_code == 0, flow.stderr + search.stderr
-    assert json.loads(flow.stdout) == mcp["flow"]
-    assert json.loads(search.stdout) == mcp["search"]
+    for out in (flow, search):  # the researcher's views carry the level statement (I1)
+        assert "level_statement" in json.loads(out.stdout)
+    assert {k: v for k, v in json.loads(flow.stdout).items() if k != "level_statement"} == (
+        mcp["flow"]
+    )
+    assert {k: v for k, v in json.loads(search.stdout).items() if k != "level_statement"} == (
+        mcp["search"]
+    )
 
     markdown = runner.invoke(app, ["report", "prisma"], env=env).stdout
     figures = mcp["flow"]
@@ -342,8 +348,12 @@ def test_cli_report_methods_and_search_markdown(
     env = _cli_env(settings.root)
     text = runner.invoke(app, ["report", "methods"], env=env)
     data = runner.invoke(app, ["report", "methods", "--json"], env=env)
-    assert text.stdout == render_methods(methods_report(project))
-    assert json.loads(data.stdout) == json.loads(methods_report(project).model_dump_json())
+    body, _, stated = text.stdout.partition("\n---\n")
+    assert body.rstrip("\n") == render_methods(methods_report(project)).rstrip("\n")
+    assert "autonomy level: attended" in stated
+    loaded = json.loads(data.stdout)
+    assert loaded.pop("level_statement")["autonomy_level"] == "attended"
+    assert loaded == json.loads(methods_report(project).model_dump_json())
     search = runner.invoke(app, ["report", "search"], env=env).stdout
     [row] = search_report(project).rows
     assert f"`{row.text}`" in search and f"retrieved: {row.retrieved}" in search
