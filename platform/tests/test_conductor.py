@@ -913,3 +913,41 @@ def test_the_conductor_calls_no_missing_escalation_hook() -> None:
     import inspect
 
     assert "escalate_waiting" not in inspect.getsource(conductor)
+
+
+# --------------------------- the run budget of a tier covers its whole plan at every autonomy level
+
+
+def _runs_a_full_plan_needs(project: Project, tier: Tier) -> int:
+    """The role runs of every live step of the tier's plan, as the conductor derives them (the
+    proposer, the second pass, the verifier and the auditor; `automatic` is no run)."""
+    from factory.model.levels import AutonomyLevel
+    from factory.tiers.resolve import plan_for
+
+    plan_ = plan_for(tier)
+    run = conductor.begin_conductor(project, plan_)
+    level = AutonomyLevel(run.autonomy_level)
+    second = {conductor.step_key(s) for s in plan_.stages if s.second_pass and not s.skipped}
+    return sum(
+        len([r for r in conductor.roles_of(project, step, level, second_pass=step in second)
+             if r != "automatic"])
+        for step in run.steps
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("tier", [Tier.BRIEF, Tier.DEEP])
+@pytest.mark.parametrize("level", ["attended", "supervised", "autonomous"])
+def test_the_run_limit_of_a_tier_covers_its_plan_at_each_level(
+    settings: Settings, clock: FixedClock, tier: Tier, level: str
+) -> None:
+    from factory.tiers.resolve import plan_for
+
+    project = init_project(
+        settings, "demo", None, session=SESSION, clock=clock, tier=tier.value, autonomy_level=level
+    )
+    needed = _runs_a_full_plan_needs(project, tier)
+    limits = plan_for(tier).limits
+    assert limits is not None
+    # one extra run of slack per queue step for the repeated run of a long queue is not counted
+    # here: the number is the plan alone, so that no tier pauses for budget before `write`
+    assert limits.max_runs >= needed, f"{tier.value} at {level}: {limits.max_runs} < {needed}"

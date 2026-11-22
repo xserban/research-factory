@@ -20,7 +20,7 @@ quick review, not a systematic one.
    be `exploratory`. Stop if it is not.
 2. Read `rf-run` for the rules every session follows (provenance: pass `role`, `model` and the
    bare skill name `rf-brief` as `skill` to every mutating tool). Limits of a brief: at most 30
-   papers, 60 minutes, 12 runs. Stop when one is reached and report it.
+   papers, 60 minutes, 20 runs. Stop when one is reached and report it.
 
 ## Steps
 

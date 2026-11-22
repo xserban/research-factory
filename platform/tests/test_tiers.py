@@ -69,7 +69,7 @@ def test_pilot_and_systematic_have_no_caps_and_skip_nothing(tier: Tier) -> None:
 
 def test_brief_caps_are_the_ruled_ones() -> None:
     plan = plan_for(Tier.BRIEF)
-    assert (plan.limits.max_papers, plan.limits.max_minutes, plan.limits.max_runs) == (30, 60, 12)  # type: ignore[union-attr]
+    assert (plan.limits.max_papers, plan.limits.max_minutes, plan.limits.max_runs) == (30, 60, 20)  # type: ignore[union-attr]
     assert plan.stage("gather").caps == {
         "sources": 2,
         "searches_per_source": 1,
@@ -194,7 +194,7 @@ def test_brief_new_plan_and_status(tmp_path: Path) -> None:
     assert "exploratory" in made.output
     plan = runner.invoke(app, ["brief", "plan", "lin"], env=env)
     assert plan.exit_code == 0, plan.output
-    for line in ("tier brief", "limits: 30 papers, 60 minutes, 12 runs", "rf-brief", "understand"):
+    for line in ("tier brief", "limits: 30 papers, 60 minutes, 20 runs", "rf-brief", "understand"):
         assert line in plan.output
     assert "skipped:" in plan.output and "gather: no snowball rounds" in plan.output
     status = runner.invoke(app, ["brief", "status", "lin"], env=env)

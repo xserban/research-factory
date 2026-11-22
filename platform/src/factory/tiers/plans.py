@@ -176,7 +176,7 @@ def _brief() -> TierPlan:
             ),
             _full_text(s, caps={"passes": 1}, note="one pass over the acquired works"),
         ),
-        limits=Limits(max_papers=30, max_minutes=60, max_runs=12),
+        limits=Limits(max_papers=30, max_minutes=60, max_runs=20),
         protocol_template=_BRIEF_PROTOCOL,
         report_template=ReportTemplate(
             sections=("question", "search", "screening", "included", "evidence", "quotes", "level"),
