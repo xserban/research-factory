@@ -1,6 +1,7 @@
 """`mine.reopened`: reopening one mined work after a selector miss (IDEA-99)."""
 
 # ruff: noqa: F811
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -60,9 +61,11 @@ def _unmatched() -> MinerSpec:
 
 
 @pytest.fixture
-def legacy_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+def legacy_selection() -> Iterator[pytest.MonkeyPatch]:
     """Tasks created as before IDEA-99: the selector's own anchors, no fallback, no recorded
-    share (what a task created before commit 108a073a holds)."""
+    share (what a task created before commit 108a073a holds). Yields its own patch object, so a
+    test can end the legacy state with `legacy_selection.undo()` without reverting the shared
+    `monkeypatch` fixture (the conftest's environment patches are part of the world-cache key)."""
     from factory.mining.select import Selection, selected_anchors
 
     def legacy(manifest: Any, selector: Any) -> Selection:
@@ -73,12 +76,15 @@ def legacy_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     def without_share(**kw: Any) -> MineBatchContent:
         return real(**{**kw, "selection_matched_share": None, "selection_fallback": False})
 
-    monkeypatch.setattr(mining_module, "select_with_fallback", legacy)
-    monkeypatch.setattr(mining_module, "MineBatchContent", without_share)
+    patch = pytest.MonkeyPatch()
+    patch.setattr(mining_module, "select_with_fallback", legacy)
+    patch.setattr(mining_module, "MineBatchContent", without_share)
+    yield patch
+    patch.undo()
 
 
 def _mined_legacy(
-    project: Project, agent: Actor, mina: Actor, legacy_selection: None
+    project: Project, agent: Actor, mina: Actor, legacy_selection: pytest.MonkeyPatch
 ) -> tuple[str, list[str]]:
     """List the unmatched miner and mine every work in pass A the old way; return the first work
     and the works mined."""
@@ -97,7 +103,11 @@ def _events(project: Project, kind: str) -> list[Any]:
 
 
 def test_old_task_share_is_computed_from_stored_anchors(
-    project: Project, agent: Actor, mina: Actor, world: list[str], legacy_selection: None
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     work, _ = _mined_legacy(project, agent, mina, legacy_selection)
     task = _a_units(project)[0]
@@ -117,12 +127,11 @@ def test_reopen_accepted_and_the_next_task_falls_back(
     human: Actor,
     mina: Actor,
     world: list[str],
-    legacy_selection: None,
-    monkeypatch: pytest.MonkeyPatch,
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     work, _ = _mined_legacy(project, agent, mina, legacy_selection)
     old_rows = {r.extraction_id for r in live_rows(project, scope=MinerScope(VISION_NAME))}
-    monkeypatch.undo()  # the fresh task is created with today's selector
+    legacy_selection.undo()  # the fresh task is created with today's selector
     event_id = reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
     [event] = _events(project, "mine.reopened")
     assert event.id == event_id and event.actor.kind == "human"
@@ -226,7 +235,7 @@ def test_refused_when_already_reopened(
     human: Actor,
     mina: Actor,
     world: list[str],
-    legacy_selection: None,
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     work, _ = _mined_legacy(project, agent, mina, legacy_selection)
     reopen_unit(project, human, VISION_NAME, 1, work, A, REASON)
@@ -242,7 +251,7 @@ def test_the_index_folds_only_a_guarded_human_event(
     human: Actor,
     mina: Actor,
     world: list[str],
-    legacy_selection: None,
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     from sqlalchemy import text
 
@@ -292,7 +301,7 @@ def test_cli_reopen_is_a_thin_wrapper(
     agent: Actor,
     mina: Actor,
     world: list[str],
-    legacy_selection: None,
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     work, _ = _mined_legacy(project, agent, mina, legacy_selection)
     args = ["miner", "reopen", VISION_NAME, "1", work, "--pass", "A"]
@@ -368,7 +377,11 @@ def test_reopen_refused_for_a_selector_that_never_falls_back(
 
 
 def test_old_table_task_share_comes_from_the_selector_not_the_anchors(
-    project: Project, agent: Actor, mina: Actor, world: list[str], legacy_selection: None
+    project: Project,
+    agent: Actor,
+    mina: Actor,
+    world: list[str],
+    legacy_selection: pytest.MonkeyPatch,
 ) -> None:
     from factory.document.anchors import AnchorKind
 

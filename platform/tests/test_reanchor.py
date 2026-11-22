@@ -38,9 +38,9 @@ def _convert_v1(project: Project, monkeypatch: pytest.MonkeyPatch) -> str:
     """Record a conversion under the legacy anchoring rules; return its document id."""
     document = fetched_document(project, promoted_works(project)[0], ARTICLE)
     legacy = partial(convert, anchor_version=1)
-    monkeypatch.setattr(document_convert, "convert", legacy)
-    run_convert(project, make_registry(ListConverter()))
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(document_convert, "convert", legacy)
+        run_convert(project, make_registry(ListConverter()))
     return document
 
 

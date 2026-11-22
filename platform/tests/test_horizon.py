@@ -169,10 +169,10 @@ def test_group_totals_filter_first_then_rank_then_cut(
 ) -> None:  # review I3
     both = horizon_view(project)
     assert both.total_groups == coverage_view(project).total_groups == 2
-    monkeypatch.setattr(horizon, "HORIZON_MAX_GROUPS", 1)
-    cut = horizon_view(project)
-    assert (cut.total_groups, cut.listed_groups, cut.meta.truncated) == (2, 1, True)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(horizon, "HORIZON_MAX_GROUPS", 1)
+        cut = horizon_view(project)
+        assert (cut.total_groups, cut.listed_groups, cut.meta.truncated) == (2, 1, True)
     with project.index.connect() as conn:  # the two detection works leave the corpus
         for work in vb_world.works[4:6]:
             conn.execute(text("DELETE FROM provenance WHERE work_id = :w"), {"w": work})

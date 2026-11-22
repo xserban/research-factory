@@ -125,9 +125,9 @@ def test_failed_init_removes_its_directory_and_can_be_retried(
     def boom(self: Project, events: object) -> None:
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(Project, "record", boom)
-    with pytest.raises(RuntimeError):
-        init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
-    assert not (settings.root / "projects" / "demo").exists()
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(Project, "record", boom)
+        with pytest.raises(RuntimeError):
+            init_project(settings, "demo", "pilot", session=SESSION, clock=clock)
+        assert not (settings.root / "projects" / "demo").exists()
     assert project_status(init_project(settings, "demo", "pilot", session=SESSION, clock=clock))
