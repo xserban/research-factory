@@ -14,8 +14,9 @@ Invariants:
   (or any run of the project: the runner refuses, and the refusal pauses with reason `refused`).
 - The stop rules are computed: a failed or lost run (retried only by `advance(retry=True)`, as a
   new run in a new session), a spent budget (`max_runs`, `max_minutes`), any gate whose trust state
-  is `pause`, and a human-only gate of a finished step (the conductor waits, escalates once to the
-  deferred queue when that exists, and never starts a run for it). A stage is never skipped.
+  is `pause`, and a human-only gate of a finished step (the conductor waits and never starts a run
+  for it; the human queue lists the waiting gate, computed from `conductor_status`). A stage is
+  never skipped.
 - The conductor records no human act and writes only `conductor.*` system events. The platform
   calls no model: a step is an outside process.
 """
@@ -664,18 +665,6 @@ def _already_paused(trail: _Trail, d: _Decision) -> bool:
     return (p["reason"], p.get("step"), p.get("gate_id")) == (d.reason, d.step, d.gate_id)
 
 
-def _escalate_default(project: Project, gate_id: str, stage_id: str) -> None:
-    """Hand a waiting human gate to the deferred queue (lane L3) when it offers `escalate_waiting`;
-    before that the `conductor.paused` event is the waiting item."""
-    try:
-        module: Any = importlib.import_module("factory.services.human_queue")
-    except ModuleNotFoundError:  # pragma: no cover
-        return
-    hook = getattr(module, "escalate_waiting", None)
-    if hook is not None:
-        hook(project, gate_id, stage_id)
-
-
 def advance(
     project: Project,
     *,
@@ -690,7 +679,8 @@ def advance(
     conductor's own open run when the runner has recorded its outcome; then decides from the log
     (stop rules before anything is started) and starts at most one role run. `retry` lets a failed
     or lost role run be started again, as a new run in a new session. The five callables are the
-    seams of the tests (a fake runner); the defaults are the runner and the deferred queue, and
+    seams of the tests (a fake runner; `escalate` is a hook a caller may add, none by default); the
+    defaults are the runner and
     `default_automatic` for the deterministic step after `acquire` (run here, once, as the system:
     an exception is a failed step and pauses the conductor)."""
     trail = _load(project)
@@ -830,8 +820,13 @@ def advance(
             _STARTING.reset(token)
     if decision.kind in ("pause", "wait") and not _already_paused(trail, decision):
         assert decision.reason is not None
-        if decision.kind == "wait" and decision.gate_id is not None and decision.stage_id:
-            (escalate or _escalate_default)(project, decision.gate_id, decision.stage_id)
+        if (
+            escalate is not None
+            and decision.kind == "wait"
+            and decision.gate_id is not None
+            and decision.stage_id
+        ):
+            escalate(project, decision.gate_id, decision.stage_id)
         _write(
             project,
             "paused",

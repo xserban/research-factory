@@ -883,3 +883,33 @@ def test_a_queue_step_stops_at_the_run_budget(project: Project, fake: FakeRunner
     status = _run_screen(project, fake, queue)
     assert status.state == "paused" and status.reason == "budget"
     assert fake.stages == ["screen", "screen"]
+
+
+# ----------------------- a waiting human-only gate is an item of the human queue (read-only)
+
+
+def test_a_waiting_human_gate_is_a_human_queue_item_until_a_human_acts(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from factory.services.human_queue import Gate, human_queue
+
+    acted = {"done": False}
+    monkeypatch.setattr(conductor, "default_gate_closed", lambda _p, _s, _g: acted["done"])
+    assert [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING] == []
+    conductor.begin_conductor(project, plan("frame"))
+    status = drive(project, fake, gate_closed=lambda *_a: False)
+    assert status.state == "waiting" and status.gate_id == "protocol.ready"
+    before = len(_events(project, "conductor.paused"))
+    [item] = [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING]
+    assert (item.count, item.stage) == (1, "frame")
+    assert item.command.startswith("factory --project demo protocol ")
+    assert len(_events(project, "conductor.paused")) == before  # read-only: nothing written
+    assert [i for i in human_queue(project, agent=True).items if i.gate is Gate.CONDUCTOR_WAITING]
+    acted["done"] = True  # the human act: the gate closes and the item goes
+    assert [i for i in human_queue(project).items if i.gate is Gate.CONDUCTOR_WAITING] == []
+
+
+def test_the_conductor_calls_no_missing_escalation_hook() -> None:
+    import inspect
+
+    assert "escalate_waiting" not in inspect.getsource(conductor)
