@@ -279,7 +279,9 @@ seeds_app = typer.Typer(
     no_args_is_help=False,
 )
 protocol_app = typer.Typer(
-    name="protocol", help="Read the protocol and confirm PRESS reviews.", no_args_is_help=True
+    name="protocol",
+    help="Read the protocol; record, amend it or declare a deviation (human); confirm PRESS.",
+    no_args_is_help=True,
 )
 question_app = typer.Typer(name="question", help="Read the question.", no_args_is_help=True)
 calibrate_app = typer.Typer(
@@ -1235,6 +1237,8 @@ def _screening_lines(screening: ScreeningStatus) -> list[str]:
     lines = [
         f"calibration: drawn {cal.drawn}, labelled {cal.labelled}; gate {gate}; passed {passed}"
     ]
+    if not cal.required:  # the preset's enforcement is off: say so, not only "gate not required"
+        lines.append("calibration not required in this mode (the preset does not enforce it)")
     for label, progress in screening.passes.items():
         if progress.queued is None:
             lines.append(f"pass {label}: not opened")

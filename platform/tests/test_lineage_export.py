@@ -144,15 +144,15 @@ def test_export_cap_checked_before_rendering(gp: Project, monkeypatch: pytest.Mo
     def boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("iter_edges must not be called")
 
-    monkeypatch.setattr(lineage, "iter_edges", boom)
-    assert export_edge_count(gp, GraphFilter()) > 1
-    with pytest.raises(FactoryValidationError) as refused:
-        graph_export(gp, "json", max_edges=1)
-    assert [(i.field, i.reason) for i in refused.value.issues] == [
-        ("query", "too large; use a query or the CLI")
-    ]
-    assert MCP_EXPORT_MAX_EDGES == 2000
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(lineage, "iter_edges", boom)
+        assert export_edge_count(gp, GraphFilter()) > 1
+        with pytest.raises(FactoryValidationError) as refused:
+            graph_export(gp, "json", max_edges=1)
+        assert [(i.field, i.reason) for i in refused.value.issues] == [
+            ("query", "too large; use a query or the CLI")
+        ]
+        assert MCP_EXPORT_MAX_EDGES == 2000
     assert graph_export(gp, "json", max_edges=MCP_EXPORT_MAX_EDGES).endswith("}\n")
 
 

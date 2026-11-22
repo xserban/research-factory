@@ -74,7 +74,9 @@ research-factory-old `stages/02-protocol.md` and `RIGOR-MODES.md`.
 9. Search. `search_run` takes no protocol argument; the current ready protocol is implicit. In
    `pilot` or `systematic` mode, a query the protocol does not plan needs `protocol_deviation`
    first. Then pass the returned `deviation_id` to `search_run`. In `exploratory` mode no
-   deviation is needed.
+   deviation is needed, and no ready protocol either: a project whose protocol is not ready, or
+   that has none, may search freely while it is exploratory (the platform checks the rigour mode,
+   not the protocol, for that; a pilot or systematic project needs a ready protocol first).
 
 ## Tool arguments
 

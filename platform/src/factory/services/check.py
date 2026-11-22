@@ -51,6 +51,7 @@ from factory.model.seed import SEED_ID_RE
 from factory.model.watch import CycleStatus
 from factory.model.work import ProvenanceMethod
 from factory.modules.contract import CheckHit
+from factory.services import count_sources
 from factory.services.access import governed
 from factory.services.agreement import Outcome, agreement_summary, final_outcomes, single_pass_works
 from factory.services.appraisal_report import appraisal_hits
@@ -556,6 +557,7 @@ def _run_rules(project: Project) -> list[_Hit]:
         _layer(project),
         _regions(project),
         _organisation(project),
+        _count_sources(project),
         gate_hits(project),
         audit_hits(project),
         _gate_policies(project),
@@ -1290,6 +1292,22 @@ def _briefings(project: Project) -> list[_Hit]:
             "briefing-stale",
             tuple(stale),
             f"{len(stale)} session(s) wrote events after a change their context pack predates",
+        )
+    ]
+
+
+def _count_sources(project: Project) -> list[_Hit]:
+    """R-87: a count source declared with an `exploratory` input (services/count_sources.py).
+    Static: reads the declaration, not the project, so it is independent of the world."""
+    declared = count_sources.exploratory_sources(count_sources.COUNT_SOURCES)
+    if not declared:
+        return []
+    return [
+        _Hit(
+            "count-source-exploratory",
+            tuple(s.name for s in declared),
+            f"{len(declared)} count source(s) declare an exploratory input: "
+            + ", ".join(s.name for s in declared),
         )
     ]
 

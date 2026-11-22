@@ -68,16 +68,16 @@ def test_model_drift_by_mode(
     assert _drift(project, RigorMode.PILOT) == []
 
     # systematic: the join is refused, with nothing written.
-    monkeypatch.setattr("factory.services.screening._rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
-    before = len(read_all(project.paths.events_dir, project.catalog))
-    with pytest.raises(FactoryValidationError) as exc:
-        join_pass(project, drifter, PassLabel.A)
-    assert [(i.field, i.reason) for i in exc.value.issues] == [("model", DRIFT_REASON)]
-    assert len(read_all(project.paths.events_dir, project.catalog)) == before
-    join_pass(project, agent, PassLabel.A)  # the calibrated model joins
+    with monkeypatch.context() as patch:
+        patch.setattr("factory.services.screening._rigor_mode", lambda _p: RigorMode.SYSTEMATIC)
+        before = len(read_all(project.paths.events_dir, project.catalog))
+        with pytest.raises(FactoryValidationError) as exc:
+            join_pass(project, drifter, PassLabel.A)
+        assert [(i.field, i.reason) for i in exc.value.issues] == [("model", DRIFT_REASON)]
+        assert len(read_all(project.paths.events_dir, project.catalog)) == before
+        join_pass(project, agent, PassLabel.A)  # the calibrated model joins
 
-    # pilot: the join is allowed and only `check` warns.
-    monkeypatch.undo()
+        # pilot: the join is allowed and only `check` warns.
     join_pass(project, drifter, PassLabel.B)
     assert _drift(project, RigorMode.PILOT) == ["warning"]
     assert _drift(project, RigorMode.SYSTEMATIC) == ["error"]

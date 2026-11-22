@@ -18,7 +18,7 @@ The map of a whole run. It records nothing: it says where to look and which skil
 | `stage` | What happens | Skill |
 | --- | --- | --- |
 | `scoping` | Question and protocol are not both recorded | `rf-develop`, then `rf-frame`, `rf-probe`, `rf-protocol` |
-| `protocol` | The protocol is not ready, or PRESS is not confirmed | `rf-protocol` |
+| `protocol` | The protocol is not ready, or PRESS is not confirmed. An exploratory project needs no ready protocol to search: skip this stage there | `rf-protocol` |
 | `search` | No complete search run | `rf-search-run` (`search_run`, `search_slice`, `report_search`, then `dedup_run`) |
 | `ta-screening` | Works wait at title and abstract | `rf-screen` |
 | `full-text` | Works wait for retrieval or a full-text outcome | `rf-acquire` (`library_adoptable`, `library_adopt`, `fulltext_fetch`, conversion by the researcher), then `rf-screen` |
@@ -66,7 +66,10 @@ and says nothing about what the project holds. Report any `notice` as it is.
 ## One session, one pass
 
 - One session holds one pass. A session that has joined a pass cannot use the read tools above,
-  and it receives what it needs in its batches.
+  and it receives what it needs in its batches. The refusal (`session`: "this session has joined
+  a pass and cannot use this tool") is not a fault: those tools show results across passes, and a
+  session that screens or extracts must not read them (R-20). Use a session that has not joined a
+  pass; do not work around it.
 - Pass A and pass B of screening, of extraction and of a miner each run in their own Claude Code
   session. Subagents share their parent's session, so they cannot serve as the other pass.
 - A hypothesis's critic and a draft's verifier are sessions of their own as well. A verifier reads

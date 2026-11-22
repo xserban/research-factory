@@ -204,9 +204,9 @@ def test_a_calibration_join_that_served_nothing_still_joins_nothing_else(
     _calibration_setup(project, agent, human)
     idle = miner_actor(S2, SONNET)
     # the join is written, but no task is claimed (nothing left to claim)
-    monkeypatch.setattr("factory.services.extraction.claim_next", lambda *a, **k: None)
-    assert mine_next(project, idle, VISION_NAME, 1, A, calibration=True).batch is None
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr("factory.services.extraction.claim_next", lambda *a, **k: None)
+        assert mine_next(project, idle, VISION_NAME, 1, A, calibration=True).batch is None
     assert _joins(project, S2) == [(VISION_NAME, "A")]
     declare_exploratory(project, OTHER, 1)
     with pytest.raises(FactoryValidationError) as raised:

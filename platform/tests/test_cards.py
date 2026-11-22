@@ -433,14 +433,14 @@ def test_idea_not_live_and_document_superseded(
     assert_properties(
         project, agent, card, [quote_item(cw, "pr:attention-kind", "linear", "s1.p1", P1)]
     )
-    monkeypatch.setattr(
-        cards_service,
-        "default_conversion",
-        lambda _p, _w: ConversionRef("doc_other", "cnv_01JZ9Q3K5M7N8P0R2S4T6V8WZZ"),
-    )
-    view = card_view(project, card, include_stale=True)
-    assert view is not None and view.assertions[0].stale_reasons == ("document-superseded",)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            cards_service,
+            "default_conversion",
+            lambda _p, _w: ConversionRef("doc_other", "cnv_01JZ9Q3K5M7N8P0R2S4T6V8WZZ"),
+        )
+        view = card_view(project, card, include_stale=True)
+        assert view is not None and view.assertions[0].stale_reasons == ("document-superseded",)
     decide_idea(project, other_session_human, cw.idea, LineageDecision.REJECT, "not an idea")
     view = card_view(project, card, include_stale=True)
     assert view is not None and view.assertions[0].stale_reasons == ("idea-not-live",)

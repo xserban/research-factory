@@ -95,10 +95,10 @@ def test_a_lock_taken_after_a_memoised_read_drops_the_memo(tmp_path: Path, monke
     with call_memo.entering():
         before = probe(project)
         # Another process writes: its `invalidate` never reaches this call's memo.
-        monkeypatch.setattr(context, "invalidate", lambda: None)
-        monkeypatch.setattr(project.index, "_on_write_lock", None)
-        create_tasks(project, project.human_actor(), [TaskSpec("k", {"i": 1})])
-        monkeypatch.undo()
+        with monkeypatch.context() as patch:
+            patch.setattr(context, "invalidate", lambda: None)
+            patch.setattr(project.index, "_on_write_lock", None)
+            create_tasks(project, project.human_actor(), [TaskSpec("k", {"i": 1})])
         assert project.index._on_write_lock is not None
         assert probe(project) == before  # the stale value, as the memo promises within a scope
         with project.index.exclusive():

@@ -154,12 +154,12 @@ def test_core_only_makes_the_core_works_the_sources(
     assert everything.sources
     one = everything.sources[0]
     _amend(project, agent, PLAN.model_copy(update={"forward_core_only": True}))
-    monkeypatch.setattr(snowball, "forward_core_sources", lambda _p, _included: [one])
-    narrowed = plan_round(project, Direction.FORWARD)
-    assert narrowed.sources == [one]
-    named = {i for q in narrowed.queries for i in q.text.removeprefix("cites:").split("|")}
-    assert len(named) == 1
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(snowball, "forward_core_sources", lambda _p, _included: [one])
+        narrowed = plan_round(project, Direction.FORWARD)
+        assert narrowed.sources == [one]
+        named = {i for q in narrowed.queries for i in q.text.removeprefix("cites:").split("|")}
+        assert len(named) == 1
     real = plan_round(project, Direction.FORWARD)
     seeds = set(seed_core_works(project))
     assert set(real.sources) | set(real.unqueryable) <= seeds | set(everything.sources)

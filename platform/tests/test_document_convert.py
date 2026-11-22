@@ -532,20 +532,20 @@ def test_store_error_is_failed_outcome_without_event_and_batch_continues(
             raise OSError("disk full")
         return real_put(data)
 
-    monkeypatch.setattr(project.library, "put", put_first_failing)
-    summary = run_convert(project, make_registry())
+    with monkeypatch.context() as patch:
+        patch.setattr(project.library, "put", put_first_failing)
+        summary = run_convert(project, make_registry())
 
-    assert _statuses(summary) == ["failed", "converted"]
-    assert summary.outcomes[0].reason == "store-error"
-    assert summary.outcomes[0].conversion_id is None
-    assert summary.failed == 1
-    assert summary.converted == 1
-    assert [e.payload["document_id"] for e in events_of_type(project, "document.converted")] == [
-        second
-    ]
-    assert events_of_type(project, "document.conversion_failed") == []
+        assert _statuses(summary) == ["failed", "converted"]
+        assert summary.outcomes[0].reason == "store-error"
+        assert summary.outcomes[0].conversion_id is None
+        assert summary.failed == 1
+        assert summary.converted == 1
+        assert [
+            e.payload["document_id"] for e in events_of_type(project, "document.converted")
+        ] == [second]
+        assert events_of_type(project, "document.conversion_failed") == []
 
-    monkeypatch.undo()
     rerun = run_convert(project, make_registry())
 
     assert _statuses(rerun) == ["converted", "unchanged"]
