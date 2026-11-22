@@ -122,3 +122,42 @@ def test_fetch_without_a_cap_takes_every_promoted_work(
     stubs = routes_for(arxiv_html=always(retrieved(Route.ARXIV_HTML, b"x")))
     summary = fetch_fulltext(project, routes=stubs, limit=20)
     assert len(summary.works) == len(_promoted(project))
+
+
+# --- finding I4: which caps the platform enforces ---------------------------------------------
+
+
+def test_every_cap_of_every_plan_is_marked_enforced_or_advisory() -> None:
+    from factory.services.tier_caps import cap_enforcement
+
+    for tier in (Tier.BRIEF, Tier.DEEP):
+        for stage in PLANS[tier].stages:
+            for key in stage.caps:
+                assert cap_enforcement(stage.stage_id, key) in ("enforced", "advisory")
+    assert cap_enforcement("screen", "max_screened") == "enforced"
+    assert cap_enforcement("acquire", "max_included") == "enforced"
+    assert cap_enforcement("gather", "sources") == "advisory"
+    assert cap_enforcement("gather", "snowball_rounds") == "advisory"
+
+
+def test_cap_lines_name_the_enforcement(settings: Settings, clock: FixedClock) -> None:
+    from factory.services.tier_caps import cap_lines
+
+    lines = cap_lines(Tier.BRIEF)
+    assert "cap gather sources: 2 (advisory)" in lines
+    assert "cap screen max_screened: 40 (enforced)" in lines
+    assert cap_lines(Tier.PILOT) == ()
+    project = _tier_project(settings, clock, "brief", "brief")
+    assert "cap gather sources: 2 (advisory)" in level_statement(project).lines
+
+
+def test_the_brief_gather_stage_has_no_snowball_tool_where_the_plan_allows_no_round(
+    settings: Settings, clock: FixedClock
+) -> None:
+    from factory.services.runner import stage_spec
+
+    snow = "mcp__factory__snowball_round"
+    brief = _tier_project(settings, clock, "brief", "brief")
+    assert snow not in stage_spec(brief, "gather").tools
+    deep = _tier_project(settings, clock, "deep", "deep")
+    assert snow in stage_spec(deep, "gather").tools  # the deep plan allows a round

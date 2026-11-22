@@ -134,3 +134,12 @@ def test_cli_note_is_read_only_and_prints_the_note(tmp_path: Path) -> None:
     as_json = runner.invoke(app, ["brief", "note", "sc", "--format", "json"], env=env)
     assert as_json.exit_code == 0, as_json.output
     assert '"project":"sc"' in as_json.output
+
+
+def test_the_note_marks_each_cap_enforced_or_advisory(
+    settings: Settings, clock: FixedClock
+) -> None:
+    project = init_project(settings, "demo", None, session=SESSION, clock=clock, tier="brief")
+    text = render_brief_note(brief_note(project))
+    assert "- cap gather: sources: 2 (advisory)" in text
+    assert "- cap screen: max_screened: 40 (enforced)" in text

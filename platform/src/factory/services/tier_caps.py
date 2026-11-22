@@ -14,7 +14,7 @@ Invariants:
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.levels import Tier
@@ -25,6 +25,31 @@ SCREEN_CAP: Final = ("screen", "max_screened")
 """(stage, cap key): the works the title/abstract queue may serve."""
 ACQUIRE_CAP: Final = ("acquire", "max_included")
 """(stage, cap key): the works full-text fetch may take on."""
+
+ENFORCED_CAPS: Final = frozenset({SCREEN_CAP, ACQUIRE_CAP})
+"""The (stage, key) caps the platform refuses past (the two above). Every other cap of a plan is
+advisory: the stage's skill tells the agent to stay within it and nothing checks (finding I4)."""
+
+CapEnforcement = Literal["enforced", "advisory"]
+
+
+def cap_enforcement(stage: str, key: str) -> CapEnforcement:
+    """`enforced` for a cap the platform refuses past, else `advisory`."""
+    return "enforced" if (stage, key) in ENFORCED_CAPS else "advisory"
+
+
+def cap_lines(tier: Tier | None) -> tuple[str, ...]:
+    """One line per stage cap of the tier's plan, each marked enforced or advisory; empty for a
+    tier with no caps (and for none)."""
+    if tier is None or tier not in CAPPED_TIERS:
+        return ()
+    return tuple(
+        f"cap {stage.stage_id} {key}: {value} ({cap_enforcement(stage.stage_id, key)})"
+        for stage in plan_for(tier).stages
+        if not stage.skipped
+        for key, value in stage.caps.items()
+    )
+
 
 CAPPED_TIERS: Final = frozenset({Tier.BRIEF, Tier.DEEP})
 

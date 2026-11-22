@@ -36,6 +36,7 @@ from factory.services.level_statement import level_statement, render_level_state
 from factory.services.prisma import PrismaFlow, prisma_flow
 from factory.services.project import project_levels
 from factory.services.question import current_question, goals
+from factory.services.tier_caps import cap_enforcement
 from factory.tiers import plan_for, report_label
 
 ACCEPTED = "accepted"
@@ -91,6 +92,9 @@ class NoteCap(StrictModel):
 
     label: str
     value: int
+    enforcement: str = "enforced"
+    """`enforced` when the platform refuses past it (the run limits and the two queue caps),
+    `advisory` when only the stage's skill tells the agent to stay within it (finding I4)."""
 
 
 class BriefNote(StrictModel):
@@ -194,7 +198,11 @@ def _caps(tier: Tier | None) -> tuple[NoteCap, ...]:
     for stage in plan.stages:
         if not stage.skipped:
             caps += [
-                NoteCap(label=f"{stage.label}: {name}", value=value)
+                NoteCap(
+                    label=f"{stage.label}: {name}",
+                    value=value,
+                    enforcement=cap_enforcement(stage.stage_id, name),
+                )
                 for name, value in stage.caps.items()
             ]
     return tuple(caps)
@@ -264,7 +272,7 @@ def render_brief_note(note: BriefNote) -> str:
     if flow.provisional:
         out.append("- provisional: screening is not complete")
     out += ["", "## Limits", ""]
-    out += [f"- cap {c.label}: {c.value}" for c in note.caps]
+    out += [f"- cap {c.label}: {c.value} ({c.enforcement})" for c in note.caps]
     out += [f"- {_flat(x)}" for x in note.limits]
     if not note.caps and not note.limits:
         out.append("- none stated")

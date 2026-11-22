@@ -25,6 +25,7 @@ from factory.model.levels import AutonomyLevel, Tier
 from factory.model.project import RigorMode
 from factory.services.context import Project
 from factory.services.project import project_levels
+from factory.services.tier_caps import cap_lines
 from factory.tiers.validation import validation_profile
 
 AGENT_LABELS = frozenset({"agent", "audited-agent"})
@@ -161,6 +162,7 @@ def level_statement(project: Project, *, skipped: SkippedSteps | None = None) ->
         lines.append("exploratory: the results are not a systematic review")
     if steps:
         lines.append("skipped compared with a systematic review: " + "; ".join(steps))
+    lines.extend(cap_lines(levels.tier))
     if closed:
         lines.append(
             "gates closed by an agent: "

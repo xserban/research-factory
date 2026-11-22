@@ -71,7 +71,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -740,11 +740,37 @@ def _require_calibrated_mine(project: Project, spec: StageSpec) -> None:
     )
 
 
+_ZERO_CAP_TOOLS: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
+    ("gather", "snowball_rounds"): (f"{_P}snowball_round",),
+}
+"""Tools a stage loses where the project's tier plan caps a count at 0 (finding I4): a brief
+allows no snowball round, so its gather run is not given the tool that would run one."""
+
+
+def _tier_filtered(project: Project, stage: str, spec: StageSpec) -> StageSpec:
+    from factory.services.project import project_levels
+    from factory.tiers.resolve import plan_for
+
+    tier = project_levels(project).tier
+    if tier is None:
+        return spec
+    dropped: set[str] = set()
+    for step in plan_for(tier).stages:
+        if step.stage_id != stage or step.skipped:
+            continue
+        for (name, key), tools in _ZERO_CAP_TOOLS.items():
+            if name == stage and step.caps.get(key) == 0:
+                dropped.update(tools)
+    if not dropped:
+        return spec
+    return replace(spec, tools=tuple(t for t in spec.tools if t not in dropped))
+
+
 def stage_spec(project: Project, stage: str) -> StageSpec:
     """The spec of `stage`; for `mine:<id>` the miner and the version the protocol lists."""
     spec = STAGES.get(stage)
     if spec is not None:
-        return spec
+        return _tier_filtered(project, stage, spec)
     if stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX):
         miner = stage[len(MINE_PREFIX) :]
         return replace(MINE_SPEC, miner=miner, miner_version=_mine_use(project, miner))
