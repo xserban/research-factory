@@ -951,3 +951,46 @@ def test_the_run_limit_of_a_tier_covers_its_plan_at_each_level(
     # one extra run of slack per queue step for the repeated run of a long queue is not counted
     # here: the number is the plan alone, so that no tier pauses for budget before `write`
     assert limits.max_runs >= needed, f"{tier.value} at {level}: {limits.max_runs} < {needed}"
+
+
+# ------------------------------------------ two advances race for one step: one run is started
+
+
+def test_a_second_advance_during_the_start_does_not_start_a_second_run(
+    project: Project, fake: FakeRunner
+) -> None:
+    """The window between the runner's start and the `conductor.step_started` write: a second
+    caller (here re-entrant, in life another process) decides to start the same step. The runner
+    refuses it, as the real one does for an open run of the project, so one run exists."""
+    from factory.errors import ValidationIssue
+
+    conductor.begin_conductor(project, plan("frame"))
+    started: list[str] = []
+    nested: list[conductor.ConductorStatus] = []
+
+    def start(p: Project, stage: str, *, unit_cap: int) -> str:
+        if started:  # the real runner refuses a start while a run of the project is open
+            raise FactoryValidationError([ValidationIssue("run", "a run of this project is open")])
+        run_id = fake.start_run(p, stage, unit_cap=unit_cap)
+        started.append(run_id)
+        fake.open.add(run_id)
+        nested.append(
+            conductor.advance(p, start_run=start, pending=_idle, gate_closed=_open,
+                              escalate=lambda *_a: None)
+        )  # fmt: skip
+        return run_id
+
+    outer = conductor.advance(
+        project, start_run=start, pending=_idle, gate_closed=_open, escalate=lambda *_a: None
+    )
+    assert len(started) == 1 and fake.stages == ["frame"]
+    assert nested[0].state == "paused" and nested[0].reason == "refused"
+    steps = [
+        e for e in _events(project, "conductor.step_started") if e.payload["role"] != "automatic"
+    ]
+    assert len(steps) == 1
+    assert outer.state == "running" and outer.run_id == started[0]
+    again = conductor.advance(
+        project, start_run=start, pending=_idle, gate_closed=_open, escalate=lambda *_a: None
+    )
+    assert again.state == "running" and len(started) == 1  # the open run is waited for
