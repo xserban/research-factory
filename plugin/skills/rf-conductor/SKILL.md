@@ -29,7 +29,13 @@ Check the proposer's step against the records, as someone who did not write them
 
 Check a sample, as the third session.
 
-1. Call `audit_sample` for the step's gate: the platform draws the sample, you never choose it.
-2. Read each sampled record against its source with `document_read` and `ledger_view`.
-3. End with a short report: per sampled item, whether it holds, with the passage quoted, and any
+1. Call `gate_audit_pending`: the conductor has drawn the platform's own sample before your run
+   (you never choose it); it lists the sampled acts by audit id, gate and act event id. Where it
+   is empty, say so and stop. (`audit_sample` is the screening audit, drawn for a human to label;
+   do not use it for this.)
+2. Read each sampled act against its source with `document_read` and `ledger_view`.
+3. Label each one with `gate_audit_label` (`correct` true or false, a short note quoting the
+   passage). The platform refuses a label on the act your own session closed. Your labels are
+   recorded apart from a human's: they never enter the overturn rate.
+4. End with a short report: per sampled item, whether it holds, with the passage quoted, and any
    refusal verbatim. Count nothing yourself: the counts are computed.

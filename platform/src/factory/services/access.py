@@ -105,6 +105,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     # MCP tools that only read.
     "project_status": Permission.PROJECT_READ,
     "gate_status": Permission.PROJECT_READ,
+    "gate_audit_pending": Permission.PROJECT_READ,
     "watch_status": Permission.PROJECT_READ,
     "feed_list": Permission.PROJECT_READ,
     "feed_status": Permission.PROJECT_READ,
@@ -223,6 +224,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "taxonomy_propose": Permission.WORK_RUN,
     "contribution_next": Permission.WORK_RUN,
     "contribution_record": Permission.WORK_RUN,
+    "gate_audit_label": Permission.WORK_RUN,
     "references_extract": Permission.WORK_RUN,
     "reference_layer_next": Permission.WORK_RUN,
     "reference_layer_record": Permission.WORK_RUN,

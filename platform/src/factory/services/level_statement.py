@@ -45,6 +45,7 @@ class AgentClosed(StrictModel):
     overturned: int = 0
     overturn_rate: float | None = None
     state: Literal["ok", "watch", "pause"] = "ok"
+    reason: str | None = None
 
 
 class LevelStatement(StrictModel):
@@ -80,6 +81,7 @@ def _agent_closed(project: Project) -> tuple[AgentClosed, ...]:
                 overturned=t.overturned,
                 overturn_rate=t.overturn_rate,
                 state=t.state,
+                reason=getattr(t, "reason", None),
             )
             for t in module.trust_ledger(project)
             if t.closed_by_agent > 0

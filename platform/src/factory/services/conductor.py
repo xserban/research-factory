@@ -321,6 +321,25 @@ def _stage_of(stage_id: str, role: ConductorRole) -> str:
     return STEP_STAGE[stage_id]
 
 
+def draw_platform_audits(project: Project, stage_id: str) -> list[str]:
+    """The platform's audit draw (finding I2, contract C4): for each `agent_audit` gate of the
+    step with agent acts, the conductor (the system actor) draws the sample through
+    `gates.gate_audit_sample_platform`. Returns the gates sampled. A gate with nothing to audit or
+    an unchanged population is skipped (the draw refuses it; nothing is written)."""
+    from factory.services.gates import gate_audit_sample_platform
+
+    drawn: list[str] = []
+    for gate_id, kind in _policy_kinds(project, stage_id).items():
+        if kind is not PolicyKind.AGENT_AUDIT:
+            continue
+        try:
+            gate_audit_sample_platform(project, gate_id)
+        except FactoryValidationError:
+            continue
+        drawn.append(gate_id)
+    return drawn
+
+
 def _trust_pauses(project: Project) -> list[str]:
     try:
         module: Any = importlib.import_module("factory.services.gate_trust")
@@ -750,6 +769,8 @@ def advance(
         assert decision.step is not None and decision.stage_id is not None and decision.role
         stage = _stage_of(decision.stage_id, decision.role)
         cap = _unit_cap(meta)
+        if decision.role == "auditor":
+            draw_platform_audits(project, decision.stage_id)
         token = _STARTING.set((pend, closer))
         try:
             run_id = start(project, stage, unit_cap=cap)

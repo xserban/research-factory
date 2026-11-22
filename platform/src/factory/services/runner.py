@@ -572,7 +572,12 @@ STAGES.update(
             model="claude-sonnet-5-5",
             skill="rf-conductor",
             role="auditor",
-            tools=(*_CONDUCT_READ, f"{_P}audit_sample"),
+            tools=(
+                *_CONDUCT_READ,
+                f"{_P}audit_sample",
+                f"{_P}gate_audit_pending",
+                f"{_P}gate_audit_label",
+            ),
             kinds=(),
             unit="step audited",
             fixed_cap=1,

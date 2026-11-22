@@ -9,7 +9,12 @@ Invariants:
 - Only agent acts count (`gate_acts`, not superseded); a human act is never audited or counted.
 - An act sampled by several audits counts once, with its label from the latest audit that
   labelled it.
-- `overturn_rate` is None until an act is audited; the state is then `ok`.
+- `overturn_rate` is None until an act is audited; the state is then `ok`, with one exception.
+- Semantics of "unaudited" (finding I2): an agent-closed gate whose policy is `agent_audit`, with
+  no label of any kind on its sample (a human label or an agent label), is `watch` with a reason
+  (`no audit drawn`, or `audit drawn, nothing labelled yet`), never `ok`: the safeguard that
+  licenses the agent's closing has not run. `watch` does not pause the conductor; only the human
+  overturn rate pauses (`pause`). A gate under any other policy keeps `ok` at zero audits.
 - A gate whose acts no audit mechanism records (no `agent_audit` policy ever sampled it) shows
   `audited = 0`: its overturns are unmeasured, not zero (a gap, see the lane report).
 """
@@ -21,7 +26,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
-from factory.modules.contract import GateKind
+from factory.modules.contract import GateKind, PolicyKind
 from factory.services.context import Project
 from factory.services.gates import gate_acts
 
@@ -46,12 +51,16 @@ class GateTrust:
     agent_audited: int = 0
     agent_overturned: int = 0
     """Acts an agent session labelled (the platform-drawn sample); never part of the rate or
-    the state, which follow human labels only."""
+    the rate-based state, which follow human labels only (they do lift the no-audit `watch`)."""
+    reason: str | None = None
+    """Why the state is `watch` when it is not the rate: the audit has not run."""
 
 
-def trust_state(audited: int, overturned: int) -> TrustState:
+def trust_state(audited: int, overturned: int, *, unaudited: bool = False) -> TrustState:
+    """The state from the human labels. `unaudited`: an agent_audit gate with agent acts and no
+    label of any kind; with no human label yet it is `watch`, not `ok`."""
     if audited == 0:
-        return "ok"
+        return "watch" if unaudited else "ok"
     rate = overturned / audited
     if rate > PAUSE_RATE:
         return "pause"
@@ -103,17 +112,61 @@ def gate_trust(project: Project, gate_id: str) -> GateTrust:
         if a.actor_kind == "agent" and not a.superseded
     }
     labels = {act: v for act, v in labels_of(project, gate_id).items() if act in agent}
+    by_agent = {a: v for a, v in agent_labels(project, gate_id).items() if a in agent}
     audited = sum(1 for v in labels.values() if v is not None)
     overturned = sum(1 for v in labels.values() if v is False)
+    reason: str | None = None
+    if agent and audited == 0 and not by_agent and _needs_audit(project, gate_id):
+        reason = "audit drawn, nothing labelled yet" if labels else "no audit drawn"
     return GateTrust(
         gate_id,
         len(agent),
         audited,
         overturned,
         None if audited == 0 else overturned / audited,
-        trust_state(audited, overturned),
-        sum(1 for a in agent_labels(project, gate_id) if a in agent),
-        sum(1 for a, v in agent_labels(project, gate_id).items() if a in agent and not v),
+        trust_state(audited, overturned, unaudited=reason is not None),
+        len(by_agent),
+        sum(1 for v in by_agent.values() if not v),
+        reason,
+    )
+
+
+def _needs_audit(project: Project, gate_id: str) -> bool:
+    from factory.services.gates import effective_policy
+
+    return effective_policy(project, gate_id).kind is PolicyKind.AGENT_AUDIT
+
+
+@dataclass(frozen=True)
+class PendingAudit:
+    """One act of a platform-drawn sample that no label (human or agent) covers yet."""
+
+    audit_id: str
+    gate_id: str
+    act_event_id: str
+    act_type: str
+
+
+def pending_audit_items(project: Project) -> tuple[PendingAudit, ...]:
+    """The acts of platform-drawn (`system`) audit samples with no label yet, for the auditor
+    role to label (`gate_audit_label`). Read-only; ids and event types only, no act content."""
+    project.index.sync()
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT a.audit_id, a.gate_id, i.act_event_id, act.type, i.correct "
+                "FROM gate_audit_items i JOIN gate_audits a ON a.audit_id = i.audit_id "
+                "JOIN events d ON d.id = a.event_id "
+                "LEFT JOIN events act ON act.id = i.act_event_id "
+                "WHERE d.actor_kind = 'system' ORDER BY a.event_id, i.act_event_id"
+            )
+        ).all()
+    gates = {str(r[1]) for r in rows}
+    labelled = {g: set(agent_labels(project, g)) for g in gates}
+    return tuple(
+        PendingAudit(str(a), str(g), str(act), str(kind or ""))
+        for a, g, act, kind, correct in rows
+        if correct is None and str(act) not in labelled[str(g)]
     )
 
 

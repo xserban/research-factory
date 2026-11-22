@@ -823,3 +823,24 @@ def test_a_gate_closes_only_by_its_own_act_event_of_a_human() -> None:
     assert not conductor.gate_act_closes("no.such_gate", "no.such_gate", "human")
     assert conductor.gate_act_closes("protocol.ready", "protocol.recorded", "human")
     assert not conductor.gate_act_closes("protocol.ready", "protocol.press_reviewed", "human")
+
+
+def test_the_conductor_draws_the_platform_audit_before_the_auditor_starts(
+    settings: Settings, clock: FixedClock, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding I2: where an agent may close a gate of the step, the system actor draws the
+    platform audit sample once the proposer's work is done, before the auditor role starts."""
+    import factory.services.gates as gates
+
+    drawn: list[tuple[str, int]] = []
+    monkeypatch.setattr(gates, "effective_policy", policy(PolicyKind.AGENT_AUDIT))
+    monkeypatch.setattr(
+        conductor,
+        "draw_platform_audits",
+        lambda _p, stage: drawn.append((stage, len(fake.stages))) or [],
+    )
+    project = make(settings, clock, "autonomous")
+    conductor.begin_conductor(project, plan("write"))
+    assert drive(project, fake).state == "finished"
+    assert drawn == [("write", 2)]  # after proposer and verifier, before the auditor run
+    assert fake.stages == ["write", "conduct-verify", "conduct-audit"]

@@ -187,7 +187,7 @@ def test_item_appears_and_a_human_decides_it(
     _acts(monkeypatch, [A1])
     drawn = gates.gate_audit_sample_platform(project, LINK)
     [item] = deferred_review.deferred_items(project)
-    assert (item.gate_id, item.act_event_id, item.trust_state) == (LINK, A1, "ok")
+    assert (item.gate_id, item.act_event_id, item.trust_state) == (LINK, A1, "watch")
     [queued] = [i for i in human_queue(project).items if i.gate is Gate.DEFERRED_REVIEW]
     assert queued.count == 1
     deferred_review.decide_deferred(
@@ -221,3 +221,49 @@ def test_the_cli_acts_have_access_rows() -> None:
 
     assert TOOL_PERMISSIONS["cli:review deferred decide"] is Permission.HUMAN_LABEL
     assert TOOL_PERMISSIONS["cli:review deferred list"] is Permission.PROJECT_READ
+
+
+# --- finding I2: the agent audit is wired ------------------------------------------------
+
+
+def test_agent_audit_gate_with_no_audit_drawn_is_not_ok(
+    project: Project, agent_other: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Agent acts at an agent_audit gate with no sample drawn are `watch` (reason named), not
+    `ok`; a drawn but unlabelled sample is `watch` too; any label (agent or human) lifts it."""
+    _level(monkeypatch, AutonomyLevel.SUPERVISED)
+    _acts(monkeypatch, [A1, A2])
+    [row] = gate_trust.trust_ledger(project)
+    assert row.state == "watch" and row.reason == "no audit drawn"
+    drawn = gates.gate_audit_sample_platform(project, LINK)
+    [row] = gate_trust.trust_ledger(project)
+    assert row.state == "watch" and row.reason == "audit drawn, nothing labelled yet"
+    first = drawn.act_event_ids[0]
+    gates.gate_audit_record_agent(project, agent_other, drawn.audit_id, first, True, None)
+    [row] = gate_trust.trust_ledger(project)
+    assert row.state == "ok" and row.reason is None
+
+
+def test_pending_audit_items_lists_platform_drawn_unlabelled_acts(
+    project: Project, agent_other: Actor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _level(monkeypatch, AutonomyLevel.SUPERVISED)
+    _acts(monkeypatch, [A1, A2])
+    assert gate_trust.pending_audit_items(project) == ()
+    drawn = gates.gate_audit_sample_platform(project, LINK)
+    pending = gate_trust.pending_audit_items(project)
+    assert {i.act_event_id for i in pending} == set(drawn.act_event_ids)
+    assert {i.audit_id for i in pending} == {drawn.audit_id}
+    gates.gate_audit_record_agent(
+        project, agent_other, drawn.audit_id, drawn.act_event_ids[0], True, None
+    )
+    left = gate_trust.pending_audit_items(project)
+    assert [i.act_event_id for i in left] == [drawn.act_event_ids[1]]
+
+
+def test_the_audit_stage_alone_may_label() -> None:
+    from factory.services.runner import STAGES
+
+    for stage, spec in STAGES.items():
+        has = "mcp__factory__gate_audit_label" in spec.tools
+        assert has == (stage == "conduct-audit"), stage
