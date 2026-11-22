@@ -114,7 +114,11 @@ STAGE_NOT_ALLOWED: dict[str, dict[str, str]] = {
         "screen_check_label": "the screening check is the researcher's calibration act",
         "screen_check_report": "the screening check is the researcher's calibration act",
     },
-    "conduct-verify": {"audit_sample": "the audit draw is the auditor's own run"},
+    "conduct-verify": {
+        "audit_sample": "the audit draw is the auditor's own run",
+        "gate_audit_label": "the auditor labels sampled agent closures; the verifier is read-only",
+        "gate_audit_pending": "the auditor reads the sample it must label; the verifier does not",
+    },
 }
 """Per stage key (a skill shared by two stages), the tools that stage does not allow."""
 
