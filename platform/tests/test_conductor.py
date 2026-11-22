@@ -810,3 +810,76 @@ def test_every_runner_stage_key_is_accepted_by_the_stage_key_pattern() -> None:
     assert bad == []
     bad_conduct = sorted(k for k in runner.CONDUCT_STAGES if not re.match(STAGE_KEY_RE, k))
     assert bad_conduct == []
+
+
+# ------------------------------------------- a queue step runs again until its queue is empty
+
+
+class Queue:
+    """A work queue of `n` units that each fake run works off `per_run` of (the unit cap of the
+    run): the `pending` seam the conductor reads and the effect of the fake runner."""
+
+    def __init__(self, fake: FakeRunner, n: int, per_run: int | None = None) -> None:
+        self.left = n
+        self.per_run = per_run
+        self.runs = 0
+        self.fake = fake
+
+    def pending(self, _p: Project, stage: str) -> dict[str, int]:
+        return {stage: self.left if stage in ("screen", "screen-ft", "extract") else 0}
+
+    def start_run(self, project: Project, stage: str, *, unit_cap: int) -> str:
+        run_id = self.fake.start_run(project, stage, unit_cap=unit_cap)
+        if stage == "screen":
+            self.runs += 1
+            self.left = max(0, self.left - (unit_cap if self.per_run is None else self.per_run))
+        return run_id
+
+
+def _run_screen(project: Project, fake: FakeRunner, queue: Queue, limit: int = 30) -> Any:
+    status = None
+    for _ in range(limit):
+        status = conductor.advance(
+            project, start_run=queue.start_run, pending=queue.pending, gate_closed=_open,
+            escalate=lambda *_a: None,
+        )  # fmt: skip
+        if status.state in ("finished", "paused", "waiting"):
+            break
+    return status
+
+
+def test_a_queue_step_runs_again_while_units_are_pending_and_progress_is_made(
+    project: Project, fake: FakeRunner
+) -> None:
+    conductor.begin_conductor(project, plan("screen"))  # unit cap 30 per run
+    queue = Queue(fake, 70)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished"
+    assert fake.stages == ["screen", "screen", "screen"]  # 70 -> 40 -> 10 -> 0
+    assert queue.left == 0
+
+
+def test_a_queue_step_stops_when_a_run_made_no_progress(project: Project, fake: FakeRunner) -> None:
+    conductor.begin_conductor(project, plan("screen"))
+    queue = Queue(fake, 70, per_run=0)  # e.g. a stopping rule: units remain, nothing is served
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished" and fake.stages == ["screen"]
+
+
+def test_a_queue_step_stops_at_the_tier_cap(
+    project: Project, fake: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conductor.begin_conductor(project, plan("screen"))
+    queue = Queue(fake, 500)
+    monkeypatch.setattr(conductor, "queue_cap_reached", lambda _p, _s: queue.runs >= 2)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "finished" and fake.stages == ["screen", "screen"]
+    assert queue.left == 440  # the cap, not the queue, ended the step
+
+
+def test_a_queue_step_stops_at_the_run_budget(project: Project, fake: FakeRunner) -> None:
+    conductor.begin_conductor(project, plan("screen", limits=FLimits(max_runs=2)))
+    queue = Queue(fake, 500)
+    status = _run_screen(project, fake, queue)
+    assert status.state == "paused" and status.reason == "budget"
+    assert fake.stages == ["screen", "screen"]

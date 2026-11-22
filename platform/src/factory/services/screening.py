@@ -569,6 +569,13 @@ def _require_under_tier_cap(project: Project, actor: Actor, stage: ScreeningStag
         raise cap_refusal(SCREEN_CAP, cap, "the works served to title and abstract screening")
 
 
+def screen_cap_reached(project: Project) -> bool:
+    """Whether a `brief` or `deep` project has been served the tier's `screen` cap of works at title
+    and abstract (False for a project without a cap). Read-only."""
+    cap = tier_cap(project, SCREEN_CAP)
+    return cap is not None and len(_served_works(project, PassLabel.A, TA)) >= cap
+
+
 def _stop_reason(stopped: StopStatus) -> str:
     if stopped.below_score is not None:
         return (

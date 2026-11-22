@@ -73,6 +73,9 @@ class ConductorStepStarted(StrictModel):
     run_id: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
     """None for the `automatic` step, which starts no run."""
     attempt: int = Field(ge=1)
+    pending: int | None = Field(default=None, ge=0)
+    """The units pending in the step's work queue when a queue step's proposer run started (counted
+    by the platform); None for any other run, and in logs written before the field."""
 
 
 class ConductorStepFinished(StrictModel):
@@ -85,6 +88,9 @@ class ConductorStepFinished(StrictModel):
     role: ConductorRole
     run_id: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
     outcome: StepOutcome
+    pending: int | None = Field(default=None, ge=0)
+    """The units still pending in the work queue when a queue step's proposer run ended (counted by
+    the platform): with `ConductorStepStarted.pending` it tells whether the run made progress."""
 
 
 class ConductorPaused(StrictModel):

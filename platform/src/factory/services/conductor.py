@@ -268,6 +268,55 @@ def _closed_roles(trail: _Trail) -> set[tuple[int, str]]:
     return {(f.step, f.role) for f in done if f.outcome == "complete"}
 
 
+def queue_cap_reached(project: Project, step: str) -> bool:
+    """Whether the tier's cap on the works of a queue step is reached (the platform enforces only
+    the title/abstract `screen` cap: `screening.screen_cap_reached`)."""
+    if stage_of_step(step) != "screen" or step == "screen:full-text":
+        return False
+    from factory.services.screening import screen_cap_reached
+
+    return screen_cap_reached(project)
+
+
+def _more_to_run(project: Project, trail: _Trail, index: int, step: str) -> bool:
+    """Whether a queue step whose proposer run is complete must run again: the proposer's latest
+    run is the step's last outcome, it left units pending, it worked some off (fewer pending than
+    when it started) and the tier cap is not reached. A run's unit cap is below the tier cap, so one
+    run need not empty the queue; a run that made no progress (a stopping rule) does not repeat."""
+    if step not in _QUEUE_UNITS:
+        return False
+    finished = [
+        ConductorStepFinished.model_validate(e.payload)
+        for e in trail.payloads("step_finished")
+        if e.payload["step"] == index
+    ]
+    if not finished:
+        return False
+    last = finished[-1]
+    if last.role != "proposer" or last.outcome != "complete" or last.run_id is None:
+        return False
+    started = next(
+        (
+            ConductorStepStarted.model_validate(e.payload)
+            for e in reversed(trail.payloads("step_started"))
+            if e.payload.get("run_id") == last.run_id
+        ),
+        None,
+    )
+    if started is None or started.pending is None or last.pending is None:
+        return False
+    return 0 < last.pending < started.pending and not queue_cap_reached(project, step)
+
+
+def _effective_closed(project: Project, trail: _Trail) -> set[tuple[int, str]]:
+    """`_closed_roles`, minus the proposer of a queue step that must run again (`_more_to_run`)."""
+    closed = _closed_roles(trail)
+    for index, step in enumerate(trail.meta.steps):
+        if (index, "proposer") in closed and _more_to_run(project, trail, index, step):
+            closed.discard((index, "proposer"))
+    return closed
+
+
 def _open_run(trail: _Trail) -> ConductorStepStarted | None:
     finished = {e.payload.get("run_id") for e in trail.payloads("step_finished")}
     for event in reversed(trail.payloads("step_started")):
@@ -397,7 +446,7 @@ def _decide(
         return _Decision(
             "running", open_run.step, open_run.stage_id, open_run.role, run_id=open_run.run_id
         )
-    closed = _closed_roles(trail)
+    closed = _effective_closed(project, trail)
     position: tuple[int, str, ConductorRole] | None = None
     waiting_gate: str | None = None
     for index, stage_id in enumerate(meta.steps):
@@ -436,7 +485,7 @@ def _decide(
         for e in trail.payloads("step_finished")
         if e.payload["step"] == index and e.payload["role"] == role
     ]
-    if last and not retry:
+    if last and last[-1].payload["outcome"] != "complete" and not retry:
         outcome = last[-1].payload["outcome"]
         return _Decision(
             "pause",
@@ -459,10 +508,14 @@ def _decide(
     if (
         role == "proposer"
         and stage_id in _QUEUE_UNITS
-        and sum(pending(project, _PENDING_STAGE.get(stage_id, stage_id)).values()) == 0
+        and _queue_pending(pending, project, stage_id) == 0
     ):
         return _Decision("complete-empty", index, stage_id, role)
     return _Decision("start", index, stage_id, role)
+
+
+def _queue_pending(pending: PendingUnits, project: Project, step: str) -> int:
+    return sum(pending(project, _PENDING_STAGE.get(step, step)).values())
 
 
 # ----------------------------------------------------------------------- the runner's pending
@@ -652,6 +705,7 @@ def advance(
         assert open_run.run_id is not None
         outcome = runner.run_outcome(project, open_run.run_id)
         if outcome is not None:
+            queue = open_run.role == "proposer" and open_run.stage_id in _QUEUE_UNITS
             _write(
                 project,
                 "step_finished",
@@ -662,6 +716,7 @@ def advance(
                     role=open_run.role,
                     run_id=open_run.run_id,
                     outcome=cast(StepOutcome, outcome),
+                    pending=_queue_pending(pend, project, open_run.stage_id) if queue else None,
                 ),
             )
             trail = _load(project) or trail
@@ -739,6 +794,11 @@ def advance(
         assert decision.step is not None and decision.stage_id is not None and decision.role
         stage = _stage_of(decision.stage_id, decision.role)
         cap = _unit_cap(meta)
+        queue_before = (
+            _queue_pending(pend, project, decision.stage_id)
+            if decision.role == "proposer" and decision.stage_id in _QUEUE_UNITS
+            else None
+        )
         token = _STARTING.set((pend, closer))
         try:
             run_id = start(project, stage, unit_cap=cap)
@@ -763,6 +823,7 @@ def advance(
                     role=decision.role,
                     run_id=run_id,
                     attempt=attempts,
+                    pending=queue_before,
                 ),
             )
         finally:
@@ -837,7 +898,7 @@ def conductor_status(
                 "refused",
                 detail=refusal.detail,
             )
-    closed = _closed_roles(trail)
+    closed = _effective_closed(project, trail)
     done_steps = sum(
         1
         for i in range(len(meta.steps))
