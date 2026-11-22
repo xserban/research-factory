@@ -189,3 +189,28 @@ def with_level_statement(project: Project, view: JsonValue) -> JsonValue:
     if not isinstance(view, dict):
         return view
     return {**view, LEVEL_STATEMENT_KEY: level_statement(project).model_dump(mode="json")}
+
+
+def text_with_statement(
+    project: Project, text: str, *, style: Literal["text", "xml", "csv"] = "text"
+) -> str:
+    """A report's text with the statement after it (the researcher's CLI views, finding I1). `xml`
+    wraps it as a trailing comment (an SVG stays well-formed); `csv` prefixes lines with `# `."""
+    lines = level_statement(project).lines
+    body = text.rstrip("\n")
+    if style == "xml":
+        safe = "\n".join(line.replace("--", "- -") for line in lines)
+        return f"{body}\n<!--\n{safe}\n-->\n"
+    if style == "csv":
+        return body + "\n" + "\n".join(f"# {line}" for line in lines) + "\n"
+    return body + "\n\n---\n" + "\n".join(lines) + "\n"
+
+
+def json_text_with_statement(project: Project, text: str) -> str:
+    """A report's JSON text with the statement as one more field (an object only)."""
+    import json
+
+    loaded = json.loads(text)
+    if not isinstance(loaded, dict):
+        return text
+    return json.dumps(with_level_statement(project, loaded))

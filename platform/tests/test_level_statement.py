@@ -1,6 +1,7 @@
 """The level statement and its presence in every report (plan tiers-and-autonomy, C7)."""
 
 import inspect
+import json
 import re
 from pathlib import Path
 
@@ -103,3 +104,44 @@ def test_every_report_tool_calls_a_statement_view() -> None:
     for tool in tools:
         body = source.split(f"def {tool}(", 1)[1].split("@server.tool()", 1)[0]
         assert re.search(r"agent_view_service\.\w+_view\(", body), tool
+
+
+def test_every_cli_report_command_carries_the_statement() -> None:
+    """The researcher's `factory report *` commands (the `_full_view` branches included) reach
+    their output through the shared statement helpers; a new command without them fails here
+    (finding I1)."""
+    source = (Path(agent_view.__file__).parents[1] / "cli" / "main.py").read_text()
+    commands = re.findall(r'@report_app\.command\("([\w-]+)"\)\ndef (\w+)\(', source)
+    assert {c for c, _ in commands} == {
+        "prisma",
+        "search",
+        "flow",
+        "flow-works",
+        "flow-trail",
+        "flow-skipped",
+        "methods",
+        "discovery",
+        "evidence",
+    }
+    for command, fn in commands:
+        body = source.split(f"def {fn}(", 1)[1].split("\n@", 1)[0]
+        assert "level_statement_service." in body or "_view(project" in body, command
+    for fn in (
+        agent_view.flow_works_view,
+        agent_view.flow_trail_view,
+        agent_view.flow_skipped_view,
+    ):
+        assert "with_level_statement" in inspect.getsource(fn), fn.__name__
+
+
+def test_text_and_json_helpers_append_the_statement(settings: Settings, clock: FixedClock) -> None:
+    project = init_project(settings, "demo", None, session=SESSION, clock=clock, tier="brief")
+    text = level_statement.text_with_statement(project, "body\n")
+    assert text.startswith("body\n\n---\ntier: brief")
+    assert level_statement.text_with_statement(project, "<svg/>", style="xml").endswith("-->\n")
+    csv = level_statement.text_with_statement(project, "a,b\n1,2\n", style="csv")
+    assert csv.splitlines()[0] == "a,b"
+    assert all(line.startswith("# ") for line in csv.splitlines()[2:])
+    loaded = json.loads(level_statement.json_text_with_statement(project, '{"a": 1}'))
+    assert loaded["a"] == 1
+    assert loaded[LEVEL_STATEMENT_KEY]["tier"] == "brief"

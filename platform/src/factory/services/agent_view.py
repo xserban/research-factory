@@ -220,7 +220,9 @@ def flow_works_view(
     }
     if not page.items and page.next_cursor is None:
         data["notice"] = "no work matches these filters"
-    return without_record_keys(withheld(project, data, include_work_ids=False))
+    return level_statement_service.with_level_statement(
+        project, without_record_keys(withheld(project, data, include_work_ids=False))
+    )
 
 
 def flow_trail_view(project: Project, work_id: str) -> JsonValue:
@@ -231,7 +233,9 @@ def flow_trail_view(project: Project, work_id: str) -> JsonValue:
         "work_id": work_id,
         "steps": [step.model_dump(mode="json") for step in steps],
     }
-    return without_record_keys(withheld(project, data, include_work_ids=False))
+    return level_statement_service.with_level_statement(
+        project, without_record_keys(withheld(project, data, include_work_ids=False))
+    )
 
 
 def flow_skipped_view(project: Project) -> JsonValue:
@@ -244,7 +248,9 @@ def flow_skipped_view(project: Project) -> JsonValue:
         ],
         "run_gaps": [gap.model_dump(mode="json") for gap in flow_skipped_service.run_gaps(project)],
     }
-    return without_record_keys(withheld(project, data, include_work_ids=False))
+    return level_statement_service.with_level_statement(
+        project, without_record_keys(withheld(project, data, include_work_ids=False))
+    )
 
 
 def search_view(project: Project) -> JsonValue:
