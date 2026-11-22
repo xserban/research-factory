@@ -456,7 +456,7 @@ STAGES.update(
         ),
         "write": StageSpec(
             model="claude-sonnet-5-5",
-            skill="rf-write",  # `rf-brief` (lane L2) for a brief once it is merged
+            skill="rf-write",
             role="proposer",
             tools=(
                 f"{_P}project_status",

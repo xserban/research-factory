@@ -7,21 +7,21 @@ Invariants:
   restructures them. The page judges nothing.
 - Each section is guarded: one that cannot be read becomes `{"error": ...}` and the others
   still render.
-- The conductor module (lane L4) is imported when it exists; before that the section is
-  `{"present": False}` and says so. `build(..., conductor=...)` lets a test inject a reader.
+- The conductor status is read directly (`conductor.conductor_status`); `levels_payload(...,
+  conductor=...)` lets a test inject a reader.
 - Deciding a deferred act stays a command-line act: each queue row carries the command, the page
   never writes.
 """
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 from factory.model.levels import AutonomyLevel
 from factory.modules.contract import GateKind, GatePolicy, PolicyKind
 from factory.modules.presets import preset
+from factory.services.conductor import conductor_status
 from factory.services.context import Project
 from factory.services.project import project_levels
 from factory.tiers.resolve import plan_for, skipped_steps
@@ -239,23 +239,13 @@ def _deferred(project: Project) -> dict[str, Any]:
     }
 
 
-def _conductor_reader() -> ConductorReader | None:
-    try:
-        module: Any = importlib.import_module("factory.services.conductor")
-    except ModuleNotFoundError:
-        return None
-
-    def read(project: Project) -> dict[str, Any]:
-        status: dict[str, Any] = module.conductor_status(project).model_dump(mode="json")
-        return status
-
-    return read
+def _read_conductor(project: Project) -> dict[str, Any]:
+    status: dict[str, Any] = conductor_status(project).model_dump(mode="json")
+    return status
 
 
 def _conductor(project: Project, reader: ConductorReader | None) -> dict[str, Any]:
-    use = reader if reader is not None else _conductor_reader()
-    if use is None:
-        return {"present": False, "status": None}
+    use = reader if reader is not None else _read_conductor
     return {"present": True, "status": use(project)}
 
 

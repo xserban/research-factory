@@ -139,14 +139,11 @@ def _policies_of(project: Project, protocol_id: str | None) -> GatePolicies | No
 
 def autonomy_level(project: Project) -> AutonomyLevel:
     """The project's autonomy level (contract C2, `services.project.project_levels`); `attended`
-    while that reader does not exist (lane L1 not merged) or the project has none."""
-    import importlib
+    for a log without `project.created`."""
+    from factory.services.project import project_levels  # project imports this module
 
-    reader = getattr(importlib.import_module("factory.services.project"), "project_levels", None)
-    if reader is None:
-        return AutonomyLevel.ATTENDED
     try:
-        return AutonomyLevel(str(reader(project).autonomy_level))
+        return AutonomyLevel(str(project_levels(project).autonomy_level))
     except ProjectNotFoundError:  # a log without `project.created` (a replayed fixture): legacy
         return AutonomyLevel.ATTENDED
 

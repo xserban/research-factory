@@ -7,8 +7,6 @@ import json
 from importlib import resources
 from typing import Any
 
-import pytest
-
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.model.levels import AutonomyLevel
@@ -148,21 +146,12 @@ def test_the_conductor_section_uses_the_reader_or_says_it_is_absent(
     assert got == {"present": True, "status": fake_conductor(project)}
 
 
-def test_a_missing_conductor_module_gives_a_clear_fallback(
-    settings: Settings, clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+def test_the_conductor_section_reads_the_real_status_without_a_fallback(
+    settings: Settings, clock: FixedClock
 ) -> None:
-    import importlib
-
-    real = importlib.import_module
-
-    def without(name: str, *a: Any, **k: Any) -> Any:
-        if name == "factory.services.conductor":
-            raise ModuleNotFoundError(name)
-        return real(name, *a, **k)
-
-    monkeypatch.setattr(hub_levels.importlib, "import_module", without)
     project = _project(settings, clock, "brief", None)
-    assert hub_levels.levels_payload(project)["conductor"] == {"present": False, "status": None}
+    section = hub_levels.levels_payload(project)["conductor"]
+    assert section["present"] is True and section["status"]["state"] == "none"
 
 
 def test_a_failing_section_is_an_error_and_the_rest_survive(

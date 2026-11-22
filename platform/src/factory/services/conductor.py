@@ -23,7 +23,6 @@ Invariants:
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -378,11 +377,9 @@ def _stage_of(stage_id: str, role: ConductorRole) -> str:
 
 
 def _trust_pauses(project: Project) -> list[str]:
-    try:
-        module: Any = importlib.import_module("factory.services.gate_trust")
-    except ModuleNotFoundError:
-        return []
-    return [str(t.gate_id) for t in module.trust_ledger(project) if t.state == "pause"]
+    from factory.services.gate_trust import trust_ledger  # gate_trust imports gates
+
+    return [str(t.gate_id) for t in trust_ledger(project) if t.state == "pause"]
 
 
 def default_gate_closed(project: Project, stage_id: str, gate_id: str) -> bool:
