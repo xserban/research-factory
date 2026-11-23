@@ -55,8 +55,12 @@ addition is your reading of the paper's own words, and the quote must carry thos
    the human audit checks your reading.
 5. Quotes and anchors. `anchor` is the element id served by `document_read` (for example
    `s3.2.p4`). Give the paragraph anchor and a quote copied verbatim, character for character,
-   from a single paragraph or table cell; never paraphrase a quote. Each text field (`name`,
-   `statement`, `compared_to`, `metric`) must occur in the quote.
+   from a single paragraph or table cell; never paraphrase a quote. The platform matches the
+   quote against the paragraph's plain text, with Markdown markup removed: write a citation
+   served as `[Majumder et al. (2025)](#b27)` as `Majumder et al. (2025)` (drop the brackets and
+   the `(#...)` target), drop emphasis markers, and write an escaped character without its
+   backslash. Removing markup is not editing the quote; changing its words is. Each text field
+   (`name`, `statement`, `compared_to`, `metric`) must occur in the quote, in the same plain form.
 6. `cited_entry`. Set it to an ordinal from `references.entries` only when the quote's own
    citation marker, or the entry text read at its `b<n>` anchor, identifies the predecessor.
    A quote with no marker is stored and flagged; a marker that maps to another entry is
@@ -71,7 +75,9 @@ addition is your reading of the paper's own words, and the quote must carry thos
    cell), or supersede the first.
 9. Call `contribution_record` with the `task_id`, the `items`, and `role`, `model`, `skill`.
    Each item is accepted or rejected with reasons; accepted items are written. Fix a rejected
-   item by re-reading its anchor; never edit a quote to make it pass. A rejection for
+   item by re-reading its anchor; never change a quote's words to make it pass (a rejection
+   `quote-not-in-anchor` for a quote that still carries link or emphasis markup is fixed by writing it
+   as plain text, see 5). A rejection for
    `entry-unknown` or `result-row-unknown` means the value is not available: drop it.
 10. Correct an accepted item with a new item passed with `supersedes`, an object whose keys
     are item indices of this call's `items` (strings such as `"0"`) and whose values are the
