@@ -114,9 +114,12 @@ product in the project hub) hides its pickers: the bar of the page that frames i
 picker, and the choice reaches the frame through the `storage` event."""
 
 _OPTIONS: Final = (
-    "<option value=''>Default (LCARS)</option><option value='dark'>Dark</option>"
-    "<option value='light'>Light</option>"
-    + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES)
+    "<option value=''>Default (LCARS)</option>"
+    "<optgroup label='Dark'><option value='dark'>Dark</option>"
+    + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES if not t.light)
+    + "</optgroup><optgroup label='Light'><option value='light'>Light</option>"
+    + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES if t.light)
+    + "</optgroup>"
 )
 
 THEME_TOGGLE: Final = (

@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import pytest
 
-from factory.services import site_chrome, site_theme, site_themes
+from factory.services import hub_ui, site_chrome, site_theme, site_themes
 from factory.services.site_theme import LIGHT, LIGHT_CSS, THEME_SCRIPT, THEME_TOGGLE
-from tests.test_theme import _contrast
+from tests.test_theme import _contrast, _luminance
 
 IDS = [t.id for t in site_themes.THEMES]
 
@@ -88,3 +88,68 @@ def test_the_theme_module_imports_nothing_from_the_package() -> None:
         if isinstance(node, ast.ImportFrom):
             assert node.module is not None and not node.module.startswith("factory")
     assert site_theme.SAVE_KEY == "factory-theme"
+
+
+NEW_IDS = [
+    "ethereal", "aetheria", "cyberpunk-dreams", "circuit-horizon", "moon-orbit", "solitude",
+    "vantablack", "kanagawa", "paper-blue", "sepia", "cool-grey", "catppuccin-latte",
+    "flexoki-light", "solarized-light",
+]  # fmt: skip
+
+
+def test_the_new_themes_are_present_and_match_the_hub_ids_and_names() -> None:
+    assert set(NEW_IDS) <= set(IDS)
+    assert [t.id for t in hub_ui.THEMES][2:] == IDS
+    assert [t.label for t in site_themes.THEMES] == [t.label for t in hub_ui.THEMES][2:]
+
+
+@pytest.mark.parametrize("theme", site_themes.THEMES, ids=IDS)
+def test_both_uis_use_the_same_palette(theme: site_themes.Theme) -> None:
+    spec = next(s for s in hub_ui.THEMES if s.id == theme.id)
+    p = theme.palette
+    assert (spec.bg, spec.surface, spec.raised) == (p["bg"], p["surface"], p["raised"])
+    assert (spec.fg, spec.dim, spec.acc) == (p["fg"], p["dim"], p["accent"])
+
+
+@pytest.mark.parametrize("theme", [t for t in site_themes.THEMES if t.id in NEW_IDS], ids=NEW_IDS)
+def test_a_new_theme_keeps_muted_text_and_semantic_colours_readable(
+    theme: site_themes.Theme,
+) -> None:
+    p = theme.palette
+    for surface in (p["bg"], p["surface"], p["raised"]):
+        assert _contrast(p["soft"], surface) >= 7.0, (theme.id, "soft", surface)
+        assert _contrast(p["dim"], surface) >= 4.5, (theme.id, "dim", surface)
+    for key in ("good", "warn", "bad", "violet", "cyan"):
+        for surface in (p["bg"], p["surface"]):
+            assert _contrast(p[key], surface) >= 4.5, (theme.id, key, surface)
+    assert len({p["good"], p["warn"], p["bad"], p["violet"], p["cyan"]}) == 5
+
+
+@pytest.mark.parametrize("theme", site_themes.THEMES, ids=IDS)
+def test_a_light_theme_declares_light_and_drops_the_dark_decoration(
+    theme: site_themes.Theme,
+) -> None:
+    root = f':root[data-theme="{theme.id}"]'
+    css = theme.css()
+    assert (root + "{color-scheme:light;" in css) is theme.light
+    assert (root + "{color-scheme:dark;" in css) is not theme.light
+    if theme.light:
+        assert root + " body{background-image:none}" in css
+        assert root + " .led,.led.stale,.led.bad,header .logo{box-shadow:none}" in css
+        assert _contrast(theme.palette["fg"], theme.palette["bg"]) >= 7.0
+        assert _luminance(theme.palette["bg"]) > _luminance(theme.palette["fg"])
+
+
+def test_there_are_light_themes_among_the_new_ones() -> None:
+    light = {t.id for t in site_themes.THEMES if t.light}
+    assert len(light) >= 4 and light <= set(NEW_IDS)
+    assert set(site_themes.LIGHT_IDS) == light
+
+
+def test_the_picker_groups_themes_into_dark_and_light() -> None:
+    dark, light = THEME_TOGGLE.split("<optgroup label='Light'>")
+    assert "<optgroup label='Dark'>" in dark
+    for ident in site_themes.LIGHT_IDS:
+        assert f"<option value='{ident}'" in light and f"<option value='{ident}'" not in dark
+    for ident in site_themes.DARK_IDS:
+        assert f"<option value='{ident}'" in dark
