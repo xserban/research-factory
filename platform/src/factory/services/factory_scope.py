@@ -1,4 +1,4 @@
-"""The factory event scope at `<root>/factory/` (decision 169, proposed).
+"""The factory event scope at `<root>/factory/` (decision 169).
 
 A third log beside the projects' and the lab's, on the same `EventWriter`, `Index` and
 `EventFactory`, with its own catalog (the `feed.*` allow-list) and projection. Its envelope

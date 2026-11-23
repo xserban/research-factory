@@ -1,4 +1,4 @@
-"""The factory event scope's reserved slug and allow-list (decision 169, proposed).
+"""The factory event scope's reserved slug and allow-list (decision 169).
 
 General reactions and the general feed ranker belong to the researcher, not to one project, so they
 live in a log of their own at `<root>/factory/`, laid out as a project directory. This module is
