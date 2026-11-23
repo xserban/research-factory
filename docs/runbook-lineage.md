@@ -126,7 +126,7 @@ factory protocol show
 **Step 4 [A] Pass A**, Sonnet. The runner has a stage for it:
 
 ```
-factory queue process --stage contributions --cap 10 --wait
+factory queue process --stage contributions --cap 12 --wait
 ```
 
 The cap is the number of works the run may serve (`FACTORY_UNIT_CAP`). The run uses the skill `rf-contributions` (text embedded in the prompt), model Sonnet, only `contribution_next`, `contribution_record`, `document_read` and `project_status`, and records `runner.started` and `runner.finished` with its log in `projects/agentic-science/runs/<run_id>/`. `factory queue runs` lists runs. With the allow-list in place, the run serves only the listed works; confirm `contribution_status` shows `listed` 10 and the expected `eligible` count first.
@@ -134,14 +134,14 @@ The cap is the number of works the run may serve (`FACTORY_UNIT_CAP`). The run u
 **Step 5 [A] Pass B**, a different session and a different model (Haiku, as the evidence pass B stage `extract-b` does). The runner has no stage for contribution pass B (checked in `services/runner.py`); start it by hand. The prompt is built like the runner's: parameters, skill text, limit.
 
 ```
-# one config, root and plugin dir set explicitly, cap 10
+# one config, root and plugin dir set explicitly, cap 12 (a re-served partial unit also uses cap: set it above the number of works)
 cat > "$PWD/mcp-pass-b.json" <<EOF
 {"mcpServers":{"factory":{"command":"$RUNTIME/platform/.venv/bin/factory","args":["serve"],
  "env":{"PYTHONPATH":"$RUNTIME/platform/src","FACTORY_PLUGIN_DIR":"$RUNTIME/plugin",
-        "FACTORY_ROOT":"$FACTORY_ROOT","FACTORY_UNIT_CAP":"10"}}}}
+        "FACTORY_ROOT":"$FACTORY_ROOT","FACTORY_UNIT_CAP":"12"}}}}
 EOF
 { printf '%s\n' "You are pass B of stage \`contributions\` for the Research Factory project \`agentic-science\`. Work through the factory MCP tools and follow exactly the skill below (you are pass \`B\`)." \
-  "Parameters for every factory call: project \`agentic-science\`, pass_label \`B\`, role \`second contributor\`, model \`claude-haiku-5-5\`, skill \`rf-contributions\`." \
+  "Parameters for every factory call: project \`agentic-science\`, pass_label \`B\`, role \`second-contributor\`, model \`claude-haiku-5-5\`, skill \`rf-contributions\`." \
   "Limit: stop after 10 units or when the queue is empty. A unit is one work read for contributions. Use no other tools. Finally print how many units you handled and any blocked text or error verbatim." \
   "=== SKILL rf-contributions ==="; cat "$RUNTIME/plugin/skills/rf-contributions/SKILL.md"; } > prompt-pass-b.txt
 claude -p "$(cat prompt-pass-b.txt)" --model claude-haiku-5-5 --strict-mcp-config --mcp-config "$PWD/mcp-pass-b.json" \
