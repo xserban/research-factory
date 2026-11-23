@@ -279,7 +279,7 @@ def test_pilot_audit_minimum_is_the_researchers_choice() -> None:
     assert "screening.audit_minimum" not in fields(50, RigorMode.SYSTEMATIC)
     spec = _spec(screening=_screening(audit_minimum=15, kappa_enforced=False))
     [gap] = [g for g in _check(spec, RigorMode.PILOT).gaps if g.field == "screening.audit_minimum"]
-    assert gap.reason == "the audit draws 10, 20, 30, 40 or at least 50 works (decision 163)"
+    assert gap.reason == "the audit draws 10, 20, 30, 40 or at least 50 works (decision 170)"
 
 
 def test_exploratory_allows_small_audit() -> None:

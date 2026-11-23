@@ -699,7 +699,7 @@ def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[V
 
 
 def audit_minimum_gap(value: int, mode: RigorMode, field: str, unit: str) -> list[ValidationIssue]:
-    """The one rule for every protocol audit's minimum draw (decision 163, replacing the
+    """The one rule for every protocol audit's minimum draw (decision 170, replacing the
     audit_minimum floor of decision 37 item 3 for pilot).
 
     Invariant: `exploratory` has no floor; `systematic` needs at least `AUDIT_MINIMUM_MIN`;
@@ -713,7 +713,7 @@ def audit_minimum_gap(value: int, mode: RigorMode, field: str, unit: str) -> lis
         return [
             ValidationIssue(
                 field,
-                f"the audit draws {choices} or at least {AUDIT_MINIMUM_MIN} {unit} (decision 163)",
+                f"the audit draws {choices} or at least {AUDIT_MINIMUM_MIN} {unit} (decision 170)",
             )
         ]
     if value >= AUDIT_MINIMUM_MIN:
