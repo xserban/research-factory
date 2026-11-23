@@ -94,7 +94,13 @@ from factory.services.core_works import core_marks, forward_core_sources, seed_c
 from factory.services.dedup_incremental import held_matches
 from factory.services.feed_events import feed_events
 from factory.services.hint_input import HintInput
-from factory.services.inbox import LinkInput, _refuse_actor, link_event, resolve_links
+from factory.services.inbox import (
+    LinkInput,
+    _refuse_actor,
+    find_open_duplicate,
+    link_event,
+    resolve_links,
+)
 from factory.services.ranking import _dot, _unit, max_cosine_scores, order_by_score, ranking_text
 from factory.services.ranking_model import Embedder
 from factory.services.references import included_works
@@ -1073,6 +1079,30 @@ def send(
     return item_id
 
 
+def send_via_inbox(
+    project: Project, actor: Actor, entry_id: str, *, note: str | None = None
+) -> tuple[str, bool]:
+    """Put the entry's arXiv link in the project's inbox as a human capture and return
+    `(inbox_item_id, duplicate)`. For an entry the project's own ranking never held (the factory
+    feed mixes every project's fetches): no `feed.sent` is written, so none of `send`'s ranking,
+    held or already-sent checks apply. A link already open in the inbox is a duplicate and writes
+    nothing. Human only; the caller has validated `entry_id` against the factory ranking."""
+    if actor.kind != "human":
+        raise _refuse("actor", "human-only")
+    with project.writing():
+        project.index.sync()
+        _refuse_actor(project, actor)
+        link = f"https://arxiv.org/abs/{entry_id}"
+        same = find_open_duplicate(project, link)
+        if same is not None:
+            return same, True
+        event, item_id, issues = link_event(project, actor, LinkInput(link, note=note), Channel.CLI)
+        if event is None or item_id is None:
+            raise FactoryValidationError(issues)
+        project.record([event])
+    return item_id, False
+
+
 AddOutcome = Literal["new", "in-corpus", "not-found", "ambiguous", "lookup-failed", "refused"]
 
 
@@ -1106,6 +1136,14 @@ def add(
     reported in the result (`lookup-failed`, `refused`) and the item stays open for
     `factory inbox resolve`."""
     item_id = send(project, actor, entry_id, note=note, ranking_id=ranking_id, hints=hints)
+    return resolve_sent(project, actor, item_id, sources=sources)
+
+
+def resolve_sent(
+    project: Project, actor: Actor, item_id: str, *, sources: Mapping[str, SourceFactory]
+) -> FeedAddResult:
+    """Resolve exactly the inbox item a send made and report as `add` does (never raises a
+    refusal: it is reported as `refused`)."""
     try:
         [outcome] = resolve_links(project, actor, sources=sources, item_ids=[item_id])
     except FactoryError as exc:

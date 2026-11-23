@@ -159,3 +159,67 @@ def test_the_acts_are_off_without_the_factory_feed(
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+class _Exploding(FakeEmbedder):
+    def embed(self, texts):  # type: ignore[no-untyped-def]
+        raise RuntimeError("CUDA out of memory /secret/path")
+
+
+def _five_reactions(port: int, token: str | None) -> None:
+    for entry, reaction in zip(IDS[:5], ["like"] * 3 + ["dislike"] * 2, strict=True):
+        assert _react(port, {"entry_id": entry, "reaction": reaction}, token)[0] == 200
+
+
+def test_an_encoder_failure_is_a_structured_500_not_a_dropped_connection(
+    six: tuple[Settings, Project, Project],  # noqa: F811
+    clock: FixedClock,
+) -> None:
+    settings = six[0]
+    ff.rank_pool(settings, FakeEmbedder(), session=SESSION, clock=clock)
+    httpd, port = _serve(settings, clock, embedder_factory=_Exploding)
+    try:
+        token = _hub_token(port, "/feed/")
+        _five_reactions(port, token)
+        status, text = _req(port, "POST", "/api/feed/train", {}, token)
+        assert status == 500 and "training-failed" in text
+        assert "Traceback" not in text and "secret" not in text
+        assert _req(port, "POST", "/api/feed/train", {}, token)[0] == 500  # the lock is released
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_second_train_while_one_runs_is_a_409(
+    six: tuple[Settings, Project, Project],  # noqa: F811
+    clock: FixedClock,
+) -> None:
+    settings = six[0]
+    ff.rank_pool(settings, FakeEmbedder(), session=SESSION, clock=clock)
+    started, release = threading.Event(), threading.Event()
+
+    class Slow(FakeEmbedder):
+        def embed(self, texts):  # type: ignore[no-untyped-def]
+            started.set()
+            release.wait(10)
+            return super().embed(texts)
+
+    httpd, port = _serve(settings, clock, embedder_factory=Slow)
+    try:
+        token = _hub_token(port, "/feed/")
+        _five_reactions(port, token)
+        first: list[tuple[int, str]] = []
+        t = threading.Thread(
+            target=lambda: first.append(_req(port, "POST", "/api/feed/train", {}, token))
+        )
+        t.start()
+        assert started.wait(10)
+        status, text = _req(port, "POST", "/api/feed/train", {}, token)
+        assert status == 409 and "training-in-progress" in text
+        release.set()
+        t.join(20)
+        assert first[0][0] == 200
+    finally:
+        release.set()
+        httpd.shutdown()
+        httpd.server_close()

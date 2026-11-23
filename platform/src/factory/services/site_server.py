@@ -267,6 +267,30 @@ def _hint_input(value: object) -> tuple[HintInput | None, list[ValidationIssue]]
     )
 
 
+def _factory_send(
+    project: Project, entry_id: str, ranking_id: str | None, refusal: FactoryValidationError
+) -> str | None:
+    """The fallback of a send or add the project's own ranking refused as `not-ranked`: the main
+    hub's Today lists entries any project fetched. When the factory ranking holds the entry, its
+    arXiv link goes to the project's inbox through the inbox service (a note names the factory
+    ranking and the rank shown) and the item id is returned; None when it does not apply (another
+    refusal, or the factory ranking does not hold the entry), and the refusal stands."""
+    if not any(i.reason == "not-ranked" for i in refusal.issues):
+        return None
+    placed = factory_feed_actions.factory_placement(project.settings, entry_id, clock=project.clock)
+    if placed is None:
+        return None
+    ranking, rank = placed
+    note = f"from the factory feed (ranking {ranking}, rank {rank} shown)"
+    try:
+        item_id, _ = feed_service.send_via_inbox(
+            project, project.human_actor(), entry_id, note=note
+        )
+    except FactoryValidationError:
+        return None
+    return item_id
+
+
 def feed_send(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
     """Send the entry to the inbox as its arXiv link (no lookup), as the local human; returns
     (status, body). The main hub's feed page offers it as "Send to project…"."""
@@ -282,6 +306,9 @@ def feed_send(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, ob
         authorize_command(project, project.principal, "cli:feed send")
         item_id = feed_service.send(project, actor, entry_id, ranking_id=ranking_id)
     except FactoryValidationError as exc:
+        via_inbox = _factory_send(project, entry_id, ranking_id, exc)
+        if via_inbox is not None:
+            return 200, {"ok": True, "inbox_item_id": via_inbox, "via": "inbox"}
         return 400, _issues(*exc.issues)
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
@@ -320,7 +347,11 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
             hints=hints,
         )
     except FactoryValidationError as exc:
-        return 400, _issues(*exc.issues)
+        via_inbox = _factory_send(project, entry_id, ranking_id, exc)
+        if via_inbox is None:
+            return 400, _issues(*exc.issues)
+        result = feed_service.resolve_sent(project, actor, via_inbox, sources=_sources())
+        return 200, {"ok": True, "via": "inbox", **result.model_dump(mode="json")}
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, **result.model_dump(mode="json")}
@@ -1929,6 +1960,8 @@ class MainHub:
     ) -> None:
         self.feed = feed
         self._factory_feed = factory_feed
+        self._train_lock = threading.Lock()
+        """Held while a Train runs: a second one is refused (409), not run in parallel."""
         self._create = create
         self.auth: site_auth.Authenticator = site_auth.LoopbackTokenAuth()
         """The seam; `make_main_server` may replace it before serving."""
@@ -2152,7 +2185,11 @@ class MainHub:
 
     def _feed_context(self, env: FactoryFeedEnv) -> site_factory_feed.PageContext:
         """What every factory feed page shows besides its own list: the projects that have a feed
-        configuration (with their tokens), the sidebar's counts and the ranker's state."""
+        configuration (with their tokens), the sidebar's counts and the ranker's state. Kept by
+        `factory_feed.cached` while no event is appended (and for its TTL at most)."""
+        return factory_feed.cached(env.settings, "context", lambda: self._build_feed_context(env))
+
+    def _build_feed_context(self, env: FactoryFeedEnv) -> site_factory_feed.PageContext:
         registry = site_portal.load_registry(self._root)
         infos = []
         for slug, title in site_portal.listed(self._slugs(), registry):
@@ -2287,6 +2324,8 @@ class MainHub:
             return 503, _issues(ValidationIssue("feed", "the factory feed is off"))
         if body:
             return 400, _issues(ValidationIssue("body", "takes no fields"))
+        if not self._train_lock.acquire(blocking=False):
+            return 409, _issues(ValidationIssue("train", "training-in-progress"))
         try:
             result = factory_feed_actions.train(
                 env.settings,
@@ -2299,6 +2338,11 @@ class MainHub:
             return 400, _issues(*exc.issues)
         except FactoryError as exc:
             return 403, _issues(ValidationIssue("permission", str(exc)))
+        except Exception:  # the encoder (RuntimeError, OSError, out of memory): a body, not a drop
+            _LOG.exception("the factory feed training failed")
+            return 500, _issues(ValidationIssue("train", "training-failed: see the hub log"))
+        finally:
+            self._train_lock.release()
         return 200, {
             "ok": True,
             "ranker_version": result.version,

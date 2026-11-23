@@ -45,6 +45,21 @@ def _refuse(field: str, reason: str) -> FactoryValidationError:
 # --- react ---
 
 
+def factory_placement(
+    settings: Settings, entry_id: str, ranking_id: str | None = None, *, clock: Clock
+) -> tuple[str, int] | None:
+    """`(ranking_id, rank)` of the entry in the newest factory ranking (or the one named), or None
+    when the factory has no ranking holding it. Reads only."""
+    if not factory_scope_exists(settings):
+        return None
+    scope = open_factory_scope(settings, session=_READ_SESSION, clock=clock)
+    try:
+        ranking, rank, _, _ = _placement(scope, entry_id, ranking_id)
+    except FactoryValidationError:
+        return None
+    return ranking, rank
+
+
 def _placement(
     scope: FactoryScope, entry_id: str, ranking_id: str | None
 ) -> tuple[str, int, float, bool]:
@@ -115,6 +130,7 @@ def react(
         )
         event = scope.events.make("feed.reacted", payload, scope.human_actor(), refs=(entry_id,))
         scope.record([event])
+    factory_feed.invalidate_cache()
     return event.id
 
 
@@ -268,6 +284,7 @@ def train(
         event = scope.events.make("feed.ranker_trained", payload, scope.system_actor())
         scope.record([event])
     ranked = factory_feed.rank_pool(settings, embedder, session=session, clock=clock)
+    factory_feed.invalidate_cache()
     return TrainResult(
         version=version,
         event_id=event.id,

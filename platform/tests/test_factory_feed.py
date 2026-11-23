@@ -6,7 +6,7 @@ embedder with chosen vectors stands in for SPECTER2 (no network, no weights)."""
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +127,7 @@ def world(
     _fetch(
         a, 1, [_rec(1, submitted="2026-11-18"), _rec(2, submitted="2026-11-22", cats=("cs.LG",))]
     )
+    clock.advance(timedelta(seconds=1))  # alpha's fetch is the earlier event
     _fetch(
         b,
         2,
@@ -351,3 +352,49 @@ def test_liked_and_reading_list_follow_latest_reactions(
     cards = {c.entry_id: c for c in ff.today(settings, clock=clock).cards}
     assert cards["2611.00001"].label == "like" and cards["2611.00003"].saved
     assert scope.read(lambda c: fx.latest_reactions(c, scope.tables))["2611.00002"]["label"] is None
+
+
+def test_a_state_trained_on_another_encoder_is_skipped(
+    world: tuple[Settings, Project, Project], clock: FixedClock
+) -> None:
+    settings, _, _ = world
+    scope = open_factory_scope(settings, session=SESSION, clock=clock)
+    _train(scope)  # embedding_model "fake/model"
+
+    class Other(FakeEmbedder):
+        model_id = "other/model"
+
+    assert _rank(settings, clock, Other()).ranker_version is None
+    assert _rank(settings, clock).ranker_version == 1
+
+
+def test_the_first_fetch_is_by_event_time_not_slug_order(
+    world: tuple[Settings, Project, Project], clock: FixedClock
+) -> None:
+    settings, a, b = world
+    clock.advance(timedelta(hours=1))
+    _fetch(b, 8, [_rec(9, title="From beta")])  # beta fetches first ...
+    clock.advance(timedelta(hours=1))
+    _fetch(a, 9, [_rec(9, title="From alpha")])  # ... alpha later: slug order would pick alpha
+    pool = {e.entry_id: e for e in ff.load_pool(settings, clock=clock)}
+    assert pool["2611.00009"].title == "From beta"
+
+
+def test_the_snapshot_is_cached_until_an_event_is_appended(
+    world: tuple[Settings, Project, Project], clock: FixedClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings, a, _ = world
+    _rank(settings, clock)
+    ff.invalidate_cache()
+    calls: list[int] = []
+    real = ff.load_pool
+    monkeypatch.setattr(ff, "load_pool", lambda *x, **k: calls.append(1) or real(*x, **k))
+    ff.today(settings, clock=clock)
+    ff.today(settings, clock=clock)
+    assert len(calls) == 1
+    _fetch(a, 7, [_rec(7)])  # an appended event changes the key
+    ff.today(settings, clock=clock)
+    assert len(calls) == 2
+    ff.invalidate_cache()
+    ff.today(settings, clock=clock)
+    assert len(calls) == 3

@@ -227,8 +227,15 @@ def test_send_route_validates_and_needs_the_project_token(served: tuple[int, Set
     path = "/p/alpha/api/feed/send"
     assert _req(port, "POST", path, {"entry_id": IDS[0]}, None)[0] == 403
     assert _req(port, "POST", path, {}, alpha["token"])[0] == 400
+    # alpha has no project ranking of its own here: the factory ranking holds the entry, so the
+    # link goes to alpha's inbox instead
     status, text = _req(port, "POST", path, {"entry_id": IDS[0]}, alpha["token"])
-    assert status == 400 and "not-ranked" in text  # alpha has no project ranking of its own here
+    body = json.loads(text)
+    assert status == 200 and body["via"] == "inbox" and body["inbox_item_id"]
+    again = json.loads(_req(port, "POST", path, {"entry_id": IDS[0]}, alpha["token"])[1])
+    assert again["inbox_item_id"] == body["inbox_item_id"]  # a duplicate writes nothing new
+    status, text = _req(port, "POST", path, {"entry_id": "2699.99999"}, alpha["token"])
+    assert status == 400 and "unknown" in text  # in no ranking at all: the refusal stands
 
 
 # ---------------------------------------------------------------- clicks (headless Chromium)
@@ -516,7 +523,7 @@ def test_click_undo_on_liked_removes_the_row_and_records_unset(
 
 @browser
 @pytest.mark.browser
-def test_click_send_opens_the_project_picker_and_shows_the_refusal(
+def test_click_send_opens_the_project_picker_and_sends_to_the_inbox(
     served: tuple[int, Settings],
 ) -> None:
     port, _ = served
@@ -524,7 +531,7 @@ def test_click_send_opens_the_project_picker_and_shows_the_refusal(
     assert result["done"] and not result["errors"], result
     s = result["steps"]
     assert s["picker"] is True and s["options"] == ["alpha", "beta"]
-    assert "not-ranked" in s["msg"] or "entry_id" in s["msg"]
+    assert "Sent to" in s["msg"]
 
 
 @browser

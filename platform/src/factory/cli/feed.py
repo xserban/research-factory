@@ -456,7 +456,9 @@ def feed_train_cmd(ctx: typer.Context) -> None:
 @feed_app.command("today")
 def feed_today_cmd(
     ctx: typer.Context,
-    page: Annotated[int, typer.Option("--page", min=1, help="Page of 100.")] = 1,
+    page: Annotated[
+        int, typer.Option("--page", min=1, help=f"Page of {factory_feed.DEFAULT_SHOWN}.")
+    ] = 1,
     sort: Annotated[str, typer.Option("--sort", help="`ranked` (default) or `newest`.")] = "ranked",
 ) -> None:
     """The factory feed's Today list, from the newest factory ranking. Read-only."""
