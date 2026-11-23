@@ -20,7 +20,7 @@ from collections.abc import Collection, Mapping, Sequence
 from datetime import date, datetime
 from typing import Literal
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from factory.clock import parse_ts
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -364,6 +364,22 @@ def miner_stale(project: Project, old: ProtocolSpec, new: ProtocolSpec) -> tuple
     return tuple(sorted(out, key=lambda m: m.name))
 
 
+def _listed_works_known(project: Project, spec: ProtocolSpec) -> set[str] | None:
+    """The listed ids of the contribution allow-list that are corpus works, or None when the
+    spec has no allow-list (nothing to check). Needs a synced index."""
+    schema = spec.contribution_schema
+    if schema is None or schema.works is None:
+        return None
+    with project.index.connect() as conn:
+        rows = conn.execute(
+            text("SELECT work_id FROM works WHERE work_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": list(schema.works)},
+        ).all()
+    return {str(r[0]) for r in rows}
+
+
 def record_protocol(
     project: Project,
     actor: Actor,
@@ -416,6 +432,7 @@ def record_protocol(
             layer_miners=layer_miner_versions(project, spec),
             registered_taxonomies=registered_taxonomy_versions(project),
             miner_taxonomies=miner_taxonomy_refs(project, spec),
+            known_works=_listed_works_known(project, spec),
         )
         if check.errors:
             raise FactoryValidationError(check.errors)
@@ -551,6 +568,7 @@ def amendment_issues(
         layer_miners=layer_miner_versions(project, spec, pending),
         registered_taxonomies=registered_taxonomy_versions(project),
         miner_taxonomies=miner_taxonomy_refs(project, spec, pending),
+        known_works=_listed_works_known(project, spec),
     )
     return [*check.errors, *check.gaps]
 

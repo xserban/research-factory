@@ -92,6 +92,14 @@ report and stop. Agreement, resolution, audit labelling and the choice between t
 human steps; do not attempt them. A reading whose audit fails needs a schema or skill
 amendment by the researcher; do not retry it.
 
+## Allow-list
+
+The protocol may restrict contribution mining to listed works (`contribution_schema.works`, set
+by a human protocol amendment; absent means every included work). Then `contribution_next` and
+`contribution_status` carry `allow_list` (`listed`, `eligible`, `not_eligible`) and serve, in
+both passes, only the listed works; `remaining` counts those. Report a non-empty `not_eligible`
+to the researcher. Do not choose, extend or work around the list.
+
 ## Tool arguments
 
 Every tool call also takes `project` (the project slug), `role`, and `model` (your own model

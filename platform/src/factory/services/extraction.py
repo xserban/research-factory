@@ -165,6 +165,7 @@ __all__ = [
     "PassConfig",
     "UnitPin",
     "UnitState",
+    "contribution_allow_list",
     "extract_next",
     "extract_record",
     "extraction_population",
@@ -372,7 +373,9 @@ def extraction_population(project: Project) -> list[str]:
 def scope_population(project: Project, scope: ScopeKey) -> list[str]:
     """The works a scope extracts, sorted: `extraction_population` for evidence; G1's
     `included_works` for contribution (slice 3b ruling 9: a work without a current G1 extraction
-    is included)."""
+    is included), restricted to the protocol's allow-list (`contribution_allow_list`) when it
+    declares one. Every reader of the contribution population (serving, pass B, unit states,
+    agreement, audit, check) goes through here, so they all see the same works."""
     if isinstance(scope, MinerScope):
         from factory.services.mining import miner_population  # mining imports this module
 
@@ -380,7 +383,19 @@ def scope_population(project: Project, scope: ScopeKey) -> list[str]:
     if scope is Scope.EVIDENCE:
         return extraction_population(project)
     project.index.sync()
-    return included_works(project)
+    included = included_works(project)
+    allowed = contribution_allow_list(project)
+    return included if allowed is None else [w for w in included if w in allowed]
+
+
+def contribution_allow_list(project: Project) -> frozenset[str] | None:
+    """The works the current protocol's `contribution_schema.works` lists, or None when it has
+    no list (every included work is mined)."""
+    protocol = current_protocol(project)
+    schema = None if protocol is None else protocol.spec.contribution_schema
+    if schema is None or schema.works is None:
+        return None
+    return frozenset(schema.works)
 
 
 def calibration_sessions_of(project: Project, scope: ScopeKey) -> set[str]:

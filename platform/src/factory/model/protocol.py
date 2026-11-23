@@ -317,6 +317,20 @@ class ExtractionSchema(StrictModel):
     audit_fraction: float = Field(default=0.02, ge=0, le=1)
     audit_minimum: int = Field(default=50, ge=0)
     claims: bool = True
+    works: tuple[Annotated[str, StringConstraints(min_length=1)], ...] | None = None
+    """The contribution allow-list: only these included works are mined (`contribution_schema`
+    only; refused on the evidence schema). Absent (None) means every included work. Kept sorted
+    and without repeats; left out of every dump while None, so a schema that never had it
+    serialises, and so hashes, exactly as before. It stales no rows."""
+
+    @field_validator("works")
+    @classmethod
+    def _sorted_works(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("works must name at least one work, or be left out")
+        return tuple(sorted(set(value)))
 
     @model_validator(mode="after")
     def _unique(self) -> Self:
@@ -325,6 +339,13 @@ class ExtractionSchema(StrictModel):
         if len(set(self.comparability_keys)) != len(self.comparability_keys):
             raise ValueError("comparability_keys must be unique")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_works(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.works is None:
+            data.pop("works", None)
+        return data
 
 
 class SnowballPlan(StrictModel):

@@ -1065,6 +1065,13 @@ def contribution_status_lines(status: ContributionStatus) -> list[str]:
         f"cited-entry markers: {counts(status.markers)}",
         f"no-references: {len(status.no_references)}",
     ]
+    if status.allow_list is not None:
+        allow = status.allow_list
+        head = [
+            f"allow-list: {allow.listed} listed, {allow.eligible} eligible, "
+            f"{len(allow.not_eligible)} not eligible"
+        ]
+        lines = head + [f"  {work}" for work in allow.not_eligible] + lines
     lines += [f"  {work}" for work in status.no_references]
     lines.append(f"other-conversion: {len(status.other_conversion)}")
     lines += [f"  {work}" for work in status.other_conversion]
