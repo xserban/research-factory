@@ -722,7 +722,10 @@ def test_a_run_past_its_limit_is_killed_recorded_failed_and_stops_the_pipeline(
             launcher.processes[0].done.set()
 
     monkeypatch.setattr(runner, "run_time_limit", lambda cap: 0.2)
-    monkeypatch.setattr(runner, "KILL_GRACE", 0.3)
+    # The grace covers the watcher recording the end (events, trust ledger); 0.3 s was too short on a
+    # loaded CI runner, so a run that obeyed SIGTERM still got SIGKILL. It only costs time when
+    # the run ignores SIGTERM.
+    monkeypatch.setattr(runner, "KILL_GRACE", 3.0)
     monkeypatch.setattr(runner, "_signal_group", deliver)
     pipeline_id = pipeline.run_pipeline(project, unit_cap=3, launcher=launcher)
     assert signals == ([signal.SIGTERM, signal.SIGKILL] if ignores_term else [signal.SIGTERM])
