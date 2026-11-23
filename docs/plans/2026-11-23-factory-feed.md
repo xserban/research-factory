@@ -1,6 +1,6 @@
 # Factory feed: a general like/dislike ranker and per-project scores in the main hub (plan, 2026-11-23)
 
-Status: planned, not built. Extends IDEA-58 (port of arXiv Miner) and slice 4c (`docs/specs/slice-4c-feed.md`, rulings 4 and 8). Decision 169 proposed.
+Status: built on branch factory-feed, reviewed (fixes in), not merged. Extends IDEA-58 (port of arXiv Miner) and slice 4c (`docs/specs/slice-4c-feed.md`, rulings 4 and 8). Decision 169 proposed.
 
 ## 1. Goal
 
@@ -139,3 +139,23 @@ Order: T1 → T2 → (T3, T4 in parallel) → T5 → T6 → T7. There is one bra
 
 ## 7. Open question
 - Q3. arXiv Miner's crude features (the first 10 dimensions of a 768-dimension vector) are ported as is for v1. A better feature set is a later version of the ranker, measured against v1 on held-out reactions.
+
+## 8. Build notes (2026-11-23)
+
+Branch `factory-feed`, commits in build order:
+- `c35bfda6` general like/dislike ranker, pure module (IDEA-58).
+- `9f1d01cd` factory event scope with feed allow-list, own projector and `ranker_trained` payload (decision 169 proposed).
+- `e1136116` factory pool, per-project scores, general order and factory `feed.ranked`.
+- `d91324e2` factory scope guards pinned (review); no `PROJECTION_VERSION` bump.
+- `b007cfdf` factory react, train and ranker status; hub `POST /api/feed/react` and `/api/feed/train`; CLI `train`, `today`, `react --scope factory`.
+- `ce3a3fa7` main-hub `/feed/` as the factory feed page; the tab-per-project page moves to `/feed/classic/`; per-project send route `POST /p/<slug>/api/feed/send`.
+- `dc30150c` review fixes: train returns 500 and 409 correctly; ranking id minted under the scope lock; encoder match; pool by event time; send via the inbox; 30 s TTL cache.
+
+Deviations from the plan, as recorded in the commit messages:
+- Pool source: the projects' `feed.fetched` records, not a separate store.
+- `feed.ranked` gains optional fields `ranker_version` and `project_references`.
+- Send and Add fall back to the project link inbox (channel CLI) when the entry is not in that project's ranking. No `feed.sent` is written on that path. The Add fallback is untested.
+- Project scores are cached for 30 s.
+- Train runs inside the request; it returns 409 when a training is already running.
+
+Testing: tests were run per file for the touched test files. The full suite was not run locally; CI is the gate (`docs/runbook-ci.md`).
