@@ -137,6 +137,13 @@ class FeedRanked(StrictModel):
     exploration_seed: int
     order_blob: BlobRef
     shown: tuple[FeedShown, ...]
+    ranker_version: int | None = None
+    """Factory scope only (decision 169): the general ranker version that ordered the ranking, None
+    for newest first. The order blob then also holds each project's score per entry."""
+    project_references: (
+        dict[str, Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]] | None
+    ) = None
+    """Factory scope only: the reference-set hash of each project scored, by slug."""
 
 
 class FeedReacted(StrictModel):

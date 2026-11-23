@@ -533,6 +533,15 @@ def _reference_works(project: Project, ids: Sequence[str]) -> list[Work]:
     return [w for w in found if w is not None and w.title.strip()]
 
 
+def reference_set(project: Project) -> list[Work] | None:
+    """The project's feed reference works (titled, sorted by id), or None without a configuration.
+    The factory feed scores against the same set the project's own feed uses (decision 169)."""
+    config = current_config(project)
+    if config is None:
+        return None
+    return _reference_works(project, _reference_ids(project, config))
+
+
 class _Recording:
     """An embedder that remembers each text's vector, so the nearest reference of a shown item
     is read from the vectors that scored it, without a second embedding."""
