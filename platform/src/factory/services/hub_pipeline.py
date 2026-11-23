@@ -169,6 +169,7 @@ BLURBS: Final[dict[str, str]] = {
     "write": "Synthesis pages, bibliography and exports.",
     "living": "New papers, how current the review is, and its heartbeat.",
     "costs": "Run costs and the runs behind them.",
+    "intuition": "Why an idea works, as interpretations you review against the source passage.",
     "platform": "Capabilities and the backlog.",
     "chat": "Spar with an agent over the corpus; you rate each argument and write the balance.",
     "contradictions": "Pairs of papers that may disagree, and your decisions on them.",
