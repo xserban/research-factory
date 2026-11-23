@@ -262,6 +262,26 @@ def test_pilot_rejects_audit_minimum_below_50() -> None:
     assert "screening.audit_fraction" in _fields(_check(thin, RigorMode.PILOT).gaps)
 
 
+def test_pilot_audit_minimum_is_the_researchers_choice() -> None:
+    """Decision 163: pilot takes 10, 20, 30, 40 or at least 50; systematic keeps 50."""
+
+    def fields(value: int, mode: RigorMode) -> set[str]:
+        spec = _spec(
+            screening=_screening(audit_minimum=value, kappa_enforced=mode is RigorMode.SYSTEMATIC)
+        )
+        return _fields(_check(spec, mode).gaps)
+
+    for value in (10, 20, 30, 40, 50, 60):
+        assert "screening.audit_minimum" not in fields(value, RigorMode.PILOT)
+    for value in (0, 5, 15, 45):
+        assert "screening.audit_minimum" in fields(value, RigorMode.PILOT)
+    assert "screening.audit_minimum" in fields(10, RigorMode.SYSTEMATIC)
+    assert "screening.audit_minimum" not in fields(50, RigorMode.SYSTEMATIC)
+    spec = _spec(screening=_screening(audit_minimum=15, kappa_enforced=False))
+    [gap] = [g for g in _check(spec, RigorMode.PILOT).gaps if g.field == "screening.audit_minimum"]
+    assert gap.reason == "the audit draws 10, 20, 30, 40 or at least 50 works (decision 163)"
+
+
 def test_exploratory_allows_small_audit() -> None:
     small = _spec(screening=_screening(audit_minimum=10, audit_fraction=0.01))
     fields = _fields(_check(small, RigorMode.EXPLORATORY).gaps)

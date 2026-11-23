@@ -133,7 +133,7 @@ def test_contribution_gaps_follow_plan_d_rules() -> None:
     assert not _gaps(RigorMode.SYSTEMATIC, dual_extract_sample=1.0)
     assert not _gaps(RigorMode.SYSTEMATIC, dual_extract_sample=None)
     for mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
-        gaps = _gaps(mode, dual_extract_sample=1.0, audit_fraction=0.01, audit_minimum=10)
+        gaps = _gaps(mode, dual_extract_sample=1.0, audit_fraction=0.01, audit_minimum=15)
         assert gaps == {"contribution_schema.audit_fraction", "contribution_schema.audit_minimum"}
     assert not _gaps(
         RigorMode.EXPLORATORY, dual_extract_sample=None, audit_fraction=0.0, audit_minimum=0
@@ -203,3 +203,14 @@ def test_old_amendment_event_validates_without_contribution_stale() -> None:
     amended = ProtocolAmended.model_validate(payload)
     assert amended.contribution_stale is None
     assert "contribution_stale" not in amended.model_dump(exclude_defaults=True)
+
+
+def test_contribution_audit_minimum_choice_in_pilot() -> None:
+    """Decision 163."""
+    field = "contribution_schema.audit_minimum"
+    for value in (10, 20, 30, 40, 50, 60):
+        assert field not in _gaps(RigorMode.PILOT, dual_extract_sample=1.0, audit_minimum=value)
+    for value in (0, 5, 15, 45):
+        assert field in _gaps(RigorMode.PILOT, dual_extract_sample=1.0, audit_minimum=value)
+    assert field in _gaps(RigorMode.SYSTEMATIC, dual_extract_sample=1.0, audit_minimum=10)
+    assert field not in _gaps(RigorMode.EXPLORATORY, dual_extract_sample=None, audit_minimum=10)
