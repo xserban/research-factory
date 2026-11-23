@@ -6,9 +6,8 @@ protection); report-only until the first fully green run on 2026-11-20. SonarClo
 ## What runs where
 | When | What | Where |
 |---|---|---|
-| Every pull request | `static` (ruff check and format, mypy --strict, import contracts) and `tests` limited to the files the change can reach (`scripts/affected_tests.py`) | GitHub, `.github/workflows/tests.yml` |
-| Every push to main | `static` and the whole offline suite (`-m 'not network and not slow'`), four shards in parallel, pytest-xdist inside each | GitHub |
-| Nightly 03:00 UTC | the whole suite including the `slow` suites (acceptance and scale files) | GitHub |
+| Every pull request and every push to main | `static` (ruff check and format, mypy --strict, import contracts) and `tests` limited to the files the change touches (`scripts/affected_tests.py`: coverage map, import fallback); a push to main is selected against the previous commit | GitHub, `.github/workflows/tests.yml` |
+| Nightly 03:00 UTC and manual dispatch | the whole suite including the `slow` suites (acceptance and scale files); records the coverage map and durations; opens or updates the issue `Nightly full run failed` on a failure | GitHub |
 | Weekly | quality report (radon, vulture, pip-audit, scc) | GitHub, `weekly-quality.yml` |
 | Every pull request | `map-fresh` (advisory, `continue-on-error`): `scripts/check_map_fresh.py` regenerates `docs/MAP.md` in memory and compares it, ignoring the commit line; stale is expected before the post-merge regeneration | GitHub, `tests.yml` |
 | Pull request touching `platform/pyproject.toml`, `platform/uv.lock` or workflows; Mondays 05:00 UTC; manual | dependency audit (pip-audit of the exported lock), report-only: summary and artifact `pip-audit`, never fails the run | GitHub, `security.yml` |
@@ -16,15 +15,60 @@ protection); report-only until the first fully green run on 2026-11-20. SonarClo
 | Locally, before a branch is opened as a pull request | the touched files one at a time (`pt.sh`), mypy and ruff | the machine |
 
 ## How a change is selected
-`scripts/affected_tests.py` builds the import graph of `platform/src` and the test helper
-modules, and selects every test file whose imports reach a changed module. It selects more, never
-fewer, when unsure: a suite-wide file (pyproject, lock, `conftest.py`, the workflow, the script)
-selects everything; a changed file outside the Python tree selects the tests that name its top
-directory; four files that import nothing by name (plugin, MCP server, site catalogue, registry
-ownership) always run. Core modules (`services/context.py`, `events/`) reach almost every test,
-so a pull request that touches them runs nearly the whole suite, sharded. Dynamic imports are the
-blind spot; the full run after the merge covers it. A coverage-based selection (pytest-testmon)
-is the next step if the first timings show the import graph is too coarse.
+Pull requests and pushes to main run only the tests a change touches; the nightly full run is the
+backstop for what the selection leaves out. `scripts/affected_tests.py` prints the plan (mode,
+source of the selection, depth, selected files of the total) in the "which tests" job log.
+
+1. A suite-wide file (pyproject, lock, `conftest.py`, the workflow, the script) selects everything,
+   as does the label `full-tests` on a pull request. A manual dispatch also runs everything.
+2. Coverage map (preferred). The nightly run records which source files each test file executed
+   (`pytest --cov=factory --cov-context=test`, config `platform/.coveragerc-map`) and keeps only
+   that relation, no line data, with the per-file durations (`scripts/make_coverage_map.py`). The
+   merged `map.json` is uploaded as the artifact `selection-map` (14 days retention). A pull request
+   downloads the latest one from a run on main. A changed source file the map knows selects every
+   test whose recorded files include it. A map that is missing, unreadable or older than 7 days
+   (`--max-age-days`) is ignored, and the log says so.
+3. Import rules (the fallback, and for a changed file the map does not know, such as a new module
+   or a non-Python file). Depth 1: the test files that import the changed module directly
+   (`import factory.x`, `from factory.x import y`; a name a package `__init__` re-exports from a
+   submodule counts as an import of that submodule). Depth 2 for the kernel
+   (`platform/src/factory/{events,model,index}/`), whose blast radius is wider. `--closure N` sets
+   the depth (`--closure 99` is the old unbounded transitive closure). A non-Python file under
+   `platform/src` (hub JS, CSS) selects the tests named after its package and the tests importing
+   the package's modules.
+4. Name match, always: `test_<stem>*.py` and `test_<package>_<stem>*.py` for a changed module.
+5. A changed test file selects itself; a changed test helper selects the tests that import it.
+6. A changed file outside the Python tree selects the tests that name its top directory; four
+   files that import nothing by name (plugin, MCP server, site catalogue, registry ownership)
+   always run.
+
+Known gaps: a test file added after the last nightly run is not in the map, so it is selected as
+a changed file only; behaviour reached only through paths the map never saw (dynamic imports,
+data-driven dispatch) is caught by the nightly run, whose failure opens the issue. A module that
+nearly every test executes (`events/catalog.py`, `services/context.py`, many `model/` files)
+selects most of the suite by overlap or by depth-2 imports: a pull request touching it is slow by
+design; finer, line-level contexts would be the next step.
+
+### Sharding
+The four required shards are filled longest file first onto the lightest shard, using the
+durations in the map (or the committed `platform/tests/.durations.json`). The headless-browser
+files (`BROWSER` in the script) run in their own non-required job `tests (browser)` in parallel,
+only when selected. A shard with no selected file still runs and passes, so the required names
+`tests (shard 0..3 of 4)` and `ruff + mypy --strict` report on every run. A new push to a pull
+request cancels the superseded run; runs on main are never cancelled.
+
+### Refresh and force
+- The map and durations refresh at every nightly run; refresh by hand with the workflow dispatch
+  of `Tests` (Actions tab, "Run workflow"), which also runs the whole suite.
+- Force all tests on a pull request: add the label `full-tests` (the run restarts).
+- Refresh the committed durations: download the junit artifacts of a green full run
+  (`gh run download <id> -p 'junit-*' -D /tmp/j`), then
+  `python3 scripts/make_coverage_map.py --out /tmp/m.json --junit /tmp/j/*/*.xml --durations-out platform/tests/.durations.json`.
+
+### Local gate
+Before pushing, run `ruff`, `mypy --strict` and the new and touched test files (the same files
+`python3 scripts/affected_tests.py --files <changed paths>` prints); never the full suite. CI and
+the nightly run cover the rest.
 
 ## Pull-request flow
 1. One branch per plan or fix, as now (worktree).
