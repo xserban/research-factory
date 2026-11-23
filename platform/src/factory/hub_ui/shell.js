@@ -217,6 +217,7 @@ function mount(opts){
     </nav>
     <div>
       <header class="topbar">
+        <a id="homeLink" class="btn" href="/" hidden aria-label="All projects" title="All projects">${svgI('overview').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Projects</a>
         <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span id="projSwitch" class="proj-sw" hidden></span>
@@ -234,6 +235,8 @@ function mount(opts){
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
   if (HUB.served) projectSwitcher($('#projSwitch'));
+  /* served under the main hub (/p/<slug>/ui/): the portal at / is home; a single-project server has none */
+  if (HUB.served && /^\/p\/[^/]+\/ui(\/|$)/.test(location.pathname)) $('#homeLink').hidden = false;
   /* served only: the classic hub lives at the prefix this hub sits under (<prefix>/ui/ → <prefix>/) */
   if (HUB.served) { const a = $('#classicHub'); a.href = location.pathname.replace(/\/ui(\/.*)?$/, '/'); a.hidden = false; }
   document.querySelectorAll('[data-palette]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openPalette();}));
