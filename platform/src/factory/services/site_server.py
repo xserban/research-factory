@@ -99,7 +99,9 @@ from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
     hub_chat,
+    hub_hypotheses,
     hub_ideas,
+    hub_intuition,
     hub_learn,
     hub_serve,
     site_auth,
@@ -137,6 +139,7 @@ EXPORT_ROUTE: Final = "/api/export/works"
 UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
 UI_CHAT_ROUTES: Final = {
     "/ui/act/chat-request": ("cli:chat request", hub_chat.order_chat),
+    "/ui/act/chat-batch": ("cli:chat request", hub_chat.order_chat_batch),
     "/ui/act/chat-rate-argument": ("cli:sheets rate", hub_chat.rate_argument_act),
     "/ui/act/chat-rate-sentence": ("cli:answers rate", hub_chat.rate_sentence_act),
     "/ui/act/chat-balance": ("cli:sheets balance", hub_chat.balance_act),
@@ -151,6 +154,15 @@ UI_IDEA_ROUTES: Final = {
 }
 """The hub Ideas page's researcher decisions (relation and idea confirm or reject): route, the CLI
 command each is authorised as, and the service act. The service refuses the proposing session."""
+UI_HYPOTHESES_ROUTES: Final = hub_hypotheses.ACTS
+"""The hub Hypotheses page's researcher acts: decide a lead, register or abandon a hypothesis. Each
+is authorised as the CLI command of its kind and is the local human's; the service applies the
+gate and the proposer separation."""
+UI_INTUITION_ROUTES: Final = {
+    "/ui/act/intuition-review": ("cli:interpretations review", hub_intuition.act_review),
+}
+"""The hub Intuition page's researcher act: an interpretation review, authorised as the CLI
+command of its kind; the service keeps the reviewer-is-not-author rule."""
 UI_DOC_PREFIX: Final = "data/sources-doc-"
 """The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
@@ -577,6 +589,19 @@ def _chat_route(
     return route
 
 
+def _hypotheses_route(
+    command_of: Callable[[dict[str, Any]], str | None],
+    act: Callable[[Project, Any, dict[str, Any]], dict[str, object]],
+) -> Callable[[Project, dict[str, Any]], tuple[int, dict[str, object]]]:
+    def route(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        name = command_of(body)
+        if name is None:  # no access row is chosen for an unknown decision
+            return 400, _issues(ValidationIssue("decision", "must be promote, park or discard"))
+        return _layer_act(project, name, [], lambda actor: act(project, actor, body))
+
+    return route
+
+
 def layers_payload(project: Project) -> dict[str, object]:
     """The latest scheme's layer ids and each known work's layer (read-only; the page's selects)."""
     from factory.services.reference_layers import current_scheme
@@ -714,13 +739,18 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     UI_SNOWBALL_ROUTE: ui_snowball_add,
     **{path: _chat_route(command, act) for path, (command, act) in UI_CHAT_ROUTES.items()},
     **{path: _chat_route(command, act) for path, (command, act) in UI_IDEA_ROUTES.items()},
+    **{path: _hypotheses_route(cmd, act) for path, (cmd, act) in UI_HYPOTHESES_ROUTES.items()},
+    **{path: _chat_route(command, act) for path, (command, act) in UI_INTUITION_ROUTES.items()},
     "/api/inbox/add": project_inbox_add,
     "/api/feed/run": feed_run_here,
     "/api/feed/refetch": feed_refetch_here,
 }
 
 
-_CHAT_ACTS: Final = tuple(_ROUTES[path] for path in (*UI_CHAT_ROUTES, *UI_IDEA_ROUTES))
+_CHAT_ACTS: Final = tuple(
+    _ROUTES[path] for path in (*UI_CHAT_ROUTES, *UI_IDEA_ROUTES, *UI_INTUITION_ROUTES)
+)
+_HYPOTHESES_ACTS: Final = tuple(_ROUTES[path] for path in UI_HYPOTHESES_ROUTES)
 
 Freshness = Literal["fresh", "stale", "queued", "building", "failed"]
 """What `Rebuilder.ensure` answers for a product: `fresh` (serve it), `stale` (serve the previous
@@ -1746,6 +1776,7 @@ def _handler_class(
                 move_layer,
                 ui_snowball_add,
                 *_CHAT_ACTS,
+                *_HYPOTHESES_ACTS,
             ):
                 with slot.write_lock:
                     code, payload = route(project, body)

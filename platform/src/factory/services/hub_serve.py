@@ -94,6 +94,8 @@ PREWARM_ORDER: Final = (
     "findings",
     "contradictions",
     "chat",
+    "hypotheses",
+    "ideas",
     "mining",
     "graph",
     "screening",
@@ -108,6 +110,7 @@ PREWARM_ORDER: Final = (
     "method",
     "costs",
     "write",
+    "intuition",
     "platform",
     "learn",
 )

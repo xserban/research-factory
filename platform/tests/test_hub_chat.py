@@ -805,3 +805,201 @@ def test_the_basket_uses_the_cached_resolution(
     hub_chat.basket_payload(project, spec)
     hub_chat.basket_payload(project, spec)
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------- threads, batches, context
+
+
+def _row(rid: str, parent: str | None, state: str, result: str | None, ts: str) -> dict[str, Any]:
+    return {
+        "request_id": rid,
+        "kind": "ask",
+        "hypothesis": None,
+        "question": f"q {rid}",
+        "mode": None,
+        "parent": parent,
+        "state": state,
+        "result": result,
+        "ts": ts,
+    }
+
+
+def _ans(aid: str, parent: str | None, ts: str) -> dict[str, Any]:
+    return {"answer_id": aid, "question": f"a {aid}", "sentences": 1, "parent": parent, "ts": ts}
+
+
+def test_threads_are_derived_from_parent_links_only() -> None:
+    answers = [_ans("ans_1", None, "t1"), _ans("ans_2", "ans_1", "t3"), _ans("ans_9", None, "t9")]
+    sheets = [
+        {"sheet_id": "sht_1", "hypothesis": "h", "mode": "explore", "respar_of": None, "ts": "t4"}
+    ]
+    requests = [
+        _row("chr_1", None, "done", "ans_1", "t0"),
+        _row("chr_2", "ans_1", "done", "ans_2", "t2"),
+        _row("chr_3", "ans_1", "done", "sht_1", "t3b"),  # a spar over the answer's question
+        _row("chr_4", "ans_2", "open", None, "t5"),  # waiting follow-up, no result yet
+        _row("chr_5", "sht_1", "taken", None, "t6"),
+        _row("chr_6", "ghost", "open", None, "t7"),  # unknown parent: a root of its own
+    ]
+    got = hub_chat.threads(requests, sheets, answers)
+    by_root = {t["root"]: t for t in got}
+    one = by_root["ans_1"]
+    assert [(n["id"], n["depth"]) for n in one["nodes"]] == [
+        ("ans_1", 0),
+        ("ans_2", 1),
+        ("chr_4", 2),
+        ("sht_1", 1),
+        ("chr_5", 2),
+    ]
+    assert one["count"] == 5 and one["latest"] == "t6" and one["state"] == "taken"
+    assert by_root["ans_9"]["state"] == "answered" and by_root["ans_9"]["count"] == 1
+    assert by_root["chr_6"]["state"] == "open" and by_root["chr_6"]["nodes"][0]["type"] == "request"
+    assert [t["root"] for t in got] == ["ans_9", "chr_6", "ans_1"]
+    assert got == hub_chat.threads(requests, sheets, answers)  # deterministic
+
+
+def test_a_cycle_of_parents_makes_roots_not_a_loop() -> None:
+    answers = [_ans("ans_1", "ans_2", "t1"), _ans("ans_2", "ans_1", "t2")]
+    got = hub_chat.threads([], [], answers)
+    assert sorted(t["root"] for t in got) == ["ans_1", "ans_2"]
+
+
+def test_the_payload_carries_threads_from_real_follow_ups(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    ans = _answer(project, agent, world)
+    follow = cr.request_chat(project, human, "ask", SPEC, question="Why?", parent=ans).request_id
+    p = hub_chat.chat_payload(project)
+    thread = p["threads"][0]
+    assert [n["id"] for n in thread["nodes"]] == [ans, follow]
+    assert thread["nodes"][1]["state"] == "open" and thread["state"] == "open"
+    assert p["batch_max"] == hub_chat.BATCH_MAX
+
+
+def test_context_view_gives_the_selection_and_cited_works(
+    project: Project, agent: Actor, world: list[str]
+) -> None:
+    ans = _answer(project, agent, world)
+    sheet = _sheet(project, agent, world)
+    got = hub_chat.live(project, {"context": ans})
+    assert got["works"] == [sorted(world)[0]] and "layers" in got["selection"]
+    assert hub_chat.live(project, {"context": sheet})["works"] == [sorted(world)[0]]
+    with pytest.raises(FactoryValidationError):
+        hub_chat.live(project, {"context": "sht_NOPE"})
+
+
+def test_a_batch_records_every_line_in_order_and_starts_one_run(
+    project: Project, human: Actor, world: list[str], started: list[tuple[str, int | None]]
+) -> None:
+    got = hub_chat.order_chat_batch(
+        project, human, {"kind": "ask", "lines": ["One?", "", "  Two?  ", "Three?"]}
+    )
+    ids = got["request_ids"]
+    assert isinstance(ids, list) and len(ids) == 3 and got["run_id"] == "run_fake"
+    assert started == [("ask", None)]
+    rows = {r.request_id: r for r in cr.list_requests(project)}
+    assert [rows[i].question for i in ids] == ["One?", "Two?", "Three?"]
+
+
+def test_a_batch_with_a_bad_line_writes_nothing(
+    project: Project, human: Actor, world: list[str], started: list[tuple[str, int | None]]
+) -> None:
+    before = _total(project)
+    bad: list[dict[str, Any]] = [
+        {"kind": "ask", "lines": ["ok?", "x" * 3000]},
+        {"kind": "ask", "lines": ["same?", "SAME?"]},
+        {"kind": "ask", "lines": []},
+        {"kind": "ask", "lines": ["  ", ""]},
+        {"kind": "ask", "lines": "one"},
+        {"kind": "ask", "lines": ["ok?"], "parent": "sht_NOPE"},
+        {"kind": "ask", "lines": ["ok?"], "mode": "prepare"},
+        {"kind": "ask", "lines": ["ok?"], "note": "n" * 700},
+        {"kind": "ask", "lines": ["ok?"], "selection": {"layers": ["no-such-layer"]}},
+        {"kind": "talk", "lines": ["ok?"]},
+        {"lines": ["ok?"]},
+    ]
+    for body in bad:
+        with pytest.raises(FactoryValidationError):
+            hub_chat.order_chat_batch(project, human, body)
+    assert _total(project) == before and started == []
+    with pytest.raises(FactoryValidationError) as exc:
+        hub_chat.order_chat_batch(project, human, {"kind": "ask", "lines": ["ok?", "x" * 3000]})
+    assert [i.field for i in exc.value.issues] == ["lines[1]"]
+
+
+def test_a_batch_is_capped_and_refuses_an_order_already_waiting(
+    project: Project, human: Actor, world: list[str], started: list[tuple[str, int | None]]
+) -> None:
+    many = [f"Question {i}?" for i in range(hub_chat.BATCH_MAX + 1)]
+    with pytest.raises(FactoryValidationError) as exc:
+        hub_chat.order_chat_batch(project, human, {"kind": "ask", "lines": many})
+    assert "at most 10" in exc.value.issues[0].reason
+    ok = hub_chat.order_chat_batch(
+        project, human, {"kind": "ask", "lines": many[:10], "start": False}
+    )
+    assert len(ok["request_ids"]) == 10 and started == []  # type: ignore[arg-type]
+    before = _total(project)
+    with pytest.raises(FactoryValidationError) as dup:
+        hub_chat.order_chat_batch(project, human, {"kind": "ask", "lines": ["new?", many[3]]})
+    assert dup.value.issues[0].field == "lines[1]" and _total(project) == before
+
+
+def test_a_batch_follow_up_shares_the_parent_and_the_selection(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    ans = _answer(project, agent, world)
+    got = hub_chat.order_chat_batch(
+        project,
+        human,
+        {"kind": "ask", "lines": ["A?", "B?"], "parent": ans, "start": False, "note": "n"},
+    )
+    rows = {r.request_id: r for r in cr.list_requests(project)}
+    assert [rows[i].parent for i in got["request_ids"]] == [ans, ans]  # type: ignore[union-attr]
+    assert all(r.note == "n" for r in rows.values())
+
+
+def test_a_case_for_batch_is_one_line_only(
+    project: Project, agent: Actor, human: Actor, world: list[str]
+) -> None:
+    works = sorted(world)
+    sheet = sh.open_sheet(
+        project, agent, "H", SPEC, [C(works[0], "claims", "against", ANCHOR, QUOTE)], mode="prepare"
+    ).sheet_id
+    sh.record_arguments(project, agent, sheet, [_arg(works[0], "against")])
+    sh.close_section(project, agent, sheet, "against")
+    body = {"kind": "spar", "mode": "prepare", "parent": sheet, "start": False}
+    with pytest.raises(FactoryValidationError):
+        hub_chat.order_chat_batch(project, human, {**body, "lines": ["H", "H2"]})
+    assert (
+        len(hub_chat.order_chat_batch(project, human, {**body, "lines": ["H"]})["request_ids"]) == 1
+    )  # type: ignore[arg-type]
+
+
+def test_the_batch_route_needs_the_token_and_records_the_lines(
+    served: tuple[int, Project], world: list[str], started: list[tuple[str, int | None]]
+) -> None:
+    port, project = served
+    route = f"{UI}/act/chat-batch"
+    body = {"kind": "ask", "lines": ["One?", "Two?"]}
+    assert _req(port, "POST", route, body)[0] in (401, 403)
+    before = _total(project)
+    status, _, data = _req(port, "POST", route, body, {"X-Factory-Token": _token(port)})
+    assert status == 200 and len(json.loads(data)["request_ids"]) == 2
+    assert _total(project) > before and started == [("ask", None)]
+
+
+def test_the_chat_script_has_the_conversation_controls() -> None:
+    src = _js("pages/chat.js")
+    assert "/ui/act/chat-batch" in src
+    for word in (
+        "Follow up",
+        "Following up on:",
+        "Same papers as the parent",
+        "Spar this claim",
+        "Ask about this",
+        "Already read in the parent:",
+        "waiting for a session",
+        "Saved",
+    ):
+        assert word in src, word
+    assert "parent: " in src and "context=" in src

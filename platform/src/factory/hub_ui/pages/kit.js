@@ -1,4 +1,4 @@
-/* Brand kit page. Payload: shell. Tokens, the eight themes and contrast ratios are read live from the
+/* Brand kit page. Payload: shell. Tokens, the themes and contrast ratios are read live from the
    CSS in each theme (the theme attribute is switched synchronously and the colours resolved by the
    browser); nothing about colour is typed here. */
 HUB.load(['shell']).then(d => {
@@ -69,7 +69,7 @@ section.k{margin-top:44px}
     if (prev) el.dataset.theme = prev; else delete el.dataset.theme;
     return o;
   }
-  const THEMES = [['dark', 'Hub dark'], ['light', 'Hub light'], ['tokyo-night', 'Tokyo Night'], ['catppuccin-mocha', 'Catppuccin Mocha'], ['gruvbox', 'Gruvbox'], ['nord', 'Nord'], ['rose-pine', 'Rosé Pine'], ['lcars', 'LCARS']];
+  const THEMES = H.THEMES;
   const TH = Object.fromEntries(THEMES.map(([k]) => [k, readTheme(k)]));
   const PAIRS = [
     ['Body text', '--fg', '--bg', 4.5], ['Body text on card', '--fg', '--surface', 4.5], ['Secondary text', '--mut', '--bg', 4.5], ['Secondary text on card', '--mut', '--surface', 4.5],
@@ -115,7 +115,7 @@ section.k{margin-top:44px}
     main.innerHTML = `
 <header style="padding:20px 0 0;max-width:72ch">
   ${H.header({ kicker: 'Design system · tokens live in the shared stylesheet', title: 'Brand kit', level: 1 })}
-  <p class="lead" style="margin-top:14px">Quiet ground, one accent, hue that means one thing. ${fmt(allOk)} of ${fmt(THEMES.length)} themes pass every colour check.${H.info(panel('The colours, type and components every page uses, in all eight themes.', 'Click a theme card to switch to it. Ticks and crosses are measured, not declared.', 'Every colour is read from the live stylesheet: the theme attribute is switched, and the browser resolves each token. Contrast uses the WCAG 2.x relative-luminance formula; the thresholds are 4.5 for text and 3 for graphics and large text.'), 'How the kit is measured')}</p>
+  <p class="lead" style="margin-top:14px">Quiet ground, one accent, hue that means one thing. ${fmt(allOk)} of ${fmt(THEMES.length)} themes pass every colour check.${H.info(panel('The colours, type and components every page uses, in every theme.', 'Click a theme card to switch to it. Ticks and crosses are measured, not declared.', 'Every colour is read from the live stylesheet: the theme attribute is switched, and the browser resolves each token. Contrast uses the WCAG 2.x relative-luminance formula; the thresholds are 4.5 for text and 3 for graphics and large text.'), 'How the kit is measured')}</p>
 </header>
 
 <section class="k">${H.header({ title: 'Themes', sub: `Showing: ${esc(curName())}`, infoHtml: panel('Each theme as it looks, with the contrast of its five most important pairs.', 'Left of each tick is the measured ratio; ✓ means it meets its threshold (4.5 for text).', 'Per theme, from the resolved token colours.') })}

@@ -359,7 +359,8 @@ def test_the_page_and_payloads_are_registered() -> None:
     assert {"landscape", "landscape_uses"} <= set(hb.BUILDERS)
     assert hub_serve.known_name("landscape_uses")
     ids = list(hub_ui.PAGES)
-    assert ids.index("landscape") == ids.index("graph") + 1  # the rail follows this order
+    assert ids.index("ideas") == ids.index("graph") + 1  # the rail follows this order
+    assert ids.index("landscape") == ids.index("ideas") + 1
 
 
 def test_both_payloads_come_from_one_read(monkeypatch: pytest.MonkeyPatch) -> None:

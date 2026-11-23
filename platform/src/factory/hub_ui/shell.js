@@ -94,7 +94,7 @@ const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Ideas','ideas.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
   ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
-  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Chat with papers','chat.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
+  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Hypotheses','hypotheses.html'],['Findings','Chat with papers','chat.html'],['Findings','Intuition','intuition.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
   ['Start','Start here','learn.html'],
   ['Design','Brand kit','kit.html'],
 ];
@@ -109,6 +109,8 @@ const ICON = {
   data:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/>',
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
+  hypotheses:'<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.500 10.900c.6.500 1 1.200 1 2.100h5c0-.9.4-1.600 1-2.100A6 6 0 0 0 12 3z"/>',
+  intuition:'<circle cx="12" cy="10" r="5"/><path d="M9.500 15.500h5M10 18.500h4"/>',
   chat:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
   learn:'<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5M9 8h6M9 12h6"/>',
   kit:'<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
@@ -131,7 +133,31 @@ const ICON = {
 const svgI = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[k]}</svg>`;
 
 /* ---------- theme ---------- */
-const THEMES = [['dark', 'Hub dark'], ['light', 'Hub light'], ['tokyo-night', 'Tokyo Night'], ['catppuccin-mocha', 'Catppuccin Mocha'], ['gruvbox', 'Gruvbox'], ['nord', 'Nord'], ['rose-pine', 'Rosé Pine'], ['lcars', 'LCARS']];
+/* [id, name, group]: the same ids and names as services/site_themes.py; the picker groups by Dark / Light */
+const THEMES = [
+  ['dark', 'Hub dark', 'Dark'],
+  ['tokyo-night', 'Tokyo Night', 'Dark'],
+  ['catppuccin-mocha', 'Catppuccin Mocha', 'Dark'],
+  ['gruvbox', 'Gruvbox', 'Dark'],
+  ['nord', 'Nord', 'Dark'],
+  ['rose-pine', 'Rosé Pine', 'Dark'],
+  ['lcars', 'LCARS', 'Dark'],
+  ['ethereal', 'Ethereal', 'Dark'],
+  ['aetheria', 'Aetheria', 'Dark'],
+  ['cyberpunk-dreams', 'Cyberpunk Dreams', 'Dark'],
+  ['circuit-horizon', 'Circuit Horizon', 'Dark'],
+  ['moon-orbit', 'Moon Orbit', 'Dark'],
+  ['solitude', 'Solitude', 'Dark'],
+  ['vantablack', 'Vantablack', 'Dark'],
+  ['kanagawa', 'Kanagawa', 'Dark'],
+  ['light', 'Hub light', 'Light'],
+  ['paper-blue', 'Paper Blue', 'Light'],
+  ['sepia', 'Sepia', 'Light'],
+  ['cool-grey', 'Cool Grey', 'Light'],
+  ['catppuccin-latte', 'Catppuccin Latte', 'Light'],
+  ['flexoki-light', 'Flexoki Light', 'Light'],
+  ['solarized-light', 'Solarized Light', 'Light'],
+];
 function setTheme(t){ document.documentElement.dataset.theme = t; try{localStorage.setItem('hub-r2-theme',t)}catch(e){} document.dispatchEvent(new CustomEvent('hub:theme')); }
 try{ const t=localStorage.getItem('hub-r2-theme'); if(t) document.documentElement.dataset.theme=t; }catch(e){}
 const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.documentElement.dataset.theme=q0.get('theme');
@@ -160,7 +186,9 @@ const RAIL = [
   ['-'],
   ['findings','Findings','findings.html'],
   ['contradictions','Contradictions','contradictions.html'],
+  ['hypotheses','Hypotheses','hypotheses.html'],
   ['chat','Chat','chat.html'],
+  ['intuition','Intuition','intuition.html'],
   ['write','Write & export','write.html'],
   ['-'],
   ['living','Living','living.html'],
@@ -189,7 +217,7 @@ function mount(opts){
         <a id="classicHub" class="btn" hidden title="The classic hub, served beside this one">&larr; Classic hub</a>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
-        <select class="theme-pick" id="themePick" aria-label="Colour theme">${THEMES.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
+        <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
       <main id="main"></main>
     </div>
@@ -298,7 +326,7 @@ const hash = { get(){ return new URLSearchParams(location.hash.slice(1)); }, set
 
 /* A page may set HUB.paletteExtra = q => [{label, group, go}] to add its own entries (approaches, …) to Ctrl-K. */
 const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, pretty, humanColor, layerColor, cssv, val, quote,
-  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, closePalette, tip, tipHtml, tipAt, hash, setTheme, init };
+  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, closePalette, tip, tipHtml, tipAt, hash, setTheme, THEMES, init };
 
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){
