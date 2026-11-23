@@ -53,6 +53,7 @@ from typing import Any, Literal
 from pydantic import JsonValue, SerializerFunctionWrapHandler, ValidationError, model_serializer
 from sqlalchemy import text
 
+from factory.document.anchors import AnchorKind
 from factory.document.quotes import quote_in_element
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor, Event
@@ -94,7 +95,7 @@ from factory.services.calibration import (
     worked_examples,
 )
 from factory.services.context import Principal, Project
-from factory.services.conversions import resolve_anchor
+from factory.services.conversions import conversion_manifest, resolve_anchor
 from factory.services.dedup import dedup_current
 from factory.services.members import _lab_of
 from factory.services.passes import pass_users, require_outside_passes
@@ -1137,12 +1138,41 @@ def _item_issues(
     ):
         return [ValidationIssue(f"{field}.quote", "an exclusion needs a quote in systematic")]
     if stage is FT:
+        if _may_lack_text(project, item, _pinned_conversion(record)):
+            return []
+        if not item.quote and not human:
+            return [ValidationIssue(f"{field}.quote", "a quote is required")]
         return _anchored_quote_issues(project, field, item, _pinned_conversion(record))
+    if not item.quote and not human:
+        return [ValidationIssue(f"{field}.quote", "a quote is required")]
     if item.quote and not quote_in(
         item.quote, str(record.get("title") or ""), record.get("abstract")
     ):
         return [ValidationIssue(f"{field}.quote", "is not in the record's title or abstract")]
     return []
+
+
+def _may_lack_text(
+    project: Project,
+    item: ScreeningItem | HumanScreeningItem,
+    conversion_id: str | None,
+) -> bool:
+    """True when a full-text `cannot-assess` with no quote and no anchor is allowed: the task's
+    pinned conversion has no segment (no non-cell anchor), so there is nothing to quote. The
+    segment count is computed from the manifest, never judged; an unreadable conversion is not
+    empty."""
+    if (
+        item.verdict is not Verdict.CANNOT_ASSESS
+        or item.quote
+        or item.anchor is not None
+        or conversion_id is None
+    ):
+        return False
+    try:
+        manifest = conversion_manifest(project, conversion_id)
+    except FactoryValidationError:
+        return False
+    return all(anchor.kind is AnchorKind.CELL for anchor in manifest.anchors)
 
 
 def _anchored_quote_issues(

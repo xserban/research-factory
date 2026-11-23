@@ -421,3 +421,54 @@ def test_title_abstract_batch_examples_unchanged(
     assert served.worked_examples
     for example in served.worked_examples:
         assert set(example) == {"title", "abstract", "expected"}
+
+
+# --- A pinned conversion with no segments (pilot 2, gate observation 28) ---
+
+
+def _empty_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from factory.document.anchors import Manifest
+
+    monkeypatch.setattr(screening, "conversion_manifest", lambda _p, _c: Manifest(anchors=()))
+
+
+def _no_text_item(record: Mapping[str, Any]) -> ScreeningItem:
+    return ScreeningItem(
+        work_id=str(record["work_id"]),
+        verdict=Verdict.CANNOT_ASSESS,
+        criterion="IN01",
+        quote="",
+        rationale="no text",
+        anchor=None,
+    )
+
+
+def test_cannot_assess_without_quote_accepted_when_conversion_is_empty(
+    project: Project, agent: Actor, batch: ScreenBatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _empty_manifest(monkeypatch)
+    result = screen_record(project, agent, batch.task_id, [_no_text_item(batch.records[0])])
+    assert result.rejected == [] and len(result.written) == 1
+    decision = _ft_live(project)[0]
+    assert decision.verdict is Verdict.CANNOT_ASSESS and decision.quote == ""
+    assert decision.anchor is None
+
+
+def test_include_without_quote_refused_even_when_conversion_is_empty(
+    project: Project, agent: Actor, batch: ScreenBatch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _empty_manifest(monkeypatch)
+    work_id = str(batch.records[0]["work_id"])
+    with pytest.raises(ValidationError):
+        ScreeningItem(work_id=work_id, verdict=Verdict.INCLUDE, quote="", rationale="x")
+    item = _item(batch.records[0]).model_copy(update={"quote": "", "anchor": None})
+    result = screen_record(project, agent, batch.task_id, [item])
+    assert result.written == [] and result.rejected[0].issues[0].field == "items.0"
+
+
+def test_cannot_assess_without_quote_refused_when_conversion_has_text(
+    project: Project, agent: Actor, batch: ScreenBatch
+) -> None:
+    result = screen_record(project, agent, batch.task_id, [_no_text_item(batch.records[0])])
+    assert result.written == []
+    assert result.rejected[0].issues[0].field == "items.0.quote"

@@ -162,9 +162,19 @@ class _ItemFields(StrictModel):
 
 
 class ScreeningItem(_ItemFields):
-    """One verdict as an agent returns it, before it becomes a decision event."""
+    """One verdict as an agent returns it, before it becomes a decision event.
 
-    quote: NonBlank
+    An agent quotes. The one verdict that may arrive without a quote is `cannot-assess`, and only
+    the service lets it through: when the full-text task's pinned conversion has no segments
+    (nothing to quote). The service refuses it in every other case."""
+
+    quote: OptionalQuote = ""
+
+    @model_validator(mode="after")
+    def _quote_unless_cannot_assess(self) -> Self:
+        if not self.quote and self.verdict is not Verdict.CANNOT_ASSESS:
+            raise ValueError("a quote is required")
+        return self
 
 
 class HumanScreeningItem(_ItemFields):
