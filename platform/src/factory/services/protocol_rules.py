@@ -183,6 +183,7 @@ def protocol_issues(
     layer_miners: Collection[tuple[str, int]] = (),
     registered_taxonomies: Collection[tuple[str, int]] = (),
     miner_taxonomies: Mapping[tuple[str, int], tuple[str, int]] | None = None,
+    known_works: Collection[str] | None = None,
 ) -> ProtocolCheck:
     """Check a protocol against the current question, its seeds, its probes and its mode.
 
@@ -193,6 +194,7 @@ def protocol_issues(
     """
     errors = _errors(spec, question, current_question_id, mode, seeds, known_sources)
     errors.extend(_watch_plan_errors(spec, window_sources))
+    errors.extend(_work_list_errors(spec.contribution_schema, known_works))
     errors.extend(_miner_errors(spec.miners, registered_miners, calibrated_miners))
     errors.extend(_layer_errors(spec.miners, layer_miners))
     errors.extend(_taxonomy_errors(spec, registered_taxonomies, miner_taxonomies or {}))
@@ -411,7 +413,14 @@ def _extraction_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]
                 f"{EXTRACTION_SECTION}.pack", "pack contribution belongs in contribution_schema"
             )
         ]
-    return _schema_field_errors(schema, EXTRACTION_SECTION)
+    issues = _schema_field_errors(schema, EXTRACTION_SECTION)
+    if schema.works is not None:
+        issues.append(
+            ValidationIssue(
+                f"{EXTRACTION_SECTION}.works", "an allow-list belongs in contribution_schema"
+            )
+        )
+    return issues
 
 
 def _contribution_errors(schema: ExtractionSchema | None) -> list[ValidationIssue]:
@@ -431,6 +440,20 @@ def _contribution_errors(schema: ExtractionSchema | None) -> list[ValidationIssu
             )
         )
     return issues
+
+
+def _work_list_errors(
+    schema: ExtractionSchema | None, known_works: Collection[str] | None
+) -> list[ValidationIssue]:
+    """The allow-list names only works the corpus holds (`known_works`; None = unchecked)."""
+    if schema is None or schema.works is None or known_works is None:
+        return []
+    unknown = [w for w in schema.works if w not in known_works]
+    if not unknown:
+        return []
+    return [
+        ValidationIssue(f"{CONTRIBUTION_SECTION}.works", f"unknown work id: {', '.join(unknown)}")
+    ]
 
 
 def _schema_field_errors(schema: ExtractionSchema, section: str) -> list[ValidationIssue]:

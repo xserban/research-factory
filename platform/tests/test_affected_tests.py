@@ -44,7 +44,7 @@ def test_a_changed_source_module_selects_the_tests_that_import_it() -> None:
     assert target in files
     direct = {
         Path(files[m]).name
-        for m in module._closure({target}, importers)
+        for m in module._closure({target}, importers, 1, files)
         if m.startswith("tests.test_")
     }
     mode, names = module.select(["platform/src/factory/services/finders.py"])

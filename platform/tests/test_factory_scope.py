@@ -1,4 +1,4 @@
-"""The factory event scope (decision 169, proposed): reserved slug, allow-list, own projector."""
+"""The factory event scope (decision 169): reserved slug, allow-list, own projector."""
 
 from pathlib import Path
 

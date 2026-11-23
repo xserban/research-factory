@@ -49,7 +49,7 @@ from factory.services.extraction import require_schema
 from factory.services.extraction_agreement import final_rows
 from factory.services.hypothesis_gates import effective_plan, may_pass, project_mode
 from factory.services.ideas import idea_view, resolve_idea
-from factory.services.leads import card_keys, lead_view
+from factory.services.leads import card_keys, lead_view, serves_rq_issues
 from factory.services.xrun_accounting import confirmatory_evidence
 
 HypothesisState = Literal["draft", "reviewed", "registered", "evaluated", "abandoned", "superseded"]
@@ -80,6 +80,7 @@ class HypothesisView(StrictModel):
     superseded_by: str | None
     drafter_session: str
     drafter_model: str | None = None
+    serves_rq: str | None = None
     abandon_reason: str | None = None
     conclusion: str | None = None
 
@@ -196,7 +197,12 @@ def _supersede_issues(project: Project, supersedes: str) -> list[ValidationIssue
 
 
 def draft_hypothesis(
-    project: Project, actor: Actor, spec: HypothesisSpec, *, supersedes: str | None = None
+    project: Project,
+    actor: Actor,
+    spec: HypothesisSpec,
+    *,
+    supersedes: str | None = None,
+    serves_rq: str | None = None,
 ) -> tuple[str, str]:
     """Record a hypothesis draft and return `(hyp_ id, H@)`. Refused, with nothing written: an
     actor that is neither an agent nor a human (`actor`); a lead that is missing where the plan
@@ -205,7 +211,7 @@ def draft_hypothesis(
     `baseline.*`); a condition key that is not a comparability key of the evidence schema
     (`conditions.<k>`: `not-a-comparability-key`); an unknown alternative; a hypothesis to supersede
     that is unknown, abandoned, already superseded or has evidence (`supersedes`:
-    `evidence-exists`)."""
+    `evidence-exists`); a `serves_rq` that is not a recorded sub-question id (`serves_rq`)."""
     if actor.kind not in ("agent", "human"):
         raise _refuse("actor", "only an agent or a human drafts a hypothesis")
     with project.index.exclusive():
@@ -213,15 +219,26 @@ def draft_hypothesis(
         issues = _spec_issues(project, spec)
         if supersedes is not None:
             issues.extend(_supersede_issues(project, supersedes))
+        issues.extend(serves_rq_issues(project, serves_rq))
         if issues:
             raise FactoryValidationError(issues)
         hypothesis_id = project.ids.new("hyp")
         version = hypothesis_version(spec)
         payload = HypothesisDrafted(
-            hypothesis_id=hypothesis_id, spec=spec, h_version=version, supersedes=supersedes
+            hypothesis_id=hypothesis_id,
+            spec=spec,
+            h_version=version,
+            supersedes=supersedes,
+            serves_rq=serves_rq,
         )
         input_blob = (
-            project.blobs.put_json({"spec": spec.model_dump(mode="json"), "supersedes": supersedes})
+            project.blobs.put_json(
+                {
+                    "spec": spec.model_dump(mode="json"),
+                    "supersedes": supersedes,
+                    **({} if serves_rq is None else {"serves_rq": serves_rq}),
+                }
+            )
             if actor.kind == "agent"
             else None
         )
@@ -328,6 +345,7 @@ def _view(project: Project, row: Any) -> HypothesisView:
         superseded_by=None if row.superseded_by is None else str(row.superseded_by),
         drafter_session=str(row.drafter_session),
         drafter_model=None if row.drafter_model is None else str(row.drafter_model),
+        serves_rq=None if row.serves_rq is None else str(row.serves_rq),
         abandon_reason=None if row.abandon_reason is None else str(row.abandon_reason),
         conclusion=None if row.conclusion_text is None else str(row.conclusion_text),
     )

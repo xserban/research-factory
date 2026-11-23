@@ -25,8 +25,8 @@ Invariants:
   `score_shown`: a human `feed.reacted` in the factory scope, `cli:feed react --scope factory`;
   the project-page route of the same path is the project's own), `POST /api/feed/train` (no
   body fields; trains the factory feed's general ranker and ranks the pool, `cli:feed train`;
-  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision 169,
-  proposed) and
+  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision
+  169) and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
   and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional
@@ -2256,6 +2256,8 @@ class MainHub:
             counts=factory_feed.counts(env.settings, clock=env.clock),
             status=factory_feed_actions.ranker_status(env.settings, clock=env.clock),
             ranking_id=snapshot.ranking_id,
+            freshness=factory_feed.freshness(env.settings, clock=env.clock),
+            can_fetch=self.feed is not None,
         )
 
     def feed_page(self) -> str:
