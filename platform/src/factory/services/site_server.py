@@ -99,6 +99,7 @@ from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
     hub_chat,
+    hub_intuition,
     hub_learn,
     hub_serve,
     site_auth,
@@ -142,6 +143,11 @@ UI_CHAT_ROUTES: Final = {
 }
 """The hub Chat page's researcher acts (night feature N5): route, the command it is authorised
 as, and the service act. Each is the local human's; nothing else on `/ui/` writes."""
+UI_INTUITION_ROUTES: Final = {
+    "/ui/act/intuition-review": ("cli:interpretations review", hub_intuition.act_review),
+}
+"""The hub Intuition page's researcher act: an interpretation review, authorised as the CLI
+command of its kind; the service keeps the reviewer-is-not-author rule."""
 UI_DOC_PREFIX: Final = "data/sources-doc-"
 """The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
@@ -704,13 +710,14 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
     **{path: _chat_route(command, act) for path, (command, act) in UI_CHAT_ROUTES.items()},
+    **{path: _chat_route(command, act) for path, (command, act) in UI_INTUITION_ROUTES.items()},
     "/api/inbox/add": project_inbox_add,
     "/api/feed/run": feed_run_here,
     "/api/feed/refetch": feed_refetch_here,
 }
 
 
-_CHAT_ACTS: Final = tuple(_ROUTES[path] for path in UI_CHAT_ROUTES)
+_CHAT_ACTS: Final = tuple(_ROUTES[path] for path in (*UI_CHAT_ROUTES, *UI_INTUITION_ROUTES))
 
 Freshness = Literal["fresh", "stale", "queued", "building", "failed"]
 """What `Rebuilder.ensure` answers for a product: `fresh` (serve it), `stale` (serve the previous
