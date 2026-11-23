@@ -416,13 +416,20 @@ def today(
     page: int = 1,
     page_size: int = DEFAULT_SHOWN,
     sort: Literal["ranked", "newest"] = "ranked",
+    hide_labelled: bool = False,
     clock: Clock | None = None,
 ) -> TodayPage:
     """Today's list, 1-based `page`. `ranked`: the shown picks by rank (exploration picks among
-    them, labelled), then the rest of the order; `newest`: submission date descending."""
+    them, labelled), then the rest of the order; `newest`: submission date descending.
+    `hide_labelled` leaves out entries whose latest label is a like or a dislike (the hub's
+    Today: a reacted card has left it)."""
     snap = _snapshot(settings, clock)
     rows = _rows_by_entry(snap)
-    ids = [i for i in rows if i in snap.pool]
+    ids = [
+        i
+        for i in rows
+        if i in snap.pool and not (hide_labelled and snap.reactions.get(i, {}).get("label"))
+    ]
     if sort == "newest":
         ids.sort(key=lambda i: i)
         ids.sort(key=lambda i: snap.pool[i].submitted or "", reverse=True)
@@ -479,6 +486,34 @@ def _by_state(settings: Settings, clock: Clock | None, wanted: str) -> list[Feed
     return [_card(snap.pool[i], rows.get(i), snap) for i in reversed(ids)]
 
 
+def disliked(settings: Settings, *, clock: Clock | None = None) -> list[FeedCard]:
+    """Entries whose latest label is a dislike, most recently first reacted first."""
+    return _by_state(settings, clock, "dislike")
+
+
+@dataclass(frozen=True)
+class FeedCounts:
+    today: int
+    liked: int
+    disliked: int
+    reading: int
+
+
+def counts(settings: Settings, *, clock: Clock | None = None) -> FeedCounts:
+    """The sidebar's numbers from one read: Today (ranked entries not yet liked or disliked),
+    Liked, disliked and the Reading list."""
+    snap = _snapshot(settings, clock)
+    rows = _rows_by_entry(snap)
+    states = snap.reactions
+    in_pool = [i for i in states if i in snap.pool]
+    return FeedCounts(
+        today=sum(1 for i in rows if i in snap.pool and not states.get(i, {}).get("label")),
+        liked=sum(1 for i in in_pool if states[i].get("label") == "like"),
+        disliked=sum(1 for i in in_pool if states[i].get("label") == "dislike"),
+        reading=sum(1 for i in in_pool if states[i].get("saved")),
+    )
+
+
 def liked(settings: Settings, *, clock: Clock | None = None) -> list[FeedCard]:
     """Entries whose latest label is a like, most recently first reacted first."""
     return _by_state(settings, clock, "like")
@@ -491,11 +526,14 @@ def reading_list(settings: Settings, *, clock: Clock | None = None) -> list[Feed
 
 __all__ = [
     "FeedCard",
+    "FeedCounts",
     "PoolEntry",
     "ProjectBadge",
     "ProjectScore",
     "RankResult",
     "TodayPage",
+    "counts",
+    "disliked",
     "liked",
     "load_pool",
     "project_view",

@@ -91,7 +91,7 @@ from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qs, parse_qsl, unquote
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -106,6 +106,7 @@ from factory.services import activity as activity_service
 from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
 from factory.services import (
+    factory_feed,
     factory_feed_actions,
     hub_chat,
     hub_learn,
@@ -115,6 +116,7 @@ from factory.services import (
     site_catalog_page,
     site_chrome,
     site_create,
+    site_factory_feed,
     site_hub_feed,
     site_portal,
     site_progress,
@@ -263,6 +265,27 @@ def _hint_input(value: object) -> tuple[HintInput | None, list[ValidationIssue]]
         ),
         [],
     )
+
+
+def feed_send(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Send the entry to the inbox as its arXiv link (no lookup), as the local human; returns
+    (status, body). The main hub's feed page offers it as "Send to project…"."""
+    entry_id = body.get("entry_id")
+    ranking_id, bad = _optional_str(body, "ranking_id")
+    if not isinstance(entry_id, str) or not entry_id:
+        bad.append(ValidationIssue("entry_id", "required"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(entry_id, str)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed send")
+        item_id = feed_service.send(project, actor, entry_id, ranking_id=ranking_id)
+    except FactoryValidationError as exc:
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "inbox_item_id": item_id}
 
 
 def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
@@ -703,6 +726,7 @@ def feed_refetch_here(_project: Project, _body: dict[str, Any]) -> tuple[int, di
 
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
+    "/api/feed/send": feed_send,
     "/api/feed/add": feed_add,
     "/api/feed/configure": feed_configure,
     "/api/watch/configure": watch_configure,
@@ -1320,7 +1344,11 @@ def _handler_class(
                 return
             mount = resolve(self.path)
             if mount is None:
-                answer = None if portal is None else portal(full)
+                answer = (
+                    None
+                    if portal is None
+                    else portal(self.path.split("#", 1)[0] if full.startswith("/feed") else full)
+                )
                 if answer is None:
                     self._deny(404, "not found")
                     return
@@ -2016,10 +2044,8 @@ class MainHub:
                 feed_panel=panel,
             )
             return 200, "text/html; charset=utf-8", page.encode()
-        if path in ("/feed", "/feed/"):
-            if path == "/feed":
-                return 301, "/feed/", b""
-            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if path == "/feed" or path.startswith("/feed/"):
+            return self.feed_route(path)
         if path in ("/backlog", "/catalog"):
             return 301, path + "/", b""
         if path == "/backlog/":
@@ -2060,8 +2086,101 @@ class MainHub:
             )
         return views
 
+    def feed_route(self, target: str) -> tuple[int, str, bytes] | None:
+        """The answer for a path under `/feed/` (`target` keeps its query): the factory feed pages,
+        the classic tab-per-project page at `/feed/classic/` and the page's assets."""
+        url, _, query = target.partition("?")
+        if url in ("/feed", "/feed/classic"):
+            return 301, url + "/", b""
+        if url == "/feed/classic/":
+            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if url.startswith(site_factory_feed.ASSET_PREFIX):
+            found = site_factory_feed.asset(url[len(site_factory_feed.ASSET_PREFIX) :])
+            return None if found is None else (200, found[1], found[0])
+        env = self._factory_feed
+        if env is None:
+            if url != "/feed/":
+                return None
+            off = site_factory_feed.render_off(self.hub_token())
+            return 200, "text/html; charset=utf-8", off.encode()
+        args = parse_qs(query)
+        if url in ("/feed/liked", "/feed/reading", "/feed/project") or (
+            url.startswith("/feed/project/") and not url.endswith("/")
+        ):
+            return 301, url + "/", b""
+        if url not in ("/feed/", "/feed/liked/", "/feed/reading/") and not url.startswith(
+            "/feed/project/"
+        ):
+            return None
+        ctx = self._feed_context(env)
+        if url == "/feed/":
+            sort: Literal["ranked", "newest"] = (
+                "newest" if args.get("sort", [""])[0] == "newest" else "ranked"
+            )
+            try:
+                number = int(args.get("page", ["1"])[0])
+            except ValueError:
+                number = 1
+            page = factory_feed.today(
+                env.settings, page=number, sort=sort, hide_labelled=True, clock=env.clock
+            )
+            doc = site_factory_feed.render_today(ctx, page)
+        elif url == "/feed/liked/":
+            doc = site_factory_feed.render_liked(
+                ctx,
+                factory_feed.liked(env.settings, clock=env.clock),
+                factory_feed.disliked(env.settings, clock=env.clock),
+            )
+        elif url == "/feed/reading/":
+            doc = site_factory_feed.render_reading(
+                ctx, factory_feed.reading_list(env.settings, clock=env.clock)
+            )
+        else:
+            slug = url[len("/feed/project/") :].strip("/")
+            info = next((p for p in ctx.projects if p.slug == slug), None)
+            if info is None:
+                return None
+            key = args.get("window", [site_factory_feed.DEFAULT_WINDOW])[0]
+            windows = {k: days for k, _, days in site_factory_feed.WINDOWS}
+            if key not in windows:
+                key = site_factory_feed.DEFAULT_WINDOW
+            cards = factory_feed.project_view(
+                env.settings, slug, window_days=windows[key], clock=env.clock
+            )
+            doc = site_factory_feed.render_project(ctx, info, cards, key)
+        return 200, "text/html; charset=utf-8", doc.encode()
+
+    def _feed_context(self, env: FactoryFeedEnv) -> site_factory_feed.PageContext:
+        """What every factory feed page shows besides its own list: the projects that have a feed
+        configuration (with their tokens), the sidebar's counts and the ranker's state."""
+        registry = site_portal.load_registry(self._root)
+        infos = []
+        for slug, title in site_portal.listed(self._slugs(), registry):
+            found = self.slot(slug)
+            if found is None:
+                continue
+            config = feed_service.current_config(found.project)
+            if config is None:
+                continue
+            infos.append(
+                site_factory_feed.ProjectInfo(
+                    slug,
+                    title,
+                    self.auth.page_credential(site_auth.Scope(slug)),
+                    tuple(config.categories),
+                )
+            )
+        snapshot = factory_feed.today(env.settings, page=1, page_size=1, clock=env.clock)
+        return site_factory_feed.PageContext(
+            hub_token=self.hub_token(),
+            projects=tuple(infos),
+            counts=factory_feed.counts(env.settings, clock=env.clock),
+            status=factory_feed_actions.ranker_status(env.settings, clock=env.clock),
+            ranking_id=snapshot.ranking_id,
+        )
+
     def feed_page(self) -> str:
-        """The `/feed/` page, read from every listed project's events at request time."""
+        """The classic `/feed/classic/` page, read from every project's events at request time."""
         return site_hub_feed.render_feed_page(
             self.feed_views(), site_hub_feed.runner_payload(self.feed), self.hub_token()
         )
