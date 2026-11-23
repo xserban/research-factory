@@ -20,6 +20,7 @@ Invariants:
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from html import escape as e
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -46,6 +47,12 @@ class PortalRow(NamedTuple):
     built: int
     hub_ready: bool
     building: bool = False
+    activity: tuple[int, ...] = ()
+    """Events per day, oldest first, ending on `activity_end`; empty when not read."""
+    activity_end: str | None = None
+    """The ISO date of the last day of `activity` (the project clock's today)."""
+    funnel: tuple[int, int, int] | None = None
+    """(found, screened, included) from the last built overview payload; None when there is none."""
 
 
 def load_registry(root: Path) -> dict[str, Entry]:
@@ -181,12 +188,67 @@ def _state(r: PortalRow) -> str:
     return "<span class=pt-ok>+ Up to date</span>"
 
 
+def _day(end: str, back: int) -> str:
+    d = date.fromisoformat(end) - timedelta(days=back)
+    return f"{d.day} {d:%b}"
+
+
+def _activity(r: PortalRow) -> str:
+    """Events per day as a bar sparkline (one bar per day, zero days as a hairline) with a
+    sentence that states the total and the busiest day; nothing when no activity was read."""
+    if not r.activity or r.activity_end is None:
+        return ""
+    total, peak = sum(r.activity), max(r.activity)
+    days = len(r.activity)
+    if total == 0:
+        return f"<p class=pt-act>No events in the last {days} days.</p>"
+    at = max(range(days), key=lambda k: (r.activity[k], k))
+    busiest = _day(r.activity_end, days - 1 - at)
+    sentence = f"{total:,} events in the last {days} days, busiest {busiest} ({peak:,})"
+    bars = []
+    for k, n in enumerate(r.activity):
+        h = 1.0 if n == 0 else max(2.0, 30.0 * n / peak)
+        label = f"{_day(r.activity_end, days - 1 - k)}: {n:,} event{'' if n == 1 else 's'}"
+        bars.append(
+            f"<rect class='{'pt-zero' if n == 0 else 'pt-grow'}' style='--i:{k}' x='{k * 10}' "
+            f"y='{32 - h:.1f}' width='8' height='{h:.1f}'><title>{label}</title></rect>"
+        )
+    return (
+        f"<svg class=pt-spark role=img aria-label='{e(sentence, quote=True)}' "
+        f"viewBox='0 0 {days * 10 - 2} 32' preserveAspectRatio='none'>{''.join(bars)}</svg>"
+        f"<p class=pt-act>{e(sentence)}.</p>"
+    )
+
+
+def _funnel(r: PortalRow) -> str:
+    """Found, screened and included as nested bars, widths relative to found, with the numbers
+    written out; nothing when there is no overview or nothing was found."""
+    if r.funnel is None or r.funnel[0] <= 0:
+        return ""
+    found, screened, included = r.funnel
+
+    def width(n: int) -> str:
+        return f"{100 * min(n, found) / found:.1f}%"
+
+    words = f"{found:,} found, {screened:,} screened, {included:,} included"
+    return (
+        f"<div class=pt-funnel role=img aria-label='{e(words, quote=True)}'>"
+        "<span class=pt-f1 style='width:100%'></span>"
+        f"<span class=pt-f2 style='width:{width(screened)}'></span>"
+        f"<span class=pt-f3 style='width:{width(included)}'></span></div>"
+        f"<p class=pt-act>{found:,} found &rarr; {screened:,} screened &rarr; "
+        f"<b>{included:,} included</b></p>"
+    )
+
+
 def _card(r: PortalRow) -> str:
     slug = e(r.slug, quote=True)
     return (
         "<article class='card pt-card'>"
         f"<h3><a href='/p/{slug}/ui/'>{e(r.title)}</a></h3>"
         + (f"<span class=pt-slug>{e(r.slug)}</span>" if r.title != r.slug else "")
+        + _activity(r)
+        + _funnel(r)
         + "<div class=pt-figs>"
         f"<div><b>{r.events:,}</b><span>events</span></div>"
         f"<div><b>{r.built:,}</b><span>pages built</span></div></div>"
@@ -196,13 +258,10 @@ def _card(r: PortalRow) -> str:
     )
 
 
-def render_portal(
-    rows: list[PortalRow], *, create_token: str | None = None, feed_panel: str = ""
-) -> str:
+def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> str:
     """The portal page: one card per project opening its hub under `/p/<slug>/ui/` (the classic hub
     under `/p/<slug>/` is a second link). With `create_token` (the hub's write token) it also has
-    the create-project and add-to-inbox forms; `feed_panel` is the short New papers list
-    (`site_hub_feed.render_feed_panel`), shown above the cards."""
+    the create-project and add-to-inbox forms. New papers is a tab of the bar, not a list here."""
     cards = "".join(_card(r) for r in rows) or (
         "<p class='card pt-empty'>No project yet under the factory root. Create one below, or with "
         "<code>factory init</code>.</p>"
@@ -224,7 +283,6 @@ def render_portal(
     body = (
         "<header class=mh-head><h1>Factory</h1>"
         "<p>All projects on this machine. Open one for its hub.</p></header>"
-        f"{feed_panel}"
         f"<section class=mh-sec><header><h2>Projects</h2><span class=meta>{count}</span></header>"
         f"<div class=pt-grid>{cards}</div></section>"
         f"{forms}"

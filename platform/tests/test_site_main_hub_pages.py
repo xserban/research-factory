@@ -39,13 +39,14 @@ def test_the_bar_marks_the_page_you_are_on(
     assert body.count("aria-current='page'") == 1
 
 
-def test_the_portal_has_the_short_feed_list_above_the_project_cards(
+def test_the_portal_lists_projects_only_and_new_papers_is_a_tab(
     served: tuple[int, site_server.MainHub],
 ) -> None:
     port, _ = served
     body = _get(port, "/")[2]
-    assert "New papers" in body
-    assert body.index("New papers") < body.index("href='/p/demo/ui/'")
+    assert "href='/feed/'" in body  # the bar's tab
+    assert "pt-paper" not in body and "data-act=" not in body
+    assert "href='/p/demo/ui/'" in body
 
 
 def test_backlog_and_catalog_paths_without_a_slash_redirect(

@@ -44,16 +44,23 @@
 .pt-warn{color:var(--exc)}
 .pt-empty{padding:20px;color:var(--mut)}
 
-/* Portal: new papers */
-.pt-papers{display:flex;flex-direction:column;gap:2px}
-.pt-paper{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:4px 14px;align-items:baseline;padding:12px 16px;background:var(--surface);border-radius:var(--r-s)}
-.pt-paper .sc{font-family:var(--f-mono);color:var(--dim);font-variant-numeric:tabular-nums;text-align:right}
-.pt-paper .tt{font-weight:600;color:var(--fg);text-decoration:none}
-.pt-paper .tt:hover{color:var(--acc)}
-.pt-paper .mm{grid-column:2;font-size:var(--t-s);color:var(--mut)}
-.pt-paper .ac{grid-column:3;grid-row:1/3;display:flex;gap:6px;align-items:center}
-.pt-paper .ac .btn{height:28px;padding:0 10px;font-size:var(--t-xs)}
-.pt-paper .msg{font-size:var(--t-xs);color:var(--mut);min-width:0}
+/* Portal: the data portrait of a card (activity per day, the screening funnel) */
+.pt-spark{display:block;width:100%;height:36px;margin:2px 0 0}
+.pt-spark rect{fill:var(--acc)}
+.pt-spark rect.pt-zero{fill:var(--line)}
+.pt-card:hover .pt-spark rect.pt-grow{fill:var(--fg)}
+.pt-act{margin:2px 0 0;font-size:var(--t-xs);color:var(--mut);font-variant-numeric:tabular-nums}
+.pt-act b{color:var(--fg);font-weight:600}
+.pt-funnel{position:relative;height:8px;margin:8px 0 0;border-radius:4px;overflow:hidden}
+.pt-funnel span{position:absolute;left:0;top:0;bottom:0;border-radius:4px;transform-origin:left}
+.pt-f1{background:var(--line)}
+.pt-f2{background:var(--seq-2)}
+.pt-f3{background:var(--inc)}
+.pt-grow{transform-box:fill-box;transform-origin:bottom;animation:pt-grow .6s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--i) * 14ms)}
+.pt-funnel .pt-f2,.pt-funnel .pt-f3{animation:pt-wide .8s cubic-bezier(.2,.7,.2,1) .15s both}
+@keyframes pt-grow{from{transform:scaleY(0)}}
+@keyframes pt-wide{from{transform:scaleX(0)}}
+@media (prefers-reduced-motion:reduce){.pt-grow,.pt-funnel .pt-f2,.pt-funnel .pt-f3{animation:none}}
 
 /* Portal: forms */
 .pt-forms{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:var(--gap)}
@@ -68,7 +75,4 @@
 @media (max-width:640px){
   .hubbar{height:auto;flex-wrap:wrap;padding:8px 12px}
   .mh{padding:20px 14px 48px}
-  .pt-paper{grid-template-columns:minmax(0,1fr)}
-  .pt-paper .sc{text-align:left}
-  .pt-paper .mm,.pt-paper .ac{grid-column:1;grid-row:auto}
 }

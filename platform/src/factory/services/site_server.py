@@ -87,7 +87,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
@@ -1899,8 +1899,23 @@ def make_server(
     return httpd, slot.rebuilder
 
 
-PORTAL_FEED_ITEMS: Final = 5
-"""How many New papers entries the portal page lists; the feed page has them all."""
+PORTAL_ACTIVITY_DAYS: Final = 30
+"""Days of activity drawn on a portal card, ending on the project clock's today."""
+
+
+def _funnel(overview: dict[str, Any] | None) -> tuple[int, int, int] | None:
+    """(found, screened, included) from an overview payload's `pipeline`; None when any is
+    missing or not a number."""
+    steps = overview.get("pipeline") if overview is not None else None
+    if not isinstance(steps, list):
+        return None
+    n = {s.get("key"): s.get("n") for s in steps if isinstance(s, dict)}
+    picked = [n.get(k) for k in ("identified", "screened", "included")]
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in picked):
+        return None
+    return (int(picked[0]), int(picked[1]), int(picked[2]))  # type: ignore[arg-type]
+
+
 PROJECT_PREFIX: Final = "/p/"
 FEED_CHECK_EVERY: Final = 1800.0
 WARM_EVERY: Final = 5.0
@@ -2081,8 +2096,23 @@ class MainHub:
             found = self.slot(slug)
             if found is None:
                 continue
+            today = found.project.clock.now().astimezone(UTC).date()
+            first = today - timedelta(days=PORTAL_ACTIVITY_DAYS - 1)
             with found.project.index.connect() as conn:
                 events = int(conn.execute(text("SELECT COUNT(*) FROM events")).scalar_one())
+                per_day: dict[str, int] = dict(
+                    conn.execute(
+                        text(
+                            "SELECT substr(ts, 1, 10), COUNT(*) FROM events WHERE ts >= :first "
+                            "GROUP BY substr(ts, 1, 10)"
+                        ),
+                        {"first": first.isoformat()},
+                    ).all()
+                )
+            activity = tuple(
+                int(per_day.get((first + timedelta(days=k)).isoformat(), 0))
+                for k in range(PORTAL_ACTIVITY_DAYS)
+            )
             # never wait for a rebuild: it holds the rebuilder's lock for minutes
             tried = found.rebuilder.try_statuses()
             building = tried is None
@@ -2098,6 +2128,9 @@ class MainHub:
                     else sum(s.built for s in states),
                     hub_ready=(found.root / "index.html").is_file(),
                     building=building,
+                    activity=activity,
+                    activity_end=today.isoformat(),
+                    funnel=_funnel(found.ui.last_built("overview")),
                 )
             )
         return out
@@ -2106,15 +2139,9 @@ class MainHub:
         """The answer for a path that belongs to no project: (status, content type or, for a
         redirect, the location, body), or None."""
         if path in ("/", "/index.html"):
-            views = self.feed_views()
-            panel = site_hub_feed.render_feed_panel(
-                site_hub_feed.top_entries(views, PORTAL_FEED_ITEMS),
-                ranked_total=site_hub_feed.ranked_total(views),
-            )
             page = site_portal.render_portal(
                 self.rows(),
                 create_token=self.hub_token() if self._create else None,
-                feed_panel=panel,
             )
             return 200, "text/html; charset=utf-8", page.encode()
         if path.partition("?")[0] == "/feed" or path.startswith("/feed/"):

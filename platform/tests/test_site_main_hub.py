@@ -261,3 +261,34 @@ def test_the_portal_answers_while_a_project_is_rebuilding(
     assert demo["building"] is True
     other = next(p for p in listing["projects"] if p["slug"] == "other")
     assert other["building"] is False
+
+
+def test_a_portal_row_carries_thirty_days_of_activity_ending_on_the_project_clock_date(
+    settings: Settings, clock: FixedClock, two: Project
+) -> None:
+    hub = _hub(settings, clock)
+    row = next(r for r in hub.rows() if r.slug == "other")
+    assert len(row.activity) == 30
+    assert row.activity_end == clock.now().date().isoformat()
+    assert sum(row.activity) == row.events  # every event of a new project is from today
+    assert row.activity[-1] == row.events
+
+
+def test_a_portal_row_reads_the_funnel_from_the_last_built_overview_and_never_builds_it(
+    settings: Settings, clock: FixedClock, two: Project
+) -> None:
+    hub = _hub(settings, clock)
+    data = site_dir(two) / "hub-ui" / "data"
+    assert next(r for r in hub.rows() if r.slug == "other").funnel is None
+    assert not (data / "overview.json").exists()  # reading the row built nothing
+    data.mkdir(parents=True, exist_ok=True)
+    pipeline = [
+        {"key": "identified", "n": 50},
+        {"key": "screened", "n": 40},
+        {"key": "sought", "n": 20},
+        {"key": "included", "n": 7},
+    ]
+    (data / "overview.json").write_text(json.dumps({"pipeline": pipeline}))
+    assert next(r for r in hub.rows() if r.slug == "other").funnel == (50, 40, 7)
+    (data / "overview.json").write_text("{not json")
+    assert next(r for r in hub.rows() if r.slug == "other").funnel is None
