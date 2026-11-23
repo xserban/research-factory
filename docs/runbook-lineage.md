@@ -27,7 +27,7 @@ A relation needs a contribution item as its basis (`services/relations.py`). Its
 3. **Converted full text and reference extractions** for the chosen papers. `factory document status` and `factory references status` show them. The proposed ten (Appendix A) all appear in the reference-extraction citation list at `ops/technique-trial-2026-11-14/night/shallow/cites-core.json` and in `night/core.txt` with a pinned conversion; this was read from files, not from the live index.
 4. **A `contribution_schema` in the protocol.** The current protocol has none (no protocol event read for this runbook contains one). Recording is refused until it is declared (step 3). This is a human act and is the first event of the run.
 5. **The ten papers are approved** by the researcher (Appendix A is a proposal).
-6. **Work selection is not available (open point O1).** `contribution_next` serves every included work with a pinned conversion, in work-id order; `FACTORY_UNIT_CAP` and `queue process --cap N` limit how many units a run serves, not which. Step 4 cannot be executed as "these ten" until O1 is settled.
+6. **Work selection by allow-list (PR #46, merged).** The contribution schema carries an optional `works` list of work ids; absent means every included work (the old behaviour). `contribution_next`, pass B, the audit, `check` and lineage all read the same restricted population, and `contribution_status` / `contribution_next` report the list (`listed`, `eligible`, `not_eligible`). `FACTORY_UNIT_CAP` and `--cap N` still apply within the list. Setting or changing the list is a protocol amendment (step 3).
 7. Held-out rule: do not open `docs/pilot/heldout-seeds.md` or the project's `ops/private/`. A reflink copy of the project contains `ops/private/`; the rule applies to the copy too.
 
 ## 3. Environment (set explicitly in every shell)
@@ -101,7 +101,7 @@ factory check
 factory contributions status
 ```
 
-**Step 2 [H] Approve the ten works.** Fix the list (Appendix A) in a file `lineage-ten.txt` next to this run's notes, one work id per line. It is a record for the researcher; no platform command reads it (see O1).
+**Step 2 [H] Approve the ten works.** Fix the list (Appendix A) in a file `lineage-ten.txt` next to this run's notes, one work id per line. Step 3 puts exactly these ids into the schema's `works` list, so this file is the source for that amendment.
 
 **Step 3 [H] Declare the contribution schema.** Pack `contribution` version 1; fields as in `platform/src/factory/packs/contribution.py`: `item_kind`, `absent_kind`, `name`, `statement`, `compared_to`, `cited_entry`, `metric`, `value`, `result_row`. `claims` is false for this scope; `dual_extract_sample` 1.0 makes every served work a pass B unit (None also means every work); `audit_fraction` and `audit_minimum` are the schema's own settings (defaults 0.02 and 50: with ten papers the minimum exceeds the population, so the researcher must choose a value and say why; see O4).
 
@@ -109,18 +109,19 @@ The amendment file has four keys, `spec`, `reason`, `semantic`, `effects`, as in
 
 ```
 # CUR.json: the current spec in the amendment file format
-jq '.spec.contribution_schema = {
+jq --rawfile ids lineage-ten.txt '.spec.contribution_schema = {
       "pack": "contribution", "pack_version": 1,
       "fields": ["item_kind","absent_kind","name","statement","compared_to","cited_entry","metric","value","result_row"],
       "comparability_keys": [], "dual_extract_sample": 1.0,
-      "audit_fraction": 0.2, "audit_minimum": 10, "claims": false }
+      "audit_fraction": 0.2, "audit_minimum": 10, "claims": false,
+      "works": ($ids | split("\n") | map(select(length>0)) | sort) }
     | .reason = "Declare the contribution schema (slice 3b) for the first lineage run on ten core papers. Criteria and screening unchanged. Researcher ruling 2026-11-23."
-    | .semantic = false | .effects = {}' CUR.json > amend-contribution.json
+    | .semantic = true | .effects = {}' CUR.json > amend-contribution.json
 factory protocol amend --file amend-contribution.json
 factory protocol show
 ```
 
-`audit_fraction` 0.2 and `audit_minimum` 10 in the snippet are placeholders for the researcher to set, not recommendations. `semantic` false is the author's reading (no criterion or screening change); the amendment's blast radius is reported by the command, and the researcher should read it. Whether a review request (`--review`) is required in the project's present mode was not checked.
+`audit_fraction` 0.2 and `audit_minimum` 10 in the snippet are placeholders for the researcher to set, not recommendations. `semantic` is true because setting `contribution_schema.works` is a field change, which the amendment rule treats as semantic (the allow-list's own tests amend with `semantic=True`); `effects` may need an entry per the command's message, so read its output. An id that does not exist is refused at the amendment; an id that exists but is not an included work with a pinned conversion is accepted and reported as `not_eligible`, so check `contribution_status` after the amendment and before pass A. Whether a review request (`--review`) is required in the project's present mode was not checked.
 
 **Step 4 [A] Pass A**, Sonnet. The runner has a stage for it:
 
@@ -128,7 +129,7 @@ factory protocol show
 factory queue process --stage contributions --cap 10 --wait
 ```
 
-The cap is the number of works the run may serve (`FACTORY_UNIT_CAP`). The run uses the skill `rf-contributions` (text embedded in the prompt), model Sonnet, only `contribution_next`, `contribution_record`, `document_read` and `project_status`, and records `runner.started` and `runner.finished` with its log in `projects/agentic-science/runs/<run_id>/`. `factory queue runs` lists runs. Note that serving the first unit queues a task for every included work with a pinned conversion, not only for ten; see O1.
+The cap is the number of works the run may serve (`FACTORY_UNIT_CAP`). The run uses the skill `rf-contributions` (text embedded in the prompt), model Sonnet, only `contribution_next`, `contribution_record`, `document_read` and `project_status`, and records `runner.started` and `runner.finished` with its log in `projects/agentic-science/runs/<run_id>/`. `factory queue runs` lists runs. With the allow-list in place, the run serves only the listed works; confirm `contribution_status` shows `listed` 10 and the expected `eligible` count first.
 
 **Step 5 [A] Pass B**, a different session and a different model (Haiku, as the evidence pass B stage `extract-b` does). The runner has no stage for contribution pass B (checked in `services/runner.py`); start it by hand. The prompt is built like the runner's: parameters, skill text, limit.
 
@@ -258,7 +259,7 @@ Researcher time is larger than agent time: agreement resolution, the audit and c
 
 ## 10. Open points
 
-- **O1 (blocks "ten papers").** There is no work selector for the contribution scope. `contribution_next` serves the included works with a pinned conversion in work-id order, and queues a task for each of them; `--cap 10` stops after ten units, which are the first ten by order, not the approved ten. Options: (a) a small plan adding an allow-list (a protocol or run parameter naming the works) with a test, then this runbook names it; (b) accept the first ten served and choose the ten afterwards by what was served (the proposal in Appendix A then does not apply); (c) run the full population (about the 95 core papers if the included set is that, which the pilot's ops notes suggest but this runbook did not verify), at about ten times the estimate. The ruling says "about ten core papers"; it does not say how. The researcher decides.
+- **O1 (resolved).** The work selector was built as an allow-list in the contribution schema (PR #46); see prerequisite 6 and step 3. Remaining caveats: `items_by_kind` still counts items recorded earlier for a work later taken off the list, and a relation source must be on the list because lineage reads the restricted population.
 - **O2.** No contribution pass B stage exists in the runner (steps 5 and 7 are hand-started `claude -p` commands, unexecuted). Whether to add `contributions-b` and a lineage stage is a backlog question, not part of this run.
 - **O3.** The exact pass B and lineage `claude -p` flags above mirror `runner.build_command` and were not run; the first dry run is their test.
 - **O4.** Audit size: the schema's `audit_minimum` default (50) exceeds ten papers' agreed values; the value to declare, and what error rate is acceptable, are the researcher's to set. The quality bar for "agreed" with Haiku as pass B is untested.
