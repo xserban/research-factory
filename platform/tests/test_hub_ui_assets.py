@@ -159,3 +159,15 @@ def test_glossary_has_no_typed_figures_and_hole_names_every_gap_value() -> None:
         assert value in GLOSSARY["hole"][1]
     hole = next(ln for ln in _read("shell.js").splitlines() if ln.lstrip().startswith("hole:"))
     assert all(v in hole for v in GAP_VALUES)  # the script's copy names them too
+
+
+def test_the_topbar_has_a_home_link_to_the_portal_only_under_the_main_hub() -> None:
+    """Inside a project's hub (`/p/<slug>/ui/`) the first thing in the top bar leads back to the
+    portal at `/`; the single-project server has no portal, so there the link stays hidden."""
+    from importlib import resources
+
+    shell = resources.files("factory").joinpath("hub_ui", "shell.js").read_text(encoding="utf-8")
+    bar = shell[shell.index('<header class="topbar">') : shell.index("</header>")]
+    assert bar.index('id="homeLink"') < bar.index('class="crumb"')
+    assert 'href="/"' in bar and 'aria-label="All projects"' in bar
+    assert "/^\\/p\\/[^/]+\\/ui(\\/|$)/.test(location.pathname)" in shell
