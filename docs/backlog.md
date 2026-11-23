@@ -1187,3 +1187,73 @@ Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: IDEA-122, lane L15
 **Why:** nothing in slice 9 has run live; `services/level_bench.py` and `docs/plans/2026-11-20-tiers-and-autonomy/benchmark.md` give the measures.
 **Rigour notes:** costs tokens, needs the researcher's go; no merge or push is implied.
 **Open questions:** the question to use; the paper cap.
+
+### IDEA-130 — Hub results views: leaderboard, performance over time, design vs score, adoption
+Status: new · Added: 2026-11-23 · Slice: 7 (views) · Depends on: a results miner (row per reported number), pilot 2 (`chest-ct-vlm`)
+**What:** four hub pages built from a results-type miner: a leaderboard per task (model x benchmark x metric, top 3, filters for evidence level and setting, each cell linked to its quote); score on one shared benchmark against model release date; design choices (input form, data scale, encoder) against score; an adoption table (weights, licence, input needs, compute).
+**Why:** pilot 2 asks "which model is best"; the 24 standard pages show corpus and flow, not rankings. Researcher ruling 2026-11-23.
+**Rigour notes:** ranks only level-1 evidence (public benchmark, official split) unless filtered otherwise; values never typed, always from quote-backed miner records; comparability flags (baseline provenance, train/test overlap) shown beside each cell.
+**Open questions:** a generic "results" miner shape so the pages work for any comparative project; how ties and missing CIs are shown.
+
+### IDEA-131 — Default kit for a new project
+Status: new · Added: 2026-11-23 · Slice: — · Depends on: pilot 2, IDEA-130
+**What:** what every new project gets without asking: the generic miners m-summary, m-claims, m-release (researcher ruling 2026-11-23); project miners derived from the question type (a comparative question implies m-results, m-model, m-data); the 24 standard hub pages; and `seeds from-folder`, which reads arXiv ids and DOIs from a PDF folder, proposes them as a seeds decision, suggests extra seeds from the seeds' shared references (cited by k of n), and queues the PDFs as full text.
+**Why:** in pilot 2 every miner and seed had to be set up by hand; seeding from a PDF folder and suggesting cited-by-k seeds worked and was accepted in full.
+**Rigour notes:** defaults are suggestions in a decision, never silently applied; a default miner is registered per project with its version.
+**Open questions:** whether generic miners are imported from pilot 1 (M-E import) or re-registered; whether the question scheme (TDMBM, PICO) selects the project miners.
+
+### IDEA-132 — Gate findings from pilot 2 (setup to protocol)
+Status: new · Added: 2026-11-23 · Slice: — · Depends on: —
+**What:** (1) held-out seeds follow by subtraction: `seed_add` returns every seed id and `probe_run` lists `development_tested`, so an agent learns the held-out ids without trying; report development seeds as counts or never return the full list after the split. (2) The `plan` level is not enforced: seeds and probe run without a selected plan decision. (3) A long-lived MCP server on an older projection gets a bare "Error executing tool" after a CLI run takes the index; return a structured "restart needed" error and show the code version in `whoami`. (4) Seeds without PMIDs make PubMed recall untestable; enrich seeds with PMIDs at `seed_add`. (5) CLI human acts run by an agent under the researcher's login are recorded as human.
+**Why:** pilot 2 tests that gates stop and ask; these are the gaps seen up to the protocol (log: `data/projects/chest-ct-vlm/ops/pilot-2-log.md`).
+**Rigour notes:** (1) touches R-20/R-24 hold-out integrity; (5) is the known limit of CLI-as-human.
+**Open questions:** whether (2) should refuse or only warn.
+
+### IDEA-133 — Hub pages for the lineage and hypothesis layers
+Status: built, merged into main 2026-11-23 (CI green; not reviewed beyond CI; not yet seen rendered by the researcher) · Added: 2026-11-23 · Slice: 3b, 3c, 6 · Depends on: IDEA-97, IDEA-103
+**What:** the hub gains an Intuition page (review interpretations; act `/ui/act/intuition-review`), a Hypotheses page (lead queue and statistics; acts lead-decide, hypothesis-register, hypothesis-abandon), an Ideas page (the lineage graph with relation and idea confirm or reject acts; PR #33) and chat threads (follow-up questions and batch orders on the chat page).
+**Why:** the researcher could not find these layers in the hub; every exchange was already saved as events.
+**Rigour notes:** acts are served-mode only and call the existing services; no new event types.
+**Open questions:** the Ideas graph stays empty until the lineage run (IDEA-137); the payload-input prefixes of the Hypotheses page were not verified against a populated project.
+
+### IDEA-134 — Technique graph on the Landscape page
+Status: built, merged into main 2026-11-23 (PR #29; CI green; not reviewed beyond CI) · Added: 2026-11-23 · Slice: M · Depends on: technique miners
+**What:** a Graph section with a toggle between "Used together" (co-use) and "Descent" (derives-from), drawn as a deterministic inline SVG capped at 120 edges.
+**Why:** only the paper and citation graph was visible; the technique miners' co-use and derives-from rows were shown as a table.
+**Rigour notes:** read-only view of miner rows; layout deterministic.
+**Open questions:** an idea-level graph depends on lineage data (IDEA-133, IDEA-137).
+
+### IDEA-135 — More themes and one saved theme
+Status: built, merged into main 2026-11-23 (PRs #34 and #49; CI green; not reviewed beyond CI) · Added: 2026-11-23 · Slice: — · Depends on: IDEA-97
+**What:** 14 themes in both UIs (dark and light; contrast bars: text 7:1, muted, accent and link 4.5:1), grouped in the picker, with one saved theme for every page and dark as the default.
+**Why:** researcher request (reading comfort; a white-and-blue theme like the old layout).
+**Rigour notes:** theme tokens are tested against the contrast bars.
+**Open questions:** none; the themes have not been viewed by the researcher yet.
+
+### IDEA-136 — "Serves RQ" on leads and hypotheses
+Status: built, merged into main 2026-11-23 (PR #43; decision 171 proposed; CI green; not reviewed beyond CI) · Added: 2026-11-23 · Slice: 6 · Depends on: IDEA-103, [design note](design-note-serves-rq-2026-11-23.md)
+**What:** an optional `serves_rq` field on leads and drafted hypotheses (default RQ4 and RQ5), validated against recorded sub-questions when there are any, grouped and filtered on the Hypotheses page.
+**Why:** hypotheses had no stated target question for evaluation.
+**Rigour notes:** absent field leaves old events and input blobs unchanged (old-log replay test).
+**Open questions:** per-question lead statistics are not built; the pilot's question has no sub-questions recorded, so any well-formed id is accepted there.
+
+### IDEA-137 — First lineage run: contribution allow-list and runbook
+Status: allow-list built, merged into main 2026-11-23 (PR #46); runbook merged (PR #44); the run itself not started · Added: 2026-11-23 · Slice: 3b · Depends on: IDEA-133, [design note](design-note-serves-rq-2026-11-23.md), [runbook](runbook-lineage.md)
+**What:** `contribution_schema.works` restricts contribution mining, pass B, the audit, check and lineage to a list of works, set by a protocol amendment; the runbook covers a dry run on a copy, the live run and rollback, with ten proposed core papers.
+**Why:** fills the idea graph on about ten core papers before any larger run (researcher ruling 2026-11-23).
+**Rigour notes:** pass A and pass B in separate sessions; the dry run on a copy comes first; the researcher approves the ten works.
+**Open questions:** the ten papers await approval; no pass B or lineage runner stage exists; `items_by_kind` still counts items of a work later removed from the list; the audit minimum (50) exceeds ten papers; cost figures are estimates.
+
+### IDEA-138 — Touched-only CI with a coverage map and a nightly full run
+Status: built, merged into main 2026-11-23 (PR #48) · Added: 2026-11-23 · Slice: — · Depends on: `docs/runbook-ci.md`
+**What:** PRs and pushes to main run the tests whose recorded source files overlap the change (map from the nightly run, import-depth fallback), balanced across the four required shards by measured durations, with a browser job and a nightly full run that refreshes the map and opens one issue on failure.
+**Why:** PRs touching widely imported modules took 15 to 25 minutes (researcher: too long).
+**Rigour notes:** the nightly full run is the backstop; a `full-tests` label forces all tests.
+**Open questions:** kernel changes (events, model, index) still select hundreds of files; shard balance; selection by changed lines; whether the nightly issue job works; docs-only PR measured at under 2 minutes per shard.
+
+### IDEA-139 — Dependency policy
+Status: built, merged into main 2026-11-23 (PR #36) · Added: 2026-11-23 · Slice: — · Depends on: slice 3d ruling 18
+**What:** `bibtexparser` stays on 1.x (the entry hash depends on its serialisation) and is on the Dependabot ignore list; the other updates, docling included, flow through the weekly grouped uv PRs; docling in the main venv is hand-installed, so a lock bump does not change the runtime converter.
+**Why:** Dependabot PR #27 pulled bibtexparser 2.x and broke every test shard.
+**Rigour notes:** each conversion records its converter version.
+**Open questions:** whether a changed docling version changes converted Markdown (not compared).
