@@ -169,6 +169,7 @@ BLURBS: Final[dict[str, str]] = {
     "write": "Synthesis pages, bibliography and exports.",
     "living": "New papers, how current the review is, and its heartbeat.",
     "costs": "Run costs and the runs behind them.",
+    "ideas": "The lineage graph: what each work and idea builds on, with the relations you confirm.",
     "hypotheses": "The hypothesis engine: leads, the queue, hypotheses and your decisions.",
     "intuition": "Why an idea works, as interpretations you review against the source passage.",
     "platform": "Capabilities and the backlog.",

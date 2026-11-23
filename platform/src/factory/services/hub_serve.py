@@ -95,6 +95,7 @@ PREWARM_ORDER: Final = (
     "contradictions",
     "chat",
     "hypotheses",
+    "ideas",
     "mining",
     "graph",
     "screening",

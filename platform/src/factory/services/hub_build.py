@@ -37,6 +37,7 @@ from factory.services import (
     hub_findings,
     hub_graph,
     hub_hypotheses,
+    hub_ideas,
     hub_intuition,
     hub_landscape,
     hub_learn,
@@ -665,6 +666,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "sources": hub_sources.build,
     "method": hub_method.build,
     "costs": hub_costs.build,
+    "ideas": hub_ideas.build,
     "intuition": hub_intuition.build,
     "write": hub_write.build,
     "platform": hub_platform.build,
@@ -701,6 +703,8 @@ PAYLOAD_INPUTS: dict[str, tuple[str, ...]] = {
             "journeys",
         )
     },
+    # contribution items, relations and ideas: nothing else changes the lineage graph
+    "ideas": hub_ideas.EVENT_PREFIXES,
     # the lead engine reads the lead, hypothesis, review and direction tables, the miner rows and
     # their stale ledger, the layers of the works and the protocol's gate policies and plan
     "hypotheses": (

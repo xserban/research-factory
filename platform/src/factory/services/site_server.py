@@ -110,6 +110,7 @@ from factory.services import (
     factory_feed_actions,
     hub_chat,
     hub_hypotheses,
+    hub_ideas,
     hub_intuition,
     hub_learn,
     hub_serve,
@@ -158,6 +159,14 @@ UI_CHAT_ROUTES: Final = {
 }
 """The hub Chat page's researcher acts (night feature N5): route, the command it is authorised
 as, and the service act. Each is the local human's; nothing else on `/ui/` writes."""
+UI_IDEA_ROUTES: Final = {
+    "/ui/act/ideas-relation-confirm": ("cli:relations confirm", hub_ideas.confirm_relation_act),
+    "/ui/act/ideas-relation-reject": ("cli:relations reject", hub_ideas.reject_relation_act),
+    "/ui/act/ideas-idea-confirm": ("cli:ideas confirm", hub_ideas.confirm_idea_act),
+    "/ui/act/ideas-idea-reject": ("cli:ideas reject", hub_ideas.reject_idea_act),
+}
+"""The hub Ideas page's researcher decisions (relation and idea confirm or reject): route, the CLI
+command each is authorised as, and the service act. The service refuses the proposing session."""
 UI_HYPOTHESES_ROUTES: Final = hub_hypotheses.ACTS
 """The hub Hypotheses page's researcher acts: decide a lead, register or abandon a hypothesis. Each
 is authorised as the CLI command of its kind and is the local human's; the service applies the
@@ -795,6 +804,7 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
     **{path: _chat_route(command, act) for path, (command, act) in UI_CHAT_ROUTES.items()},
+    **{path: _chat_route(command, act) for path, (command, act) in UI_IDEA_ROUTES.items()},
     **{path: _hypotheses_route(cmd, act) for path, (cmd, act) in UI_HYPOTHESES_ROUTES.items()},
     **{path: _chat_route(command, act) for path, (command, act) in UI_INTUITION_ROUTES.items()},
     "/api/inbox/add": project_inbox_add,
@@ -803,7 +813,9 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
 }
 
 
-_CHAT_ACTS: Final = tuple(_ROUTES[path] for path in (*UI_CHAT_ROUTES, *UI_INTUITION_ROUTES))
+_CHAT_ACTS: Final = tuple(
+    _ROUTES[path] for path in (*UI_CHAT_ROUTES, *UI_IDEA_ROUTES, *UI_INTUITION_ROUTES)
+)
 _HYPOTHESES_ACTS: Final = tuple(_ROUTES[path] for path in UI_HYPOTHESES_ROUTES)
 
 Freshness = Literal["fresh", "stale", "queued", "building", "failed"]
