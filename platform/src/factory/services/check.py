@@ -790,8 +790,6 @@ def _miner_lifecycle(project: Project) -> list[_Hit]:
 
 # --- Lineage (slice 3b, plan G2-E) ---
 
-_PAGE = 500
-
 
 def _lineage(project: Project) -> list[_Hit]:
     """Findings of the contribution items and the lineage graph. Each names works, relations,
@@ -1116,12 +1114,8 @@ def _contribution_schema_missing(project: Project) -> list[_Hit]:
 
 
 def _all_relations(project: Project) -> list[RelationView]:
-    out: list[RelationView] = []
-    while True:
-        page = list_relations(project, statuses=set(EdgeStatus), limit=_PAGE, offset=len(out))
-        out += page
-        if len(page) < _PAGE:
-            return out
+    # One query: SQLite reads LIMIT -1 as no limit, so no offset paging rescans the sorted rows.
+    return list_relations(project, statuses=set(EdgeStatus), limit=-1)
 
 
 def _relation_hits(project: Project) -> list[_Hit]:

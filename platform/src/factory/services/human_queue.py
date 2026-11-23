@@ -20,7 +20,7 @@ from enum import StrEnum
 from factory.errors import FactoryValidationError
 from factory.model.base import StrictModel
 from factory.model.protocol import ScreeningStage
-from factory.services.agreement import screen_agreement
+from factory.services.agreement import human_screen_agreement
 from factory.services.audit import audit_report
 from factory.services.calibration import calibration_status
 from factory.services.context import Project
@@ -148,7 +148,7 @@ def human_queue(project: Project, *, agent: bool = False) -> HumanQueue:
 def _screening_disagreements(project: Project, stage: ScreeningStage) -> int:
     """Unresolved disagreements, `unsure` included; 0 while the agreement is refused."""
     try:
-        return len(screen_agreement(project, project.human_actor(), stage=stage).disagreements)
+        return len(human_screen_agreement(project, stage=stage).disagreements)
     except FactoryValidationError:
         return 0
 

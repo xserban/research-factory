@@ -152,6 +152,13 @@ class _Screen:
     single: frozenset[str]
 
 
+@memoised
+def human_screen_agreement(project: Project, *, stage: ScreeningStage = TA) -> Agreement:
+    """`screen_agreement` read as the researcher; memoised within a call scope, so `project_status`
+    computes it once. A refusal is raised, not cached."""
+    return screen_agreement(project, project.human_actor(), stage=stage)
+
+
 def screen_agreement(project: Project, actor: Actor, *, stage: ScreeningStage = TA) -> Agreement:
     """The agreement of the two passes: κ, per-criterion κ, disagreements, single-pass works and
     the cannot-assess rate per criterion (R-36, R-38).

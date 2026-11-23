@@ -42,6 +42,7 @@ from factory.modules.presets import Enforcement, enforcement
 from factory.services import audit_core
 from factory.services.agreement import AgreedWork, agreed_works, screen_agreement
 from factory.services.audit_core import AuditPopulation
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.protocol import current_protocol
 from factory.services.screening import decision_events, live_decisions
@@ -200,6 +201,7 @@ def audit_record(
     return event.id
 
 
+@memoised
 def audit_report(
     project: Project, *, stage: ScreeningStage = ScreeningStage.TITLE_ABSTRACT
 ) -> AuditReport | None:

@@ -13,6 +13,7 @@ from typing import Literal
 
 from factory.model.base import StrictModel
 from factory.modules.contract import Autonomy, GateKind, PolicyKind
+from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.gates import (
     autonomy_counts,
@@ -71,6 +72,7 @@ class GateStatusRow(StrictModel):
         return (loose and (agent_acts > 0 or self.source == "protocol")) or self.below_policy > 0
 
 
+@memoised
 def gates_status(project: Project) -> list[GateStatusRow]:
     """One row per decision gate of the registry."""
     from factory.services.modules.default import default_modules  # the registry imports services

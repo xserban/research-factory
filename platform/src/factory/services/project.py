@@ -12,7 +12,13 @@ from factory.model.dedup import MergeStatus
 from factory.model.project import ProjectCreated, RigorMode
 from factory.model.protocol import ProtocolStatus, ScreeningStage
 from factory.model.seed import SeedKind
-from factory.services.agreement import Agreement, PassProgress, pass_progress, screen_agreement
+from factory.services.agreement import (
+    Agreement,
+    PassProgress,
+    human_screen_agreement,
+    pass_progress,
+)
+from factory.services.call_memo import entering
 from factory.services.audit import audit_report
 from factory.services.calibration import CalibrationStatus, calibration_status
 from factory.services.chase import chase_rounds
@@ -132,6 +138,11 @@ def init_project(
 def project_status(project: Project, *, agent: bool = False) -> ProjectStatus:
     """The project's state. `agent` gives the human queue of the agent path, whose import gates
     count the development part only; the researcher's status stays complete."""
+    with entering():  # the agreement, audit and gate reads below are computed once
+        return _project_status(project, agent)
+
+
+def _project_status(project: Project, agent: bool) -> ProjectStatus:
     project.index.sync()
     slug = project.paths.slug
     with project.index.connect() as conn:
@@ -216,6 +227,6 @@ def _screening_status(project: Project) -> ScreeningStatus:
 def _agreement_or_none(project: Project) -> Agreement | None:
     """The agreement once both passes have finished; None while it is refused."""
     try:
-        return screen_agreement(project, project.human_actor())
+        return human_screen_agreement(project)
     except FactoryValidationError:
         return None
