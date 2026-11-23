@@ -22,28 +22,28 @@ Update this file in the landing commit of every plan, together with the backlog 
 
 ## Slice 9: tiers and autonomy levels (integration branch `tiers-base`, 2026-11-21)
 
-Plan `docs/plans/2026-11-20-tiers-and-autonomy.md`, spec `docs/specs/slice-9-tiers-autonomy.md`, proposed rows 163 to 168 in `docs/specs/slice-9-decision-rows.md`, open rulings in `docs/decision-sheet-2026-11-21.md`. Each lane was built on its own branch `tiers/<lane>` and merged into `tiers-base`. "Built" means committed with its tests written; the tests run on GitHub CI, and the integrated branch had a first CI run with three failures fixed in 982ca9cc. Nothing is on `main`, and no lane has been tried live.
+Plan `docs/plans/2026-11-20-tiers-and-autonomy.md`, spec `docs/specs/slice-9-tiers-autonomy.md`, proposed rows 163 to 168 in `docs/specs/slice-9-decision-rows.md`, open rulings in `docs/decision-sheet-2026-11-21.md`. Each lane was built on its own branch `tiers/<lane>` and merged into `tiers-base`. "Built" means committed with its tests written; the tests run on GitHub CI, and the integrated branch had a first CI run with three failures fixed in 982ca9cc. All lanes, L15 included, are on `main` (merged with PR #20, 2026-11-23); no lane has been tried live.
 
 | Lane | Content | Built | Reviewed | Merged into `tiers-base` | On main |
 |---|---|---|---|---|---|
-| L0 | Spec and decision rows D1 to D6 | yes | not verified | yes | no |
-| L1 | Tier and autonomy level at init, status line, level statement in every report | yes (1a58fd89) | not verified | yes | no |
-| L2 | Tier plans, brief templates, skill `rf-brief`, `factory brief` | yes (5a4392ae) | not verified | yes | no |
-| L3 | Autonomy profiles, effective policy, trust ledger, deferred review, agent audit label | yes (8ae9e07d) | not verified | yes | no |
-| L4 | Conductor and runner stages frame, gather, acquire, write; `conductor.*` events | yes (11fbc268) | not verified | yes | no |
-| L5 | Level metrics and benchmark protocol (`factory bench level`) | yes (ecceb8c5) | not verified | yes | no |
-| L6 | Deep tier: skill `rf-deep`, plan pins | yes (1bf6a0c8) | not verified | yes | no |
-| L7 | Hub page `levels`, Learn concepts, overview badges | yes (1fdfc0f5) | not verified | yes | no |
-| L9 | The brief's computed evidence note | yes (0952a780) | not verified | yes | no |
-| L10 | Conductor steps understand, develop (lead, drafter, critic) and maintain | yes (34fe2cf6) | not verified | yes | no |
-| L11 | Validation profile per tier and level | yes (67788a31) | not verified | yes | no |
-| L12 | On-the-fly miner design, skill `rf-miner-suggest`, `check_proposal` (not wired) | yes (b410fdb7) | not verified | yes | no |
-| L13 | Walking-skeleton test of the tiers | yes (b8f423c8) | not verified | yes | no |
-| L14 | Enforcement bundle: PRESS session, tier caps, gate-policy fold reads the level | yes (459595ed, 25df9fc1, e21a613d) | not verified | yes | no |
-| L15 | Make the stock brief plan run end to end | no (prompt only; branch has no commit) | no | no | no |
+| L0 | Spec and decision rows D1 to D6 | yes | not verified | yes | yes |
+| L1 | Tier and autonomy level at init, status line, level statement in every report | yes (1a58fd89) | not verified | yes | yes |
+| L2 | Tier plans, brief templates, skill `rf-brief`, `factory brief` | yes (5a4392ae) | not verified | yes | yes |
+| L3 | Autonomy profiles, effective policy, trust ledger, deferred review, agent audit label | yes (8ae9e07d) | not verified | yes | yes |
+| L4 | Conductor and runner stages frame, gather, acquire, write; `conductor.*` events | yes (11fbc268) | not verified | yes | yes |
+| L5 | Level metrics and benchmark protocol (`factory bench level`) | yes (ecceb8c5) | not verified | yes | yes |
+| L6 | Deep tier: skill `rf-deep`, plan pins | yes (1bf6a0c8) | not verified | yes | yes |
+| L7 | Hub page `levels`, Learn concepts, overview badges | yes (1fdfc0f5) | not verified | yes | yes |
+| L9 | The brief's computed evidence note | yes (0952a780) | not verified | yes | yes |
+| L10 | Conductor steps understand, develop (lead, drafter, critic) and maintain | yes (34fe2cf6) | not verified | yes | yes |
+| L11 | Validation profile per tier and level | yes (67788a31) | not verified | yes | yes |
+| L12 | On-the-fly miner design, skill `rf-miner-suggest`, `check_proposal` (not wired) | yes (b410fdb7) | not verified | yes | yes |
+| L13 | Walking-skeleton test of the tiers | yes (b8f423c8) | not verified | yes | yes |
+| L14 | Enforcement bundle: PRESS session, tier caps, gate-policy fold reads the level | yes (459595ed, 25df9fc1, e21a613d) | not verified | yes | yes |
+| L15 | Make the stock brief plan run end to end | yes (7a8b053c) | not verified | yes | yes |
 | R | Stage-alternatives research | prompt only in the repository; reports not verified | no | n/a | n/a |
 
-Known gaps: `AUTONOMOUS_FLOOR` is empty (decision 165 unruled); the stock brief plan cannot reach extraction without the workaround in the skeleton test (L15); `check_proposal` is not wired to a tool (IDEA-123); the last screening batch may pass the tier cap (IDEA-124). Follow-ups are IDEA-121 to IDEA-129 in `docs/backlog.md`.
+Known gaps: `AUTONOMOUS_FLOOR` is empty (decision 165 unruled); `check_proposal` is not wired to a tool (IDEA-123); the last screening batch may pass the tier cap (IDEA-124). Follow-ups are IDEA-121 to IDEA-129 in `docs/backlog.md`.
 
 ## Before merging this line
 

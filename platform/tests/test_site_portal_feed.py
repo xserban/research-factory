@@ -17,7 +17,7 @@ def test_portal_has_the_bar_with_one_toggle_and_no_new_papers_list() -> None:
     page = site_portal.render_portal([])
     assert "class=hubbar" in page and page.count(THEME_TOGGLE) == 1
     assert "data-act" not in page and "pt-paper" not in page
-    assert page.index("class=hubbar") < page.index("Factory</h1>")
+    assert page.index("class=hubbar") < page.index("Conjecture</h1>")
 
 
 def _row(**kw: object) -> site_portal.PortalRow:
@@ -126,3 +126,12 @@ def test_every_standalone_page_comes_from_the_one_shell() -> None:
         assert "max-width:1100px" not in doc and "max-width:960px" not in doc, name
         assert site.THEME_CSS in doc, name  # the same control-room stylesheet as the catalog
     assert "<body class=portal>" in feed
+
+
+def test_the_interface_name_is_conjecture_in_the_bar_and_the_portal() -> None:
+    from factory.services.site_chrome import UI_NAME, hub_bar
+
+    assert UI_NAME == "Conjecture"
+    assert "<b>Conjecture</b>" in hub_bar("projects") and "FACTORY" not in hub_bar("projects")
+    page = site_portal.render_portal([])
+    assert "<h1>Conjecture</h1>" in page and "<title>Projects · Conjecture</title>" in page

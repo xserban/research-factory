@@ -25,6 +25,7 @@ from html import escape as e
 from pathlib import Path
 from typing import Final, NamedTuple
 
+from factory.services.site_chrome import UI_NAME
 from factory.services.site_kit_page import kit_page
 
 REGISTRY: Final = "registry.json"
@@ -281,7 +282,7 @@ def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> 
     )
     count = f"{len(rows)} project{'' if len(rows) == 1 else 's'}" if rows else "No project yet"
     body = (
-        "<header class=mh-head><h1>Factory</h1>"
+        f"<header class=mh-head><h1>{UI_NAME}</h1>"
         "<p>All projects on this machine. Open one for its hub.</p></header>"
         f"<section class=mh-sec><header><h2>Projects</h2><span class=meta>{count}</span></header>"
         f"<div class=pt-grid>{cards}</div></section>"
@@ -290,7 +291,7 @@ def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> 
         "<code>registry.json</code> can give a title or hide one.</p>"
     )
     return kit_page(
-        "Factory projects",
+        f"Projects · {UI_NAME}",
         body,
         "projects",
         head=token_meta,

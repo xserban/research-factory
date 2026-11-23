@@ -22,6 +22,10 @@ from typing import Final
 from factory.services.site_theme import THEME_SCRIPT, THEME_TOGGLE
 from factory.services.site_themes import THEMES_CSS
 
+UI_NAME: Final = "Conjecture"
+"""The product's name in the interface (bar, portal, dashboard), after Popper's *Conjectures and
+Refutations*. Display only: code, CLI, package and event names stay `factory`."""
+
 CONTAINER_WIDTH: Final = "1500px"
 """The width of the centred container of every standalone page (main hub pages and products)."""
 
@@ -119,7 +123,7 @@ hub is served alone (the single-project server has no such pages)."""
 
 
 def hub_bar(active: str | None, *, context: str = "", main_hub_only: bool = False) -> str:
-    """The bar: the Factory name, a tab per main-hub page (`active` marks one), an optional
+    """The bar: the product name (`UI_NAME`), a tab per main-hub page (`active` marks one), an optional
     `context` (trusted HTML from the caller: a project's name and status) and the picker. It is a
     div, so a page's own `header` rules never reach it."""
     tabs = "".join(
@@ -127,7 +131,7 @@ def hub_bar(active: str | None, *, context: str = "", main_hub_only: bool = Fals
         for ident, label, href in HUB_NAV
     )
     return (
-        f"<div class=hubbar role=banner><b>FACTORY</b>{tabs}"
+        f"<div class=hubbar role=banner><b>{UI_NAME}</b>{tabs}"
         f"{context}<span class=sp></span>{THEME_TOGGLE}<i class=rf-prog aria-hidden=true></i></div>"
         + (_HIDE_TABS if main_hub_only else "")
     )
