@@ -55,6 +55,14 @@ class FeedReaction(StrEnum):
     DISLIKE = "dislike"
     SAVE = "save"
     DISMISS = "dismiss"
+    UNSET = "unset"
+    """Factory scope only: withdraws the latest like or dislike of the entry (decision 169)."""
+    UNSAVE = "unsave"
+    """Factory scope only: removes the entry from the reading list (decision 169)."""
+
+
+FACTORY_ONLY_REACTIONS = frozenset({FeedReaction.UNSET, FeedReaction.UNSAVE})
+"""Reactions a project's feed refuses: they act on the factory scope's labels and reading list."""
 
 
 class FeedConfigured(StrictModel):
@@ -138,6 +146,34 @@ class FeedReacted(StrictModel):
     rank_shown: int = Field(ge=1)
     score_shown: float
     beyond_shown: bool = False
+
+
+class FeedRankerTrained(StrictModel):
+    """One training of the factory's general ranker (decision 169; system actor, human-triggered).
+
+    `ids` are the arXiv ids of the training set (the latest like or dislike of each), `likes` and
+    `dislikes` count them, `training_set_hash` pins them with their labels, and `state_blob` holds
+    the fitted state as JSON (never a pickle). `ranker_version` counts trainings from 1.
+    `triggered_by` names the human command or event that asked for it.
+    """
+
+    training_set_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ids: tuple[EntryId, ...] = Field(min_length=1)
+    likes: int = Field(ge=0)
+    dislikes: int = Field(ge=0)
+    features: tuple[NonBlank, ...] = Field(min_length=1)
+    library_versions: dict[NonBlank, NonBlank]
+    state_blob: BlobRef
+    ranker_version: int = Field(ge=1)
+    triggered_by: NonBlank
+
+    @model_validator(mode="after")
+    def _counts_match_ids(self) -> Self:
+        if len(set(self.ids)) != len(self.ids):
+            raise ValueError("ids must not repeat")
+        if self.likes + self.dislikes != len(self.ids):
+            raise ValueError("likes + dislikes must equal the number of ids")
+        return self
 
 
 class FeedSent(StrictModel):

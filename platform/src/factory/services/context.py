@@ -20,6 +20,7 @@ from factory.index.index import Index
 from factory.index.levels import attach_level_reader
 from factory.index.library import referenced_check
 from factory.index.project import latest_host
+from factory.model.factory_scope import FACTORY_SLUG
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
 from factory.model.lab import LAB_SLUG
 from factory.model.screening import Channel
@@ -142,7 +143,10 @@ class Project:
 
 
 def slug_issues(slug: str) -> list[ValidationIssue]:
-    """Why `slug` cannot name a new project. `lab` is the lab log's envelope slug."""
+    """Why `slug` cannot name a new project. `lab` and `_factory` are the envelope slugs of the lab
+    log and the factory scope."""
+    if slug == FACTORY_SLUG:
+        return [ValidationIssue("slug", f"{FACTORY_SLUG!r} is reserved for the factory scope")]
     if slug == LAB_SLUG:
         return [ValidationIssue("slug", f"{LAB_SLUG!r} is reserved for the lab registry")]
     return _format_issues(slug)
@@ -246,4 +250,6 @@ def list_projects(settings: Settings) -> list[str]:
     projects_dir = settings.root / "projects"
     if not projects_dir.is_dir():
         return []
-    return sorted(p.name for p in projects_dir.iterdir() if (p / "events").is_dir())
+    return sorted(
+        p.name for p in projects_dir.iterdir() if p.name != FACTORY_SLUG and (p / "events").is_dir()
+    )

@@ -72,6 +72,7 @@ from factory.events.envelope import Actor
 from factory.index.ranking import corpus_hash
 from factory.model.base import StrictModel
 from factory.model.feed import (
+    FACTORY_ONLY_REACTIONS,
     FEED_ENTRY_RE,
     FeedConfigured,
     FeedFetched,
@@ -973,6 +974,8 @@ def react(
     Human only; refused with nothing written for an unknown entry or one in no ranking's order."""
     if actor.kind != "human":
         raise _refuse("actor", "human-only")
+    if FeedReaction(reaction) in FACTORY_ONLY_REACTIONS:
+        raise _refuse("reaction", "factory-scope-only: unset and unsave act on the factory feed")
     with project.writing():
         project.index.sync()
         ranking, rank, score, _, beyond = _shown_in(project, entry_id, ranking_id)
