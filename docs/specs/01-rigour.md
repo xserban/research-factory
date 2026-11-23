@@ -53,7 +53,7 @@ Source: consolidated from research-factory-old (`spec/TRACEABILITY.md`, `RIGOR-M
 | R-34 | **Statelessness:** records are screened in fresh contexts in randomised order; learning enters only as worked examples or protocol amendments, never as remembered precedent | — (agentic) | P, S | task design |
 | R-35 | **Calibration** (correctness): before each batch both passes screen ~30 human-labelled records (incl. seeds); sensitivity and specificity reported; below threshold blocks the batch | — | P, S | gate 04 |
 | R-36 | **Agreement** (consistency): Cohen's κ per pass pair and per criterion; floor declared in the protocol (advisory in P, enforced in S); disagreements never auto-resolved | MECIR | P, S | gate 04 |
-| R-37 | **Audit sample** (agreed-but-wrong): human audits ≥2% (min. 50) of agreed decisions, weighted 3:1 towards agreed exclusions; error rate above the declared floor sends criteria back to the protocol | — | P, S | gate 04 |
+| R-37 | **Audit sample** (agreed-but-wrong): human audits ≥2% (min. 50; in pilot the researcher's choice of 10, 20, 30, 40 or 50, decision 163) of agreed decisions, weighted 3:1 towards agreed exclusions; error rate above the declared floor sends criteria back to the protocol | — | P, S | gate 04 |
 | R-38 | `cannot-assess` rate is reported per criterion; above threshold the criterion's `applies_at` must be amended | — | P, S | gate 04 |
 | R-39 | Reviewer roles are declared in the protocol (reviewer of record, assisting reviewers and their duties); a **methods statement** disclosing what was automated is generated from it | journal AI-disclosure policies | all | report test |
 
