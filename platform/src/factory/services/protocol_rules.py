@@ -156,6 +156,7 @@ UNKNOWN_SEED = "unknown seed"
 KAPPA_FLOOR_MIN = 0.7
 AUDIT_FRACTION_MIN = 0.02
 AUDIT_MINIMUM_MIN = 50
+PILOT_AUDIT_MINIMUM_CHOICES = (10, 20, 30, 40)
 SLOT_PREFIX = "slot:"
 
 
@@ -697,6 +698,29 @@ def _extraction_gaps(schema: ExtractionSchema | None, mode: RigorMode) -> list[V
     return gaps
 
 
+def audit_minimum_gap(value: int, mode: RigorMode, field: str, unit: str) -> list[ValidationIssue]:
+    """The one rule for every protocol audit's minimum draw (decision 170, replacing the
+    audit_minimum floor of decision 37 item 3 for pilot).
+
+    Invariant: `exploratory` has no floor; `systematic` needs at least `AUDIT_MINIMUM_MIN`;
+    `pilot` needs one of `PILOT_AUDIT_MINIMUM_CHOICES` or at least `AUDIT_MINIMUM_MIN`."""
+    if mode is RigorMode.EXPLORATORY:
+        return []
+    if mode is RigorMode.PILOT:
+        if value >= AUDIT_MINIMUM_MIN or value in PILOT_AUDIT_MINIMUM_CHOICES:
+            return []
+        choices = ", ".join(str(c) for c in PILOT_AUDIT_MINIMUM_CHOICES)
+        return [
+            ValidationIssue(
+                field,
+                f"the audit draws {choices} or at least {AUDIT_MINIMUM_MIN} {unit} (decision 170)",
+            )
+        ]
+    if value >= AUDIT_MINIMUM_MIN:
+        return []
+    return [ValidationIssue(field, f"the audit draws at least {AUDIT_MINIMUM_MIN} {unit}")]
+
+
 def _sampling_gaps(
     schema: ExtractionSchema | MinerUse | None, mode: RigorMode, section: str
 ) -> list[ValidationIssue]:
@@ -728,13 +752,7 @@ def _sampling_gaps(
                 f"the audit samples at least {AUDIT_FRACTION_MIN:.0%} of agreed values",
             )
         )
-    if schema.audit_minimum < AUDIT_MINIMUM_MIN:
-        gaps.append(
-            ValidationIssue(
-                f"{section}.audit_minimum",
-                f"the audit draws at least {AUDIT_MINIMUM_MIN} values",
-            )
-        )
+    gaps.extend(audit_minimum_gap(schema.audit_minimum, mode, f"{section}.audit_minimum", "values"))
     return gaps
 
 
@@ -806,7 +824,7 @@ def _pilot_screening_gaps(spec: ProtocolSpec) -> list[ValidationIssue]:
         )
     if screening.kappa_floor is None:
         gaps.append(ValidationIssue("screening.kappa_floor", "a kappa floor must be declared"))
-    gaps.extend(_audit_gaps(screening))
+    gaps.extend(_audit_gaps(screening, RigorMode.PILOT))
     return gaps
 
 
@@ -832,11 +850,11 @@ def _systematic_screening_gaps(spec: ProtocolSpec) -> list[ValidationIssue]:
         gaps.append(
             ValidationIssue("screening.kappa_enforced", "systematic screening enforces the floor")
         )
-    gaps.extend(_audit_gaps(screening))
+    gaps.extend(_audit_gaps(screening, RigorMode.SYSTEMATIC))
     return gaps
 
 
-def _audit_gaps(screening: ScreeningPlan) -> list[ValidationIssue]:
+def _audit_gaps(screening: ScreeningPlan, mode: RigorMode) -> list[ValidationIssue]:
     gaps: list[ValidationIssue] = []
     if screening.audit_fraction < AUDIT_FRACTION_MIN:
         gaps.append(
@@ -845,12 +863,9 @@ def _audit_gaps(screening: ScreeningPlan) -> list[ValidationIssue]:
                 f"the audit samples at least {AUDIT_FRACTION_MIN:.0%} of agreed decisions",
             )
         )
-    if screening.audit_minimum < AUDIT_MINIMUM_MIN:
-        gaps.append(
-            ValidationIssue(
-                "screening.audit_minimum", f"the audit draws at least {AUDIT_MINIMUM_MIN} works"
-            )
-        )
+    gaps.extend(
+        audit_minimum_gap(screening.audit_minimum, mode, "screening.audit_minimum", "works")
+    )
     return gaps
 
 
