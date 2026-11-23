@@ -158,8 +158,14 @@ const THEMES = [
   ['flexoki-light', 'Flexoki Light', 'Light'],
   ['solarized-light', 'Solarized Light', 'Light'],
 ];
-function setTheme(t){ document.documentElement.dataset.theme = t; try{localStorage.setItem('hub-r2-theme',t)}catch(e){} document.dispatchEvent(new CustomEvent('hub:theme')); }
-try{ const t=localStorage.getItem('hub-r2-theme'); if(t) document.documentElement.dataset.theme=t; }catch(e){}
+/* One saved choice for every hub page: the key and ids of services/site_theme.py (SAVE_KEY), so the
+   portal, the classic hub and these pages show the same theme. 'hub-r2-theme' is read once, as a fallback. */
+const THEME_KEY = 'factory-theme';
+const themeOk = t => THEMES.some(x => x[0] === t);
+function savedTheme(){ try{ const t=localStorage.getItem(THEME_KEY); if(themeOk(t)) return t; const o=localStorage.getItem('hub-r2-theme'); return themeOk(o)?o:null; }catch(e){ return null; } }
+function setTheme(t){ document.documentElement.dataset.theme = t; try{localStorage.setItem(THEME_KEY,t)}catch(e){} document.dispatchEvent(new CustomEvent('hub:theme')); }
+{ const t=savedTheme(); if(t) document.documentElement.dataset.theme=t; }
+window.addEventListener('storage', ev => { if(ev.key!==THEME_KEY) return; const t=savedTheme()||'dark'; document.documentElement.dataset.theme=t; const tp=document.getElementById('themePick'); if(tp) tp.value=t; document.dispatchEvent(new CustomEvent('hub:theme')); });
 const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.documentElement.dataset.theme=q0.get('theme');
 
 /* ---------- rail: one entry per line, in order; ['-'] is a divider, ['group', label] a small label ---------- */

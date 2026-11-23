@@ -154,11 +154,29 @@ def test_project_hub_has_the_main_hub_bar_with_its_context_and_a_filter_in_the_s
     assert "id=q" in nav
 
 
-def test_lcars_is_the_default_when_nothing_is_saved() -> None:
+def test_dark_is_the_default_when_nothing_is_saved() -> None:
     from factory.services.site_theme import DEFAULT_THEME, THEME_SCRIPT, THEME_TOGGLE
 
-    assert DEFAULT_THEME == "lcars"
-    assert "saved()||D" in THEME_SCRIPT and "D='lcars'" in THEME_SCRIPT
+    assert DEFAULT_THEME == "dark"
+    assert "saved()||D" in THEME_SCRIPT and "D='dark'" in THEME_SCRIPT
     assert "removeAttribute" not in THEME_SCRIPT  # the first entry selects the default, not none
-    assert "<option value=''>Default (LCARS)</option>" in THEME_TOGGLE
+    assert "<option value=''>Default (Dark)</option>" in THEME_TOGGLE
     assert "value='dark'" in THEME_TOGGLE and "value='light'" in THEME_TOGGLE
+
+
+def test_the_hub_v2_shell_saves_the_theme_under_the_same_key_and_ids() -> None:
+    """The portal, the classic hub and the hub v2 pages share one saved choice."""
+    import re
+    from importlib import resources
+
+    from factory.services.site_theme import _CHOICES, SAVE_KEY
+
+    shell = resources.files("factory").joinpath("hub_ui", "shell.js").read_text(encoding="utf-8")
+    assert f"const THEME_KEY = '{SAVE_KEY}';" in shell
+    assert "localStorage.setItem(THEME_KEY,t)" in shell
+    assert "localStorage.setItem('hub-r2-theme'" not in shell
+    block = shell[
+        shell.index("const THEMES = [") : shell.index("];", shell.index("const THEMES = ["))
+    ]
+    assert set(re.findall(r"\['([a-z0-9-]+)',", block)) == set(_CHOICES)
+    assert "addEventListener('storage'" in shell
