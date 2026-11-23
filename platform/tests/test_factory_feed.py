@@ -407,3 +407,59 @@ def test_the_snapshot_is_cached_until_an_event_is_appended(
     ff.invalidate_cache()
     ff.today(settings, clock=clock)
     assert len(calls) == 3
+
+
+def test_freshness_reports_fetch_dates_pool_and_unranked_fetches(
+    world: tuple[Settings, Project, Project], clock: FixedClock
+) -> None:
+    settings, alpha, _ = world
+    before = ff.freshness(settings, clock=clock)
+    assert (before.pool, before.unranked_fetches, before.ranked_at) == (4, 2, None)
+    assert before.stale and before.window_to == "2026-11-20"
+    assert before.newest_submitted == "2026-11-22" and before.last_fetch_at is not None
+    ranked = ff.rank_pool(settings, FakeEmbedder(), session=SESSION, clock=clock)
+    after = ff.freshness(settings, clock=clock)
+    assert after.ranked_at is not None and after.unranked_fetches == 0 and not after.stale
+    assert ranked.ranking_id is not None
+    VECTORS["Paper 7"] = _vec(0.5, 0.5)
+    _fetch(alpha, 3, [_rec(7)])
+    newer = ff.freshness(settings, clock=clock)
+    assert newer.stale and newer.unranked_fetches == 1 and newer.pool == 5
+
+
+def test_rank_if_stale_ranks_only_when_the_pool_holds_unranked_fetches(
+    world: tuple[Settings, Project, Project], clock: FixedClock
+) -> None:
+    settings, alpha, _ = world
+    built: list[FakeEmbedder] = []
+
+    def factory() -> FakeEmbedder:
+        built.append(FakeEmbedder())
+        return built[-1]
+
+    first = ff.rank_if_stale(settings, factory, session=SESSION, clock=clock)
+    assert first is not None and first.entries == 4 and len(built) == 1
+    assert ff.today(settings, clock=clock).total == 4  # Today is no longer empty
+    assert ff.rank_if_stale(settings, factory, session=SESSION, clock=clock) is None
+    assert len(built) == 1  # current: the encoder is never built
+    VECTORS["Paper 7"] = _vec(0.5, 0.5)
+    _fetch(alpha, 3, [_rec(7)])
+    again = ff.rank_if_stale(settings, factory, session=SESSION, clock=clock)
+    assert again is not None and again.entries == 5 and len(built) == 2
+
+
+def test_rank_if_stale_does_nothing_on_an_empty_pool(tmp_path: Path, clock: FixedClock) -> None:
+    settings = Settings(root=tmp_path, user="obd")
+    init_project(settings, "alpha", "exploratory", session=SESSION, clock=clock)
+    fresh = ff.freshness(settings, clock=clock)
+    assert (fresh.pool, fresh.last_fetch_at, fresh.newest_submitted, fresh.stale) == (
+        0,
+        None,
+        None,
+        False,
+    )
+
+    def never() -> FakeEmbedder:
+        raise AssertionError("no encoder for an empty pool")
+
+    assert ff.rank_if_stale(settings, never, session=SESSION, clock=clock) is None

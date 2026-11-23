@@ -17,7 +17,9 @@ Invariants:
 from __future__ import annotations
 
 import json
+import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select, text
@@ -32,6 +34,8 @@ from factory.services.context import list_projects, open_project
 from factory.services.factory_scope import FactoryScope, factory_scope_exists, open_factory_scope
 from factory.services.ranking import entry_text
 from factory.services.ranking_model import Embedder
+
+_LOG = logging.getLogger(__name__)
 
 _READ_SESSION = "0" * 26  # a read opens the scopes but never mints an event
 _ENTRY = re.compile(FEED_ENTRY_RE)
@@ -294,3 +298,25 @@ def train(
         skipped=len(labels_all) - len(labels),
         ranking_id=ranked.ranking_id,
     )
+
+
+def rank_after_fetch(
+    settings: Settings,
+    embedder_factory: Callable[[], Embedder],
+    *,
+    session: str,
+    clock: Clock,
+) -> str:
+    """After a hub feed run: rank the factory pool when it holds unranked fetches
+    (`factory_feed.rank_if_stale`) and return the runner's note. A failure (no weights, the
+    encoder, a refused write) becomes a `failed: ...` note: the fetch itself has succeeded."""
+    try:
+        ranked = factory_feed.rank_if_stale(
+            settings, embedder_factory, session=session, clock=clock
+        )
+    except Exception as exc:  # the runner thread reports, never raises
+        _LOG.exception("the factory ranking after the feed run failed")
+        return f"failed: {type(exc).__name__}: {exc}"
+    if ranked is None:
+        return "up to date"
+    return f"ranked {ranked.entries} papers"

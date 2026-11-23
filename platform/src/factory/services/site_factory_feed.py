@@ -22,11 +22,18 @@ import json
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from importlib import resources
 from typing import Final
 
 from factory.services import hub_ui
-from factory.services.factory_feed import FeedCard, FeedCounts, ProjectBadge, TodayPage
+from factory.services.factory_feed import (
+    FeedCard,
+    FeedCounts,
+    Freshness,
+    ProjectBadge,
+    TodayPage,
+)
 from factory.services.factory_feed_actions import RankerStatus
 from factory.services.site_chrome import with_bar
 
@@ -76,6 +83,10 @@ class PageContext:
     counts: FeedCounts
     status: RankerStatus
     ranking_id: str | None
+    freshness: Freshness | None = None
+    """The date line; None leaves it out."""
+    can_fetch: bool = False
+    """The hub runs the feed (`--feed`): the Fetch now button posts `/api/feed/run`."""
 
 
 def _info(text: str, label: str = "About this") -> str:
@@ -240,6 +251,58 @@ def _head(title: str, info: str, extra: str = "") -> str:
     )
 
 
+def _when(ts: str | None) -> str:
+    """`23 Nov 2026, 15:28 UTC` in a `<time>` the script shows in local time; `never` for None."""
+    if not ts:
+        return "never"
+    try:
+        moment = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return _e(ts)
+    at = moment.astimezone(UTC)
+    text = f"{at.day} {at:%b %Y, %H:%M} UTC"
+    return f"<time datetime='{_e(moment.isoformat())}'>{_e(text)}</time>"
+
+
+def _day(iso: str | None) -> str:
+    if not iso:
+        return "none"
+    try:
+        day = date.fromisoformat(iso[:10])
+    except ValueError:
+        return _e(iso)
+    return _e(f"{day.day} {day:%b %Y}")
+
+
+def _freshness(ctx: PageContext) -> str:
+    """The date line: when the feed last fetched, the newest submission date, the pool size and
+    when Today was last ranked; and the Fetch now button when the hub runs the feed."""
+    f = ctx.freshness
+    if f is None:
+        return ""
+    parts = [
+        f"Fetched {_when(f.last_fetch_at)}",
+        f"newest paper submitted {_day(f.newest_submitted)}",
+        f"{f.pool:,} papers",
+        f"ranked {_when(f.ranked_at)}",
+    ]
+    lag = (
+        "arXiv lists a paper a day or more after its submission, so the newest submission date "
+        "trails the fetch date. Fetch now asks every project's feed for anything new (a project "
+        "fetches at most once per its interval) and then ranks the list."
+    )
+    stale = " <strong class=fx-stale>New papers are not ranked yet.</strong>" if f.stale else ""
+    button = (
+        "<button type=button class=btn id=fx-fetch>Fetch now</button><span class=meta id=fx-fetch-line></span>"
+        if ctx.can_fetch
+        else "<span class=meta>The hub's feed runner is off (started with --no-feed).</span>"
+    )
+    return (
+        f"<div class=fx-fresh><span class=meta>{' · '.join(parts)}</span>"
+        f"{_info(lag, 'About freshness')}{stale}{button}</div>"
+    )
+
+
 def _tools(sort_html: str = "") -> str:
     return f"<div class=fx-tools>{sort_html}<input type=search id=fx-q placeholder='Filter this page' aria-label='Filter this page'></div>"
 
@@ -270,22 +333,33 @@ def render_today(ctx: PageContext, page: TodayPage) -> str:
         if ctx.status.version is not None
         else "<p class=note>No ranker yet: Today is newest first. Like or dislike some papers, then press Train in Settings.</p>"
     )
-    empty = (
-        ""
-        if page.cards
-        else "<p class=fx-empty>Nothing to show. Run a feed fetch, or you have reacted to everything.</p>"
-    )
+    empty = "" if page.cards else _empty_today(ctx)
     body = (
         _head(
             "Today",
             "The papers the projects' feeds fetched, one list. Ranked uses the classifier trained on your likes and dislikes; a liked or disliked paper leaves this list.",
         )
+        + _freshness(ctx)
         + _settings(ctx)
         + ranker
         + _tools(sorter)
         + f"<div class=fx-list>{cards}</div>{empty}{nav}"
     )
     return _shell(ctx, "today", "Today · New papers", body, page.cards, "today")
+
+
+def _empty_today(ctx: PageContext) -> str:
+    f = ctx.freshness
+    if f is not None and f.pool == 0:
+        text = "No papers fetched yet. Press Fetch now."
+    elif f is not None and ctx.ranking_id is None:
+        text = (
+            f"{f.pool:,} papers are fetched but not ranked yet. Press Fetch now: it fetches "
+            "anything new, then ranks the list."
+        )
+    else:
+        text = "Nothing to show: you have reacted to every paper in the list."
+    return f"<p class=fx-empty>{_e(text)}</p>"
 
 
 def render_project(
@@ -305,6 +379,7 @@ def render_project(
             info.title or info.slug,
             "Papers ordered by their similarity to this project's core works, the highest first. The project does not learn from your reactions.",
         )
+        + _freshness(ctx)
         + _settings(ctx)
         + _tools(picker)
         + f"<div class=fx-list>{items}{divider}</div>{empty}"
