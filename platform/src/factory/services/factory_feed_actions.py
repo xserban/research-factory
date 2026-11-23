@@ -103,17 +103,18 @@ def react(
     if not factory_scope_exists(settings):
         raise _refuse("entry_id", "not-ranked")
     scope = open_factory_scope(settings, session=session, clock=clock)
-    ranking, rank, score, beyond = _placement(scope, entry_id, ranking_id)
-    payload = FeedReacted(
-        entry_id=entry_id,
-        reaction=parsed,
-        ranking_id=ranking,
-        rank_shown=rank_shown if rank_shown is not None else rank,
-        score_shown=score_shown if score_shown is not None else score,
-        beyond_shown=beyond,
-    )
-    event = scope.events.make("feed.reacted", payload, scope.human_actor(), refs=(entry_id,))
-    scope.record([event])
+    with scope.writing():  # the event id is minted under the lock, above the log's newest
+        ranking, rank, score, beyond = _placement(scope, entry_id, ranking_id)
+        payload = FeedReacted(
+            entry_id=entry_id,
+            reaction=parsed,
+            ranking_id=ranking,
+            rank_shown=rank_shown if rank_shown is not None else rank,
+            score_shown=score_shown if score_shown is not None else score,
+            beyond_shown=beyond,
+        )
+        event = scope.events.make("feed.reacted", payload, scope.human_actor(), refs=(entry_id,))
+        scope.record([event])
     return event.id
 
 
@@ -251,20 +252,21 @@ def train(
     state = feed_ranker.train(labels, vectors, embedding_model=embedder.model_id)
     scope = open_factory_scope(settings, session=session, clock=clock)
     blob = scope.blobs.put(state.to_json().encode("utf-8"))
-    version = scope.read(lambda conn: fx.latest_version(conn, scope.tables)) + 1
-    payload = FeedRankerTrained(
-        training_set_hash=state.training_set_hash,
-        ids=tuple(ids),
-        likes=state.n_likes,
-        dislikes=state.n_dislikes,
-        features=state.feature_names,
-        library_versions=dict(state.library_versions),
-        state_blob=blob,
-        ranker_version=version,
-        triggered_by=command_ref,
-    )
-    event = scope.events.make("feed.ranker_trained", payload, scope.system_actor())
-    scope.record([event])
+    with scope.writing():  # the version and the event id are taken under the lock
+        version = scope.read(lambda conn: fx.latest_version(conn, scope.tables)) + 1
+        payload = FeedRankerTrained(
+            training_set_hash=state.training_set_hash,
+            ids=tuple(ids),
+            likes=state.n_likes,
+            dislikes=state.n_dislikes,
+            features=state.feature_names,
+            library_versions=dict(state.library_versions),
+            state_blob=blob,
+            ranker_version=version,
+            triggered_by=command_ref,
+        )
+        event = scope.events.make("feed.ranker_trained", payload, scope.system_actor())
+        scope.record([event])
     ranked = factory_feed.rank_pool(settings, embedder, session=session, clock=clock)
     return TrainResult(
         version=version,

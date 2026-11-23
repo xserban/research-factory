@@ -283,9 +283,10 @@ def rank_pool(
         ranker_version=version,
         project_references=ref_hashes,
     )
-    scope.record(
-        [scope.events.make("feed.ranked", payload, scope.system_actor(), refs=(ranking_id,))]
-    )
+    with scope.writing():  # the event id is minted under the lock, above the log's newest
+        scope.record(
+            [scope.events.make("feed.ranked", payload, scope.system_actor(), refs=(ranking_id,))]
+        )
     return RankResult(
         ranking_id, len(pool), version, tuple(sorted(references)), len(picks), len(explore)
     )
