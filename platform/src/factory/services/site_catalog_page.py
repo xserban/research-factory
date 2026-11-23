@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,18 +21,32 @@ from factory.services.site_catalog import (
     ToolInfo,
     build_catalog,
 )
-from factory.services.site_widgets import REPORT_CSS, esc, note, table
+from factory.services.site_kit_page import kit_page
+from factory.services.site_widgets import esc
 
 CATALOG_CSS = (
-    ".card{background:var(--card);border:1px solid var(--mut);padding:10px 14px;margin:8px 0}"
-    ".card h3{margin:0 0 4px}.card ol{margin:6px 0 0 18px;padding:0}.card li{margin:3px 0}"
-    ".tool{border-top:1px solid var(--mut);padding:8px 0}.tool b{color:var(--ac)}"
-    ".tool pre{background:var(--dk);padding:8px;overflow:auto;font-size:11.5px}"
-    ".bad{background:var(--card);border:1px solid #c33;border-left:3px solid #c33;color:#e55;padding:10px 14px;margin:8px 0}"
-    ".dim{color:var(--dim)}.ex{color:var(--light);margin:2px 0;font-size:12px}"
-    "summary{cursor:pointer;color:var(--dim)}"
-    ".mark{border:1px solid var(--mut);color:var(--amber);font-size:10.5px;padding:0 5px}"
+    ".ct-figs{display:flex;flex-wrap:wrap;gap:8px 28px;margin:0 0 12px}"
+    ".ct-figs div{display:flex;flex-direction:column}"
+    ".ct-figs b{font:500 var(--t-l)/1.2 var(--f-mono);font-variant-numeric:tabular-nums}"
+    ".ct-figs span{font-size:var(--t-xs);color:var(--mut)}"
+    ".ct-fail{background:var(--surface);border-radius:var(--r-s);box-shadow:inset 3px 0 0 var(--exc);padding:10px 14px;margin:8px 0;font-size:var(--t-s)}"
+    ".ct-fail b{color:var(--exc)}"
+    ".ct-skill{margin:0 0 var(--gap)}.ct-skill h3{font:600 var(--t-m)/1.3 var(--f-ui);margin:0 0 4px}"
+    ".ct-skill ol{margin:8px 0 0 18px;padding:0}.ct-skill li{margin:4px 0}"
+    ".ct-dim{color:var(--dim);font-size:var(--t-s)}"
+    ".ct-tool{border-top:1px solid var(--hair);padding:10px 0;font-size:var(--t-s)}"
+    ".ct-tool>b{font-family:var(--f-mono);color:var(--fg)}"
+    ".ct-tool pre{background:var(--surface);border-radius:var(--r-s);padding:10px;overflow:auto;font:400 var(--t-xs) var(--f-mono);margin:6px 0 0}"
+    ".ct-tool summary{cursor:pointer;color:var(--mut)}"
+    ".ct-ex{color:var(--mut);margin:2px 0;font-size:var(--t-xs)}"
+    ".ct-mark{border-radius:999px;background:var(--raised);color:var(--mut);font-size:var(--t-xs);padding:2px 8px}"
+    ".ct-sec{margin:0 0 36px}.ct-sec>h2{font:600 var(--t-l)/1.3 var(--f-ui);margin:0 0 4px}"
+    ".ct-sec>p{margin:0 0 12px}"
 )
+
+
+_STEP_NO = re.compile(r"^\s*\d+[.)]\s+")
+"""A step's own leading number; the list numbers the steps."""
 
 
 def _first_line(text: str) -> str:
@@ -81,34 +96,27 @@ def stage_summary(catalog: Catalog) -> list[dict[str, Any]]:
 
 MAP_CSS = (
     "/*cmap*/"
-    "#cmap{margin:6px 0 22px}#cmap .bar{display:flex;gap:10px;align-items:center;margin:0 0 10px}"
-    "#cmap input{flex:1;max-width:420px;background:var(--dk);color:var(--fg);border:1px solid var(--mut);padding:6px 9px;font:inherit}"
-    "#cmap .hint{color:var(--dim);font-size:12px}"
-    "#cmap .line{display:flex;align-items:stretch;overflow-x:auto;padding:6px 2px 10px}"
-    "#cmap .cn{flex:none;width:26px;align-self:center;height:3px;margin:0 2px;"
-    "background:repeating-linear-gradient(90deg,var(--ac) 0 6px,transparent 6px 12px);"
-    "background-size:12px 3px;animation:cflow 1s linear infinite;opacity:.75}"
-    "#cmap.paused .cn{animation-play-state:paused}"
-    "@keyframes cflow{to{background-position:12px 0}}"
-    "@media (prefers-reduced-motion:reduce){#cmap .cn{animation:none}}"
-    "#cmap .stn{flex:none;position:relative;text-align:left;font:inherit;color:var(--fg);cursor:pointer;"
-    "background:var(--card);border:1px solid var(--mut);padding:8px 10px;min-width:96px}"
-    "#cmap .stn:hover,#cmap .stn:focus-visible{border-color:var(--ac);outline:none}"
-    "#cmap .stn[aria-expanded=true]{border-color:var(--ac);background:var(--sel);box-shadow:0 0 0 1px var(--ac)}"
-    "#cmap .stn .k{font:600 10.5px var(--mono,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}"
-    "#cmap .stn .v{font:700 20px var(--mono,monospace);color:var(--ac);line-height:1.2}"
-    "#cmap .stn .s{font-size:11px;color:var(--dim)}"
-    "#cmap .stn .fb{position:absolute;top:-7px;right:-7px;background:var(--amber);color:var(--bg);"
-    "font:700 10px var(--mono,monospace);padding:1px 5px;border-radius:9px}"
-    "#cmap .stn .mc{position:absolute;bottom:-7px;right:-7px;background:var(--green);color:var(--bg);"
-    "font:700 10px var(--mono,monospace);padding:1px 5px;border-radius:9px}"
-    "#cmap .stn.lit{border-color:var(--green)}#cmap .stn.dimmed{opacity:.4}"
-    "#cmap .panel{border:1px solid var(--ac);background:var(--card);padding:10px 14px;margin:4px 0}"
-    "#cmap .panel h3{margin:0 0 2px;color:var(--ac)}#cmap .panel h4{margin:12px 0 4px;color:var(--dim);"
-    "font-size:11px;letter-spacing:.12em;text-transform:uppercase}"
-    "#cmap .panel .it{border-top:1px solid var(--mut);padding:5px 0;font-size:13px}"
-    "#cmap .panel .it b{color:var(--fg)}#cmap .panel .t{color:var(--cyan);font-size:12px}"
-    "#cmap .panel .fl{color:var(--amber)}#cmap .panel .w{color:var(--dim);font-size:11.5px}"
+    "#cmap{margin:6px 0 36px}#cmap .ct-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 12px}"
+    "#cmap input{flex:1;min-width:200px;max-width:420px}"
+    "#cmap .ct-hint{color:var(--mut);font-size:var(--t-xs)}"
+    "#cmap .ct-line{display:flex;align-items:stretch;overflow-x:auto;padding:6px 2px 10px}"
+    "#cmap .ct-cn{flex:none;width:22px;align-self:center;height:2px;margin:0 2px;background:var(--line)}"
+    "#cmap .ct-stn{flex:none;text-align:left;font:inherit;color:var(--fg);cursor:pointer;border:0;padding:12px 14px;min-width:104px}"
+    "#cmap .ct-stn:hover,#cmap .ct-stn:focus-visible{background:var(--raised);outline:none}"
+    "#cmap .ct-stn:focus-visible{box-shadow:0 0 0 2px var(--acc)}"
+    "#cmap .ct-stn[aria-expanded=true]{background:var(--acc-soft);box-shadow:inset 0 0 0 1px var(--acc)}"
+    "#cmap .ct-stn .ct-k{display:block;font:500 var(--t-xs) var(--f-ui);color:var(--mut)}"
+    "#cmap .ct-stn .ct-v{display:block;font:500 var(--t-xl)/1.2 var(--f-mono);font-variant-numeric:tabular-nums}"
+    "#cmap .ct-stn .ct-s{display:block;font-size:var(--t-xs);color:var(--dim)}"
+    "#cmap .ct-stn .ct-fb{display:block;font-size:var(--t-xs);color:var(--exc)}"
+    "#cmap .ct-stn .ct-mc{display:block;font-size:var(--t-xs);color:var(--inc)}"
+    "#cmap .ct-stn.lit{box-shadow:inset 0 0 0 1px var(--inc)}#cmap .ct-stn.dimmed{opacity:.45}"
+    "#cmap .ct-panel{margin:4px 0}"
+    "#cmap .ct-panel h3{margin:0 0 2px;font:600 var(--t-m) var(--f-ui)}#cmap .ct-panel h4{margin:14px 0 4px;color:var(--mut);"
+    "font:500 var(--t-xs) var(--f-ui)}"
+    "#cmap .ct-panel .ct-it{border-top:1px solid var(--hair);padding:6px 0;font-size:var(--t-s)}"
+    "#cmap .ct-panel .ct-t{color:var(--mut);font-size:var(--t-xs)}"
+    "#cmap .ct-panel .ct-fl{color:var(--exc);font-family:var(--f-mono)}#cmap .ct-panel .ct-w{color:var(--dim);font-size:var(--t-xs)}"
     "/*end cmap*/"
 )
 
@@ -116,7 +124,7 @@ MAP_JS = r"""
 (function(){
 var root=document.getElementById('cmap');if(!root)return;
 var data=JSON.parse(document.getElementById('cmap-data').textContent).stages;
-var line=root.querySelector('.line'),panel=root.querySelector('.panel'),q=root.querySelector('input');
+var line=root.querySelector('.ct-line'),panel=root.querySelector('.ct-panel'),q=root.querySelector('input');
 var open=null,term='';
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 function hit(s){return !term||(s.n+' '+s.d).toLowerCase().indexOf(term)>=0}
@@ -125,9 +133,9 @@ function btn(id){return document.getElementById('st-'+id)}
 function paintLine(){
   data.forEach(function(st){
     var b=btn(st.id);if(!b)return;var m=matches(st),n=m.skills.length+m.tools.length;
-    var old=b.querySelector('.mc');if(old)old.remove();
+    var old=b.querySelector('.ct-mc');if(old)old.remove();
     b.classList.toggle('lit',!!term&&n>0);b.classList.toggle('dimmed',!!term&&n===0);
-    if(term&&n>0){b.appendChild(el('span','mc',String(n)))}
+    if(term&&n>0){b.appendChild(el('span','ct-mc',n+(n===1?' match':' matches')))}
   });
 }
 function paintPanel(){
@@ -136,14 +144,14 @@ function paintPanel(){
   var st=data.filter(function(s){return s.id===open})[0];
   if(!st){panel.hidden=true;return}
   var m=matches(st);panel.hidden=false;
-  panel.appendChild(el('h3',null,st.label));panel.appendChild(el('div','w',st.covers));
+  panel.appendChild(el('h3',null,st.label));panel.appendChild(el('div','ct-w',st.covers));
   panel.appendChild(el('h4',null,'Skills ('+m.skills.length+')'));
-  m.skills.forEach(function(s){var d=el('div','it');d.appendChild(el('b',null,s.n));
-    d.appendChild(el('div',null,s.d));if(s.t.length)d.appendChild(el('div','t','tools: '+s.t.join(', ')));panel.appendChild(d)});
+  m.skills.forEach(function(s){var d=el('div','ct-it');d.appendChild(el('b',null,s.n));
+    d.appendChild(el('div',null,s.d));if(s.t.length)d.appendChild(el('div','ct-t','tools: '+s.t.join(', ')));panel.appendChild(d)});
   panel.appendChild(el('h4',null,'Tools ('+m.tools.length+')'));
-  m.tools.forEach(function(t){var d=el('div','it');d.appendChild(el('b',null,t.n));d.appendChild(el('span','w',' '+t.d));panel.appendChild(d)});
+  m.tools.forEach(function(t){var d=el('div','ct-it');d.appendChild(el('b',null,t.n));d.appendChild(el('span','ct-w',' '+t.d));panel.appendChild(d)});
   if(st.flags.length){panel.appendChild(el('h4',null,'Flags ('+st.flags.length+')'));
-    st.flags.forEach(function(f){var d=el('div','it');d.appendChild(el('b','fl',f.c));d.appendChild(el('span','w',' '+f.w));d.appendChild(el('div',null,f.m));panel.appendChild(d)})}
+    st.flags.forEach(function(f){var d=el('div','ct-it');d.appendChild(el('b','ct-fl',f.c));d.appendChild(el('span','ct-w',' '+f.w));d.appendChild(el('div',null,f.m));panel.appendChild(d)})}
 }
 function setOpen(id,fromHash){
   open=id;data.forEach(function(s){var b=btn(s.id);if(b)b.setAttribute('aria-expanded',String(s.id===id))});
@@ -164,37 +172,35 @@ root.hidden=false;fromHash();
 
 def _stage_map(catalog: Catalog) -> str:
     rows = stage_summary(catalog)
-    biggest = max([int(r["n_tools"]) for r in rows] + [1])
     parts: list[str] = []
     for r in rows:
-        width = 96 + round(40 * int(r["n_tools"]) / biggest)
-        flag = f"<span class=fb title='flags'>{int(r['n_flags'])}</span>" if r["n_flags"] else ""
+        nf = int(r["n_flags"])
+        flag = f"<span class=ct-fb>{nf} flag{'s' if nf != 1 else ''}</span>" if nf else ""
         parts.append(
-            f"<button type=button class=stn id='st-{esc(r['id'])}' aria-expanded=false "
-            f"style='min-width:{width}px'><div class=k>{esc(r['label'])}</div>"
-            f"<div class=v>{int(r['n_tools'])}</div>"
-            f"<div class=s>{int(r['n_skills'])} skills · {int(r['n_tools'])} tools</div>{flag}</button>"
+            f"<button type=button class='card ct-stn' id='st-{esc(r['id'])}' aria-expanded=false>"
+            f"<span class=ct-k>{esc(r['label'])}</span>"
+            f"<span class=ct-v>{int(r['n_tools'])}</span>"
+            f"<span class=ct-s>{int(r['n_skills'])} skills · {int(r['n_tools'])} tools</span>{flag}</button>"
         )
-    line = "<span class=cn aria-hidden=true></span>".join(parts)
+    line = "<span class=ct-cn aria-hidden=true></span>".join(parts)
     data = json.dumps({"stages": rows}, ensure_ascii=False).replace("</", "<\\/")
     return (
-        "<div id=cmap hidden><div class=bar><input type=search id=cmap-q placeholder='Search tools and skills' "
-        "aria-label='Search tools and skills'><span class=hint>Click a stage for its skills, tools and flags. Esc closes.</span></div>"
-        f"<div class=line>{line}</div><div class=panel hidden></div>"
+        "<div id=cmap hidden><div class=ct-bar><input type=search id=cmap-q placeholder='Search tools and skills' "
+        "aria-label='Search tools and skills'><span class=ct-hint>Click a stage for its skills, tools and flags. Esc closes.</span></div>"
+        f"<div class=ct-line>{line}</div><div class='card raised ct-panel' hidden></div>"
         f"<script type=application/json id=cmap-data>{data}</script></div>"
-        f"<script>{MAP_JS}</script>"
     )
 
 
 def _skill_card(skill: SkillInfo) -> str:
     steps = "".join(
-        f"<li>{esc(s.text)} <small class=dim>({esc(s.file)}:{s.line})</small></li>"
+        f"<li>{esc(_STEP_NO.sub('', s.text, count=1))} <small class=ct-dim>({esc(s.file)}:{s.line})</small></li>"
         for s in skill.steps
     )
     extra = [st for st in skill.stages[1:]]
-    spans = f" <small class=dim>also: {esc(', '.join(extra))}</small>" if extra else ""
+    spans = f" <small class=ct-dim>also: {esc(', '.join(extra))}</small>" if extra else ""
     return (
-        f"<div class=card><h3>{esc(skill.name)}{spans}</h3><div>{esc(skill.description)}</div>"
+        f"<div class='card ct-skill'><h3>{esc(skill.name)}{spans}</h3><div>{esc(skill.description)}</div>"
         + (f"<ol>{steps}</ol>" if steps else "")
         + "</div>"
     )
@@ -202,55 +208,68 @@ def _skill_card(skill: SkillInfo) -> str:
 
 def _tool(tool: ToolInfo, catalog: Catalog) -> str:
     examples = "".join(
-        f"<div class=ex>{esc(s.skill)}: {esc(s.text)}</div>"
+        f"<div class=ct-ex>{esc(s.skill)}: {esc(s.text)}</div>"
         for sk in catalog.skills
         for s in sk.steps
         if tool.name in s.tools
     )
     also = (
-        f"<div class=dim>also used in: {', '.join(esc(s) for s in tool.also_used_in)}</div>"
+        f"<div class=ct-dim>also used in: {', '.join(esc(s) for s in tool.also_used_in)}</div>"
         if tool.also_used_in
         else ""
     )
-    badge = f" <span class=mark>{esc(tool.marker)}</span>" if tool.marker else ""
+    badge = f" <span class=ct-mark>{esc(tool.marker)}</span>" if tool.marker else ""
     return (
-        f"<div class=tool id='{esc(tool.name)}'><b>{esc(tool.name)}</b>{badge} "
-        f"<small>({esc(', '.join(tool.params) or 'no inputs')})</small>"
+        f"<div class=ct-tool id='{esc(tool.name)}'><b>{esc(tool.name)}</b>{badge} "
+        f"<span class=meta>({esc(', '.join(tool.params) or 'no inputs')})</span>"
         f"<div>{esc(tool.description)}</div>"
         f"<details><summary>inputs</summary><pre>{esc(tool.input_schema_json)}</pre></details>"
         f"{examples}{also}</div>"
     )
 
 
+def _table(headers: list[str], rows: list[list[object]], numeric: tuple[int, ...] = ()) -> str:
+    """A kit table; columns named in `numeric` are right-aligned figures. Every cell is escaped."""
+
+    def cls(i: int) -> str:
+        return " class=r" if i in numeric else ""
+
+    head = "".join(f"<th{cls(i)}>{esc(h)}</th>" for i, h in enumerate(headers))
+    body = "".join(
+        "<tr>" + "".join(f"<td{cls(i)}>{esc(c)}</td>" for i, c in enumerate(row)) + "</tr>"
+        for row in rows
+    )
+    return f"<table class=t><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _sec(title: str, inner: str, *, ident: str = "") -> str:
+    attr = f" id='{esc(ident)}'" if ident else ""
+    return f"<section class=ct-sec><h2{attr}>{esc(title)}</h2>{inner}</section>"
+
+
 def render(catalog: Catalog, built_at: str, code: str) -> str:
     c = catalog.count_check
-    header = "<h1>Capability catalog</h1>" + table(
-        [
-            "tools registered",
-            "tools listed",
-            "skills",
-            "prompts",
-            "examples",
-            "marked",
-            "orphan tools",
-            "flags",
-        ],
-        [
-            [
-                c.registered,
-                c.listed,
-                len(catalog.skills),
-                "not derived" if catalog.prompts is None else catalog.prompts,
-                catalog.examples,
-                sum(1 for t in catalog.tools if t.marker),
-                catalog.flag_counts()["orphan-tool"],
-                len(catalog.flags),
-            ]
-        ],
+    figs = [
+        ("tools registered", c.registered),
+        ("tools listed", c.listed),
+        ("skills", len(catalog.skills)),
+        ("prompts", "not derived" if catalog.prompts is None else catalog.prompts),
+        ("examples", catalog.examples),
+        ("marked", sum(1 for t in catalog.tools if t.marker)),
+        ("orphan tools", catalog.flag_counts()["orphan-tool"]),
+        ("flags", len(catalog.flags)),
+    ]
+    header = (
+        "<header class=mh-head><h1>Capabilities</h1><p>The factory's tools and skills by lifecycle "
+        "stage, derived from the source at each load.</p></header>"
+        "<div class=ct-figs>"
+        + "".join(f"<div><b>{esc(v)}</b><span>{esc(k)}</span></div>" for k, v in figs)
+        + "</div>"
     )
     if c.ok:
-        header += note(
-            f"Count check: {c.registered} tools registered in the source, all listed by the built server."
+        header += (
+            f"<p class=note>Count check passed: {c.registered} tools registered in the source, "
+            "all listed by the built server.</p>"
         )
     else:
         parts = [f"registered {c.registered}, listed {c.listed}"]
@@ -261,37 +280,40 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
         ):
             if names:
                 parts.append(f"{label}: {', '.join(names)}")
-        header += f"<div class=bad>Count check failed. {esc('; '.join(parts))}</div>"
+        header += f"<div class=ct-fail><b>Count check failed.</b> {esc('; '.join(parts))}</div>"
     for check, reason in sorted(catalog.skipped.items()):
-        header += note(f"Not derived: {check} ({reason}).")
+        header += f"<p class=note>Not derived: {esc(check)} ({esc(reason)}).</p>"
 
     body = [header, _stage_map(catalog)]
     for stage_id, label, covers in LIFECYCLE:
         skills = [s for s in catalog.skills if s.stages[:1] == (stage_id,)]
         tools = [t for t in catalog.tools if t.stage == stage_id]
-        sec = f"<h2 id='{esc(stage_id)}'>{esc(label)}</h2><div class=dim>{esc(covers)}</div>"
+        sec = f"<p class=ct-dim>{esc(covers)}</p>"
         sec += (
-            "".join(_skill_card(s) for s in skills) or "<p class=dim>No skill has this stage.</p>"
+            "".join(_skill_card(s) for s in skills)
+            or "<p class=ct-dim>No skill has this stage.</p>"
         )
         sec += (
             "".join(_tool(t, catalog) for t in tools)
-            or "<p class=dim>No tool is assigned here.</p>"
+            or "<p class=ct-dim>No tool is assigned here.</p>"
         )
-        body.append(sec)
+        body.append(_sec(label, sec, ident=stage_id))
     orphans = [t for t in catalog.tools if t.stage is None and t.marker is None]
     stageless = [s for s in catalog.skills if not s.stages]
     body.append(
-        "<h2>Unassigned</h2>"
-        + note(
-            "Tools no skill names and no marker covers (orphans), and skills with no valid stage."
-        )
-        + (
-            "".join(_skill_card(s) for s in stageless) + "".join(_tool(t, catalog) for t in orphans)
-            or "<p class=dim>None.</p>"
+        _sec(
+            "Unassigned",
+            "<p class=note>Tools no skill names and no marker covers (orphans), and skills with "
+            "no valid stage.</p>"
+            + (
+                "".join(_skill_card(s) for s in stageless)
+                + "".join(_tool(t, catalog) for t in orphans)
+                or "<p class=ct-dim>None.</p>"
+            ),
         )
     )
 
-    marked_rows = [
+    marked_rows: list[list[object]] = [
         [
             t.name,
             t.marker,
@@ -309,34 +331,37 @@ def render(catalog: Catalog, built_at: str, code: str) -> str:
         if t.marker == kind
     ]
     body.append(
-        "<h2>Marked tools</h2>"
-        + note(
-            "Declared in services/site_catalog.py (MARKERS), never inferred from a name. A marked tool "
-            "that no skill names is not an orphan. A human-only tool named by a skill, or a marker "
-            "that disagrees with the tool's access row, is flagged below."
+        _sec(
+            "Marked tools",
+            "<p class=note>Declared in services/site_catalog.py (MARKERS), never inferred from a "
+            "name. A marked tool that no skill names is not an orphan. A human-only tool named by "
+            "a skill, or a marker that disagrees with the tool's access row, is flagged below.</p>"
+            + _table(["tool", "marker", "why", "access row", "named by skills"], marked_rows),
         )
-        + table(["tool", "marker", "why", "access row", "named by skills"], marked_rows)
     )
 
-    rows = [
+    rows: list[list[object]] = [
         [f.code, f"{f.file}:{f.line}", f.message + (f"  |  {f.other}" if f.other else "")]
         for f in catalog.flags
     ]
     body.append(
-        "<h2>Flags</h2>"
-        + note(
-            "Mechanical findings, listed for the researcher to judge; the platform rules on none of them."
+        _sec(
+            "Flags",
+            "<p class=note>Mechanical findings, listed for the researcher to judge; the platform "
+            "rules on none of them.</p>" + _table(["code", "where", "finding"], rows),
         )
-        + table(["code", "where", "finding"], rows)
     )
     hashes = ", ".join(f"{s.name} {s.sha}" for s in catalog.skills)
     body.append(
-        f"<h2>Footer</h2><p class=dim>Built {esc(built_at)} · code {esc(code)} · decisions "
-        f"{esc(catalog.decisions_sha or 'n/a')} · skills: {esc(hashes)}</p>"
+        _sec(
+            "Footer",
+            f"<p class=ct-dim>Built {esc(built_at)} · code {esc(code)} · decisions "
+            f"{esc(catalog.decisions_sha or 'n/a')} · skills: {esc(hashes)}</p>",
+        )
     )
-    from factory.services.site import page
-
-    return page("Capability catalog", "".join(body), REPORT_CSS + CATALOG_CSS + MAP_CSS)
+    return kit_page(
+        "Capabilities", "".join(body), "catalog", css=CATALOG_CSS + MAP_CSS, script=MAP_JS
+    )
 
 
 def render_catalog(settings: Settings) -> str:
@@ -346,3 +371,14 @@ def render_catalog(settings: Settings) -> str:
     catalog = build_catalog(settings)
     stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     return render(catalog, stamp, code_hash())
+
+
+def render_unavailable() -> str:
+    """The catalog page when no project is listed: says what to do next."""
+    return kit_page(
+        "Capabilities",
+        "<header class=mh-head><h1>Capabilities</h1><p>No project found under the factory "
+        "root, so the catalog cannot be derived. Create a project from the portal, then reload "
+        "this page.</p></header>",
+        "catalog",
+    )

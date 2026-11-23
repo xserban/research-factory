@@ -101,7 +101,8 @@ def test_the_portal_lists_each_project_with_a_link_to_its_hub(
     port, _ = served
     status, head, body = _get(port, "/")
     assert status == 200 and head["content-type"].startswith("text/html")
-    assert "href='/p/demo/'" in body and "href='/p/other/'" in body
+    assert "href='/p/demo/ui/'" in body and "href='/p/other/ui/'" in body
+    assert "href='/p/demo/'" in body  # the classic hub, a second link
     listing = json.loads(_get(port, "/api/projects")[2])
     assert [p["slug"] for p in listing["projects"]] == ["demo", "other"]
     assert all(p["hub_ready"] for p in listing["projects"])
@@ -255,7 +256,7 @@ def test_the_portal_answers_while_a_project_is_rebuilding(
     with slot.rebuilder._lock:  # what `rebuild_if_stale` holds while it builds
         status, _, body = _get(port, "/")
         listing = json.loads(_get(port, "/api/projects")[2])
-    assert status == 200 and "rebuilding" in body
+    assert status == 200 and "Rebuilding" in body
     demo = next(p for p in listing["projects"] if p["slug"] == "demo")
     assert demo["building"] is True
     other = next(p for p in listing["projects"] if p["slug"] == "other")

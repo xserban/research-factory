@@ -12,7 +12,8 @@ Invariants:
   token goes only into the project list the picker uses.
 - The page works without the factory feed environment: it then says the feed is off and links the
   classic page, so `/feed/` is never an error.
-- The assets are `kit.css`, its fonts, `feed.css` and `feed.js`; `asset` serves nothing else.
+- The assets are `kit.css`, its fonts, `feed.css`, `feed.js` and `main-hub.css` (the bar and the frame
+  of every main-hub page, `site_kit_page`); `asset` serves nothing else.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ DEFAULT_WINDOW: Final = "7d"
 _OWN: Final = {
     "feed.css": ("hub_ui/feed.css", "text/css; charset=utf-8"),
     "feed.js": ("hub_ui/feed.js", "text/javascript; charset=utf-8"),
+    "main-hub.css": ("hub_ui/main-hub.css", "text/css; charset=utf-8"),
 }
 
 
@@ -233,6 +235,7 @@ def _shell(
         f"<meta name='factory-token' content='{_e(ctx.hub_token)}'>"
         "<meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'>"
         f"<link rel=stylesheet href='{ASSET_PREFIX}kit.css?v={v}'><link rel=stylesheet href='{ASSET_PREFIX}feed.css?v={v}'>"
+        f"<link rel=stylesheet href='{ASSET_PREFIX}main-hub.css?v={v}'>"
     )
     doc = (
         f"<!doctype html><html lang=en><head><title>{_e(title)}</title>{head}</head><body>"

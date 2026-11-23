@@ -3,8 +3,13 @@ with the react buttons, and the bar with the theme toggle on the portal and the 
 
 from __future__ import annotations
 
-from factory.services import site_hub_feed, site_portal
+import re
+
+import pytest
+
+from factory.services import hub_ui, site_hub_feed, site_portal
 from factory.services.feed_read import FeedListing, FeedListItem
+from factory.services.site_chrome import BAR_CSS
 from factory.services.site_theme import THEME_TOGGLE
 
 
@@ -100,9 +105,40 @@ def test_feed_page_has_the_bar_with_feed_active_and_one_toggle() -> None:
     assert page.count(THEME_TOGGLE) == 1
 
 
-def test_portal_palette_follows_an_explicit_choice() -> None:
+def test_portal_is_a_kit_page_whose_stylesheet_carries_every_theme() -> None:
     page = site_portal.render_portal([])
-    assert ':root[data-theme="light"]' in page and ':root[data-theme="lcars"]' in page
+    assert "/feed/assets/kit.css?v=" in page and "/feed/assets/main-hub.css?v=" in page
+    kit = hub_ui.asset_bytes("kit.css").decode()
+    assert ":root[data-theme=light]" in kit and ':root[data-theme="lcars"]' in kit
+    styles = re.findall(r"<style>(.*?)</style>", page, re.S)
+    assert styles == [BAR_CSS]  # the bar's own fallbacks; main-hub.css maps it to kit tokens
+
+
+def test_portal_cards_open_the_new_hub_and_keep_the_classic_one_as_a_second_link() -> None:
+    row = site_portal.PortalRow("demo", "Demo <b>", 1234, 0, 3, True)
+    page = site_portal.render_portal([row])
+    assert "href='/p/demo/ui/'" in page and "href='/p/demo/'" in page
+    assert page.index("href='/p/demo/ui/'") < page.index("href='/p/demo/'")
+    assert "Demo &lt;b&gt;" in page and "1,234" in page and "+ Up to date" in page
+
+
+@pytest.mark.parametrize(
+    ("row", "word"),
+    [
+        (site_portal.PortalRow("a", "a", 1, 0, 0, False), "Hub not built"),
+        (site_portal.PortalRow("a", "a", 1, 4, 1, True), "4 to rebuild"),
+        (site_portal.PortalRow("a", "a", 1, 0, 1, True, True), "Rebuilding"),
+    ],
+)
+def test_portal_card_states_are_words_not_colour_alone(
+    row: site_portal.PortalRow, word: str
+) -> None:
+    assert word in site_portal.render_portal([row])
+
+
+def test_portal_with_no_project_says_what_to_do_next() -> None:
+    page = site_portal.render_portal([], create_token="tok")
+    assert "No project yet" in page and "factory init" in page and "id=create-form" in page
 
 
 def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
@@ -122,19 +158,16 @@ def test_ranked_total_sums_the_ranked_entries_not_the_shown_ones() -> None:
 
 def test_every_standalone_page_comes_from_the_one_shell() -> None:
     from factory.services import site
-    from factory.services.site_backlog import render_backlog
     from factory.services.site_chrome import CONTAINER_WIDTH
 
     shell = f"max-width:{CONTAINER_WIDTH};margin:0 auto"
     feed = site_hub_feed.render_feed_page([], {"available": False, "running": False}, "tok")
     docs = {
-        "portal": site_portal.render_portal([]),
         "feed": feed,
         "page": site.page("t", "<p>b</p>"),
-        "backlog": render_backlog(),
     }
     for name, doc in docs.items():
         assert shell in doc, name
         assert "max-width:1100px" not in doc and "max-width:960px" not in doc, name
         assert site.THEME_CSS in doc, name  # the same control-room stylesheet as the catalog
-    assert "<body class=portal>" in docs["portal"] and "<body class=portal>" in feed
+    assert "<body class=portal>" in feed

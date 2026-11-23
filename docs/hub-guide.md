@@ -235,6 +235,13 @@ aligned; `prefers-reduced-motion` keeps the finished state; works at 1440 px, 76
    HTML sinks; `test_hub_ui_clicks.py` drives every registered page in headless chromium and fails on JS
    errors (skipped where chromium is absent, as on CI today).
 
+**A page outside a project** (the main hub's portal, New papers, Backlog, Capabilities) is
+server-rendered, not a payload page: build it with `services/site_kit_page.kit_page(title, body,
+active, css=…, script=…)`. It links `kit.css` and `hub_ui/main-hub.css` (the shared bar in kit
+tokens and the `.mh` frame: `.mh-head`, `.mh-sec`), served under `/feed/assets/`, and adds the
+bar of `site_chrome`. Page-local CSS uses kit tokens only, with a page prefix (`pt-`, `bl-`,
+`ct-`), because kit already owns `.card`, `.btn`, `.chip`, `.drawer`, `.t`, `.k` and `.v`.
+
 ### Speed budget
 
 The hub rebuilds a payload in a background process whenever its inputs change, so builder time
