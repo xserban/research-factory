@@ -36,6 +36,7 @@ from factory.services import (
     hub_costs,
     hub_findings,
     hub_graph,
+    hub_ideas,
     hub_landscape,
     hub_learn,
     hub_lenses,
@@ -662,6 +663,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "sources": hub_sources.build,
     "method": hub_method.build,
     "costs": hub_costs.build,
+    "ideas": hub_ideas.build,
     "write": hub_write.build,
     "platform": hub_platform.build,
     "learn": hub_learn.build,
@@ -697,6 +699,8 @@ PAYLOAD_INPUTS: dict[str, tuple[str, ...]] = {
             "journeys",
         )
     },
+    # contribution items, relations and ideas: nothing else changes the lineage graph
+    "ideas": hub_ideas.EVENT_PREFIXES,
     # the call ledger and the budget: agent-written work and its runs, not inbox, feed or pages
     "costs": (
         "runner.",
