@@ -28,7 +28,8 @@ CONCEPTS: tuple[Concept, ...] = (
         "Human gates",
         "Some acts are yours alone: selecting choices, confirming the search review, labelling "
         "samples, resolving disagreements, admitting a miner, rating arguments. Agents propose. "
-        "The status command lists what waits for you, each with its command.",
+        "The status command lists what waits for you, each with its command. Under the supervised "
+        "and autonomous levels an agent may close some of them, and your review is deferred.",
     ),
     Concept(
         "human-in-log",
@@ -38,6 +39,24 @@ CONCEPTS: tuple[Concept, ...] = (
         "37.6). So a gate is attribution plus the platform refusing agent actors on the MCP path, "
         "not authentication. Resting on documentation only: the go-ahead before a real snowball "
         "round, and that an agent-registered hypothesis is never reported as confirmatory.",
+    ),
+    Concept(
+        "tiers",
+        "Tiers: how deep a study goes",
+        "A tier is chosen at creation, with the rigour mode it implies. A brief is a quick, capped "
+        "read; a deep study adds independent checks; pilot and systematic run the full method. "
+        "What a tier skips is computed from its plan and printed in every report, so a quick study "
+        "is never read as a systematic one. The page How this study runs shows the plan.",
+    ),
+    Concept(
+        "autonomy-levels",
+        "Autonomy levels: who closes the gates",
+        "Attended is the default: you close every decision gate. Supervised lets an independent "
+        "agent session close the gates that allow it, with a sampled audit. Autonomous lets an "
+        "orchestrated run do so and defers your review. A gate never drops below its floor, and "
+        "an agent-closed act is labelled not human-confirmed until you review it. The trust "
+        "ledger counts how often your review overturns an agent, and a gate that does so too "
+        "often pauses the run.",
     ),
     Concept(
         "holdout",

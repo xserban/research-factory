@@ -36,6 +36,9 @@ NOT_TOOLS: dict[str, str] = {
     "selection_digest": "a field of a chat request, not a tool",
     "snowball_plan": "a field of the protocol, not a tool",
     "grey_sources": "a field of the protocol, not a tool",
+    "rigor_mode": "a project setting (`factory init --mode`), not a tool",
+    "autonomy_level": "a project setting (`factory init --autonomy-level`), not a tool",
+    "check_proposal": "a service function (`services/miner_proposal`); a checklist applied by hand until a tool exists",
     "source_project": "an argument of the project-copy command",
     "est_tokens": "a field of a chat request, not a tool",
     "raw_goal": "a field of the question, not a tool",
@@ -45,7 +48,17 @@ NOT_TOOLS: dict[str, str] = {
     "technique_min_works": "a parameter of the lead-candidate tools",
 }
 # A name ending like this is a parameter or field (`task_id`, `work_ids`), never a tool.
-PARAM_SUFFIXES = ("_id", "_ids", "_name", "_label", "_no", "_count", "_digest", "_item", "_span")
+PARAM_SUFFIXES = (
+    "_id",
+    "_ids",
+    "_name",
+    "_label",
+    "_no",
+    "_count",
+    "_digest",
+    "_item",
+    "_span",
+)
 # A name is read as a tool claim when its first word begins a registered tool (`screen_...`) or
 # its sentence says "tool" or "call"; this is a heuristic by context, and `NOT_TOOLS` is its
 # allow-list.
@@ -53,7 +66,9 @@ _CLAIM_WORDS = re.compile(r"\b(tool|tools|call|calls|calling)\b", re.IGNORECASE)
 
 _BACKTICKED = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
 # a command is in code: after a backtick, or at the start of a line (a fenced block)
-_FACTORY_CMD = re.compile(r"(?:`|^\s*(?:\$ )?)factory((?: [a-z][a-z-]*)+)", re.MULTILINE)
+_FACTORY_CMD = re.compile(
+    r"(?:`|^\s*(?:\$ )?)factory((?: [a-z][a-z-]*)+)", re.MULTILINE
+)
 
 
 def skill_files() -> list[Path]:
@@ -111,7 +126,9 @@ def main() -> int:
             bad_tools.append(f"{skill}: `{name}` is not a registered tool")
         for words in sorted(command_candidates(text)):
             if not resolves(words, known, groups):
-                bad_cmds.append(f"{skill}: `factory {' '.join(words)}` is not a command")
+                bad_cmds.append(
+                    f"{skill}: `factory {' '.join(words)}` is not a command"
+                )
     print(f"{len(tools)} tools, {len(commands)} commands, {len(skill_files())} skills")
     print(f"allow-listed non-tools used: {', '.join(sorted(allowed_seen)) or 'none'}")
     for line in bad_tools + bad_cmds:

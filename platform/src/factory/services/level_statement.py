@@ -1,0 +1,242 @@
+"""The level statement: what tier and autonomy level a study ran at, what it skipped and what no
+human confirmed (plan tiers-and-autonomy, C7). Every report carries it, so an output of a quick or
+autonomous run is never read as a human-confirmed systematic one.
+
+Invariants:
+- Computed from the events only; nothing is typed. A legacy project says "tier: not declared".
+- `human_confirmed` is true only at `attended` with no agent-closed act; at `supervised` and
+  `autonomous` it stays false (the deferred human review samples acts; it does not confirm them
+  all).
+- `steps_skipped` comes from the tier plans (`tiers.resolve.skipped_steps`) and `agent_closed` from
+  the trust ledger (`gate_trust.trust_ledger`): both are read directly, never with a fallback.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Callable
+from typing import Literal
+
+from pydantic import JsonValue
+
+from factory.events.reader import read_typed
+from factory.model.base import StrictModel
+from factory.model.levels import AutonomyLevel, Tier
+from factory.model.project import RigorMode
+from factory.modules.contract import GateKind
+from factory.services.context import Project
+from factory.services.gate_trust import trust_ledger
+from factory.services.gates import lowered_by_level
+from factory.services.project import project_levels
+from factory.services.tier_caps import cap_lines
+from factory.tiers.resolve import skipped_steps
+from factory.tiers.validation import validation_profile
+
+LEVEL_STATEMENT_KEY = "level_statement"
+
+SkippedSteps = Callable[[Tier], tuple[str, ...]]
+
+
+class AgentClosed(StrictModel):
+    """One gate's agent-closed acts. Mirrors `gate_trust.GateTrust`."""
+
+    gate_id: str
+    closed_by_agent: int
+    audited: int = 0
+    overturned: int = 0
+    overturn_rate: float | None = None
+    state: Literal["ok", "watch", "pause"] = "ok"
+    reason: str | None = None
+
+
+class LevelStatement(StrictModel):
+    tier: Tier | None
+    autonomy_level: AutonomyLevel
+    rigor_mode: RigorMode
+    steps_skipped: tuple[str, ...]
+    agent_closed: tuple[AgentClosed, ...]
+    human_confirmed: bool
+    person_reviewed: bool = True
+    """Whether any human decision, label or audit exists in the project (finding I5);
+    `human_confirmed` keeps its older meaning (no agent-closed act at `attended`)."""
+    validation_label: str | None = None
+    lines: tuple[str, ...]
+
+
+def _agent_closed(project: Project) -> tuple[AgentClosed, ...]:
+    return tuple(
+        AgentClosed(
+            gate_id=t.gate_id,
+            closed_by_agent=t.closed_by_agent,
+            audited=t.audited,
+            overturned=t.overturned,
+            overturn_rate=t.overturn_rate,
+            state=t.state,
+            reason=t.reason,
+        )
+        for t in trust_ledger(project)
+        if t.closed_by_agent > 0
+    )
+
+
+_VALIDATION_TYPES = (
+    "screening.decision_recorded",
+    "extraction.recorded",
+    "extraction.claim_recorded",
+    "calibration.labelled",
+    "miner.calibration_labelled",
+    "audit.sampled",
+    "audit.labelled",
+    "extraction.audit_sampled",
+    "extraction.audit_labelled",
+)
+
+
+def _validation_lines(project: Project, tier: Tier, level: AutonomyLevel) -> list[str]:
+    """What actually ran, from the events: the profile label, the passes per stage, whether an audit
+    sample was drawn and labelled and whether a calibration was labelled. Where the profile's
+    evidence is missing the line says `unvalidated`."""
+    profile = validation_profile(tier, level)
+    passes: dict[str, set[str]] = {"screening": set(), "extraction": set()}
+    seen: Counter[str] = Counter()
+    for event in read_typed(project.paths.events_dir, project.catalog, _VALIDATION_TYPES):
+        seen[event.type] += 1
+        stage = event.type.split(".")[0]
+        if stage in passes and event.payload.get("pass_label") is not None:
+            passes[stage].add(str(event.payload["pass_label"]))
+    ran = "; ".join(
+        f"{stage} {'+'.join(sorted(labels))}" if labels else f"{stage} none"
+        for stage, labels in passes.items()
+    )
+    lines = [f"validation: {profile.label}", f"passes that ran: {ran}"]
+    sampled = seen["audit.sampled"] + seen["extraction.audit_sampled"]
+    labelled = seen["audit.labelled"] + seen["extraction.audit_labelled"]
+    if sampled == 0:
+        lines.append("audit: no sample drawn (unvalidated)")
+    elif labelled == 0:
+        lines.append(f"audit: {sampled} sample(s) drawn, none labelled (unvalidated)")
+    else:
+        lines.append(f"audit: {sampled} sample(s) drawn, {labelled} label(s) recorded")
+    if seen["calibration.labelled"] + seen["miner.calibration_labelled"] > 0:
+        lines.append("calibration: a human-labelled gold set exists")
+    elif profile.calibration_required:
+        lines.append("calibration: none (unvalidated)")
+    else:
+        lines.append("calibration: none")
+    if profile.independent_judge:
+        lines.append("validation by a session and model other than the proposer's is required")
+    return lines
+
+
+def _person_reviewed(project: Project) -> bool:
+    """Whether a human actor wrote any decision-gate act, label, audit or screening decision."""
+    from factory.services.modules.default import default_modules  # the registry imports services
+
+    types = {
+        act
+        for gate in default_modules().gates()
+        if gate.kind is GateKind.DECISION
+        for act in gate.act_events
+    }
+    types.update(_VALIDATION_TYPES)
+    types.add("gate.audit_labelled")
+    return any(
+        e.actor.kind == "human"
+        for e in read_typed(project.paths.events_dir, project.catalog, sorted(types))
+    )
+
+
+def level_statement(project: Project, *, skipped: SkippedSteps | None = None) -> LevelStatement:
+    """The statement for `project`. `skipped` replaces the tier-plan resolver (tests inject a
+    fake); it is called only for a project that declared a tier."""
+    levels = project_levels(project)
+    resolver = skipped if skipped is not None else skipped_steps
+    steps = resolver(levels.tier) if levels.tier is not None else ()
+    closed = _agent_closed(project)
+    confirmed = levels.autonomy_level is AutonomyLevel.ATTENDED and not closed
+    lines: list[str] = []
+    if levels.tier is None:
+        lines.append("tier: not declared (a project that predates tiers)")
+    else:
+        lines.append(f"tier: {levels.tier.value} (rigor mode {levels.rigor_mode.value})")
+    lines.append(f"autonomy level: {levels.autonomy_level.value}")
+    if levels.rigor_mode is RigorMode.EXPLORATORY:
+        lines.append("exploratory: the results are not a systematic review")
+    if steps:
+        lines.append("skipped compared with a systematic review: " + "; ".join(steps))
+    lines.extend(cap_lines(levels.tier))
+    lowered = lowered_by_level(project)
+    if lowered:
+        lines.append("preset lowered by autonomy level: " + ", ".join(lowered))
+    if closed:
+        lines.append(
+            "gates closed by an agent: "
+            + ", ".join(f"{c.gate_id} ({c.closed_by_agent})" for c in closed)
+        )
+    overturned = [c for c in closed if c.overturned > 0]
+    if overturned:
+        lines.append(
+            "overturned by a human review: "
+            + ", ".join(f"{c.gate_id} ({c.overturned})" for c in overturned)
+            + "; the act is still active (an overturn writes a label, it does not undo the act)"
+        )
+    reasons = [f"{c.gate_id} ({c.reason})" for c in closed if c.reason]
+    if reasons:
+        lines.append("agent-closed gates not yet audited: " + ", ".join(reasons))
+    validation_label: str | None = None
+    if levels.tier is not None:
+        validation_label = validation_profile(levels.tier, levels.autonomy_level).label
+        lines.extend(_validation_lines(project, levels.tier, levels.autonomy_level))
+    reviewed = _person_reviewed(project)
+    if not reviewed:
+        lines.append("no person has reviewed this output")
+    if not confirmed:
+        lines.append("not human-confirmed: no person has confirmed the acts an agent closed")
+    return LevelStatement(
+        tier=levels.tier,
+        autonomy_level=levels.autonomy_level,
+        rigor_mode=levels.rigor_mode,
+        steps_skipped=steps,
+        agent_closed=closed,
+        human_confirmed=confirmed,
+        person_reviewed=reviewed,
+        validation_label=validation_label,
+        lines=tuple(lines),
+    )
+
+
+def render_level_statement(statement: LevelStatement) -> str:
+    return "\n".join(statement.lines)
+
+
+def with_level_statement(project: Project, view: JsonValue) -> JsonValue:
+    """A report's JSON view with the statement as one more field, `level_statement`. A view that is
+    not an object is returned unchanged (no report is one)."""
+    if not isinstance(view, dict):
+        return view
+    return {**view, LEVEL_STATEMENT_KEY: level_statement(project).model_dump(mode="json")}
+
+
+def text_with_statement(
+    project: Project, text: str, *, style: Literal["text", "xml", "csv"] = "text"
+) -> str:
+    """A report's text with the statement after it (the researcher's CLI views, finding I1). `xml`
+    wraps it as a trailing comment (an SVG stays well-formed); `csv` prefixes lines with `# `."""
+    lines = level_statement(project).lines
+    body = text.rstrip("\n")
+    if style == "xml":
+        safe = "\n".join(line.replace("--", "- -") for line in lines)
+        return f"{body}\n<!--\n{safe}\n-->\n"
+    if style == "csv":
+        return body + "\n" + "\n".join(f"# {line}" for line in lines) + "\n"
+    return body + "\n\n---\n" + "\n".join(lines) + "\n"
+
+
+def json_text_with_statement(project: Project, text: str) -> str:
+    """A report's JSON text with the statement as one more field (an object only)."""
+    import json
+
+    loaded = json.loads(text)
+    if not isinstance(loaded, dict):
+        return text
+    return json.dumps(with_level_statement(project, loaded))

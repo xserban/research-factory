@@ -24,6 +24,13 @@ from factory.model.cards import (
 from factory.model.chase import ChaseRoundStarted, SampleExtended, SeedAdmitted
 from factory.model.chat_requests import ChatRequested, ChatRequestTaken
 from factory.model.conclusions import ConclusionRegistered, ConclusionRetired
+from factory.model.conductor import (
+    ConductorFinished,
+    ConductorPaused,
+    ConductorStarted,
+    ConductorStepFinished,
+    ConductorStepStarted,
+)
 from factory.model.core_works import WorkMarkedCore, WorkUnmarkedCore
 from factory.model.curation import CurationDecided, CurationProposed
 from factory.model.decisions import DecisionSelected, DecisionSuggested
@@ -410,6 +417,11 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("runner.finished", RunnerFinished, 1))
     catalog.register(EventType("runner.pipeline_started", PipelineStarted, 1))
     catalog.register(EventType("runner.pipeline_finished", PipelineFinished, 1))
+    catalog.register(EventType("conductor.started", ConductorStarted, 1))
+    catalog.register(EventType("conductor.step_started", ConductorStepStarted, 1))
+    catalog.register(EventType("conductor.step_finished", ConductorStepFinished, 1))
+    catalog.register(EventType("conductor.paused", ConductorPaused, 1))
+    catalog.register(EventType("conductor.finished", ConductorFinished, 1))
     catalog.register(EventType("work.marked_core", WorkMarkedCore, 1))
     catalog.register(EventType("work.unmarked_core", WorkUnmarkedCore, 1))
     catalog.register(EventType("notice.observed", NoticeObserved, 1))

@@ -18,7 +18,10 @@ from factory.cli import appraisal_render, evidence_render, portfolio_render, ren
 from factory.cli.activity import activity_cmd
 from factory.cli.admin import member_app, token_app, user_app
 from factory.cli.answers import answers_app
+from factory.cli.bench import bench_app
+from factory.cli.brief import brief_app
 from factory.cli.chat import chat_app
+from factory.cli.conductor import conductor_app
 from factory.cli.costs import costs_app
 from factory.cli.dashboard import dashboard_app
 from factory.cli.decisions import decide_app
@@ -159,6 +162,7 @@ from factory.services import interpretations as interpretations_service
 from factory.services import lab_pack as lab_pack_service
 from factory.services import labels as labels_service
 from factory.services import leads as leads_service
+from factory.services import level_statement as level_statement_service
 from factory.services import lineage as graph_service
 from factory.services import matching as matching_service
 from factory.services import methods as methods_service
@@ -602,10 +606,12 @@ app.add_typer(dashboard_app)
 app.add_typer(site_app)
 app.add_typer(hub_app)
 app.add_typer(costs_app)
+app.add_typer(bench_app)
 app.add_typer(pages_app)
 app.add_typer(sheets_app)
 app.add_typer(answers_app)
 app.add_typer(chat_app)
+app.add_typer(conductor_app)
 app.add_typer(files_app)
 app.add_typer(develop_app)
 app.add_typer(screen_check_app)
@@ -637,6 +643,7 @@ app.command("tour")(tour_cmd)
 app.command("workspace")(workspace_cmd)
 app.command("ledger")(ledger_cmd)
 app.add_typer(queue_app)
+app.add_typer(brief_app)
 app.command("resume")(resume_cmd)
 app.command("activity")(activity_cmd)
 app.add_typer(budget_app)
@@ -804,16 +811,42 @@ def main(
 def init(
     ctx: typer.Context,
     slug: Annotated[str, typer.Argument(help="New project slug.")],
-    mode: Annotated[str, typer.Option("--mode", help="Rigor mode.")] = "pilot",
+    mode: Annotated[
+        str | None,
+        typer.Option("--mode", help="Rigor mode (default pilot; with --tier, the tier's mode)."),
+    ] = None,
+    tier: Annotated[
+        str | None,
+        typer.Option(
+            "--tier", help="Tier: brief, deep, pilot or systematic. Fixes the rigor mode."
+        ),
+    ] = None,
+    autonomy_level: Annotated[
+        str | None,
+        typer.Option(
+            "--autonomy-level",
+            help="Who closes the decision gates: attended (default), supervised or autonomous.",
+        ),
+    ] = None,
 ) -> None:
     """Create a project."""
     state = _state(ctx)
     with _reporting_errors():
         authorise_root_command(state.settings, "cli:init", session=state.session, clock=state.clock)
-        project_service.init_project(
-            state.settings, slug, mode, session=state.session, clock=state.clock
+        created = project_service.init_project(
+            state.settings,
+            slug,
+            mode,
+            session=state.session,
+            clock=state.clock,
+            tier=tier,
+            autonomy_level=autonomy_level,
         )
-    typer.echo(f"initialised {slug} ({mode})")
+        levels = project_service.project_levels(created)
+    extra = "" if levels.tier is None else f", tier {levels.tier.value}"
+    if levels.autonomy_level.value != "attended":
+        extra += f", autonomy {levels.autonomy_level.value}"
+    typer.echo(f"initialised {slug} ({levels.rigor_mode.value}{extra})")
 
 
 @app.command()
@@ -861,6 +894,8 @@ def status(
         return
     typer.echo(f"project: {report.slug}")
     typer.echo(f"rigor mode: {report.rigor_mode.value}")
+    typer.echo(f"tier: {report.tier.value if report.tier else 'not declared'}")
+    typer.echo(f"autonomy level: {report.autonomy_level.value}")
     typer.echo(f"stage: {report.stage.value if report.stage else 'unknown'}")
     typer.echo(f"events: {report.events_total}")
     for blocked in report.blocking:
@@ -3646,14 +3681,26 @@ def report_prisma(
                 text = exports_service.export_prisma_svg(project)
             else:
                 text = render.prisma_markdown(prisma_service.prisma_flow(project))
-            typer.echo(agent_view_service.scrubbed_text(project, text), nl=False)
+            typer.echo(
+                level_statement_service.text_with_statement(
+                    project,
+                    agent_view_service.scrubbed_text(project, text),
+                    style="xml" if fmt is PrismaFormat.SVG and update is None else "text",
+                ),
+                nl=False,
+            )
             return
         if update is not None:
             shown = prisma_update_service.prisma_update(
                 project, until=None if update == "last" else update
             )
             typer.echo(
-                shown.model_dump_json() if as_json else render.update_markdown(shown), nl=as_json
+                level_statement_service.json_text_with_statement(project, shown.model_dump_json())
+                if as_json
+                else level_statement_service.text_with_statement(
+                    project, render.update_markdown(shown)
+                ),
+                nl=as_json,
             )
             return
         if fmt is PrismaFormat.SVG:
@@ -3661,9 +3708,14 @@ def report_prisma(
         else:
             flow = prisma_service.prisma_flow(project)
     if fmt is PrismaFormat.SVG:
-        typer.echo(svg, nl=False)
+        typer.echo(level_statement_service.text_with_statement(project, svg, style="xml"), nl=False)
         return
-    typer.echo(flow.model_dump_json() if as_json else render.prisma_markdown(flow), nl=as_json)
+    typer.echo(
+        level_statement_service.json_text_with_statement(project, flow.model_dump_json())
+        if as_json
+        else level_statement_service.text_with_statement(project, render.prisma_markdown(flow)),
+        nl=as_json,
+    )
 
 
 def _emit(chunks: Iterable[str], out: Path | None) -> None:
@@ -3889,7 +3941,12 @@ def report_search(ctx: typer.Context, as_json: _JSON = False) -> None:
             if _full_view(project)
             else agent_view_service.agent_search(project)
         )
-    typer.echo(report.model_dump_json() if as_json else render.search_markdown(report), nl=as_json)
+    typer.echo(
+        level_statement_service.json_text_with_statement(project, report.model_dump_json())
+        if as_json
+        else level_statement_service.text_with_statement(project, render.search_markdown(report)),
+        nl=as_json,
+    )
 
 
 @report_app.command("flow")
@@ -3907,7 +3964,13 @@ def report_flow(
     with _reporting_errors():
         project = _resolve_project(state)
         if not _full_view(project):
-            typer.echo(json.dumps(agent_view_service.by_source_view(project)))
+            typer.echo(
+                json.dumps(
+                    level_statement_service.with_level_statement(
+                        project, agent_view_service.by_source_view(project)
+                    )
+                )
+            )
             return
         rows = flow_ledger_service.flow_ledger(project)
         counts = flow_ledger_service.flow_by_source(project, rows)
@@ -3917,7 +3980,7 @@ def report_flow(
             "by_source": {key: value.model_dump(mode="json") for key, value in counts.items()},
             "reconciles": mismatches,
         }
-        typer.echo(json.dumps(payload))
+        typer.echo(level_statement_service.json_text_with_statement(project, json.dumps(payload)))
         return
     typer.echo(render.flow_table_markdown(counts), nl=False)
     if mismatches:
@@ -3925,6 +3988,7 @@ def report_flow(
             typer.echo(f"not reconciled: {line}")
     else:
         typer.echo("reconciles with the PRISMA flow")
+    typer.echo(level_statement_service.text_with_statement(project, ""), nl=False)
 
 
 @report_app.command("flow-works")
@@ -3978,7 +4042,13 @@ def report_flow_works(
             cursor=cursor,
             limit=limit,
         )
-    typer.echo(page.model_dump_json() if as_json else "\n".join(render.flow_works_lines(page)))
+    typer.echo(
+        level_statement_service.json_text_with_statement(project, page.model_dump_json())
+        if as_json
+        else level_statement_service.text_with_statement(
+            project, "\n".join(render.flow_works_lines(page))
+        )
+    )
 
 
 @report_app.command("flow-trail")
@@ -3997,9 +4067,13 @@ def report_flow_trail(
         steps = flow_query_service.flow_trail(project, work_id)
     if as_json:
         payload = {"work_id": work_id, "steps": [step.model_dump(mode="json") for step in steps]}
-        typer.echo(json.dumps(payload))
+        typer.echo(level_statement_service.json_text_with_statement(project, json.dumps(payload)))
         return
-    typer.echo("\n".join(render.flow_trail_lines(work_id, steps)))
+    typer.echo(
+        level_statement_service.text_with_statement(
+            project, "\n".join(render.flow_trail_lines(work_id, steps))
+        )
+    )
 
 
 @report_app.command("flow-skipped")
@@ -4018,9 +4092,13 @@ def report_flow_skipped(ctx: typer.Context, as_json: _JSON = False) -> None:
             "skipped": [record.model_dump(mode="json") for record in records],
             "run_gaps": [gap.model_dump(mode="json") for gap in gaps],
         }
-        typer.echo(json.dumps(payload))
+        typer.echo(level_statement_service.json_text_with_statement(project, json.dumps(payload)))
         return
-    typer.echo("\n".join(render.flow_skipped_lines(records, gaps)))
+    typer.echo(
+        level_statement_service.text_with_statement(
+            project, "\n".join(render.flow_skipped_lines(records, gaps))
+        )
+    )
 
 
 @report_app.command("methods")
@@ -4033,11 +4111,20 @@ def report_methods(ctx: typer.Context, as_json: _JSON = False) -> None:
             if as_json:
                 typer.echo(json.dumps(agent_view_service.methods_view(project)))
             else:
-                typer.echo(agent_view_service.methods_text(project), nl=False)
+                typer.echo(
+                    level_statement_service.text_with_statement(
+                        project, agent_view_service.methods_text(project)
+                    ),
+                    nl=False,
+                )
             return
         report = methods_service.methods_report(project)
     typer.echo(
-        report.model_dump_json() if as_json else methods_service.render_methods(report),
+        level_statement_service.json_text_with_statement(project, report.model_dump_json())
+        if as_json
+        else level_statement_service.text_with_statement(
+            project, methods_service.render_methods(report)
+        ),
         nl=as_json,
     )
 
@@ -4053,7 +4140,12 @@ def report_discovery(ctx: typer.Context, as_json: _JSON = False) -> None:
             return
         report = discovery_service.discovery_report(project)
     typer.echo(
-        report.model_dump_json() if as_json else render.discovery_markdown(report), nl=as_json
+        level_statement_service.json_text_with_statement(project, report.model_dump_json())
+        if as_json
+        else level_statement_service.text_with_statement(
+            project, render.discovery_markdown(report)
+        ),
+        nl=as_json,
     )
 
 
@@ -4141,14 +4233,20 @@ def report_evidence(
         text = report.model_dump_json()
         if matrix is not None:
             text = '{"evidence": ' + text + ', "appraisal": ' + matrix.model_dump_json() + "}"
+        text = level_statement_service.json_text_with_statement(project, text)
     elif fmt is EvidenceFormat.CSV_ROWS:
-        text = evidence_render.rows_csv(report)
+        text = level_statement_service.text_with_statement(
+            project, evidence_render.rows_csv(report), style="csv"
+        )
     elif fmt is EvidenceFormat.CSV_POINTS:
-        text = evidence_render.points_csv(report)
+        text = level_statement_service.text_with_statement(
+            project, evidence_render.points_csv(report), style="csv"
+        )
     else:
         text = evidence_render.evidence_markdown(report, show_audit=full)
         if matrix is not None:
             text = text.rstrip("\n") + "\n" + appraisal_render.report_markdown(matrix)
+        text = level_statement_service.text_with_statement(project, text)
     if not full:
         text = agent_view_service.scrubbed_text(project, text)
     if output is not None:

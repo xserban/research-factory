@@ -6,6 +6,7 @@ fed to `assemble_report`; its expected numbers are written out here, not derived
 under test. The service one is the synthetic conversion of plan D's tests with both passes
 recorded, for what needs events, the index and `trace`. Values are invented; no literature text."""
 
+import json
 import shutil
 from collections.abc import Iterator
 
@@ -194,7 +195,9 @@ def test_cli_markdown_and_csv_are_deterministic_and_consistent_with_json(
 
     for fmt in ("md", "json", "csv-points", "csv-rows"):
         assert run(fmt) == run(fmt)
-    assert run("json").strip() == world.model_dump_json()
+    stated = json.loads(run("json"))
+    assert stated.pop("level_statement")["tier"] is None  # the statement is one more field (I1)
+    assert stated == json.loads(world.model_dump_json())
     md, rows_csv = run("md"), run("csv-rows")
     for g in world.groups:
         assert g.group_id in md

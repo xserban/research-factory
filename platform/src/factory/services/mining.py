@@ -720,6 +720,11 @@ def _mine_next(
         from factory.services.miner_independence import require_production_pass
 
         require_production_pass(project, actor, name)
+        from factory.services.validation_profile import miner_use_refusal
+
+        refusal = miner_use_refusal(project, evidence=use.evidence, pass_label=label.value)
+        if refusal is not None:
+            raise FactoryValidationError([ValidationIssue("miners", refusal)])
         if not exploratory:
             _require_calibrated(project, name, version)
     reopened: frozenset[str] = frozenset()

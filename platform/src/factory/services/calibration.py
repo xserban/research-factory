@@ -42,7 +42,7 @@ from factory.model.screening import (
     Verdict,
 )
 from factory.model.seed import SeedKind
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.services import passes
 from factory.services.context import Project
 from factory.services.dedup import absorbed_ids
@@ -66,6 +66,7 @@ from factory.services.seeds import (
     split_is_drawn,
 )
 from factory.services.stages import require_pass_stage, screening_plan
+from factory.services.validation_profile import enforcement_for
 from factory.services.work_ref import resolve_work_id
 
 WORKED_EXAMPLES = 2
@@ -238,7 +239,7 @@ def calibration_drawn(
 def sensitivity_threshold(project: Project) -> float | None:
     """The minimum sensitivity a pass must reach on the set; `None` when there is no gate."""
     mode = _rigor_mode(project)
-    if enforcement(mode, "screening.calibration_sensitivity") is Enforcement.OFF:
+    if enforcement_for(project, "screening.calibration_sensitivity", mode=mode) is Enforcement.OFF:
         return None
     return CALIBRATION_SENSITIVITY[mode]
 

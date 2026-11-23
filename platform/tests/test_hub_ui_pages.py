@@ -197,9 +197,10 @@ def test_no_page_passes_dataset_or_attribute_text_to_an_html_sink() -> None:
     assert m and "textContent" in m.group(0) and "innerHTML" not in m.group(0)
 
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = ("protocol", "levels", "pipeline", "sources", "method", "costs", "write", "platform")
 RAIL_ORDER = [
     "protocol",
+    "levels",
     "overview",
     "pipeline",
     "flow",

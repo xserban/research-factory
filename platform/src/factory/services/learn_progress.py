@@ -56,6 +56,8 @@ _GATE_STAGE: Final[dict[Gate, str]] = {
     Gate.DOCUMENTS_UNCONVERTED: "acquire",
     Gate.INBOX_OPEN: "gather",
     Gate.VERSION_PAIRS: "gather",
+    Gate.DEFERRED_REVIEW: "write",
+    Gate.CONDUCTOR_WAITING: "frame",
 }
 
 
@@ -77,6 +79,8 @@ class StageProgress:
 
 def gate_stage(item: HumanItem) -> str:
     """The tutorial stage a human queue item belongs to (full-text screening gates: acquire)."""
+    if item.gate is Gate.CONDUCTOR_WAITING:  # `stage` is the step the conductor waits after
+        return item.stage.split(":", 1)[0] if item.stage else _GATE_STAGE[item.gate]
     if item.stage == "full-text" and _GATE_STAGE[item.gate] == "screen":
         return "acquire"
     return _GATE_STAGE[item.gate]

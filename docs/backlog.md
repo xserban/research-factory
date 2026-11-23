@@ -44,7 +44,7 @@ Status: partly built (2026-11-11): the digest (slice 4b) has a feed section (sli
 **Open questions:** channel (email, Slack, phone push, artifact page); quiet days; per-project opt-in.
 
 ### IDEA-04 — Cross-project suggestions
-Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: slice 3 regions, IDEA-02
+Status: built (v1; decision 112, option a): `services/suggestions.py` (`factory suggest`, computed on request), test `tests/test_mesh_suggestions.py`; on main. Not verified: the proactive daily digest route of the idea. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 6 · Depends on: slice 3 regions, IDEA-02
 **What:** a paper found for one project is flagged to others whose regions it touches (e.g. a linear-attention paper relevant to the angiography reconstruction project).
 **Why:** the method-borrowing across fields that motivated the graph/onion design.
 **Rigour notes:** a cross-project flag is a hint with a stated reason (shared region, method card match); it enters the other project only through that project's protocol.
@@ -69,7 +69,7 @@ Status: accepted ([slice-2](specs/slice-2.md)) · Added: 2026-11-01 · Slice: 2 
 **Open questions:** extraction schema per domain pack; how to normalise compute measures.
 
 ### IDEA-07 — Contradiction and gap finder
-Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-06, claims
+Status: built (v1): `services/finders.py`, MCP `finder_contradictions` and `finder_gaps` (`mcp/server.py`), tests `tests/test_finder_conflicts.py`, `tests/test_finder_gaps.py`, `tests/test_contradictions.py`; contradiction map under decision 147. On main; linking gaps to idea capture (IDEA-05) not verified. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-06, claims
 **What:** surface claims that disagree across papers, and untested combinations (e.g. mechanism never evaluated on dense prediction or medical images).
 **Why:** contradictions and gaps are where research ideas come from; feeds IDEA-05.
 **Rigour notes:** a contradiction lists both claims with spans and the conditions that differ; a gap is "not found in corpus", never "does not exist".
@@ -82,31 +82,31 @@ Status: parked · Added: 2026-11-01 · Reason: hard to make reliable now; revisi
 ## People and agents (added 2026-11-01)
 
 ### IDEA-09 — Onboarding briefings (humans and agents)
-Status: new · Added: 2026-11-01 · Slice: 3/5 · Depends on: graph and regions
+Status: built (v1; decision 98): `services/briefing.py`, `services/briefing_served.py`, MCP `briefing_get`; on main. Per-test coverage not verified. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 3/5 · Depends on: graph and regions
 **What:** a generated project briefing — question, protocol version, key decisions and amendments, core works and regions, open issues — rendered as a reading path for a new student and as a **context pack** for a new agent session.
 **Why:** humans and agents both join projects mid-way; today each Claude session reconstructs context ad hoc.
 **Rigour notes:** an agent's context pack is versioned and stored as its `input_blob`, so what an agent "knew" is reproducible; briefings derive from events, not memory.
 
 ### IDEA-10 — Supervision view and performance record (humans and agents)
-Status: new · Added: 2026-11-01 · Slice: 5 · Depends on: calibration and audit (slice 1), actors
+Status: built (v1; decision 111): `services/performance.py` (performance record, CLI only); on main. No test file named for it was found (not verified). (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 5 · Depends on: calibration and audit (slice 1), actors
 **What:** per person and per agent role (role × model × skill version): work done, decisions pending, amendments proposed, and measured quality — calibration sensitivity/specificity, κ against partners, audit error rate, trend over time.
 **Why:** supervise agents like junior team members, with evidence rather than impressions; the same view supports supervising students.
 **Rigour notes:** metrics come only from calibration, agreement and audit events; a model or skill change starts a new performance record (links to the model-change regression idea).
 
 ### IDEA-11 — Roles, ownership and review (team model)
-Status: new · Added: 2026-11-01 · Slice: 5 · Depends on: human identity (00-system §11)
+Status: built (decisions 106 and 107): `services/lab.py`, `services/members.py`, `services/access.py` (role gate); on main. Never run by a real multi-person team: see IDEA-84. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 5 · Depends on: human identity (00-system §11)
 **What:** project and region roles (PI, maintainer, contributor, agent role); owners per region (cf. CODEOWNERS); changes to a shared region or a protocol amendment by a contributor go through review and sign-off (cf. pull requests).
 **Why:** several PhDs share regions (PINNs used by the TAVI and CFD projects); a change in one must not silently alter another's evidence base.
 **Rigour notes:** sign-offs are events with the reviewer of record; downstream projects see an amendment's blast radius across projects.
 
 ### IDEA-12 — Human–human and human–agent screening teams
-Status: new · Added: 2026-11-01 · Slice: 5 · Depends on: slice-1 dual screening
+Status: built (decision 108): `services/human_pass.py`, `services/passes.py`; on main. Not verified: a mixed human and agent team run end to end (IDEA-84). (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 5 · Depends on: slice-1 dual screening
 **What:** passes A/B can be any mix of people and agents (two students; student + agent); a third person adjudicates; agreement reported per pair type.
 **Why:** standard systematic-review practice with two human reviewers, extended with agents as a measured third reviewer.
 **Rigour notes:** pair composition recorded and reported; human–agent κ is evidence for when agents can replace a human pass.
 
 ### IDEA-13 — Contribution ledger (CRediT)
-Status: new · Added: 2026-11-01 · Slice: 5/7 · Depends on: actors, events
+Status: built (decision 109): `services/ledger.py` (`ledger.confirmed`), MCP `ledger_view`; on main. CRediT export not verified. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 5/7 · Depends on: actors, events
 **What:** author contribution statements (CRediT roles) and an AI-assistance statement generated from events: who framed, searched, screened, adjudicated, extracted, wrote.
 **Why:** fair credit in teams and honest disclosure of automation.
 **Rigour notes:** derived, never typed; humans confirm before submission.
@@ -146,7 +146,7 @@ Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: hypothesis registry
 **Rigour notes:** a failure is recorded with its conditions (budget, data, model), so "failed here" is not read as "impossible"; never deleted, only superseded.
 
 ### IDEA-17 — Experiment discipline for hypothesis testing
-Status: new · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-16, R-50
+Status: partly built: `services/experiments.py` (registered design, freeze, unlock and baseline gates; decision 93), MCP `experiment_design`, tests `tests/test_experiments*.py`, `tests/test_cli_experiments.py`; on main. Not built or not verified: sandboxed execution with time and output limits, ablation planning. (status refreshed 2026-11-21; was: new) · Added: 2026-11-01 · Slice: 6 · Depends on: IDEA-16, R-50
 **What:** experiment runs follow fixed rules: reproduce baselines first; change one variable at a time; sandboxed execution with time and output limits; acceptance criteria and analysis plan registered before running; ablations planned, not post hoc.
 **Why:** turns agent-run experiments into evidence a reviewer can trust.
 **Rigour notes:** deviations from the registered plan are recorded as deviations (R-14); results that beat baselines only under changed conditions are flagged.
@@ -177,7 +177,7 @@ Status: built (option (b), commit 69528b3: `screen_next` returns `blocked` and `
 ## Deferred from slice 2 (added 2026-11-03; decision 44)
 
 ### IDEA-21 — Per-paper appraisal
-Status: triaged · Added: 2026-11-03 · Slice: when a project needs it (required in `systematic`, R-41) · Depends on: slice 2 documents and anchors
+Status: built (decision 114): `services/appraisal.py`, `appraisal_passes.py`, `appraisal_judgements.py`, `appraisal_report.py`, `model/appraisal.py`; on main. No test file named for appraisal was found (not verified). (status refreshed 2026-11-21; was: triaged) · Added: 2026-11-03 · Slice: when a project needs it (required in `systematic`, R-41) · Depends on: slice 2 documents and anchors
 **What:** item-level appraisal with a project-declared instrument; items typed `platform` (deterministic), `agent-span` (agent with verified quote, dual on a sample, audited), `judgement` (agent proposes, human decides); no overall score (decision 42).
 **Open questions:** first instruments (ML evidence checklist from NeurIPS M14; RoB 2 / PROBAST for biomedical projects).
 
@@ -195,7 +195,7 @@ Status: built (services/copied_check.py, commit 99754a1; plan EQ task 7; not rev
 ## Evidence beyond databases (added 2026-11-03)
 
 ### IDEA-24 — Grey literature in the review stages
-Status: triaged · Added: 2026-11-03 · Slice: after slice 2 (outline: [specs/outlines/grey-literature.md](specs/outlines/grey-literature.md)) · Depends on: slice-2 Markdown conversion and local library; IDEA-21 for grey appraisal
+Status: partly built: `services/grey.py` and MCP `grey_search_report`; on main. Grey appraisal and the full outline of `specs/outlines/grey-literature.md` not verified. (status refreshed 2026-11-21; was: triaged) · Added: 2026-11-03 · Slice: after slice 2 (outline: [specs/outlines/grey-literature.md](specs/outlines/grey-literature.md)) · Depends on: slice-2 Markdown conversion and local library; IDEA-21 for grey appraisal
 **What:** planned grey-literature searching (registries, repositories, model hubs, targeted websites, web search with declared stopping rules, expert contact), page capture into the local library, and grey items flowing through the same dedup, screening, full-text and extraction stages with their own provenance.
 **Why:** reviews limited to indexed literature miss technical reports, code results, registries and regulatory evidence, and are biased towards published positive results.
 **Rigour notes:** declared in the protocol before searching; snapshots with hash and timestamp; web-search cut-offs declared and reported (explicit exception to R-21); grey evidence labelled and shown with and without it; later publications linked, not merged away.
@@ -277,14 +277,14 @@ Status: built (slice 3c: intuition layer (CLAUDE.md); status corrected 2026-11-1
 The researcher re-raised IDEA-01 (a UI to manage several projects) on 2026-11-04, and added the two ideas below.
 
 ### IDEA-34 — Link inbox for researcher-supplied papers
-Status: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 `seed_add`, IDEA-02 (candidate inbox), plan C/D pipeline
+Status: built (v1; slice 4a, decision 61): `services/inbox.py`, `inbox_watch.py`, MCP `inbox_add`, `inbox_list`, `inbox_resolve`, tests `tests/test_inbox_*.py`; on main. (status refreshed 2026-11-21; was: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1)) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 `seed_add`, IDEA-02 (candidate inbox), plan C/D pipeline
 **What:** the researcher drops links (arXiv, DOI, publisher page) into a per-project inbox, from the CLI, the MCP server or a future UI; each link is resolved to a work, deduplicated against the corpus, marked as researcher-supplied, and then goes through the same path as any candidate: screening under the protocol, full-text acquisition, conversion and extraction.
 **Why:** papers the researcher finds by reading, talks or colleagues are often the most relevant, and today they enter only as seeds.
 **Rigour notes:** a supplied link enters the corpus as a candidate, never as an inclusion: it is screened by the protocol like every other record, and PRISMA reports it as its own source ("researcher-supplied") so the search remains reproducible. Supplying is a human event with the human actor. Whether supplied papers may be screened differently is a protocol choice declared before screening, not a silent default.
 **Open questions:** one inbox per project or a shared inbox routed to projects; how this differs from `seed_add` (seeds steer search and are not screened the same way); whether a supplied link after the search date counts as a supplementary search.
 
 ### IDEA-35 — Record and report how each paper was discovered
-Status: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 search events, IDEA-34
+Status: built (v1; slice 4a, decision 61): `services/discovery.py`, MCP `report_discovery`, test `tests/test_discovery.py`; on main. (status refreshed 2026-11-21; was: accepted ([slice 4a](specs/slice-4a-inbox-discovery.md), decision 61; implemented v1)) · Added: 2026-11-04 · Slice: 4a · Depends on: slice 1 search events, IDEA-34
 **What:** for every work, a computed discovery record: which routes found it (database search, snowballing backward or forward, researcher-supplied, seed, agent suggestion), whether a human or an agent first surfaced it, and when. Reports show per-route and human-versus-agent counts for the corpus, the included set and the final evidence.
 **Why:** whether humans or AI systems find the papers that end up mattering is itself useful data, for this programme and as evidence about AI-assisted research. It can later inform how much weight a route deserves.
 **Rigour notes:** the record is derived from events (actor kind and channel already sit on every event), never typed. Weighting by discovery route must never change screening or evidence counts silently: any use of it is a declared protocol rule, reported in methods, with the unweighted figures shown too.
@@ -325,7 +325,7 @@ What is built or planned today maps onto it as four hand-written miners sharing 
 **Plan:** generalise only after the worked example, from the four concrete miners (rule of three), via brainstorming on the existing specs into a slice spec.
 
 ### IDEA-38 — Stage modules with one contract, and gate policies for autonomy
-Status: new · Added: 2026-11-04 · Slice: — (after the worked example, with IDEA-37) · Depends on: slice 1–2 stages, IDEA-37, `docs/02-production-lines.md`, rigor modes (00-system §6)
+Status: built as slice M (decision 84): `modules/contract.py` (`GateSpec`, floors, `Autonomy`), `modules/presets.py` (policy per rigour mode), `services/gates.py`, protocol `gate_policies`, pin test `tests/test_gates_by_preset.py`; on main. Extended on the integration branch `tiers-base`, not on main, by slice 9: `modules/autonomy.py` (`AUTONOMOUS_FLOOR`, shipped empty), `services/gate_trust.py`, `services/deferred_review.py`, `services/conductor.py`; floors for `autonomous` wait for decision 165 (D3). Not built: several implementations per stage behind one contract. (status refreshed 2026-11-21; was: new) · Added: 2026-11-04 · Slice: — (after the worked example, with IDEA-37) · Depends on: slice 1–2 stages, IDEA-37, `docs/02-production-lines.md`, rigor modes (00-system §6)
 **What:** every step of the factory becomes a **stage module** with one contract, so that each step can be run by a human, by a human with agent help, or by agents alone, without changing the step. IDEA-37's miners are one module kind; the others follow the same contract.
 - *Contract.* A module declares: its **inputs** and **outputs** as typed artifacts referenced by id (question, protocol, search run, candidate set, document, mined record, graph, hypothesis, experiment result); its **events**; its **gates** (the decisions that bind later stages, e.g. "protocol frozen", "screening agreed", "hypothesis registered"); its **quality regime** (passes, agreement, audit, calibration); its **checks** (what `check` reports for it); and the **methods text** it contributes to the report.
 - *Implementations.* A module may have several implementations (strategies) behind the same contract, e.g. scoping by researcher interview, by probe search, or by an agent drafting from a seed set. The implementation and its version are recorded in provenance, so outputs from different strategies stay comparable.
@@ -339,7 +339,7 @@ Status: new · Added: 2026-11-04 · Slice: — (after the worked example, with I
 ## Research planning (added 2026-11-06)
 
 ### IDEA-39 — Planning agent and a versioned study plan above the protocol
-Status: triaged ([draft slice 8](specs/slice-8-develop.md)) · Added: 2026-11-06 · Slice: 8 (draft) · Depends on: `rf-frame`, `rf-protocol`, method profiles (decision 35), IDEA-38
+Status: triaged ([draft slice 8](specs/slice-8-develop.md)); a first version exists only as the fixed tier plan on the integration branch `tiers-base` (`factory/tiers/plans.py` `TierPlan`: stages, caps, limits per tier; `factory brief plan`). It is typed data chosen by the tier, not a versioned study plan, not `rf-plan`, with no critic or objectives and KPIs; those parts stay open. (status refreshed 2026-11-21; was: triaged ([draft slice 8](specs/slice-8-develop.md))) · Added: 2026-11-06 · Slice: 8 (draft) · Depends on: `rf-frame`, `rf-protocol`, method profiles (decision 35), IDEA-38
 **What:** a skill `rf-plan` that works with the researcher alongside framing to define the research plan: the aim and question type, a composition of methods with reasons, backward planning from the final claim, the analysis plan, risks, cost and stopping rules. A separate critic agent with no authoring context challenges the plan, and the researcher confirms it. The result is a recorded, versioned study plan with phases, each naming its method and handover, and each protocol points back to its phase. Sub-questions become a first-class part of the question.
 **Why:** a protocol fixes the procedure of one method, not the argument from question to claim. A study may combine methods, for example Design Science Research as the frame, with a scoping review under a PRISMA-P protocol as its first phase. Today nothing records that, and `method_profile` holds one value, so scoping plus living cannot be declared.
 **Rigour notes:** the plan is fixed before results and changes only by a recorded amendment with a reason. The method choice records the alternatives rejected. Only the researcher confirms a plan. A plan's phases must not weaken a phase's protocol requirements.
@@ -348,14 +348,14 @@ Status: triaged ([draft slice 8](specs/slice-8-develop.md)) · Added: 2026-11-06
 **Open questions:** one project with phases or linked projects; whether a plan gates the probe; how `factory status` shows progress against the plan; which methods the router knows. Prototype by hand in the agentic-science pilot first (`rf-plan` draft kept outside the repo) and build only what proved useful.
 
 ### IDEA-40 — Evidence-backed factory design: run the factory on its own design choices
-Status: new · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-39
+Status: partly: the stage-alternatives research of the night of 2026-11-20 (prompt `docs/plans/2026-11-20-tiers-and-autonomy/prompts/R-stage-alternatives.md`, one read-only report per stage) is the first evidence-backed input to a design (slice 9); its reports are not in the repository (not verified). The practice of one exploratory review per design choice is not set up. (status refreshed 2026-11-21; was: new) · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-39
 **What:** each substantial design choice in the factory gets a small review run by the factory itself, for example "which methods are best for research planning?". Each is a separate exploratory project that ends in a short evidence note linked from the decision it informs.
 **Why:** the researcher wants factory design to rest on literature, not on what an agent recalls; each run also exercises the factory on a small real question.
 **Rigour notes:** the factory judging its own design is circular, so results are advisory and a human decides. Methods recalled by an agent are marked unverified until such a review checks them. Keep each run small and time-boxed.
 **Open questions:** which choices merit a review; a fixed cost limit per review; how a decision row links to its evidence note.
 
 ### IDEA-41 — Quick factory: a very fast mode for very small research projects
-Status: new · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-40
+Status: built as the `brief` tier on the integration branch `tiers-base`, not on main: `factory/tiers/plans.py`, `factory brief new|plan|status|note` (`cli/brief.py`), skill `rf-brief`, `services/brief_note.py`, `services/tier_caps.py` (caps enforced), conductor `services/conductor.py`, test `tests/test_tiers_walking_skeleton.py`. Gap: the stock brief plan does not reach extraction without a workaround (lane L15, prompt only, not built). Promotion is by import (proposed decision 168), not in place. Never run live (IDEA-129). (status refreshed 2026-11-21; was: new) · Added: 2026-11-06 · Slice: — (after the first agentic-science pass) · Depends on: exploratory mode, `rapid-review` profile, IDEA-40
 **What:** a very quick version of the factory for a small question: one short command or skill that goes from a question to a cited evidence note in one sitting, with a light frame, one search, single-pass screening, a small paper limit and a fixed cost limit. It is the vehicle for the small reviews of IDEA-40.
 **Why:** the researcher wants to run many very small research projects, and the full path of probe, protocol, PRESS, calibration and dual passes is too heavy for them.
 **Rigour notes:** still event-sourced and traceable, with every claim citing its source. The output states plainly that it is a quick review and which steps were skipped. A quick project can be promoted to a fuller mode without losing its record.
@@ -1120,3 +1120,70 @@ Status: open question (decision 162 proposed; found by job G4).
 **Why:** the preset and the code disagree; the tests pin the code.
 **Rigour notes:** a citation is checked against its source; human-only is the safer side.
 **Open questions:** none besides the choice.
+
+## Tiers and autonomy follow-ups (added 2026-11-21; from the lanes of plan 2026-11-20-tiers-and-autonomy)
+
+Numbers 121 to 129 are the next free after IDEA-120 on `tiers-docs`; renumber at merge if another line has used them.
+
+### IDEA-121 — Mechanical document acts are recorded under the human actor
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: slice 2 conversion, decision 160
+**What:** `services/document_convert.py` (lines 695 and 725 on `tiers-base`) writes `document.converted` and `document.conversion_failed` with `project.human_actor()`, so a conversion run inside an agent session looks like a human act in the log and in the level statement's human counts.
+**Why:** the conductor's "no human act" invariant and the "not human-confirmed" label (R-153, proposed) would otherwise be misread for conversion events.
+**Rigour notes:** a conversion is a mechanical platform act, not a judgement; the right actor is the system or the calling agent, chosen once. Changing it must not move any old log's state hash (the actor is not in the hashed tables, not verified).
+**Open questions:** system actor or the caller's actor; which callers and tests depend on the attribution (lane L15 was asked to list them; report not in the repository); proposed as decision row D-ATTR in `docs/decision-sheet-2026-11-21.md`.
+
+### IDEA-122 — Single-pass extraction mode and the pass-B requirement of brief and deep
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: plan 2D (extraction), tier plans
+**What:** a work is final for extraction only after extraction pass B has been opened (`services/extraction_agreement.py`, about line 628), even when `dual_extract_sample` is 0.01 and in practice one pass runs. The brief and deep plans say "extract: 1 pass". Either an explicit single-pass mode for exploratory tiers, or the plan carries the pass-B open as data and the conductor starts it as a separate run (lane L15, not built).
+**Why:** without it the stock brief plan cannot reach extraction without a workaround in the walking-skeleton test.
+**Rigour notes:** a single pass must be labelled as such in the level statement and the evidence report; no agreement figure may be reported for it.
+**Open questions:** decision row D-X1 in `docs/decision-sheet-2026-11-21.md`.
+
+### IDEA-123 — Wire `check_proposal` into `factory miner check` and an MCP read tool
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/miner_proposal.py`, skill `rf-miner-suggest`
+**What:** `check_proposal(spec, question, max_fields)` is a pure service and nothing calls it; add `factory miner check <spec.json> [--question]`, an MCP read tool, and optionally a call inside `register_miner` for an agent actor under a tier.
+**Why:** until then the independent reviewer applies the checklist by hand (on-the-fly-miners.md section 6).
+**Rigour notes:** a lexical screen only; a reviewer still reads the schema. It changes no admission or evidence count.
+**Open questions:** refuse in `register_miner` or only advise.
+
+### IDEA-124 — Trim the last screening batch at the tier cap
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/tier_caps.py`, `services/screening.py`
+**What:** the cap on works served to title and abstract screening is checked before a batch is claimed and a batch is served whole, so the last batch may pass the cap by less than `SCREEN_BATCH` (docstring of `_require_under_tier_cap`).
+**Why:** the cap is stated as a number in the plan and the level statement; an overshoot makes it inexact.
+**Rigour notes:** either trim the final batch so the cap is exact, or state the overshoot bound in the level statement; never leave it silent.
+**Open questions:** decision row D-X2.
+
+### IDEA-125 — Autonomous floors (decision 165) and the agent selection act (decision 166)
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: decisions 165 and 166 (proposed), `modules/autonomy.py`
+**What:** `AUTONOMOUS_FLOOR` ships empty, so `autonomous` changes no gate policy yet; fill it per decision 165 once ruled. The agent selection of a decision (decision 166) needs a representation (a field on `decision.selected` or a new event) and a fold change (`index/decisions.py:126` drops non-human selections).
+**Why:** `pilot` and `systematic` projects at `autonomous` cannot record question, seed, probe or protocol without it.
+**Rigour notes:** no floor is lowered; an agent selection never satisfies a rule that names a human (decision 158); needs the amendment of 84.6.
+**Open questions:** decision sheet 2026-11-21, batches 1 and 2.
+
+### IDEA-126 — Conductor: autonomy for `understand` and `maintain`, and the develop drafter without promoted leads
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/conductor.py` (lane L10)
+**What:** the conductor starts steps for `understand`, `develop` and `maintain` without recording a human act, but verifier and auditor roles for the first and last, and the drafter run of `develop` when no lead has been promoted, are not covered (as reported by the lane; not re-verified here).
+**Why:** the pilot and systematic plans list these stages; only `brief` runs end to end.
+**Rigour notes:** no human-only gate is closed by the conductor; the step waits and escalates.
+**Open questions:** what a `develop` step does when the lead queue is empty (wait or stop).
+
+### IDEA-127 — Distinct session for the verifier and the proposer in the agent audit path
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `services/gates.py` (agent audit label), R-154 (proposed)
+**What:** `gate_audit_record_agent` (`services/gates.py`, about line 565) already refuses a label from the session that closed the act. Not enforced: that the verifier session of a closure, and the auditor of a sample, differ from the session that PROPOSED the act, and (for the validation profile) the model; today only conductor role runs are distinct by construction. The PRESS reviewer is enforced separately (`tests/test_press_session.py`).
+**Why:** R-154 (proposed) requires an independent closer; a hand-driven agent could reuse a session.
+**Rigour notes:** session ids are attribution, not authentication (decision 160); the check refuses, writes nothing.
+**Open questions:** which events carry the proposer's session for each gate.
+
+### IDEA-128 — Define the claims-only miner
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: `tiers/validation.py` (`miners_allowed = "claims-only"`), `services/validation_profile.py`
+**What:** the `brief` profile allows only "claims-only" miners but the term is operational only as "a use admitted as evidence" in `validation_profile.py`; define it in the spec (which miner kinds, which fields) and test it.
+**Why:** a brief's extraction then has one named meaning.
+**Rigour notes:** exploratory output never enters evidence counts (R-87) whatever the definition.
+**Open questions:** decision row D-V4.
+
+### IDEA-129 — A live end-to-end brief run
+Status: new · Added: 2026-11-21 · Slice: 9 · Depends on: IDEA-122, lane L15
+**What:** run one real `brief` through `factory brief new` and the conductor with real `claude -p` steps on a small question, and record time, tokens and what broke; the tests use a fake runner only.
+**Why:** nothing in slice 9 has run live; `services/level_bench.py` and `docs/plans/2026-11-20-tiers-and-autonomy/benchmark.md` give the measures.
+**Rigour notes:** costs tokens, needs the researcher's go; no merge or push is implied.
+**Open questions:** the question to use; the paper cap.

@@ -39,6 +39,12 @@ Invariants:
   coordinator (`spar_v2.advance`), which names the request and role (`RoleAssignment`); the start
   writes `spar.role_started` with `runner.started`. After a run ends, the watcher advances a begun
   v2 request to its next role; a failed role stops the chain.
+- The stages `frame`, `gather`, `acquire`, `write`, `understand`, `develop-lead`, `develop-draft`,
+  `develop-critic`, `maintain`, `conduct-verify` and `conduct-audit` (plan
+  tiers-and-autonomy C8) are started only by the conductor (`services/conductor.py`): one unit per
+  run, Sonnet, an allow-list that leaves out the gate acts of the stage (no confirm, release,
+  amend or PRESS review), and the verifier and auditor read only. Their pending unit is the
+  conductor's current step. The runner records no human act.
 - Stages: `screen`, `extract`, `appraise`, `contributions`, `intuition` and `mine:<miner id>`; the
   derivation of which apply and the pipeline over them are in `factory.services.pipeline`. The
   child's MCP config carries `FACTORY_UNIT_CAP` and `FACTORY_RUN_ID`: the MCP server then refuses
@@ -65,7 +71,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -147,6 +153,21 @@ STAGES: Final[dict[str, StageSpec]] = {
             task_kind(ScreeningStage.FULL_TEXT, PassLabel.A),
         ),
         unit="record screened",
+    ),
+    # The full-text phase of `screen` as a run of its own (the conductor starts it after
+    # `acquire`): the same skill, model and tools, the full-text task kind only.
+    "screen-ft": StageSpec(
+        model="claude-haiku-5-5",
+        skill="rf-screen",
+        role="screener",
+        tools=(
+            "mcp__factory__screen_next",
+            "mcp__factory__screen_record",
+            "mcp__factory__document_read",
+            "mcp__factory__project_status",
+        ),
+        kinds=(task_kind(ScreeningStage.FULL_TEXT, PassLabel.A),),
+        unit="record screened (full text)",
     ),
     "extract": StageSpec(
         model="claude-sonnet-5-5",
@@ -344,6 +365,263 @@ STAGES.update(
         ),
     }
 )
+_DEVELOP_READ: Final = (
+    f"{_P}corpus_search",
+    f"{_P}selection_resolve",
+    f"{_P}match_query",
+    f"{_P}finder_gaps",
+    f"{_P}finder_contradictions",
+    f"{_P}technique_challenges",
+    f"{_P}technique_combinations",
+    f"{_P}technique_gaps",
+    f"{_P}technique_neighbors",
+    f"{_P}chat_verify",
+)
+"""The reads the hypothesis engine's skill names for the lead author and the drafter (corpus and
+selection, the finders, the technique views, quote verification). Every one is a
+`project:read` tool: none writes an event or closes a gate."""
+_CONDUCT_READ: Final = (
+    f"{_P}project_status",
+    f"{_P}gate_status",
+    f"{_P}claims_digest",
+    f"{_P}document_read",
+    f"{_P}ledger_view",
+    f"{_P}trace",
+)
+STAGES.update(
+    {
+        # Lifecycle stages run by the conductor (`services/conductor.py`, plan tiers-and-autonomy
+        # C8). Each allow-list leaves out the gate acts of its stage: a proposer never confirms,
+        # releases or reviews what it proposed. Their pending unit is the conductor's current step.
+        "frame": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-frame",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}question_record",
+                f"{_P}question_view",
+                f"{_P}seed_add",
+                f"{_P}seed_list",
+                f"{_P}probe_run",
+                f"{_P}protocol_record",
+                f"{_P}protocol_view",
+                f"{_P}term_list",
+                f"{_P}vocabulary_propose",
+            ),
+            kinds=(),
+            unit="frame step",
+            fixed_cap=1,
+        ),
+        "gather": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-search-run",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}seed_list",
+                f"{_P}question_view",
+                f"{_P}protocol_view",
+                f"{_P}term_list",
+                f"{_P}search_run",
+                f"{_P}search_slice",
+                f"{_P}search_chase",
+                f"{_P}dedup_run",
+                f"{_P}dedup_merges",
+                f"{_P}snowball_round",
+                f"{_P}budget_status",
+                f"{_P}report_search",
+            ),
+            kinds=(),
+            unit="search step",
+            fixed_cap=1,
+        ),
+        "acquire": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-acquire",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}fulltext_fetch",
+                f"{_P}fulltext_status",
+                f"{_P}document_status",
+                f"{_P}document_read",
+                f"{_P}inbox_list",
+                f"{_P}library_adoptable",
+                f"{_P}budget_status",
+            ),
+            kinds=(),
+            unit="acquire step",
+            fixed_cap=1,
+        ),
+        "write": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-write",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}claims_digest",
+                f"{_P}document_read",
+                f"{_P}interpretation_list",
+                f"{_P}writing_outline",
+                f"{_P}report_evidence",
+                f"{_P}report_prisma",
+                f"{_P}report_methods",
+                f"{_P}report_search",
+                f"{_P}export_bibliography",
+                f"{_P}draft_create",
+                f"{_P}draft_write",
+                f"{_P}draft_reorder",
+                f"{_P}draft_repin",
+                f"{_P}draft_next",
+                f"{_P}draft_list",
+                f"{_P}draft_status",
+                f"{_P}draft_render",
+            ),
+            kinds=(),
+            unit="write step",
+            fixed_cap=1,
+        ),
+        "understand": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-lineage",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}contribution_status",
+                f"{_P}relation_list",
+                f"{_P}relation_propose",
+                f"{_P}idea_list",
+                f"{_P}idea_propose",
+            ),
+            kinds=(),
+            unit="understand step",
+            fixed_cap=1,
+        ),
+        # The develop step is three runs in three sessions (the engine's independence rule): the
+        # lead author, the drafter and the critic. None may decide a lead or register.
+        "develop-lead": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-hypothesis-engine",
+            role="lead-author",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}claims_digest",
+                f"{_P}lead_candidates",
+                f"{_P}lead_queue",
+                f"{_P}lead_stats",
+                f"{_P}lead_list",
+                f"{_P}lead_record",
+                f"{_P}hypothesis_list",
+                *_DEVELOP_READ,
+            ),
+            kinds=(),
+            unit="develop step (leads)",
+            fixed_cap=1,
+        ),
+        "develop-draft": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-hypothesis-engine",
+            role="drafter",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}document_read",
+                f"{_P}claims_digest",
+                f"{_P}lead_list",
+                f"{_P}hypothesis_list",
+                f"{_P}hypothesis_view",
+                f"{_P}hypothesis_draft",
+                *_DEVELOP_READ,
+            ),
+            kinds=(),
+            unit="develop step (drafts)",
+            fixed_cap=1,
+        ),
+        "develop-critic": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-critic",
+            role="critic",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}hypothesis_review_next",
+                f"{_P}hypothesis_review",
+                f"{_P}hypothesis_view",
+            ),
+            kinds=(),
+            unit="develop step (review)",
+            fixed_cap=1,
+        ),
+        "maintain": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-living",
+            role="proposer",
+            tools=(
+                f"{_P}project_status",
+                f"{_P}watch_status",
+                f"{_P}watch_run",
+                f"{_P}feed_status",
+                f"{_P}feed_list",
+                f"{_P}feed_run",
+                f"{_P}digest_get",
+            ),
+            kinds=(),
+            unit="maintain step",
+            fixed_cap=1,
+        ),
+        # Pass B of extraction, a run of its own: another model than pass A (the engine refuses a
+        # model both passes share) and, as every run, a session of its own. It extracts only the
+        # works the protocol's dual sample serves it.
+        "extract-b": StageSpec(
+            model="claude-haiku-5-5",
+            skill="rf-extract",
+            role="second extractor",
+            tools=STAGES["extract"].tools,
+            kinds=(),
+            unit="work extracted (pass B)",
+        ),
+        "conduct-verify": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-conductor",
+            role="verifier",
+            tools=_CONDUCT_READ,
+            kinds=(),
+            unit="step verified",
+            fixed_cap=1,
+        ),
+        "conduct-audit": StageSpec(
+            model="claude-sonnet-5-5",
+            skill="rf-conductor",
+            role="auditor",
+            tools=(
+                *_CONDUCT_READ,
+                f"{_P}audit_sample",
+                f"{_P}gate_audit_pending",
+                f"{_P}gate_audit_label",
+            ),
+            kinds=(),
+            unit="step audited",
+            fixed_cap=1,
+        ),
+    }
+)
+CONDUCT_STAGES: Final = (
+    "frame",
+    "gather",
+    "acquire",
+    "write",
+    "understand",
+    "develop-lead",
+    "develop-draft",
+    "develop-critic",
+    "maintain",
+    "extract-b",
+    "conduct-verify",
+    "conduct-audit",
+)
+"""The stages the conductor starts; their pending unit is its current step (`conductor.pending`).
+`screen` and `extract` are also conductor steps but keep their own work-queue pending units."""
 CHAT_STAGES: Final = ("spar", "ask")
 """The stages that answer chat requests (`services/chat_requests.py`): one request per run; their
 pending units are the open requests of the stage's kind."""
@@ -484,11 +762,37 @@ def _require_calibrated_mine(project: Project, spec: StageSpec) -> None:
     )
 
 
+_ZERO_CAP_TOOLS: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
+    ("gather", "snowball_rounds"): (f"{_P}snowball_round",),
+}
+"""Tools a stage loses where the project's tier plan caps a count at 0 (finding I4): a brief
+allows no snowball round, so its gather run is not given the tool that would run one."""
+
+
+def _tier_filtered(project: Project, stage: str, spec: StageSpec) -> StageSpec:
+    from factory.services.project import project_levels
+    from factory.tiers.resolve import plan_for
+
+    tier = project_levels(project).tier
+    if tier is None:
+        return spec
+    dropped: set[str] = set()
+    for step in plan_for(tier).stages:
+        if step.stage_id != stage or step.skipped:
+            continue
+        for (name, key), tools in _ZERO_CAP_TOOLS.items():
+            if name == stage and step.caps.get(key) == 0:
+                dropped.update(tools)
+    if not dropped:
+        return spec
+    return replace(spec, tools=tuple(t for t in spec.tools if t not in dropped))
+
+
 def stage_spec(project: Project, stage: str) -> StageSpec:
     """The spec of `stage`; for `mine:<id>` the miner and the version the protocol lists."""
     spec = STAGES.get(stage)
     if spec is not None:
-        return spec
+        return _tier_filtered(project, stage, spec)
     if stage.startswith(MINE_PREFIX) and len(stage) > len(MINE_PREFIX):
         miner = stage[len(MINE_PREFIX) :]
         return replace(MINE_SPEC, miner=miner, miner_version=_mine_use(project, miner))
@@ -628,10 +932,34 @@ def _prompt(
     if spec.miner is not None:
         parameters += f"miner `{spec.miner}`, version {spec.miner_version}, "
         miner = f" of miner `{spec.miner}` (version {spec.miner_version})"
-    if spec.skill == "rf-intuition":
+    if spec.skill == "rf-intuition" or stage in CONDUCT_STAGES:
         parameters = f"project `{slug}`, role `{spec.role}`, model `{spec.model}`, "
+    label = "A"
+    if stage == "extract-b":
+        label = "B"
+        parameters = f"project `{slug}`, pass_label `B`, role `{spec.role}`, model `{spec.model}`, "
     extra = ""
-    if spec.skill == "rf-screen":
+    if stage in CONDUCT_STAGES:
+        extra = (
+            "You are one role session of a conducted run (`factory conductor`), in a session of "
+            f"your own: the role is `{spec.role}`. Nobody answers questions during the run: ask "
+            "nothing and wait for nothing. Do only your role; confirm, release or decide no gate "
+            "that a human or another role closes; if a tool refuses, report the refusal "
+            "verbatim and stop.\n\n"
+        )
+    if stage == "screen-ft":
+        from factory.services.screening import SCREEN_BATCH  # screening imports much
+
+        extra = (
+            "Screening order for this run: the skill says full-text mode runs only when the "
+            "researcher asks; for this run that is overridden, the researcher has asked for it. "
+            "Title and abstract screening is done. Screen at full text only: call `screen_next` "
+            'with `stage="full-text"` and follow the skill\'s full-text mode until it serves no '
+            f"batch. It is pass A, and a batch of up to {SCREEN_BATCH} records is {SCREEN_BATCH} "
+            "units. If it serves no batch because of a `blocked` reason, report it verbatim and "
+            "stop.\n\n"
+        )
+    elif spec.skill == "rf-screen":
         from factory.services.screening import SCREEN_BATCH  # screening imports much
 
         extra = (
@@ -651,9 +979,9 @@ def _prompt(
             "steps.\n\n"
         )
     return (
-        f"You are pass A of stage `{stage}`{miner} for the Research Factory project `{slug}`. "
-        "Work through the factory MCP tools and follow exactly the skill below "
-        "(you are pass `A`).\n\n"
+        f"You are pass {label} of stage `{stage}`{miner} for the Research Factory project "
+        f"`{slug}`. Work through the factory MCP tools and follow exactly the skill below "
+        f"(you are pass `{label}`).\n\n"
         f"Parameters for every factory call: {parameters}skill `{spec.skill}`.\n\n"
         f"{extra}"
         f"Limit: stop after {unit_cap} units or when the queue is empty, whichever comes first. "
@@ -771,6 +1099,10 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
         from factory.services.chat_requests import open_count
 
         return {stage: open_count(project, stage)}
+    if stage in CONDUCT_STAGES:
+        from factory.services.conductor import pending_units as conductor_pending
+
+        return {stage: conductor_pending(project, stage)}
     if stage in SPAR2_STAGES:
         from factory.services.spar_v2 import pending_by_role
 
@@ -784,10 +1116,13 @@ def pending_units(project: Project, stage: str) -> dict[str, int]:
         return {stage: unit_pending(project, stage) or 0}
     pending = pending_work(project)
     counts = {kind: pending.get(kind, 0) for kind in spec.kinds}
-    if stage == "screen":  # a screening task is made only when `screen_next` serves the record
-        for kind, screening_stage in zip(
-            spec.kinds, (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT), strict=True
-        ):
+    if stage in ("screen", "screen-ft"):  # a task is made only when `screen_next` serves it
+        phases = (
+            (ScreeningStage.FULL_TEXT,)
+            if stage == "screen-ft"
+            else (ScreeningStage.TITLE_ABSTRACT, ScreeningStage.FULL_TEXT)
+        )
+        for kind, screening_stage in zip(spec.kinds, phases, strict=True):
             servable, blocked = _screen_servable(project, screening_stage)
             counts[kind] = servable if blocked else max(counts[kind], servable)
     if stage == "extract":  # a task is made only when a session asks for the unit

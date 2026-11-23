@@ -184,6 +184,12 @@ class FakeSource:
         )
 
 
+def reviewer_of(author: Actor) -> Actor:
+    """The author's agent in another session: a PRESS review may not come from the session that
+    recorded the protocol (lane L14)."""
+    return author.model_copy(update={"session": SESSION if author.session == S2 else S2})
+
+
 def _work(record: dict[str, Any], *, run_id: str, query_id: str, raw_blob: str) -> Work:
     year = record.get("year")
     # "published" (an ISO date) says when the source listed the record; "year" gives Jan 1.
@@ -418,7 +424,7 @@ def ready_protocol(
         finding = PressFinding(
             element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
         )
-        review_id = press_review(project, agent, protocol_id, (finding,))
+        review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
         confirm_press(project, human, review_id, ("Accepted; the synonym is in the next version.",))
     return protocol_id
 
@@ -492,7 +498,7 @@ def _protocol(
         finding = PressFinding(
             element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
         )
-        review_id = press_review(project, agent, protocol_id, (finding,))
+        review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
         confirm_press(project, human, review_id, ("Accepted.",))
     return protocol_id
 

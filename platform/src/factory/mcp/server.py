@@ -153,6 +153,7 @@ from factory.services import feed_read as feed_read_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import gate_trust as gate_trust_service
 from factory.services import gates as gates_service
 from factory.services import grey as grey_service
 from factory.services import horizon as horizon_service
@@ -365,7 +366,8 @@ def build_server(
 
     @server.tool()
     def project_status(project: str) -> dict[str, JsonValue]:
-        """Report a project's rigor mode, event counts, task queue state, derived `stage` (null to
+        """Report a project's rigor mode, `tier` (null: not declared), `autonomy_level`, event
+        counts, task queue state, derived `stage` (null to
         a session that has joined a pass) and `human`: what waits on the researcher, each with the
         command that does it. Imports, conversion and gate decisions are the researcher's acts on
         the CLI: relay the command, there is no tool for them."""
@@ -579,6 +581,55 @@ def build_server(
             return _withheld(opened, {"gates": rows}, include_work_ids=False)
 
         return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def gate_audit_pending(project: str) -> dict[str, JsonValue]:
+        """The acts of platform-drawn audit samples that no one has labelled yet (audit id, gate,
+        act event id, act event type), for the auditor role of a supervised or autonomous run.
+        Read-only; no act content. Refused to a session that has joined a pass."""
+
+        def pending() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            rows: list[JsonValue] = [
+                {
+                    "audit_id": i.audit_id,
+                    "gate_id": i.gate_id,
+                    "act_event_id": i.act_event_id,
+                    "act_type": i.act_type,
+                }
+                for i in gate_trust_service.pending_audit_items(opened)
+            ]
+            return {"items": rows}
+
+        return _reply(project, pending, include_work_ids=False)
+
+    @server.tool()
+    def gate_audit_label(
+        project: str,
+        audit_id: str,
+        act_event_id: str,
+        correct: bool,
+        role: str,
+        model: str,
+        skill: str,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Label one sampled act of a platform-drawn audit as correct or incorrect (the auditor
+        role of a supervised or autonomous run; contract C4). Refused for an attended project, a
+        sample not drawn by the platform, an act outside the sample, or the session that closed
+        the act. The label never enters the human overturn rate. Refused to a pass session."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            event_id = gates_service.gate_audit_record_agent(
+                opened, actor, audit_id, act_event_id, correct, note
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label, include_work_ids=False)
 
     @server.tool()
     def watch_status(project: str) -> dict[str, JsonValue]:

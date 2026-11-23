@@ -17,6 +17,7 @@ from typing import Annotated, cast
 import typer
 from pydantic import JsonValue
 
+from factory.cli.review import deferred_app
 from factory.model.project import Visibility
 from factory.model.reviews import (
     DeviationProposal,
@@ -38,6 +39,7 @@ from factory.services.reviews import ReviewView
 
 project_app = typer.Typer(name="project", help="The project itself.", no_args_is_help=True)
 review_app = typer.Typer(name="review", help="Review requests.", no_args_is_help=True)
+review_app.add_typer(deferred_app)
 
 ReviewArg = Annotated[str, typer.Argument(help="Review request id.")]
 FileOption = Annotated[

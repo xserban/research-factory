@@ -129,6 +129,7 @@ from factory.services.tasks import (
     session_in_layer,
     task_content,
 )
+from factory.services.tier_caps import SCREEN_CAP, cap_refusal, tier_cap
 
 __all__ = ["pass_users", "require_outside_passes"]  # kept with the pass rules in `passes`
 
@@ -497,6 +498,7 @@ def screen_next(
                 ],
                 remaining=0,
             )
+        _require_under_tier_cap(project, actor, stage)
         needs_join = _check_join(project, actor, label, stage)
         human = actor.kind == "human"
         if human and not needs_join and _joined_pass(project, actor.session, stage) is not label:
@@ -554,6 +556,24 @@ def screen_next(
             )
         batch = None if task is None else _claimed_batch(project, task)
         return ScreenNext(batch=batch, blocked=blocked, remaining=remaining, stopped=stopped)
+
+
+def _require_under_tier_cap(project: Project, actor: Actor, stage: ScreeningStage) -> None:
+    """A `brief` or `deep` project serves at most the tier's `screen` cap of works to title and
+    abstract screening (counted as the works of claimed pass-A batches; a batch is served whole, so
+    the last one may pass the cap by less than `SCREEN_BATCH`). Refused `tier-cap-reached`."""
+    if stage is not TA or actor.kind != "agent":
+        return
+    cap = tier_cap(project, SCREEN_CAP)
+    if cap is not None and len(_served_works(project, PassLabel.A, stage)) >= cap:
+        raise cap_refusal(SCREEN_CAP, cap, "the works served to title and abstract screening")
+
+
+def screen_cap_reached(project: Project) -> bool:
+    """Whether a `brief` or `deep` project has been served the tier's `screen` cap of works at title
+    and abstract (False for a project without a cap). Read-only."""
+    cap = tier_cap(project, SCREEN_CAP)
+    return cap is not None and len(_served_works(project, PassLabel.A, TA)) >= cap
 
 
 def _stop_reason(stopped: StopStatus) -> str:

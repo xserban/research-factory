@@ -771,7 +771,7 @@ def test_the_page_scripts_call_those_routes_only_when_served() -> None:
     assert "Retry-After" in shell and "Updating" in shell
 
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = ("protocol", "levels", "pipeline", "sources", "method", "costs", "write", "platform")
 
 
 def test_the_seven_new_pages_and_payloads_are_served(served: tuple[int, Project]) -> None:
