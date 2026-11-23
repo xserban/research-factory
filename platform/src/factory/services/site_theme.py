@@ -4,12 +4,13 @@ the explorer.
 Each page keeps its own dark palette in a `:root` block. `LIGHT_CSS` sits after it and overrides the
 same variable names: `:root[data-theme="light"]` applies when the reader chose light, and
 `prefers-color-scheme: light` applies only to a page without scripts (with scripts, no saved
-choice means LCARS)
+choice means dark)
 (`:root:not([data-theme])`, so any explicit choice, dark or a named theme, always wins). The
 dark-only decoration (grid background, glows) is switched off in the light block.
 
 `THEME_SCRIPT` goes in `<head>` before the stylesheet: it applies the saved choice before paint and
-wires every `[data-theme-toggle]` button. The choice lives in localStorage under `SAVE_KEY`; the
+wires every `[data-theme-toggle]` button. The choice lives in localStorage under `SAVE_KEY`, the
+same key the hub v2 pages (`hub_ui/shell.js`) read and write, so every page shows one theme; the
 storage is wrapped in try/catch, so a blocked store only means the choice is not remembered. Storage
 events keep same-origin frames (the hub and its product iframes) in step.
 
@@ -23,7 +24,7 @@ from typing import Final
 from factory.services.site_themes import IDS, THEMES, THEMES_CSS
 
 SAVE_KEY: Final = "factory-theme"
-DEFAULT_THEME: Final = "lcars"
+DEFAULT_THEME: Final = "dark"
 """Applied when no choice is saved (the picker's first entry). Without scripts the page keeps its
 own dark palette, or the light one when the system asks for it."""
 
@@ -114,7 +115,7 @@ product in the project hub) hides its pickers: the bar of the page that frames i
 picker, and the choice reaches the frame through the `storage` event."""
 
 _OPTIONS: Final = (
-    "<option value=''>Default (LCARS)</option>"
+    "<option value=''>Default (Dark)</option>"
     "<optgroup label='Dark'><option value='dark'>Dark</option>"
     + "".join(f"<option value='{t.id}'>{t.label}</option>" for t in THEMES if not t.light)
     + "</optgroup><optgroup label='Light'><option value='light'>Light</option>"
