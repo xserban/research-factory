@@ -36,6 +36,7 @@ from factory.events.blobs import BlobStore
 from factory.events.envelope import Event
 from factory.index.projection import Handler
 from factory.model.feed import (
+    FACTORY_ONLY_REACTIONS,
     FEED_ENTRY_RE,
     FeedConfigured,
     FeedFetched,
@@ -233,7 +234,7 @@ def feed_handlers(t: FeedTables, blobs: BlobStore | None) -> dict[str, Handler]:
 
     def reacted(conn: Connection, event: Event) -> None:
         p = FeedReacted.model_validate(event.payload)
-        if event.actor.kind != "human":
+        if event.actor.kind != "human" or p.reaction in FACTORY_ONLY_REACTIONS:
             return
         entry = conn.execute(
             text("SELECT 1 FROM feed_entries WHERE entry_id = :e"), {"e": p.entry_id}

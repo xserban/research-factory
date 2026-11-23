@@ -121,7 +121,7 @@ def test_pilot_and_systematic_need_comparability_keys() -> None:
 
 def test_audit_floors_apply_in_pilot_and_systematic_only() -> None:
     for mode in (RigorMode.PILOT, RigorMode.SYSTEMATIC):
-        gaps = _gap_fields(mode, dual_extract_sample=1.0, audit_fraction=0.01, audit_minimum=10)
+        gaps = _gap_fields(mode, dual_extract_sample=1.0, audit_fraction=0.01, audit_minimum=15)
         assert {"extraction_schema.audit_fraction", "extraction_schema.audit_minimum"} <= gaps
     assert not _gap_fields(
         RigorMode.EXPLORATORY, dual_extract_sample=None, audit_fraction=0.0, audit_minimum=0
@@ -212,3 +212,17 @@ def test_old_amendment_event_validates_without_extraction_stale() -> None:
         "semantic": False,
     }
     assert ProtocolAmended.model_validate(payload).extraction_stale is None
+
+
+def test_audit_minimum_is_the_researchers_choice_in_pilot() -> None:
+    """Decision 163: pilot takes 10, 20, 30, 40 or at least 50; systematic keeps 50."""
+    field = "extraction_schema.audit_minimum"
+    for value in (10, 20, 30, 40, 50, 60):
+        assert field not in _gap_fields(
+            RigorMode.PILOT, dual_extract_sample=1.0, audit_minimum=value
+        )
+    for value in (0, 5, 15, 45):
+        assert field in _gap_fields(RigorMode.PILOT, dual_extract_sample=1.0, audit_minimum=value)
+    assert field in _gap_fields(RigorMode.SYSTEMATIC, dual_extract_sample=1.0, audit_minimum=10)
+    assert field not in _gap_fields(RigorMode.SYSTEMATIC, dual_extract_sample=1.0, audit_minimum=50)
+    assert field not in _gap_fields(RigorMode.EXPLORATORY, audit_minimum=10)

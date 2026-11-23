@@ -72,7 +72,14 @@ from factory.model.extraction import (
     ExtractionRejected,
     ExtractionResolved,
 )
-from factory.model.feed import FeedConfigured, FeedFetched, FeedRanked, FeedReacted, FeedSent
+from factory.model.feed import (
+    FeedConfigured,
+    FeedFetched,
+    FeedRanked,
+    FeedRankerTrained,
+    FeedReacted,
+    FeedSent,
+)
 from factory.model.files import FileRegistered
 from factory.model.findings import ContradictionDecided, ContradictionProposed
 from factory.model.fulltext import (
@@ -413,6 +420,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("feed.ranked", FeedRanked, 1))
     catalog.register(EventType("feed.reacted", FeedReacted, 1))
     catalog.register(EventType("feed.sent", FeedSent, 1))
+    catalog.register(EventType("feed.ranker_trained", FeedRankerTrained, 1))
     catalog.register(EventType("runner.started", RunnerStarted, 1))
     catalog.register(EventType("runner.finished", RunnerFinished, 1))
     catalog.register(EventType("runner.pipeline_started", PipelineStarted, 1))

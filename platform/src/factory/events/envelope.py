@@ -16,6 +16,7 @@ from factory.canonical import canonical_json
 from factory.clock import format_ts
 from factory.events.blobs import BLOB_REF_RE
 from factory.model.base import StrictModel
+from factory.model.factory_scope import FACTORY_SLUG
 from factory.model.identity import ACTOR_ID_RE, SLUG_RE, ULID_RE, ulid_time
 from factory.model.lab import CREDENTIAL_ID_RE
 
@@ -23,6 +24,8 @@ ActorKind = Literal["human", "agent", "system"]
 
 SKILL_RE = r"^[a-z0-9][a-z0-9-]*@[0-9a-f]{8,64}$"
 EVENT_ID_RE = rf"^ev_{ULID_RE}$"
+ENVELOPE_PROJECT_RE = rf"^({SLUG_RE[1:-1]}|{FACTORY_SLUG})$"
+"""A project slug, or the reserved `_factory` of the factory scope (decision 169)."""
 _ZERO = timedelta(0)
 
 
@@ -59,7 +62,7 @@ class Event(StrictModel):
 
     id: str = Field(pattern=EVENT_ID_RE)
     ts: datetime
-    project: str = Field(pattern=SLUG_RE)
+    project: str = Field(pattern=ENVELOPE_PROJECT_RE)
     type: str
     schema_version: int = Field(alias="schema", ge=1)
     actor: Actor

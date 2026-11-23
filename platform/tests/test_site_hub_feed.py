@@ -103,7 +103,7 @@ def test_without_feed_events_every_project_is_a_tab_marked_not_configured(
     served: tuple[int, site_server.MainHub, Scripted],
 ) -> None:
     port, _, _ = served
-    status, page = _req(port, "GET", "/feed/")
+    status, page = _req(port, "GET", "/feed/classic/")
     assert status == 200
     assert "data-slug='demo'" in page and "data-slug='other'" in page
     assert page.count("not configured") >= 2
@@ -118,7 +118,7 @@ def test_the_cards_show_the_ranking_of_the_tabs_project_and_never_a_held_entry(
 ) -> None:
     port, _, _ = served
     _world(project)
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     demo = page.split("<section class=pn data-slug='demo'", 1)[1].split("<section", 1)[0]
     assert f"https://arxiv.org/abs/{FIRST}" in demo and f"https://arxiv.org/pdf/{FIRST}" in demo
     assert "0.900" in demo and "A core reference" in demo
@@ -133,7 +133,7 @@ def test_the_page_has_a_token_per_tab_and_one_for_the_hub_acts(
     served: tuple[int, site_server.MainHub, Scripted], project: Project, two: Project
 ) -> None:
     port, _, _ = served
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     tokens = re.findall(r"data-slug='(\w+)' data-token='([0-9a-f]+)'", page)
     assert {s for s, _ in tokens} == {"demo", "other"}
     assert len({t for _, t in tokens} | {_meta_token(page)}) == 3
@@ -147,7 +147,7 @@ def test_a_reaction_from_a_tab_is_recorded_for_that_project_as_the_human(
 ) -> None:
     port, _, _ = served
     _world(project)
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     token = dict(re.findall(r"data-slug='(\w+)' data-token='([0-9a-f]+)'", page))["demo"]
     body = {"entry_id": FIRST, "ranking_id": RANKING, "reaction": "like"}
     assert _req(port, "POST", "/p/demo/api/feed/react", body, token)[0] == 200
@@ -167,14 +167,14 @@ def test_fetch_now_and_refetch_start_one_run_and_refuse_a_second(
     served: tuple[int, site_server.MainHub, Scripted],
 ) -> None:
     port, _, script = served
-    token = _meta_token(_req(port, "GET", "/feed/")[1])
+    token = _meta_token(_req(port, "GET", "/feed/classic/")[1])
     assert _req(port, "POST", "/api/feed/run", {}, None)[0] == 403
     script.hold = True
     assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 202
     text = _req(port, "GET", "/api/feed/runner")[1]
     assert json.loads(text)["running"] is True
     assert _req(port, "POST", "/api/feed/refetch", {}, token)[0] == 409
-    assert "running" in _req(port, "GET", "/feed/")[1]
+    assert "running" in _req(port, "GET", "/feed/classic/")[1]
     script.release.set()
     for _ in range(100):
         if json.loads(_req(port, "GET", "/api/feed/runner")[1])["running"] is False:
@@ -195,7 +195,7 @@ def test_a_project_token_does_not_start_a_run(
     served: tuple[int, site_server.MainHub, Scripted],
 ) -> None:
     port, _, script = served
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     project_token = re.findall(r"data-slug='demo' data-token='([0-9a-f]+)'", page)[0]
     assert _req(port, "POST", "/api/feed/run", {}, project_token)[0] == 403
     assert script.calls == []
@@ -211,13 +211,13 @@ def test_a_failed_run_is_shown_as_the_last_outcome(
     httpd, _ = _serve(settings, clock, runner)
     try:
         port = httpd.server_address[1]
-        token = _meta_token(_req(port, "GET", "/feed/")[1])
+        token = _meta_token(_req(port, "GET", "/feed/classic/")[1])
         assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 202
         for _ in range(100):
             if runner.last is not None:
                 break
             threading.Event().wait(0.05)
-        assert "arXiv said no" in _req(port, "GET", "/feed/")[1]
+        assert "arXiv said no" in _req(port, "GET", "/feed/classic/")[1]
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -229,7 +229,7 @@ def test_without_a_runner_the_page_says_so_and_the_acts_are_refused(
     httpd, _ = _serve(settings, clock, None)
     try:
         port = httpd.server_address[1]
-        page = _req(port, "GET", "/feed/")[1]
+        page = _req(port, "GET", "/feed/classic/")[1]
         assert "runner is off" in page
         token = _meta_token(page)
         assert _req(port, "POST", "/api/feed/run", {}, token)[0] == 503
@@ -247,7 +247,7 @@ def test_titles_are_escaped(
         json.dumps({"projects": {"demo": {"title": "<script>x</script>"}}})
     )
     port, _, _ = served
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     assert "<script>x</script>" not in page and "&lt;script&gt;x&lt;/script&gt;" in page
     assert SECOND not in page
 
@@ -434,7 +434,7 @@ def test_the_page_counts_shown_of_ranked_and_hides_further_cards_read_only(
 
     port, _, _ = served
     world(project, total=100, shown=29)
-    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    demo = _demo_section(_req(port, "GET", "/feed/classic/")[1])
     assert "Showing <span class=shown-count>30</span> of 100 ranked" in demo
     assert "window 2026-11-10 to 2026-11-11" in demo
     further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
@@ -466,7 +466,7 @@ def test_a_further_card_shows_its_reaction_and_added_state(
     assert any(
         e.payload.get("beyond_shown") for e in _read(project.paths.events_dir, project.catalog)
     )
-    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    demo = _demo_section(_req(port, "GET", "/feed/classic/")[1])
     cards = {
         m.group(1): m.group(0)
         for m in re.finditer(
@@ -493,7 +493,7 @@ def test_the_page_says_when_the_cap_cuts(
     world(project, total=40, shown=5)
     monkeypatch.setattr(feed_page, "DEFAULT_CAP", 10)
     monkeypatch.setattr(feed_page.feed_ranked_page, "__kwdefaults__", {"cap": 10, "records": None})
-    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    demo = _demo_section(_req(port, "GET", "/feed/classic/")[1])
     assert "first 10 ranked entries beyond the shown ones" in demo
     assert "24 more are not listed" in demo
 
@@ -508,7 +508,7 @@ def test_the_page_has_the_grid_css_and_the_layout_switch_with_its_storage_key(
 ) -> None:
     port, _, _ = served
     _world(project)
-    page = _req(port, "GET", "/feed/")[1]
+    page = _req(port, "GET", "/feed/classic/")[1]
     assert "repeat(auto-fill,minmax(380px,1fr))" in page
     assert "-webkit-line-clamp:3" in page and "line-clamp:3" in page
     assert "data-layout=grid" in page and "data-layout=list" in page
@@ -525,7 +525,7 @@ def test_cards_clamp_the_abstract_with_a_more_button_and_authors_only_when_expan
 
     port, _, _ = served
     world(project, total=100, shown=29)
-    demo = _demo_section(_req(port, "GET", "/feed/")[1])
+    demo = _demo_section(_req(port, "GET", "/feed/classic/")[1])
     shown = re.findall(r"<article class=card data-entry-id.*?</article>", demo, re.S)
     further = re.findall(r"<article class='card further' hidden[^>]*>.*?</article>", demo, re.S)
     assert shown and further
