@@ -5,6 +5,7 @@ embedder with chosen vectors stands in for SPECTER2 (no network, no weights)."""
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -240,6 +241,12 @@ def _train(scope: FactoryScope, version: int = 1) -> None:
     scope.record([scope.events.make("feed.ranker_trained", payload, scope.system_actor())])
 
 
+needs_sklearn = pytest.mark.skipif(
+    importlib.util.find_spec("sklearn") is None, reason="needs the ranker extra (scikit-learn)"
+)
+
+
+@needs_sklearn
 def test_trained_ranker_orders_today_and_is_named(
     world: tuple[Settings, Project, Project], clock: FixedClock
 ) -> None:
@@ -256,6 +263,7 @@ def test_trained_ranker_orders_today_and_is_named(
     assert FeedRanked.model_validate(_events(scope, "feed.ranked")[0].payload).ranker_version == 1
 
 
+@needs_sklearn
 def test_damaged_latest_training_falls_back_to_previous(
     world: tuple[Settings, Project, Project], clock: FixedClock
 ) -> None:
@@ -354,6 +362,7 @@ def test_liked_and_reading_list_follow_latest_reactions(
     assert scope.read(lambda c: fx.latest_reactions(c, scope.tables))["2611.00002"]["label"] is None
 
 
+@needs_sklearn
 def test_a_state_trained_on_another_encoder_is_skipped(
     world: tuple[Settings, Project, Project], clock: FixedClock
 ) -> None:

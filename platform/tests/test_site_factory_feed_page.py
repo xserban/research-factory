@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import html as htmllib
 import http.client
+import importlib.util
 import json
 import re
 import shutil
@@ -481,6 +482,12 @@ def test_click_train_is_disabled_with_its_reason_below_the_threshold(
     assert s["disabled"] is True and "5 needed" in s["reason"] and s["out"] == ""
 
 
+needs_sklearn = pytest.mark.skipif(
+    importlib.util.find_spec("sklearn") is None, reason="needs the ranker extra (scikit-learn)"
+)
+
+
+@needs_sklearn
 @browser
 @pytest.mark.browser
 def test_click_train_runs_once_the_threshold_is_met(served: tuple[int, Settings]) -> None:

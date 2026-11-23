@@ -5,6 +5,7 @@ torch or weights), enlarged to six entries so that training can pass its thresho
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 import pytest
@@ -122,6 +123,12 @@ def test_train_below_the_thresholds_refuses_with_the_reason_and_writes_nothing(
     assert _events(settings, clock, "feed.ranker_trained") == []
 
 
+needs_sklearn = pytest.mark.skipif(
+    importlib.util.find_spec("sklearn") is None, reason="needs the ranker extra (scikit-learn)"
+)
+
+
+@needs_sklearn
 def test_train_uses_factory_and_project_reactions_and_only_likes_and_dislikes(
     six: tuple[Settings, Project, Project], clock: FixedClock
 ) -> None:

@@ -5,6 +5,7 @@ human's. A fake embedder stands in for SPECTER2; no network, torch or weights.""
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import threading
 from collections.abc import Iterator, Mapping
@@ -112,6 +113,12 @@ def test_train_below_the_thresholds_is_a_400_with_the_reason(
     assert _req(port, "POST", "/api/feed/train", {}, None)[0] == 403
 
 
+needs_sklearn = pytest.mark.skipif(
+    importlib.util.find_spec("sklearn") is None, reason="needs the ranker extra (scikit-learn)"
+)
+
+
+@needs_sklearn
 def test_train_then_today_is_ranked(served: tuple[int, Settings], clock: FixedClock) -> None:
     port, settings = served
     token = _hub_token(port, "/feed/")
@@ -190,6 +197,7 @@ def test_an_encoder_failure_is_a_structured_500_not_a_dropped_connection(
         httpd.server_close()
 
 
+@needs_sklearn
 def test_a_second_train_while_one_runs_is_a_409(
     six: tuple[Settings, Project, Project],  # noqa: F811
     clock: FixedClock,
