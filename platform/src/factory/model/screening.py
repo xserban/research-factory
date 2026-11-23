@@ -258,9 +258,14 @@ class DecisionRecorded(StrictModel):
 
     @model_validator(mode="after")
     def _anchor_matches_stage(self) -> Self:
-        """A full-text decision cites its anchor in one conversion; a title/abstract one cannot."""
+        """A full-text decision cites its anchor in one conversion; a title/abstract one cannot.
+        The one exception: a full-text `cannot-assess` with an empty quote names its conversion
+        but no anchor (the pinned conversion has no text to cite; gate observation 28)."""
         _check_verdict_fields(self.verdict, self.criterion, self.rationale)
-        has_both = self.anchor is not None and self.conversion_id is not None
+        no_text = (
+            self.verdict is Verdict.CANNOT_ASSESS and self.quote == "" and self.anchor is None
+        )
+        has_both = self.conversion_id is not None and (self.anchor is not None or no_text)
         has_any = self.anchor is not None or self.conversion_id is not None
         if self.stage is ScreeningStage.FULL_TEXT and not has_both:
             raise ValueError("a full-text decision needs an anchor and a conversion_id")

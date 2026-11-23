@@ -436,7 +436,7 @@ def _no_text_item(record: Mapping[str, Any]) -> ScreeningItem:
     return ScreeningItem(
         work_id=str(record["work_id"]),
         verdict=Verdict.CANNOT_ASSESS,
-        criterion="IN01",
+        criterion="EX04",
         quote="",
         rationale="no text",
         anchor=None,
