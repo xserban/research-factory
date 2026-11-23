@@ -121,6 +121,16 @@ def test_human_events_fold(project: Project) -> None:
     assert _rows(project, "SELECT entry_id, inbox_item_id FROM feed_sends") == [(ENTRY, ITEM)]
 
 
+def test_factory_only_reactions_fold_to_nothing_in_a_project(project: Project) -> None:
+    """A hand-written `unset`/`unsave` (the factory scope's reactions) makes no project row."""
+    _world(project)
+    for reaction in ("unset", "unsave"):
+        _record(project, "feed.reacted", {**_reaction(), "reaction": reaction})
+    assert _count(project, "feed_reactions") == 0
+    _record(project, "feed.reacted", _reaction())
+    assert _count(project, "feed_reactions") == 1
+
+
 def test_agent_written_events_fold_to_nothing(project: Project, agent: Actor) -> None:
     _world(project)
     _record(project, "feed.configured", {**_config(), "config_id": f"fdc_{ULID[:-1]}A"}, agent)

@@ -20,7 +20,13 @@ Invariants:
   (`work_ids`, optional `pdfs`; IDEA-87) answers a zip of the chosen works' converted Markdown and
   manifest as the local human (`cli:export works`), read-only, body limit
   `MAX_EXPORT_BODY`; nothing is withheld. Hub acts (main server, hub
-  token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
+  token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create`,
+  `POST /api/feed/react` (`entry_id`, `reaction`, optional `ranking_id`, `rank_shown`,
+  `score_shown`: a human `feed.reacted` in the factory scope, `cli:feed react --scope factory`;
+  the project-page route of the same path is the project's own), `POST /api/feed/train` (no
+  body fields; trains the factory feed's general ranker and ranks the pool, `cli:feed train`;
+  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision 169,
+  proposed) and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
   and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional
@@ -80,24 +86,28 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qs, parse_qsl, unquote
 
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 
+from factory.clock import Clock
+from factory.config import Settings
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
 from factory.services import activity as activity_service
 from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
-from factory.services import feed as feed_service
 from factory.services import (
+    factory_feed,
+    factory_feed_actions,
     hub_chat,
     hub_hypotheses,
     hub_ideas,
@@ -109,6 +119,7 @@ from factory.services import (
     site_catalog_page,
     site_chrome,
     site_create,
+    site_factory_feed,
     site_hub_feed,
     site_portal,
     site_progress,
@@ -116,6 +127,7 @@ from factory.services import (
     work_layers,
     work_queue,
 )
+from factory.services import feed as feed_service
 from factory.services import inbox as inbox_service
 from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
@@ -126,6 +138,7 @@ from factory.services import watch_config as watch_config_service
 from factory.services.access import authorize_command, authorize_export_works
 from factory.services.context import Project
 from factory.services.hint_input import HintInput
+from factory.services.ranking_model import Embedder, Specter2Embedder
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
@@ -275,6 +288,54 @@ def _hint_input(value: object) -> tuple[HintInput | None, list[ValidationIssue]]
     )
 
 
+def _factory_send(
+    project: Project, entry_id: str, ranking_id: str | None, refusal: FactoryValidationError
+) -> str | None:
+    """The fallback of a send or add the project's own ranking refused as `not-ranked`: the main
+    hub's Today lists entries any project fetched. When the factory ranking holds the entry, its
+    arXiv link goes to the project's inbox through the inbox service (a note names the factory
+    ranking and the rank shown) and the item id is returned; None when it does not apply (another
+    refusal, or the factory ranking does not hold the entry), and the refusal stands."""
+    if not any(i.reason == "not-ranked" for i in refusal.issues):
+        return None
+    placed = factory_feed_actions.factory_placement(project.settings, entry_id, clock=project.clock)
+    if placed is None:
+        return None
+    ranking, rank = placed
+    note = f"from the factory feed (ranking {ranking}, rank {rank} shown)"
+    try:
+        item_id, _ = feed_service.send_via_inbox(
+            project, project.human_actor(), entry_id, note=note
+        )
+    except FactoryValidationError:
+        return None
+    return item_id
+
+
+def feed_send(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+    """Send the entry to the inbox as its arXiv link (no lookup), as the local human; returns
+    (status, body). The main hub's feed page offers it as "Send to project…"."""
+    entry_id = body.get("entry_id")
+    ranking_id, bad = _optional_str(body, "ranking_id")
+    if not isinstance(entry_id, str) or not entry_id:
+        bad.append(ValidationIssue("entry_id", "required"))
+    if bad:
+        return 400, _issues(*bad)
+    assert isinstance(entry_id, str)
+    try:
+        actor = project.human_actor()
+        authorize_command(project, project.principal, "cli:feed send")
+        item_id = feed_service.send(project, actor, entry_id, ranking_id=ranking_id)
+    except FactoryValidationError as exc:
+        via_inbox = _factory_send(project, entry_id, ranking_id, exc)
+        if via_inbox is not None:
+            return 200, {"ok": True, "inbox_item_id": via_inbox, "via": "inbox"}
+        return 400, _issues(*exc.issues)
+    except FactoryError as exc:
+        return 403, _issues(ValidationIssue("permission", str(exc)))
+    return 200, {"ok": True, "inbox_item_id": item_id}
+
+
 def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
     """Send the entry to the inbox and look it up, as the local human; returns (status, body)."""
     entry_id = body.get("entry_id")
@@ -307,7 +368,11 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
             hints=hints,
         )
     except FactoryValidationError as exc:
-        return 400, _issues(*exc.issues)
+        via_inbox = _factory_send(project, entry_id, ranking_id, exc)
+        if via_inbox is None:
+            return 400, _issues(*exc.issues)
+        result = feed_service.resolve_sent(project, actor, via_inbox, sources=_sources())
+        return 200, {"ok": True, "via": "inbox", **result.model_dump(mode="json")}
     except FactoryError as exc:
         return 403, _issues(ValidationIssue("permission", str(exc)))
     return 200, {"ok": True, **result.model_dump(mode="json")}
@@ -726,6 +791,7 @@ def feed_refetch_here(_project: Project, _body: dict[str, Any]) -> tuple[int, di
 
 _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     "/api/feed/react": feed_react,
+    "/api/feed/send": feed_send,
     "/api/feed/add": feed_add,
     "/api/feed/configure": feed_configure,
     "/api/watch/configure": watch_configure,
@@ -1349,7 +1415,11 @@ def _handler_class(
                 return
             mount = resolve(self.path)
             if mount is None:
-                answer = None if portal is None else portal(full)
+                answer = (
+                    None
+                    if portal is None
+                    else portal(self.path.split("#", 1)[0] if full.startswith("/feed") else full)
+                )
                 if answer is None:
                     self._deny(404, "not found")
                     return
@@ -1898,6 +1968,17 @@ class FeedTimer:
             self._stop.wait(self._every)
 
 
+@dataclass(frozen=True)
+class FactoryFeedEnv:
+    """What the factory feed's hub acts need: the settings (the root), this server's session and
+    clock, and the encoder factory (default: SPECTER2 from the configured directory)."""
+
+    settings: Settings
+    session: str
+    clock: Clock
+    embedder_factory: Callable[[], Embedder] = Specter2Embedder
+
+
 class MainHub:
     """The parts of the main server that know several projects: which exist (scanned under the
     factory root, each time), their slots (opened on first use, each with its hub written at once)
@@ -1916,8 +1997,12 @@ class MainHub:
         feed: FeedRunner | None = None,
         feed_every: float = FEED_CHECK_EVERY,
         create: Callable[[object, object, object], site_create.Created] | None = None,
+        factory_feed: FactoryFeedEnv | None = None,
     ) -> None:
         self.feed = feed
+        self._factory_feed = factory_feed
+        self._train_lock = threading.Lock()
+        """Held while a Train runs: a second one is refused (409), not run in parallel."""
         self._create = create
         self.auth: site_auth.Authenticator = site_auth.LoopbackTokenAuth()
         """The seam; `make_main_server` may replace it before serving."""
@@ -2033,10 +2118,8 @@ class MainHub:
                 feed_panel=panel,
             )
             return 200, "text/html; charset=utf-8", page.encode()
-        if path in ("/feed", "/feed/"):
-            if path == "/feed":
-                return 301, "/feed/", b""
-            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if path.partition("?")[0] == "/feed" or path.startswith("/feed/"):
+            return self.feed_route(path)
         if path in ("/backlog", "/catalog"):
             return 301, path + "/", b""
         if path == "/backlog/":
@@ -2077,8 +2160,106 @@ class MainHub:
             )
         return views
 
+    def feed_route(self, target: str) -> tuple[int, str, bytes] | None:
+        """The answer for a path under `/feed/` (`target` keeps its query): the factory feed pages,
+        the classic tab-per-project page at `/feed/classic/` and the page's assets."""
+        url, _, query = target.partition("?")
+        keep = "?" + query if query else ""
+        if url in ("/feed", "/feed/classic"):
+            return 301, url + "/" + keep, b""
+        if url == "/feed/classic/":
+            return 200, "text/html; charset=utf-8", self.feed_page().encode()
+        if url.startswith(site_factory_feed.ASSET_PREFIX):
+            found = site_factory_feed.asset(url[len(site_factory_feed.ASSET_PREFIX) :])
+            return None if found is None else (200, found[1], found[0])
+        env = self._factory_feed
+        if env is None:
+            if url != "/feed/":
+                return None
+            off = site_factory_feed.render_off(self.hub_token())
+            return 200, "text/html; charset=utf-8", off.encode()
+        args = parse_qs(query)
+        if url in ("/feed/liked", "/feed/reading", "/feed/project") or (
+            url.startswith("/feed/project/") and not url.endswith("/")
+        ):
+            return 301, url + "/" + keep, b""
+        if url not in ("/feed/", "/feed/liked/", "/feed/reading/") and not url.startswith(
+            "/feed/project/"
+        ):
+            return None
+        ctx = self._feed_context(env)
+        if url == "/feed/":
+            sort: Literal["ranked", "newest"] = (
+                "newest" if args.get("sort", [""])[0] == "newest" else "ranked"
+            )
+            try:
+                number = int(args.get("page", ["1"])[0])
+            except ValueError:
+                number = 1
+            page = factory_feed.today(
+                env.settings, page=number, sort=sort, hide_labelled=True, clock=env.clock
+            )
+            doc = site_factory_feed.render_today(ctx, page)
+        elif url == "/feed/liked/":
+            doc = site_factory_feed.render_liked(
+                ctx,
+                factory_feed.liked(env.settings, clock=env.clock),
+                factory_feed.disliked(env.settings, clock=env.clock),
+            )
+        elif url == "/feed/reading/":
+            doc = site_factory_feed.render_reading(
+                ctx, factory_feed.reading_list(env.settings, clock=env.clock)
+            )
+        else:
+            slug = url[len("/feed/project/") :].strip("/")
+            info = next((p for p in ctx.projects if p.slug == slug), None)
+            if info is None:
+                return None
+            key = args.get("window", [site_factory_feed.DEFAULT_WINDOW])[0]
+            windows = {k: days for k, _, days in site_factory_feed.WINDOWS}
+            if key not in windows:
+                key = site_factory_feed.DEFAULT_WINDOW
+            cards = factory_feed.project_view(
+                env.settings, slug, window_days=windows[key], clock=env.clock
+            )
+            doc = site_factory_feed.render_project(ctx, info, cards, key)
+        return 200, "text/html; charset=utf-8", doc.encode()
+
+    def _feed_context(self, env: FactoryFeedEnv) -> site_factory_feed.PageContext:
+        """What every factory feed page shows besides its own list: the projects that have a feed
+        configuration (with their tokens), the sidebar's counts and the ranker's state. Kept by
+        `factory_feed.cached` while no event is appended (and for its TTL at most)."""
+        return factory_feed.cached(env.settings, "context", lambda: self._build_feed_context(env))
+
+    def _build_feed_context(self, env: FactoryFeedEnv) -> site_factory_feed.PageContext:
+        registry = site_portal.load_registry(self._root)
+        infos = []
+        for slug, title in site_portal.listed(self._slugs(), registry):
+            found = self.slot(slug)
+            if found is None:
+                continue
+            config = feed_service.current_config(found.project)
+            if config is None:
+                continue
+            infos.append(
+                site_factory_feed.ProjectInfo(
+                    slug,
+                    title,
+                    self.auth.page_credential(site_auth.Scope(slug)),
+                    tuple(config.categories),
+                )
+            )
+        snapshot = factory_feed.today(env.settings, page=1, page_size=1, clock=env.clock)
+        return site_factory_feed.PageContext(
+            hub_token=self.hub_token(),
+            projects=tuple(infos),
+            counts=factory_feed.counts(env.settings, clock=env.clock),
+            status=factory_feed_actions.ranker_status(env.settings, clock=env.clock),
+            ranking_id=snapshot.ranking_id,
+        )
+
     def feed_page(self) -> str:
-        """The `/feed/` page, read from every listed project's events at request time."""
+        """The classic `/feed/classic/` page, read from every project's events at request time."""
         return site_hub_feed.render_feed_page(
             self.feed_views(), site_hub_feed.runner_payload(self.feed), self.hub_token()
         )
@@ -2138,8 +2319,85 @@ class MainHub:
             return 400, _issues(ValidationIssue("project", "unknown project"))
         return inbox_add_in(found, body)
 
+    def factory_react(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """`POST /api/feed/react` on the main hub: a reaction in the factory scope as the local
+        human (`factory feed react --scope factory`)."""
+        env = self._factory_feed
+        if env is None:
+            return 503, _issues(ValidationIssue("feed", "the factory feed is off"))
+        entry_id = body.get("entry_id")
+        ranking_id, bad = _optional_str(body, "ranking_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            bad.append(ValidationIssue("entry_id", "required"))
+        rank = body.get("rank_shown")
+        if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
+            bad.append(ValidationIssue("rank_shown", "must be a positive integer"))
+        score = body.get("score_shown")
+        if score is not None and (not isinstance(score, int | float) or isinstance(score, bool)):
+            bad.append(ValidationIssue("score_shown", "must be a number"))
+        reaction = body.get("reaction")
+        if not isinstance(reaction, str):
+            bad.append(ValidationIssue("reaction", "required"))
+        if bad:
+            return 400, _issues(*bad)
+        assert isinstance(entry_id, str) and isinstance(reaction, str)
+        try:
+            event_id = factory_feed_actions.react(
+                env.settings,
+                entry_id=entry_id,
+                reaction=reaction,
+                ranking_id=ranking_id,
+                rank_shown=rank,
+                score_shown=None if score is None else float(score),
+                session=env.session,
+                clock=env.clock,
+            )
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        return 200, {"ok": True, "event_id": event_id, "reaction": reaction}
+
+    def factory_train(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """`POST /api/feed/train` on the main hub: train the general ranker now (the Train
+        button), as `factory feed train`. A missing extra or weights is a structured 400."""
+        env = self._factory_feed
+        if env is None:
+            return 503, _issues(ValidationIssue("feed", "the factory feed is off"))
+        if body:
+            return 400, _issues(ValidationIssue("body", "takes no fields"))
+        if not self._train_lock.acquire(blocking=False):
+            return 409, _issues(ValidationIssue("train", "training-in-progress"))
+        try:
+            result = factory_feed_actions.train(
+                env.settings,
+                env.embedder_factory(),
+                session=env.session,
+                clock=env.clock,
+                command_ref="hub:feed train",
+            )
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        except Exception:  # the encoder (RuntimeError, OSError, out of memory): a body, not a drop
+            _LOG.exception("the factory feed training failed")
+            return 500, _issues(ValidationIssue("train", "training-failed: see the hub log"))
+        finally:
+            self._train_lock.release()
+        return 200, {
+            "ok": True,
+            "ranker_version": result.version,
+            "likes": result.likes,
+            "dislikes": result.dislikes,
+            "training_set_hash": result.training_set_hash,
+            "ranking_id": result.ranking_id,
+        }
+
     def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
         return {
+            "/api/feed/react": self.factory_react,
+            "/api/feed/train": self.factory_train,
             "/api/feed/run": lambda _body: self.start_feed_run(refetch=False),
             "/api/feed/refetch": lambda _body: self.start_feed_run(refetch=True),
             "/api/projects/create": self.create_project,

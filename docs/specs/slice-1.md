@@ -62,7 +62,7 @@ Full text and claim extraction; PubMed and other sources; graph, regions and lab
 15. **Seed check:** after search, every positive seed is retrieved or carries an explanation and admission route; otherwise `check` fails.
 16. **Quotes:** a screening rationale whose quote is not verbatim in the title/abstract is rejected.
 17. **Independence recorded:** each pass records model, framing and criterion order; `screen_agreement` refuses to compute κ for two passes with identical configuration.
-18. **Calibration and audit:** screening is blocked until the calibration set is labelled; `audit_sample` draws ≥2% (min. 50) of agreed decisions, 3:1 towards exclusions; error rates are reported.
+18. **Calibration and audit:** screening is blocked until the calibration set is labelled; `audit_sample` draws ≥2% (min. 50; in pilot the researcher's choice of 10, 20, 30, 40 or 50, decision 170) of agreed decisions, 3:1 towards exclusions; error rates are reported.
 19. **Deviations vs. amendments** are stored separately and both appear in the methods statement.
 20. **Promotion:** `check --promote-to systematic` on a pilot project lists the missing items (e.g. single-pass records, missing audit).
 21. **Quality:** `mypy --strict` and ruff pass; coverage ≥ 90% for `services/` and `model/`.

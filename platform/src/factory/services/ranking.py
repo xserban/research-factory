@@ -66,9 +66,14 @@ class RankingView(StrictModel):
     ranked: list[RankedWork]
 
 
+def entry_text(title: str, abstract: str | None) -> str:
+    """The embedded text of a title and abstract: `title [SEP] abstract`."""
+    return f"{title.strip()} {SEPARATOR} {(abstract or '').strip()}".strip()
+
+
 def ranking_text(work: Work) -> str:
     """The embedded text of a work: `title [SEP] abstract`."""
-    return f"{work.title.strip()} {SEPARATOR} {(work.abstract or '').strip()}".strip()
+    return entry_text(work.title, work.abstract)
 
 
 def to_rank(project: Project) -> list[str]:

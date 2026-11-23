@@ -87,6 +87,7 @@ FEED_SPEC = ModuleSpec(
             "feed.configured",
             "feed.fetched",
             "feed.ranked",
+            "feed.ranker_trained",
             "feed.reacted",
             "feed.sent",
         ),

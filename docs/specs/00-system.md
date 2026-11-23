@@ -27,6 +27,7 @@ research-factory/
   plugin/                   Claude Code plugin: research skills, subagents, hooks (+ provenance manifest)
   domain-packs/             (not created; see note) vocabularies, extraction schemas, gold sets
   projects/<slug>/          one directory per research project (data; see §4)
+  factory/                  the factory scope: researcher-level feed reactions and ranker (§4.1)
   docs/                     vision, decisions, specs, plans
 ```
 
@@ -60,6 +61,8 @@ IDs are never reused and never change. A changed entity is a new version or a su
 ### 4.1 Events are the source of truth
 - Append-only JSON Lines files in git: `projects/<slug>/events/<actor>/<session-ULID>.jsonl`. One file per writing session → no write contention; git merges are conflict-free (different files).
 - Events are never edited or deleted. Corrections are new events that supersede earlier ones.
+
+*Factory scope (decision 169, proposed).* Events that belong to the researcher rather than to one project, namely the general feed reactions and the general feed ranker, live in a second scope at `<factory root>/factory/`, laid out as a project directory (`events/<actor>/<session-ULID>.jsonl`, `blobs/sha256/…`, `.index/factory.sqlite`). The envelope is unchanged; `project` is the reserved value `_factory`, which is not a valid project slug, and `factory init` and the hub's project creation refuse it. The scope accepts only `feed.reacted`, `feed.ranked` and `feed.ranker_trained`; any other type is refused at the boundary with nothing written. It has its own projector and its own `FACTORY_PROJECTION_VERSION`, so a project projection bump never rebuilds it, nor the reverse. It is not a project: project listings and `--all` loops do not include it.
 
 ### 4.2 Event envelope
 ```json

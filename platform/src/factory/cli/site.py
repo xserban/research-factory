@@ -163,6 +163,7 @@ def site_serve_cmd(
             create=lambda slug, title, profile: create_project(
                 state.settings, slug, title, profile, session=state.session, clock=state.clock
             ),
+            factory_feed=server_service.FactoryFeedEnv(state.settings, state.session, state.clock),
         )
         with _reporting_errors():
             main_server = server_service.make_main_server(hub, port)
