@@ -93,7 +93,7 @@ $$('.chip[data-cat]').forEach(function(ch){
   });
 });
 $$('.fx-cat').forEach(function(b){b.addEventListener('click',function(){
-  var ch=$('.chip[data-cat="'+b.dataset.cat+'"]');if(ch)ch.click();
+  var ch=$('.chip[data-cat="'+CSS.escape(b.dataset.cat)+'"]');if(ch)ch.click();
 });});
 var sort=$('#fx-sort');
 if(sort)sort.addEventListener('change',function(){location.href=sort.dataset.base+'?sort='+encodeURIComponent(sort.value);});

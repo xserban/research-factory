@@ -542,3 +542,19 @@ def test_click_text_filter_and_category_chip(served: tuple[int, Settings]) -> No
     assert result["done"] and not result["errors"], result
     s = result["steps"]
     assert s["shown"] == 1 and s["all"] >= 5 and s["chip_pressed"] == "true"
+
+
+def test_redirects_keep_the_query(served: tuple[int, Settings]) -> None:
+    import http.client
+
+    port, _ = served
+    for path, location in (
+        ("/feed?sort=newest", "/feed/?sort=newest"),
+        ("/feed/project/alpha?window=all", "/feed/project/alpha/?window=all"),
+    ):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        assert resp.status == 301 and resp.getheader("Location") == location

@@ -2077,7 +2077,7 @@ class MainHub:
                 feed_panel=panel,
             )
             return 200, "text/html; charset=utf-8", page.encode()
-        if path == "/feed" or path.startswith("/feed/"):
+        if path.partition("?")[0] == "/feed" or path.startswith("/feed/"):
             return self.feed_route(path)
         if path in ("/backlog", "/catalog"):
             return 301, path + "/", b""
@@ -2123,8 +2123,9 @@ class MainHub:
         """The answer for a path under `/feed/` (`target` keeps its query): the factory feed pages,
         the classic tab-per-project page at `/feed/classic/` and the page's assets."""
         url, _, query = target.partition("?")
+        keep = "?" + query if query else ""
         if url in ("/feed", "/feed/classic"):
-            return 301, url + "/", b""
+            return 301, url + "/" + keep, b""
         if url == "/feed/classic/":
             return 200, "text/html; charset=utf-8", self.feed_page().encode()
         if url.startswith(site_factory_feed.ASSET_PREFIX):
@@ -2140,7 +2141,7 @@ class MainHub:
         if url in ("/feed/liked", "/feed/reading", "/feed/project") or (
             url.startswith("/feed/project/") and not url.endswith("/")
         ):
-            return 301, url + "/", b""
+            return 301, url + "/" + keep, b""
         if url not in ("/feed/", "/feed/liked/", "/feed/reading/") and not url.startswith(
             "/feed/project/"
         ):
