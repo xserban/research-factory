@@ -1,30 +1,37 @@
 name: Tests
 
-# The offline test suite (the same selection as a local run: `-m 'not network and not slow'`),
-# split into four shards of test files and run in parallel with pytest-xdist inside each shard.
-# Required: `static` and the four `tests` shards are required checks on main (branch protection),
-# so a failure blocks the merge. They were report-only until the first fully green run (2026-11-20).
-# The slowest 25 tests of every shard are printed in the run summary, to find the cost.
-#
-# Tiers: a pull request runs only the tests its change can reach (scripts/affected_tests.py: the
-# import graph plus a small always-run set; suite-wide files select everything); every push to
-# main, the nightly run and a manual run execute the whole suite. The nightly run adds the `slow`
-# suites (acceptance and scale files excluded from a normal run).
+# Tiers (docs/runbook-ci.md):
+# - A pull request and a push to main run only the tests the change touches: the coverage map
+#   recorded by the last nightly run (which tests executed which source files) with the import
+#   rules of scripts/affected_tests.py as the fallback and for files the map does not know.
+#   Suite-wide files (pyproject, lock, conftest, this workflow, the script) select everything, and
+#   so does the label `full-tests` on a pull request.
+# - The nightly run (03:00 UTC) and a manual dispatch run the whole suite including the `slow`
+#   suites, record the coverage map and the per-file durations (artifact `selection-map`), and,
+#   when they fail, open or update one issue "Nightly full run failed".
+# Required checks on main: `ruff + mypy --strict` and `tests (shard 0..3 of 4)`; every shard runs
+# on every run (a shard with nothing selected passes). `tests (browser)` is not required.
+# The files are split into the shards by their measured duration; the headless-browser files run
+# in their own job so they do not wait in a shard. The slowest 25 tests of every job are printed
+# in the run summary.
 
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 3 * * *"  # nightly, 03:00 UTC: everything, including the slow suites
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  # A new push to a pull request cancels the superseded run; runs on main are never cancelled.
+  group: tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
   run:
@@ -38,28 +45,56 @@ jobs:
     outputs:
       mode: ${{ steps.pick.outputs.mode }}
       slow: ${{ steps.pick.outputs.slow }}
+      nightly: ${{ steps.pick.outputs.nightly }}
+      browser: ${{ steps.pick.outputs.browser }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: pick
         working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-tests') }}
         run: |
-          slow=false
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python3 scripts/affected_tests.py --base "origin/${{ github.base_ref }}" > plan.txt
-          else
+          slow=false; nightly=false; full=false; base=""
+          case "$EVENT" in
+            schedule|workflow_dispatch) full=true; slow=true; nightly=true ;;
+            pull_request) base="origin/$BASE_REF"; [ "$FULL_LABEL" = true ] && full=true ;;
+            push)
+              base="$BEFORE"
+              # a new branch or a force push has no usable previous commit: run everything
+              if [ -z "$BEFORE" ] || [ "${BEFORE//0/}" = "" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then full=true; fi ;;
+          esac
+          if [ "$full" = true ]; then
             echo "mode=all" > plan.txt
-            [ "${{ github.event_name }}" = "schedule" ] && slow=true
+            echo "plan: mode=all (event $EVENT, full run requested)" > plan.log
+          else
+            # the latest unexpired coverage map written by a nightly run on main (optional)
+            id=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=selection-map&per_page=30" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")][0].workflow_run.id // empty' || true)
+            if [ -n "$id" ] && gh run download "$id" -n selection-map -D mapdir; then mv mapdir/map.json map.json; fi
+            map=""; [ -f map.json ] && map="--map map.json"
+            python3 scripts/affected_tests.py --base "$base" $map > plan.txt 2> plan.log
           fi
+          cat plan.log
           mode=$(head -1 plan.txt | cut -d= -f2)
+          browser=$(python3 scripts/affected_tests.py --browser --plan plan.txt | wc -l)
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "slow=$slow" >> "$GITHUB_OUTPUT"
-          { echo "### Plan: $mode"; if [ "$mode" = touched ]; then echo "$(($(wc -l < plan.txt) - 1)) test files"; fi; } >> "$GITHUB_STEP_SUMMARY"
+          echo "nightly=$nightly" >> "$GITHUB_OUTPUT"
+          echo "browser=$([ "$browser" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          { echo "### Plan"; echo '```'; cat plan.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: plan
-          path: plan.txt
+          path: |
+            plan.txt
+            map.json
+          if-no-files-found: warn
 
   static:
     name: ruff + mypy --strict
@@ -115,23 +150,27 @@ jobs:
           name: plan
           path: platform
       - name: Pick this shard's files
-        # Round-robin over the sorted file list (all, or the planned ones): stable, and
-        # neighbouring (related, similarly heavy) files land in different shards.
+        # Balanced by recorded duration (longest first onto the lightest shard); the browser
+        # files are left to their own job. A shard with no files passes.
         run: |
-          if [ "${{ needs.plan.outputs.mode }}" = touched ]; then
-            tail -n +2 plan.txt | sort > all.txt
-          else
-            find tests -name 'test_*.py' -not -path '*/__pycache__/*' | sort > all.txt
-          fi
-          awk -v s=${{ matrix.shard }} 'NR % 4 == s' all.txt > shard.txt
+          python3 ../scripts/affected_tests.py --plan plan.txt --shard ${{ matrix.shard }} --of 4 \
+            $([ -f map.json ] && echo --map map.json) > shard.txt
           echo "files in this shard: $(wc -l < shard.txt)"
       - name: Run
         run: |
           [ -s shard.txt ] || { echo "nothing to run in this shard"; exit 0; }
           marker="not network and not slow"
           [ "${{ needs.plan.outputs.slow }}" = true ] && marker="not network"
+          cov=""
+          [ "${{ needs.plan.outputs.nightly }}" = true ] && cov="--cov=factory --cov-context=test --cov-config=.coveragerc-map --cov-report="
           uv run --with numpy pytest $(cat shard.txt) -q -p no:cacheprovider -n auto --dist loadfile \
-            -m "$marker" --durations=25 --junitxml=junit-${{ matrix.shard }}.xml
+            -m "$marker" --durations=25 --junitxml=junit-${{ matrix.shard }}.xml $cov
+      - name: Coverage map part (nightly)
+        if: needs.plan.outputs.nightly == 'true' && !cancelled()
+        run: |
+          [ -f .coverage ] || { echo "no coverage data"; exit 0; }
+          uv run python ../scripts/make_coverage_map.py --out map-part-${{ matrix.shard }}.json \
+            --data .coverage --junit junit-${{ matrix.shard }}.xml
       - name: Summary
         if: always()
         run: |
@@ -156,3 +195,132 @@ jobs:
           name: junit-${{ matrix.shard }}
           path: platform/junit-${{ matrix.shard }}.xml
           retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: needs.plan.outputs.nightly == 'true' && !cancelled()
+        with:
+          name: map-part-${{ matrix.shard }}
+          path: platform/map-part-${{ matrix.shard }}.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+  browser:
+    name: tests (browser)
+    # Not a required check. The headless-browser files (scripts/affected_tests.py BROWSER) run
+    # here, in parallel with the shards, and only when the plan selects one of them. The tests
+    # skip themselves when chromium is not on PATH.
+    needs: plan
+    if: needs.plan.outputs.browser == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: platform/uv.lock
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan
+          path: platform
+      - name: Run
+        run: |
+          python3 ../scripts/affected_tests.py --plan plan.txt --browser > browser.txt
+          cat browser.txt
+          cov=""
+          [ "${{ needs.plan.outputs.nightly }}" = true ] && cov="--cov=factory --cov-context=test --cov-config=.coveragerc-map --cov-report="
+          uv run --with numpy pytest $(cat browser.txt) -q -p no:cacheprovider -n 2 --dist loadfile \
+            -m "not network" --durations=25 --junitxml=junit-browser.xml $cov
+      - name: Coverage map part (nightly)
+        if: needs.plan.outputs.nightly == 'true' && !cancelled()
+        run: |
+          [ -f .coverage ] || exit 0
+          uv run python ../scripts/make_coverage_map.py --out map-part-browser.json \
+            --data .coverage --junit junit-browser.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: junit-browser
+          path: platform/junit-browser.xml
+          retention-days: 14
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v7
+        if: needs.plan.outputs.nightly == 'true' && !cancelled()
+        with:
+          name: map-part-browser
+          path: platform/map-part-browser.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+  refresh-map:
+    name: refresh selection map (nightly)
+    # Merges the shards' parts into the one artifact the pull-request runs download. Artifact
+    # retention is 14 days; the selector ignores a map older than 7 days.
+    needs: [plan, tests, browser]
+    if: always() && needs.plan.outputs.nightly == 'true' && needs.tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: map-part-*
+          path: parts
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: junit-*
+          path: junit
+          merge-multiple: true
+      - name: Merge
+        working-directory: .
+        run: |
+          python3 scripts/make_coverage_map.py --out map.json --merge parts/*.json --junit junit/*.xml
+          ls -l map.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: selection-map
+          path: map.json
+          retention-days: 14
+
+  nightly-report:
+    name: nightly failure issue
+    needs: [plan, tests, browser]
+    if: always() && needs.plan.outputs.nightly == 'true' && (needs.tests.result == 'failure' || needs.browser.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: junit-*
+          path: junit
+          merge-multiple: true
+      - name: List the failing tests
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          lines = []
+          for f in sorted(glob.glob("junit/*.xml")):
+              for c in ET.parse(f).getroot().iter("testcase"):
+                  if c.find("failure") is not None or c.find("error") is not None:
+                      lines.append(f"- `{c.get('classname')}::{c.get('name')}`")
+          open("failures.md", "w").write("\n".join(lines[:200]) or "No failing test in the reports (a job failed before reporting).")
+          PY
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Nightly full run failed';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `Run: ${run}\n\n${fs.readFileSync('failures.md', 'utf8')}`;
+            const open = await github.paginate(github.rest.issues.listForRepo, {...context.repo, state: 'open', per_page: 100});
+            const existing = open.find(i => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.update({...context.repo, issue_number: existing.number, body});
+            } else {
+              await github.rest.issues.create({...context.repo, title, body});
+            }

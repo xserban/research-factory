@@ -1,0 +1,4 @@
+[run]
+branch = false
+source = factory
+parallel = true
