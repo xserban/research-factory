@@ -171,6 +171,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/explore.js": ("hub_ui/pages/explore.js", "text/javascript; charset=utf-8"),
     "pages/graph.js": ("hub_ui/pages/graph.js", "text/javascript; charset=utf-8"),
     "pages/landscape.js": ("hub_ui/pages/landscape.js", "text/javascript; charset=utf-8"),
+    "pages/ideas.js": ("hub_ui/pages/ideas.js", "text/javascript; charset=utf-8"),
     "pages/miners.js": ("hub_ui/pages/miners.js", "text/javascript; charset=utf-8"),
     "pages/data.js": ("hub_ui/pages/data.js", "text/javascript; charset=utf-8"),
     "pages/findings.js": ("hub_ui/pages/findings.js", "text/javascript; charset=utf-8"),
@@ -384,6 +385,7 @@ PAGES: Final[dict[str, PageSpec]] = {
     "lenses": PageSpec("lenses", "Lenses", "pages/lenses.js", ("shell", "lenses")),
     "explore": PageSpec("explore", "Explore", "pages/explore.js", ("shell", "explore")),
     "graph": PageSpec("graph", "Graph", "pages/graph.js", ("shell", "graph")),
+    "ideas": PageSpec("ideas", "Ideas", "pages/ideas.js", ("shell", "ideas")),
     "landscape": PageSpec(
         "landscape",
         "Landscape",
