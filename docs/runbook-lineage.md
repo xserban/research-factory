@@ -26,7 +26,7 @@ A relation needs a contribution item as its basis (`services/relations.py`). Its
 2. **Nothing else running.** No wave, hub build or miner session on the project (index rebuild guard, `docs/runbook-living.md`, "One code line per pilot").
 3. **Converted full text and reference extractions** for the chosen papers. `factory document status` and `factory references status` show them. The proposed ten (Appendix A) all appear in the reference-extraction citation list at `ops/technique-trial-2026-11-14/night/shallow/cites-core.json` and in `night/core.txt` with a pinned conversion; this was read from files, not from the live index.
 4. **A `contribution_schema` in the protocol.** The current protocol has none (no protocol event read for this runbook contains one). Recording is refused until it is declared (step 3). This is a human act and is the first event of the run.
-5. **The ten papers are approved** by the researcher (Appendix A is a proposal).
+5. **The ten papers are approved** by the researcher (Appendix A, 2026-11-23).
 6. **Work selection by allow-list (PR #46, merged).** The contribution schema carries an optional `works` list of work ids; absent means every included work (the old behaviour). `contribution_next`, pass B, the audit, `check` and lineage all read the same restricted population, and `contribution_status` / `contribution_next` report the list (`listed`, `eligible`, `not_eligible`). `FACTORY_UNIT_CAP` and `--cap N` still apply within the list. Setting or changing the list is a protocol amendment (step 3).
 7. Held-out rule: do not open `docs/pilot/heldout-seeds.md` or the project's `ops/private/`. A reflink copy of the project contains `ops/private/`; the rule applies to the copy too.
 
@@ -269,7 +269,10 @@ Researcher time is larger than agent time: agreement resolution, the audit and c
 - **O8.** Token and time figures are estimates (section 9).
 - **O9.** `factory site serve` options and the hub path of the Ideas page were not read; follow its own help.
 
-## Appendix A. Proposed ten core papers (proposal, researcher approves)
+## Appendix A. The ten core papers (proposed by the runbook author; approved one by one by the researcher on 2026-11-23)
+
+Status: all ten approved without change. The list is kept in `ops/lineage-ten.txt` of the project (one work id per line) and is the source for the `works` list of step 3. Checked read-only on 2026-11-23: all ten are works in the live index with a live reference extraction on a converted document (docling for rows 1, 3, 4, 7; latexml-html for the others). Row 1's docling conversion yielded only 4 reference markers, so its outgoing edges will be few. Inclusion status is not checked here: `contribution_status` reports it (`eligible`, `not_eligible`) after the amendment.
+
 
 Derived without running any model, from files already on disk: the 95-paper core list (`ops/technique-trial-2026-11-14/night/core.txt`), the in-corpus citation edges among core papers from reference extraction (`night/shallow/cites-core.json`, 185 edges), and the lineage statements in the technique notes and codebook (`night/codebook-ideation-v1.md`, agent-written and unverified). Selection rule: cover the research lifecycle (hypothesis generation and ranking, experiment and data analysis, review and verification, the surrounding agent systems), and make the graph non-trivial by choosing papers with citation edges among them. Titles are as printed in the technique notes.
 
