@@ -1,6 +1,6 @@
 # Factory feed: a general like/dislike ranker and per-project scores in the main hub (plan, 2026-11-23)
 
-Status: built on branch factory-feed, reviewed (fixes in), not merged. Extends IDEA-58 (port of arXiv Miner) and slice 4c (`docs/specs/slice-4c-feed.md`, rulings 4 and 8). Decision 169 proposed.
+Status: built, reviewed (fixes in), merged to main (PR #35, 49f54f4f). Extends IDEA-58 (port of arXiv Miner) and slice 4c (`docs/specs/slice-4c-feed.md`, rulings 4 and 8). Decision 169 decided (2026-11-23).
 
 ## 1. Goal
 
@@ -8,7 +8,7 @@ The main hub (`factory site serve --all`) gets a paper-feed page that works like
 
 ## 2. Rulings (researcher, 2026-11-23)
 
-1. **Storage.** General reactions and the general ranker live in a new factory-level event log, not in a project. This extends `00-system` §4.1, which keeps events per project only (decision 169, proposed).
+1. **Storage.** General reactions and the general ranker live in a new factory-level event log, not in a project. This extends `00-system` §4.1, which keeps events per project only (decision 169).
 2. **Layout.** arXiv Miner's layout:
    - Today, ordered by the general classifier, with project badges;
    - one page per project, ordered by that project's score;

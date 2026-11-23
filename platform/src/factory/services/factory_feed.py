@@ -1,4 +1,4 @@
-"""The factory feed (decision 169, proposed): one pool, one general order, a score per project.
+"""The factory feed (decision 169): one pool, one general order, a score per project.
 
 The pool is the arXiv entries every project's feed has fetched, one entry per arXiv id. Each
 project that has a feed configuration scores every entry by the feed's own measure, the maximum

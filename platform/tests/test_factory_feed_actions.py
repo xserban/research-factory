@@ -1,4 +1,4 @@
-"""Factory feed writes: react, train and the ranker's status (decision 169, proposed).
+"""Factory feed writes: react, train and the ranker's status (decision 169).
 
 Same world as `test_factory_feed` (two projects, a fake embedder with chosen vectors; no network,
 torch or weights), enlarged to six entries so that training can pass its thresholds."""

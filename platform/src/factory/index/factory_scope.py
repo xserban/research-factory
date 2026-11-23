@@ -1,7 +1,7 @@
 """The factory scope's catalog and projection: `<root>/factory/.index/factory.sqlite`.
 
 Versioned on its own (`FACTORY_PROJECTION_VERSION`), apart from the project index: a project
-projection bump never rebuilds it, nor the reverse (decision 169, proposed).
+projection bump never rebuilds it, nor the reverse (decision 169).
 
 Invariants:
 - Every handler is total: a malformed payload, or an event that fails a guard, changes nothing, on

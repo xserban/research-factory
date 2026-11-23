@@ -25,8 +25,8 @@ Invariants:
   `score_shown`: a human `feed.reacted` in the factory scope, `cli:feed react --scope factory`;
   the project-page route of the same path is the project's own), `POST /api/feed/train` (no
   body fields; trains the factory feed's general ranker and ranks the pool, `cli:feed train`;
-  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision 169,
-  proposed) and
+  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision
+  169) and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
   and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional

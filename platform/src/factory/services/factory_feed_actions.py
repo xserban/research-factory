@@ -1,4 +1,4 @@
-"""The factory feed's writes: react, train, and the ranker's status (decision 169, proposed).
+"""The factory feed's writes: react, train, and the ranker's status (decision 169).
 
 Invariants:
 - A reaction is a human act in the factory scope. An entry in no factory ranking's order is
