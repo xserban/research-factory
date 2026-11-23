@@ -20,7 +20,13 @@ Invariants:
   (`work_ids`, optional `pdfs`; IDEA-87) answers a zip of the chosen works' converted Markdown and
   manifest as the local human (`cli:export works`), read-only, body limit
   `MAX_EXPORT_BODY`; nothing is withheld. Hub acts (main server, hub
-  token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create` and
+  token): `POST /api/feed/run`, `POST /api/feed/refetch`, `POST /api/projects/create`,
+  `POST /api/feed/react` (`entry_id`, `reaction`, optional `ranking_id`, `rank_shown`,
+  `score_shown`: a human `feed.reacted` in the factory scope, `cli:feed react --scope factory`;
+  the project-page route of the same path is the project's own), `POST /api/feed/train` (no
+  body fields; trains the factory feed's general ranker and ranks the pool, `cli:feed train`;
+  the thresholds, the missing `ranker` extra or weights answer 400 with the reason; decision 169,
+  proposed) and
   `POST /api/inbox/add` (`project`, `value`, optional `note`: captures one link as an inbox item
   as the local human, `cli:inbox add`; an identifier already in the inbox answers `duplicate`
   and writes nothing). A project page uses `POST /p/<slug>/api/inbox/add` (`value`, optional
@@ -80,6 +86,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -90,14 +97,16 @@ from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 
+from factory.clock import Clock
+from factory.config import Settings
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
 from factory.model.screening import Channel
 from factory.services import activity as activity_service
 from factory.services import dashboard as dashboard_service
 from factory.services import export_works as export_works_service
-from factory.services import feed as feed_service
 from factory.services import (
+    factory_feed_actions,
     hub_chat,
     hub_learn,
     hub_serve,
@@ -113,6 +122,7 @@ from factory.services import (
     work_layers,
     work_queue,
 )
+from factory.services import feed as feed_service
 from factory.services import inbox as inbox_service
 from factory.services import pipeline as pipeline_service
 from factory.services import resume as resume_service
@@ -123,6 +133,7 @@ from factory.services import watch_config as watch_config_service
 from factory.services.access import authorize_command, authorize_export_works
 from factory.services.context import Project
 from factory.services.hint_input import HintInput
+from factory.services.ranking_model import Embedder, Specter2Embedder
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
@@ -1857,6 +1868,17 @@ class FeedTimer:
             self._stop.wait(self._every)
 
 
+@dataclass(frozen=True)
+class FactoryFeedEnv:
+    """What the factory feed's hub acts need: the settings (the root), this server's session and
+    clock, and the encoder factory (default: SPECTER2 from the configured directory)."""
+
+    settings: Settings
+    session: str
+    clock: Clock
+    embedder_factory: Callable[[], Embedder] = Specter2Embedder
+
+
 class MainHub:
     """The parts of the main server that know several projects: which exist (scanned under the
     factory root, each time), their slots (opened on first use, each with its hub written at once)
@@ -1875,8 +1897,10 @@ class MainHub:
         feed: FeedRunner | None = None,
         feed_every: float = FEED_CHECK_EVERY,
         create: Callable[[object, object, object], site_create.Created] | None = None,
+        factory_feed: FactoryFeedEnv | None = None,
     ) -> None:
         self.feed = feed
+        self._factory_feed = factory_feed
         self._create = create
         self.auth: site_auth.Authenticator = site_auth.LoopbackTokenAuth()
         """The seam; `make_main_server` may replace it before serving."""
@@ -2097,8 +2121,78 @@ class MainHub:
             return 400, _issues(ValidationIssue("project", "unknown project"))
         return inbox_add_in(found, body)
 
+    def factory_react(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """`POST /api/feed/react` on the main hub: a reaction in the factory scope as the local
+        human (`factory feed react --scope factory`)."""
+        env = self._factory_feed
+        if env is None:
+            return 503, _issues(ValidationIssue("feed", "the factory feed is off"))
+        entry_id = body.get("entry_id")
+        ranking_id, bad = _optional_str(body, "ranking_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            bad.append(ValidationIssue("entry_id", "required"))
+        rank = body.get("rank_shown")
+        if rank is not None and (not isinstance(rank, int) or isinstance(rank, bool) or rank < 1):
+            bad.append(ValidationIssue("rank_shown", "must be a positive integer"))
+        score = body.get("score_shown")
+        if score is not None and (not isinstance(score, int | float) or isinstance(score, bool)):
+            bad.append(ValidationIssue("score_shown", "must be a number"))
+        reaction = body.get("reaction")
+        if not isinstance(reaction, str):
+            bad.append(ValidationIssue("reaction", "required"))
+        if bad:
+            return 400, _issues(*bad)
+        assert isinstance(entry_id, str) and isinstance(reaction, str)
+        try:
+            event_id = factory_feed_actions.react(
+                env.settings,
+                entry_id=entry_id,
+                reaction=reaction,
+                ranking_id=ranking_id,
+                rank_shown=rank,
+                score_shown=None if score is None else float(score),
+                session=env.session,
+                clock=env.clock,
+            )
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        return 200, {"ok": True, "event_id": event_id, "reaction": reaction}
+
+    def factory_train(self, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        """`POST /api/feed/train` on the main hub: train the general ranker now (the Train
+        button), as `factory feed train`. A missing extra or weights is a structured 400."""
+        env = self._factory_feed
+        if env is None:
+            return 503, _issues(ValidationIssue("feed", "the factory feed is off"))
+        if body:
+            return 400, _issues(ValidationIssue("body", "takes no fields"))
+        try:
+            result = factory_feed_actions.train(
+                env.settings,
+                env.embedder_factory(),
+                session=env.session,
+                clock=env.clock,
+                command_ref="hub:feed train",
+            )
+        except FactoryValidationError as exc:
+            return 400, _issues(*exc.issues)
+        except FactoryError as exc:
+            return 403, _issues(ValidationIssue("permission", str(exc)))
+        return 200, {
+            "ok": True,
+            "ranker_version": result.version,
+            "likes": result.likes,
+            "dislikes": result.dislikes,
+            "training_set_hash": result.training_set_hash,
+            "ranking_id": result.ranking_id,
+        }
+
     def acts(self) -> dict[str, Callable[[dict[str, Any]], tuple[int, dict[str, object]]]]:
         return {
+            "/api/feed/react": self.factory_react,
+            "/api/feed/train": self.factory_train,
             "/api/feed/run": lambda _body: self.start_feed_run(refetch=False),
             "/api/feed/refetch": lambda _body: self.start_feed_run(refetch=True),
             "/api/projects/create": self.create_project,

@@ -40,6 +40,8 @@ _T = TypeVar("_T")
 
 _ACTOR_KIND = {"feed.reacted": "human", "feed.ranker_trained": "system"}
 """The one actor kind that may write each type; `feed.ranked` may come from any non-human."""
+_NOT_HUMAN = frozenset({"feed.ranked"})
+"""Types a human actor may not write (the fold ignores them)."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,11 @@ class FactoryScope:
             ValidationIssue(f"events[{i}].actor", f"{e.type} is written by a {need} actor")
             for i, e in enumerate(events)
             if (need := _ACTOR_KIND.get(e.type)) is not None and e.actor.kind != need
+        ]
+        issues += [
+            ValidationIssue(f"events[{i}].actor", f"{e.type} is not written by a human actor")
+            for i, e in enumerate(events)
+            if e.type in _NOT_HUMAN and e.actor.kind == "human"
         ]
         issues += [
             ValidationIssue(f"events[{i}].type", f"{e.type!r} is not a factory-scope event type")

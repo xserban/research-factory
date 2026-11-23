@@ -60,9 +60,9 @@ def check_thresholds(labels: Mapping[str, bool]) -> TrainingShortfall | None:
 
 
 def training_set_hash(labels: Mapping[str, bool]) -> str:
-    """sha256 over the sorted (id, label) pairs."""
+    """Bare hex sha256 over the sorted (id, label) pairs."""
     pairs = [[k, bool(v)] for k, v in sorted(labels.items())]
-    return "sha256:" + hashlib.sha256(_dumps(pairs).encode("utf-8")).hexdigest()
+    return hashlib.sha256(_dumps(pairs).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

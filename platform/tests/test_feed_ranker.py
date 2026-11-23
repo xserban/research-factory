@@ -89,6 +89,7 @@ def test_training_set_hash_is_order_free_and_label_sensitive() -> None:
     h = fr.training_set_hash({"a": True, "b": False})
     assert h == fr.training_set_hash({"b": False, "a": True})
     assert h != fr.training_set_hash({"a": False, "b": False})
+    assert len(h) == 64 and set(h) <= set("0123456789abcdef")  # bare hex, as the model requires
 
 
 @pytest.mark.parametrize("text", ["", "{", "[]", '{"format": 2}', '{"format": 1}'])

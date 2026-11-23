@@ -21,8 +21,9 @@ from pydantic import ValidationError as PydanticValidationError
 
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.model.feed import FeedNote, FeedReaction
+from factory.services import factory_feed, feed_read
+from factory.services import factory_feed_actions as actions
 from factory.services import feed as feed_service
-from factory.services import feed_read
 from factory.services.access import authorize_command
 from factory.services.context import Project, list_projects, open_project
 from factory.services.hint_input import HintInput
@@ -44,6 +45,9 @@ ProjectOpt = Annotated[str | None, typer.Option("--project", help="Project slug.
 EntryArg = Annotated[str, typer.Argument(help="arXiv entry id, e.g. 2611.01234.")]
 _TITLE_WIDTH = 60
 _REACTIONS = ", ".join(r.value for r in FeedReaction)
+ScopeOpt = Annotated[
+    str, typer.Option("--scope", help="`project` (default) or `factory` (the general feed).")
+]
 
 
 def _exit_with_issues(issues: list[ValidationIssue]) -> NoReturn:
@@ -291,12 +295,32 @@ def feed_react_cmd(
     entry_id: EntryArg,
     reaction: Annotated[str, typer.Argument(help=f"One of: {_REACTIONS}.")],
     project: ProjectOpt = None,
+    scope: ScopeOpt = "project",
 ) -> None:
-    """Record a reaction to a shown entry. Human only."""
+    """Record a reaction to a shown entry. Human only. `--scope factory` reacts in the factory
+    feed (the only scope that takes `unset` and `unsave`)."""
     try:
         parsed = FeedReaction(reaction)
     except ValueError:
         _exit_with_issues([ValidationIssue("reaction", f"must be one of {_REACTIONS}")])
+    if scope not in ("project", "factory"):
+        _exit_with_issues([ValidationIssue("scope", "must be project or factory")])
+    if scope == "factory":
+        if project is not None:
+            _exit_with_issues([ValidationIssue("project", "--project and --scope factory differ")])
+        from factory.cli import main
+
+        state = main._state(ctx)
+        with _refusals():
+            event_id = actions.react(
+                state.settings,
+                entry_id=entry_id,
+                reaction=parsed,
+                session=state.session,
+                clock=state.clock,
+            )
+        typer.echo(f"reacted {parsed.value} to {entry_id} in the factory feed ({event_id})")
+        return
     opened = _open(ctx, project)
     with _refusals():
         event_id = feed_service.react(opened, opened.human_actor(), entry_id, parsed)
@@ -403,3 +427,63 @@ def feed_status_cmd(ctx: typer.Context, project: ProjectOpt = None) -> None:
         f"entries {status.entries} (held {status.held_entries}); fetches {status.fetches}; "
         f"rankings {status.rankings}; reactions {status.reactions}; sends {status.sends}"
     )
+
+
+@feed_app.command("train")
+def feed_train_cmd(ctx: typer.Context) -> None:
+    """Train the factory feed's general ranker on the likes and dislikes now, then rank the pool.
+
+    Never runs by itself. Needs at least 5 reactions, 3 of them likes, the `ranker` extra and the
+    encoder weights. Human only."""
+    from factory.cli import main
+
+    state = main._state(ctx)
+    with _refusals():
+        result = actions.train(
+            state.settings,
+            Specter2Embedder(),
+            session=state.session,
+            clock=state.clock,
+            command_ref=state.tool,
+        )
+    typer.echo(
+        f"trained ranker v{result.version} on {result.likes} like(s) and {result.dislikes} "
+        f"dislike(s) (training set {result.training_set_hash[:12]}, {result.skipped} outside the "
+        f"pool, event {result.event_id}); ranking {result.ranking_id or '-'}"
+    )
+
+
+@feed_app.command("today")
+def feed_today_cmd(
+    ctx: typer.Context,
+    page: Annotated[int, typer.Option("--page", min=1, help="Page of 100.")] = 1,
+    sort: Annotated[str, typer.Option("--sort", help="`ranked` (default) or `newest`.")] = "ranked",
+) -> None:
+    """The factory feed's Today list, from the newest factory ranking. Read-only."""
+    from factory.cli import main
+
+    if sort not in ("ranked", "newest"):
+        _exit_with_issues([ValidationIssue("sort", "must be ranked or newest")])
+    state = main._state(ctx)
+    result = factory_feed.today(
+        state.settings,
+        page=page,
+        sort="newest" if sort == "newest" else "ranked",
+        clock=state.clock,
+    )
+    if result.ranking_id is None:
+        typer.echo("no factory ranking yet; run `factory feed run`")
+        return
+    typer.echo(f"ranking {result.ranking_id}; page {result.page}/{result.pages} ({result.total})")
+    typer.echo(f"{'rank':>4}  {'pred':>5}  {'entry':<11}  {'date':<10}  {'mark':<4}  title")
+    for card in result.cards:
+        predicted = "-" if card.score is None else f"{card.score:.0%}"
+        mark = (
+            {"like": "+", "dislike": "-"}.get(card.label or "", " ")
+            + ("s" if card.saved else " ")
+            + ("x" if card.explore else " ")
+        )
+        typer.echo(
+            f"{card.rank or 0:>4}  {predicted:>5}  {card.entry_id:<11}  "
+            f"{(card.submitted or '-')[:10]:<10}  {mark:<4}  {_cut(card.title, _TITLE_WIDTH)}"
+        )

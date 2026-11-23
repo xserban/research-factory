@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from factory.clock import FixedClock
 from factory.config import Settings
@@ -13,9 +14,12 @@ from factory.index import default as project_index
 from factory.index import factory_scope as fx
 from factory.model.feed import (
     FACTORY_ONLY_REACTIONS,
+    FeedRanked,
     FeedRankerTrained,
+    FeedRankParameters,
     FeedReacted,
     FeedReaction,
+    FeedReferences,
 )
 from factory.services import feed
 from factory.services.context import Project, list_projects, slug_issues
@@ -137,9 +141,14 @@ def test_training_versions_must_follow_and_rebuild_is_deterministic(scope: Facto
     assert scope.index.state_hash() == before
 
 
-def test_own_version_is_independent() -> None:
-    assert fx.FACTORY_PROJECTION_VERSION != ""
-    assert fx.FACTORY_PROJECTION_VERSION is not project_index.PROJECTION_VERSION
+def test_own_version_is_independent(scope: FactoryScope) -> None:
+    assert fx.__name__ != project_index.__name__
+    scope.record([_react(scope, "2401.00001", FeedReaction.LIKE)])
+    with scope.index.connect() as conn:
+        stored = conn.exec_driver_sql("SELECT * FROM meta").fetchall()
+    flat = {str(v) for row in stored for v in row}
+    assert fx.FACTORY_PROJECTION_VERSION in flat
+    assert project_index.PROJECTION_VERSION not in flat
 
 
 def test_slug_reserved_and_not_listed(tmp_path: Path, clock: FixedClock) -> None:
@@ -168,3 +177,76 @@ def test_project_feed_refuses_factory_only_reactions(project: Project) -> None:
         with pytest.raises(FactoryValidationError) as exc:
             feed.react(project, human, "2401.00001", reaction)
         assert exc.value.issues[0].field == "reaction"
+
+
+def _agent() -> Actor:
+    return Actor(
+        kind="agent", id="claude", user="obd", session=SESSION, model="m", skill="rf-feed@abcdef12"
+    )
+
+
+def _ranked_event(scope: FactoryScope, actor: Actor) -> Event:
+    payload = FeedRanked(
+        ranking_id=RANKING,
+        fetch_ids=(),
+        reference_hash="c" * 64,
+        reference_count=0,
+        model="m",
+        weights_hash="d" * 64,
+        software="s",
+        parameters=FeedRankParameters(
+            shown_per_cycle=1, exploration_share=0.0, references=FeedReferences.CORE
+        ),
+        exploration_seed=0,
+        order_blob=scope.blobs.put(b"{}"),
+        shown=(),
+    )
+    return scope.events.make("feed.ranked", payload, actor, input_blob=scope.blobs.put(b"{}"))
+
+
+def test_human_ranked_is_refused_and_nothing_written(scope: FactoryScope, tmp_path: Path) -> None:
+    with pytest.raises(FactoryValidationError) as exc:
+        scope.record([_ranked_event(scope, scope.human_actor())])
+    assert exc.value.issues[0].field == "events[0].actor"
+    assert not list((tmp_path / "factory" / "events").glob("*/*.jsonl"))
+
+
+def _count(scope: FactoryScope, table: str) -> int:
+    return scope.read(lambda c: len(c.execute(select(scope.tables[table])).fetchall()))
+
+
+def test_fold_ignores_wrongly_acted_events_written_around_record(scope: FactoryScope) -> None:
+    """Hand-written events (bypassing `record`) failing an actor guard change nothing."""
+    scope.index.sync()
+    agent_react = scope.events.make(
+        "feed.reacted",
+        FeedReacted(
+            entry_id="2401.00001",
+            reaction=FeedReaction.LIKE,
+            ranking_id=RANKING,
+            rank_shown=1,
+            score_shown=0.5,
+        ),
+        _agent(),
+        input_blob=scope.blobs.put(b"{}"),
+    )
+    human_train = scope.events.make("feed.ranker_trained", _trained(1), scope.human_actor())
+    human_ranked = _ranked_event(scope, scope.human_actor())
+    with scope.writing():
+        scope.index.appended()
+        scope.writer.append([agent_react, human_train, human_ranked])
+    for table in ("reactions", "trainings", "rankings"):
+        assert _count(scope, table) == 0
+    before = scope.index.state_hash()
+    scope.index.rebuild()
+    assert scope.index.state_hash() == before
+    for table in ("reactions", "trainings", "rankings"):
+        assert _count(scope, table) == 0
+
+
+def test_project_writer_refuses_factory_envelope(project: Project, scope: FactoryScope) -> None:
+    event = _react(scope, "2401.00001", FeedReaction.LIKE)
+    assert event.project == "_factory"
+    with pytest.raises(FactoryValidationError) as exc:
+        project.writer.append([event])
+    assert exc.value.issues[0].field == "events[0].project"
