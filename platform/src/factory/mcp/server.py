@@ -4104,6 +4104,7 @@ def build_server(
         model: str,
         skill: str,
         framework: str | None = None,
+        serves_rq: str | None = None,
     ) -> dict[str, JsonValue]:
         """Record a research-idea lead (at most 600 characters) with at least one trigger: a
         work (`rf:`), an evidence `row` key, a `claim`, a contribution `item`, an `idea`, an
@@ -4114,8 +4115,9 @@ def build_server(
         `{kind, ref}` (builder
         kinds also `row`). The answer lists `prior`: the parked and discarded leads and the
         hypotheses that share a trigger, card, idea or property; read it and say how this lead
-        differs. Name the ideation `framework` you used. Refused to a session that has joined a
-        pass."""
+        differs. Name the ideation `framework` you used. `serves_rq` optionally names the research
+        question the lead serves (a recorded sub-question id; absent counts as RQ4 and RQ5).
+        Refused to a session that has joined a pass."""
 
         def record() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4124,7 +4126,12 @@ def build_server(
             actor = make_agent_actor(settings, session, role, model, skill)
             item = parse_input(
                 LeadInput,
-                {"text": text, "triggers": cast(JsonValue, triggers), "framework": framework},
+                {
+                    "text": text,
+                    "triggers": cast(JsonValue, triggers),
+                    "framework": framework,
+                    "serves_rq": serves_rq,
+                },
                 "lead",
             )
             lead_id = leads_service.record_lead(opened, actor, item)
@@ -4191,6 +4198,7 @@ def build_server(
         model: str,
         skill: str,
         supersedes: str | None = None,
+        serves_rq: str | None = None,
     ) -> dict[str, JsonValue]:
         """Draft a hypothesis: kind (experiment or literature), a statement, the promoted `lead`
         (required in pilot and systematic mode), treatment and baseline (a method card, a lineage
@@ -4199,7 +4207,9 @@ def build_server(
         decision rule from the menu (superiority, non-inferiority, literature-direction) and a
         test. The platform computes the version `H@` and the falsifier sentence; you never state
         a state or a version. `supersedes` names the draft this one replaces; a hypothesis with
-        evidence cannot be replaced. Refused to a session that has joined a pass."""
+        evidence cannot be replaced. `serves_rq` optionally names the research question it serves
+        (a recorded sub-question id; absent counts as RQ4 and RQ5). Refused to a session that has
+        joined a pass."""
 
         def draft() -> JsonValue:
             opened = open_project(settings, project, session=session, clock=clock)
@@ -4208,7 +4218,7 @@ def build_server(
             actor = make_agent_actor(settings, session, role, model, skill)
             parsed = parse_input(HypothesisSpec, spec, "spec")
             hypothesis_id, version = hypotheses_service.draft_hypothesis(
-                opened, actor, parsed, supersedes=supersedes
+                opened, actor, parsed, supersedes=supersedes, serves_rq=serves_rq
             )
             created = hypotheses_service.hypothesis_view(opened, hypothesis_id)
             assert created is not None

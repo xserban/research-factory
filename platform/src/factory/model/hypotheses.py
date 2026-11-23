@@ -135,12 +135,21 @@ class Trigger(StrictModel):
         return self
 
 
+SERVES_RQ_RE = r"^[A-Za-z]{1,4}[0-9]{1,3}$"
+ServesRq = Annotated[str, StringConstraints(pattern=SERVES_RQ_RE)]
+"""A question id (`SQ2`, `RQ4`): the research question a lead or hypothesis serves. Optional on
+the payloads; the service checks it against the recorded sub-questions. When it is absent, the
+hypothesis engine and the Hypotheses page treat the item as serving RQ4 and RQ5."""
+DEFAULT_SERVES_RQ: tuple[str, ...] = ("RQ4", "RQ5")
+
+
 class LeadInput(StrictModel):
     """What an agent or a human states: the note, its triggers and the framework used."""
 
     text: Annotated[NonBlank, Field(max_length=MAX_LEAD_TEXT)]
     triggers: tuple[Trigger, ...] = Field(min_length=1, max_length=MAX_TRIGGERS)
     framework: Annotated[NonBlank, Field(max_length=MAX_FRAMEWORK)] | None = None
+    serves_rq: ServesRq | None = None
 
 
 class LeadRecorded(StrictModel):
@@ -151,6 +160,7 @@ class LeadRecorded(StrictModel):
     prior: tuple[str, ...] = ()
     prior_total: int = Field(default=0, ge=0)
     keys: tuple[str, ...] = ()
+    serves_rq: ServesRq | None = None
 
 
 LeadDecision = Literal["promote", "park", "discard"]
@@ -349,6 +359,8 @@ class HypothesisDrafted(StrictModel):
     spec: HypothesisSpec
     h_version: HVersion
     supersedes: HypothesisId | None = None
+    serves_rq: ServesRq | None = None
+    """The question the hypothesis serves; not part of `H@` (it is a link, not a decision field)."""
 
     @model_validator(mode="after")
     def _version_is_computed(self) -> Self:

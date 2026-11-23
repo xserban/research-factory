@@ -79,6 +79,7 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("triggers_json", String, nullable=False),
         Column("prior_json", String, nullable=False),
         Column("prior_total", Integer, nullable=False),
+        Column("serves_rq", String),
         Column("author_session", String, nullable=False),
         Column("state", String, nullable=False),
         Column("decision", String),
@@ -113,6 +114,7 @@ def hypothesis_tables(metadata: MetaData, protocols: Table, project: Table) -> H
         Column("superseded_by", String),
         Column("drafter_session", String, nullable=False),
         Column("drafter_model", String),
+        Column("serves_rq", String),
         Column("event_id", String, nullable=False),
         Column("abandon_reason", String),
         Column("abandoned_event_id", String),
@@ -301,6 +303,7 @@ def _lead_recorded(t: HypothesisTables) -> Handler:
                 ).decode(),
                 prior_json=canonical_json(list(p.prior)).decode(),
                 prior_total=p.prior_total,
+                serves_rq=p.serves_rq,
                 author_session=event.actor.session,
                 state="open",
                 event_id=event.id,
@@ -372,6 +375,7 @@ def _drafted(t: HypothesisTables) -> Handler:
                 supersedes=p.supersedes,
                 drafter_session=event.actor.session,
                 drafter_model=event.actor.model,
+                serves_rq=p.serves_rq,
                 event_id=event.id,
             )
             .on_conflict_do_nothing(index_elements=["hypothesis_id"])

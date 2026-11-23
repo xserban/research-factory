@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
-from factory.model.hypotheses import AbandonReason, DiscardReason
+from factory.model.hypotheses import DEFAULT_SERVES_RQ, AbandonReason, DiscardReason
 from factory.model.lead_engine import NOTICE, QueueItem
 from factory.services import hypotheses as hypotheses_service
 from factory.services import leads as leads_service
@@ -239,6 +239,7 @@ def _leads(project: Project, metrics: dict[str, dict[str, Any]]) -> dict[str, An
                 "lead_id": v.lead_id,
                 "text": v.text,
                 "framework": v.framework,
+                "serves_rq": v.serves_rq,
                 "state": v.state,
                 "triggers": len(v.triggers),
                 "trigger_kinds": dict(sorted(kinds.items())),
@@ -331,6 +332,32 @@ def _gates(
     return gates
 
 
+DEFAULT_RQ_ID = "default"
+DEFAULT_RQ_LABEL = ", ".join(DEFAULT_SERVES_RQ) + " (default)"
+
+
+def rq_groups(project: Project) -> list[dict[str, Any]]:
+    """Leads and hypotheses counted by the question they serve. An item without the field is
+    grouped under `default`, labelled "RQ4, RQ5 (default)"; the default group is always listed
+    and comes first, the others follow sorted by id."""
+    counts: dict[str, dict[str, int]] = {DEFAULT_RQ_ID: {"leads": 0, "hypotheses": 0}}
+    for lead in leads_service.list_leads(project):
+        key = lead.serves_rq or DEFAULT_RQ_ID
+        counts.setdefault(key, {"leads": 0, "hypotheses": 0})["leads"] += 1
+    for hyp in hypotheses_service.list_hypotheses(project):
+        key = hyp.serves_rq or DEFAULT_RQ_ID
+        counts.setdefault(key, {"leads": 0, "hypotheses": 0})["hypotheses"] += 1
+    order = [DEFAULT_RQ_ID, *sorted(k for k in counts if k != DEFAULT_RQ_ID)]
+    return [
+        {
+            "id": k,
+            "label": DEFAULT_RQ_LABEL if k == DEFAULT_RQ_ID else k,
+            **counts[k],
+        }
+        for k in order
+    ]
+
+
 def _hypotheses(project: Project) -> dict[str, Any]:
     views = hypotheses_service.list_hypotheses(project)
     reviews = _reviews(project)
@@ -354,6 +381,7 @@ def _hypotheses(project: Project) -> dict[str, Any]:
                 "baseline": v.spec.baseline.name,
                 "metric": v.spec.metric.name,
                 "lead": v.spec.lead,
+                "serves_rq": v.serves_rq,
                 "flags": list(v.flags),
                 "autonomy": v.autonomy,
                 "reviews": len([r for r in mine if r["eligible"]]),
@@ -525,6 +553,7 @@ def build(ctx: HubContext) -> dict[str, Any]:
         "queue": queue_block,
         "leads": leads,
         "hypotheses": hyp,
+        "rq": rq_groups(project),
         "stats": {
             "recorded": stats.recorded,
             "by_state": dict(stats.by_state),
