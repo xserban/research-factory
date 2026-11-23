@@ -27,6 +27,7 @@ from factory.services.benchmark_ledger import LedgerGroup
 from factory.services.cards import CardSummary, CardView
 from factory.services.check import LAYER_CHECK_CODES, CheckReport, Finding
 from factory.services.concepts import ConceptLinkList, ConceptList, ConceptView
+from factory.services.contribution_pairs import ContributionPairs, PairedRow
 from factory.services.contributions import ContributionStatus, ItemView
 from factory.services.coverage import CoverageReport, Ratio
 from factory.services.dedup import MergeRow
@@ -1099,6 +1100,33 @@ def contribution_item_lines(items: list[ItemView]) -> list[str]:
         )
         lines.append(f"  quote: {item.quote or '-'}")
     return lines
+
+
+def contribution_pair_lines(report: ContributionPairs) -> list[str]:
+    """The proposed pairs (score, reasons, both rows) and the rows without a candidate."""
+    lines = [
+        f"pairs proposed {len(report.pairs)}, unmatched A {report.unmatched_a}, "
+        f"unmatched B {report.unmatched_b}, without candidate {len(report.without_candidate)} "
+        f"(min score {report.min_score})",
+        "proposals only: confirm each with `contributions resolve` (the human's act)",
+    ]
+    for p in report.pairs:
+        lines.append(f"{p.work_id}  score {p.score:.3f}  {'; '.join(p.reasons)}")
+        for label, row in (("A", p.a), ("B", p.b)):
+            lines += _pair_row_lines(label, row)
+    for u in report.without_candidate:
+        lines.append(f"{u.work_id}  no candidate")
+        lines += _pair_row_lines(u.pass_label.value, u.row)
+    return lines
+
+
+def _pair_row_lines(label: str, row: PairedRow) -> list[str]:
+    entry = "-" if row.cited_entry is None else str(row.cited_entry)
+    return [
+        f"  {label} {row.row_key}  {row.item_kind}  name {row.name or '-'}  entry {entry}"
+        f"  anchor {row.anchor or '-'}",
+        f"    quote: {row.quote or '-'}",
+    ]
 
 
 def _absent(item: ItemView) -> str:

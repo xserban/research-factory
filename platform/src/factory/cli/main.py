@@ -61,6 +61,7 @@ from factory.errors import (
     ValidationIssue,
 )
 from factory.events.envelope import Actor
+from factory.extraction.pairing import DEFAULT_MIN_SCORE as DEFAULT_PAIR_MIN_SCORE
 from factory.imports.model import ImportFormat, ImportRole
 from factory.index.index import IndexHeldError
 from factory.lineage.graph import GraphFilter
@@ -113,6 +114,7 @@ from factory.services import chase as chase_service
 from factory.services import check as check_service
 from factory.services import concepts as concepts_service
 from factory.services import conclusions as conclusions_service
+from factory.services import contribution_pairs as contribution_pairs_service
 from factory.services import contributions as contributions_service
 from factory.services import conversion_coverage as conversion_coverage_service
 from factory.services import core_works as core_works_service
@@ -3401,6 +3403,30 @@ def contributions_agreement_cmd(ctx: typer.Context) -> None:
         project = _resolve_project(state)
         agreement = contributions_service.contribution_agreement(project, project.human_actor())
     for line in render.agreement_lines(agreement):
+        typer.echo(line)
+
+
+@contributions_app.command("pairs")
+def contributions_pairs_cmd(
+    ctx: typer.Context,
+    work: Annotated[str | None, typer.Option("--work", help="Only this work.")] = None,
+    min_score: Annotated[
+        float, typer.Option("--min-score", help="Lowest score proposed.")
+    ] = DEFAULT_PAIR_MIN_SCORE,
+    as_json: _JSON = False,
+) -> None:
+    """Proposed pairs among the unmatched rows of the two passes (read-only; the human confirms
+    with `resolve`)."""
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        report = contribution_pairs_service.contribution_pairs(
+            project, project.human_actor(), work_id=work, min_score=min_score
+        )
+    if as_json:
+        typer.echo(report.model_dump_json())
+        return
+    for line in render.contribution_pair_lines(report):
         typer.echo(line)
 
 
