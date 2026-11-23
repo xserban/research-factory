@@ -222,3 +222,23 @@ def _project_like(project: Project, entry: str) -> None:
     )
     project.record([event])
     feed_service.react(project, project.human_actor(), entry, FeedReaction.LIKE)
+
+
+def test_rank_after_fetch_notes_ranked_up_to_date_and_failed(
+    six: tuple[Settings, Project, Project], clock: FixedClock
+) -> None:
+    settings, _, _ = six
+    note = acts.rank_after_fetch(settings, FakeEmbedder, session=SESSION, clock=clock)
+    assert note == "ranked 6 papers"
+    assert acts.rank_after_fetch(settings, FakeEmbedder, session=SESSION, clock=clock) == (
+        "up to date"
+    )
+    _fetch(six[1], 4, [_rec(7)])
+    VECTORS["Paper 7"] = _vec(0.2, 0.2)
+
+    def broken() -> FakeEmbedder:
+        raise RuntimeError("no weights")
+
+    failed = acts.rank_after_fetch(settings, broken, session=SESSION, clock=clock)
+    assert failed == "failed: RuntimeError: no weights"
+    assert ff.freshness(settings, clock=clock).stale  # nothing was written

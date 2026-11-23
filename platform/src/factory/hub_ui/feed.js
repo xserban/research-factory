@@ -187,5 +187,45 @@ function pick(card,act){
   });
 }
 
+/* Fetch now: the hub's feed run (fetch anything new, then rank), polled until it ends */
+function localTimes(){
+  $$('time[datetime]').forEach(function(t){
+    var d=new Date(t.getAttribute('datetime'));
+    if(!isNaN(d))t.textContent=d.toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  });
+}
+function fetcher(){
+  var btn=$('#fx-fetch'),line=$('#fx-fetch-line');
+  if(!btn)return;
+  function idle(){btn.disabled=false;btn.textContent='Fetch now';}
+  function poll(waiting){
+    fetch('/api/feed/runner',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+      if(s.running){
+        btn.disabled=true;btn.textContent='Fetching…';
+        line.textContent='fetching new papers, then ranking; this can take a few minutes';
+        setTimeout(function(){poll(true);},3000);return;
+      }
+      idle();
+      if(!waiting)return;
+      var last=s.last||{};
+      if(last.error){line.textContent='The run failed: '+last.error;return;}
+      if(last.factory_ranking&&last.factory_ranking.indexOf('failed')===0){line.textContent='Fetched, but ranking '+last.factory_ranking;return;}
+      line.textContent='Done: '+(last.factory_ranking||'finished')+'. Reloading…';
+      location.reload();
+    }).catch(function(){idle();line.textContent='Could not read the run state.';});
+  }
+  btn.addEventListener('click',function(){
+    btn.disabled=true;line.textContent='starting…';
+    post('/api/feed/run',HUB,{}).then(function(r){
+      var busy=(r.issues||[]).some(function(i){return /in progress/.test(i.reason||'');});
+      if(r.ok||busy){poll(true);return;}
+      idle();line.textContent=issues(r);
+    });
+  });
+  poll(false);
+}
+
+localTimes();
+fetcher();
 applyWeak();
 })();
