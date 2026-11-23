@@ -121,7 +121,7 @@ def test_server_binds_loopback_serves_state_and_refuses_writes(
         assert httpd.server_address[0] == "127.0.0.1"
         base = f"http://127.0.0.1:{httpd.server_port}"
         with urllib.request.urlopen(base + "/") as page:
-            assert b"Factory dashboard" in page.read()
+            assert b"Conjecture dashboard" in page.read()
         with urllib.request.urlopen(base + "/api/state") as api:
             data = json.loads(api.read())
         assert len(data["decisions"]) == 1

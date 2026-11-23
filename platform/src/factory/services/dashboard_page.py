@@ -19,7 +19,7 @@ PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <!--THEME-->
-<title>Factory dashboard</title>
+<title>Conjecture dashboard</title>
 <style>
 :root{color-scheme:dark;--bg:#0B0C16;--dk:#080910;--lt:#151828;--sel:#1f253a;--mut:#2d3450;--fg:#ddf7ff;--dim:#6a6e95;--light:#b5c5db;
 --ac:#82FB9C;--green:#4fe88f;--cyan:#7cf8f7;--blue:#829dd4;--mag:#86a7df;--brown:#287b51;--bright:#9cf7c2;--soft:rgba(130,251,156,.12)}
@@ -70,7 +70,7 @@ code,.q{overflow-wrap:anywhere;font-size:.8rem}
 @media (max-width:600px){.kvs{grid-template-columns:1fr}main{padding:0 10px 48px}}
 *{border-radius:0!important}body{background-image:linear-gradient(rgba(130,251,156,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(130,251,156,.035) 1px,transparent 1px);background-size:28px 28px}button{background:transparent;color:var(--ac);border:1px solid rgba(130,251,156,.45);font-weight:600;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}button:hover,button.on{background:var(--ac);color:var(--bg)}th{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase}.help,.card,.tile{border-left:3px solid var(--ac)}h2::before{content:'▮';color:var(--ac);margin-right:8px}
 /*LIGHT*/</style></head><body>
-<header><h1>Factory dashboard <span class="dim" id="slug"></span></h1><!--TOGGLE-->
+<header><h1>Conjecture dashboard <span class="dim" id="slug"></span></h1><!--TOGGLE-->
 <div class="dim"><span id="fresh">loading</span> <span id="last"></span></div>
 <nav id="tabs"></nav></header>
 <section id="run"></section>
