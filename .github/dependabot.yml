@@ -8,6 +8,12 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    # bibtexparser stays on 1.x (slice 3d ruling 18: the entry hash depends on its serialisation);
+    # docling is the chosen PDF converter (decision 49) and a new version changes the converter
+    # fingerprint recorded on every conversion, so it is bumped by hand with a re-conversion plan.
+    ignore:
+      - dependency-name: "bibtexparser"
+      - dependency-name: "docling"
     groups:
       python-dependencies:
         patterns: ["*"]
