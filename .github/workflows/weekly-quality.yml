@@ -25,9 +25,9 @@ jobs:
       run:
         working-directory: platform
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
           cache: false
@@ -83,7 +83,7 @@ jobs:
             echo '```'; head -n 30 report/vulture.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: quality-report
           path: report/

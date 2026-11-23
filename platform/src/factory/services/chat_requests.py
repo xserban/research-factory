@@ -208,6 +208,14 @@ def _parent_issues(
     return []
 
 
+def check_parent(
+    project: Project, kind: str, mode: str | None, parent: str
+) -> list[ValidationIssue]:
+    """Why `parent` is no parent for a new request of `kind` and `mode` (empty when it is one).
+    Read-only; the caller has synced the index."""
+    return _parent_issues(project, kind, mode, parent)
+
+
 def _respar_issues(project: Project, parent: str) -> list[ValidationIssue]:
     """Why `parent` cannot be re-sparred (empty when it can): it is a sheet with both sections
     closed, and no other re-spar of it is open or taken."""

@@ -1,7 +1,8 @@
 /* Chat page (night feature N5). Payload: shell, chat (services/hub_chat.py); served mode also reads `ui/chat?...` live.
    An agent proposes; you rate each argument or sentence and write the balance yourself. Every quote is shown with its
    FULL paragraph. Writes (served only): the four allow-listed acts, each as you (the local human).
-   Hash: layers, include, exclude, only (the basket), kind, mode, hyp, parent (the form), sheet or answer (the open result). */
+   Hash: layers, include, exclude, only (the basket), kind, mode, hyp, parent (the form), sheet or answer (the open result).
+   Conversations are derived from the parent links (no event of their own); every exchange is already recorded, the page says so. */
 HUB.load(['shell', 'chat']).then(d => {
   const H = HUB.init(d.shell);
   const main = H.mount({ page: 'chat', crumb: 'Chat with papers' });
@@ -36,12 +37,19 @@ HUB.load(['shell', 'chat']).then(d => {
 .ch-diff ul{margin:6px 0;padding-left:18px}.ch-diff li{margin:6px 0;overflow-wrap:anywhere}
 .ch-sugg{margin-top:4px;padding:6px 8px;border-radius:var(--r-s);background:var(--surface);font:400 var(--t-s) var(--f-ui)}
 .ch-prec{border-collapse:collapse;font:400 var(--t-s) var(--f-ui);width:100%}.ch-prec th,.ch-prec td{text-align:left;padding:3px 8px;border-bottom:1px solid var(--hair)}
+.ch-saved{font:500 var(--t-xs) var(--f-ui);padding:2px 8px;border-radius:var(--r);background:var(--acc-soft);color:var(--acc)}
+.ch-follow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.ch-queued{margin:8px 0 0;padding-left:18px;font:400 var(--t-s) var(--f-ui)}.ch-queued li{margin:2px 0;overflow-wrap:anywhere}
+.ch-thread{padding:10px 0;border-bottom:1px solid var(--hair);list-style:none}
+.ch-thead{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.ch-thead b{overflow-wrap:anywhere}
+.ch-nodes{list-style:none;margin:8px 0 0;padding:0}.ch-nodes li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:4px 0;border-left:2px solid var(--hair);overflow-wrap:anywhere}
+.ch-wait{color:var(--mut);font-style:italic}
 .ch-empty{color:var(--dim);font:400 var(--t-s) var(--f-ui);padding:8px 0}`;
     document.head.appendChild(st);
   }
 
   /* ---------- state: the address holds the basket, the form and the open result ---------- */
-  const st = { layers: [], include: [], exclude: [], only: false, kind: 'spar', mode: 'explore', hyp: '', parent: '', sheet: '', answer: '' };
+  const st = { layers: [], include: [], exclude: [], only: false, kind: 'spar', mode: 'explore', hyp: '', parent: '', sheet: '', answer: '', same: true, ctx: null, queued: [], openT: {} };
   const csv = v => (v || '').split(',').map(x => x.trim()).filter(Boolean);
   const readHash = () => {
     const p = H.hash.get();
@@ -110,43 +118,119 @@ HUB.load(['shell', 'chat']).then(d => {
     const rows = [...(C.sheets || []).map(s => [s.sheet_id, 'Sheet: ' + s['hypothesis']]), ...(C.answers || []).map(a => [a.answer_id, 'Answer: ' + a['question']])];
     return '<option value="">No parent (a new chat)</option>' + rows.map(r => `<option value="${esc(r[0])}" ${st.parent === r[0] ? 'selected' : ''}>${esc(r[1].slice(0, 90))}</option>`).join('');
   }
+  const maxBatch = () => C.batch_max || 10;
+  /* one order per non-empty line, or per paragraph when blank lines separate them */
+  const itemsOf = t => {
+    const raw = (t || '').replace(/\r/g, '').trim();
+    if (!raw) return [];
+    const paras = raw.split(/\n\s*\n/);
+    const parts = paras.length > 1 ? paras.map(p => p.split('\n').map(x => x.trim()).filter(Boolean).join(' ')) : raw.split('\n').map(x => x.trim());
+    return parts.filter(Boolean);
+  };
+  const nodeOf = id => { for (const t of (C.threads || [])) for (const n of t.nodes) if (n.id === id) return n; return null; };
+  const shortOf = id => { const n = nodeOf(id); return n ? n.text.slice(0, 70) : id; };
+  const countLine = () => {
+    const n = itemsOf(st.hyp).length, kind = st.kind === 'spar' ? 'spars' : 'asks';
+    if (n > maxBatch()) return `At most ${maxBatch()} at once; you have ${n}.`;
+    return n > 1 ? `${n} ${kind} will be queued, one per line or paragraph.` : '';
+  };
+  const ctxLine = () => {
+    if (!st.parent || !st.same) return '';
+    if (!HUB.served) return 'The live hub passes the parent’s papers along.';
+    if (!st.ctx || st.ctx.id !== st.parent) return 'Reading the parent’s papers…';
+    return `Uses the parent’s papers; ${fmt(st.ctx.works.length)} it cites are passed along as already read.`;
+  };
   function formHtml() {
     const spar = st.kind === 'spar';
+    const followRow = st.parent ? `<div class="ch-follow"><span class="chip" id="ch-follow">Following up on: ${esc(shortOf(st.parent))}</span><button type="button" class="btn" id="ch-unfollow">Clear</button>
+        <label class="meta"><input type="checkbox" id="ch-same" ${st.same ? 'checked' : ''}> Same papers as the parent</label>${H.info('A follow-up reads the parent’s papers by default and is told which of them the parent already cited, so the session can skip re-reading them. Untick it to use the basket above instead.', 'About the parent’s papers')}
+        <span class="meta" id="ch-ctx" aria-live="polite">${esc(ctxLine())}</span></div>` : '';
+    const queued = st.queued.length ? `<div class="meta">Queued ${fmt(st.queued.length)}:</div><ol class="ch-queued">${st.queued.map(q => `<li>${esc(q)}</li>`).join('')}</ol>` : '';
     return `<div class="ch-form"><div class="ch-row"><span class="seg" role="group" aria-label="Kind"><button type="button" data-kind="spar" aria-pressed="${spar}">Spar</button><button type="button" data-kind="ask" aria-pressed="${!spar}">Ask</button></span>
       ${H.info(spar ? 'A spar puts a hypothesis against the papers: the case against and the case for, each argument with an exact quote. You rate each one and write the balance yourself.' : 'An ask answers a question from the papers, sentence by sentence, each with an exact quote. You rate each sentence.', 'About the kind')}</div>
-      <label class="meta" for="ch-text">${spar ? 'Hypothesis' : 'Question'}</label>
-      <textarea id="ch-text" rows="3" maxlength="2000">${esc(st.hyp)}</textarea>
+      ${followRow}
+      <label class="meta" for="ch-text">${spar ? 'Hypothesis' : 'Question'} ${H.info('Write several at once: each line, or each paragraph when blank lines separate them, becomes its own order, in order, over the same papers and parent. Up to ' + maxBatch() + ' at a time.', 'About several at once')}</label>
+      <textarea id="ch-text" rows="3" maxlength="${2000 * maxBatch()}">${esc(st.hyp)}</textarea>
+      <div class="meta" id="ch-count" aria-live="polite">${esc(countLine())}</div>
       ${spar ? `<div class="ch-row"><span class="meta">Mode</span><span class="seg" role="group" aria-label="Mode"><button type="button" data-mode="explore" aria-pressed="${st.mode === 'explore'}">Explore</button><button type="button" data-mode="prepare" aria-pressed="${st.mode === 'prepare'}">Prepare</button></span>
         ${H.info('Explore: one session writes both cases. Prepare: separate sessions write the case against and the case for, so the case for is a second order. Only a Prepare sheet may feed a lead.', 'About the mode')}</div>` : ''}
       <label class="meta" for="ch-parent">Follow up on an earlier result</label><select id="ch-parent">${parentOptions()}</select>
       <label class="meta" for="ch-note">Note (optional)</label><input type="text" id="ch-note" maxlength="600">
-      <div class="ch-row">${HUB.served ? '<button type="button" class="btn primary" id="ch-go">Order it</button>' : '<button type="button" class="btn" disabled title="Available in the live hub">Order it</button>'}<span class="meta" id="ch-msg" aria-live="polite"></span></div></div>`;
+      <div class="ch-row">${HUB.served ? '<button type="button" class="btn primary" id="ch-go">Order it</button>' : '<button type="button" class="btn" disabled title="Available in the live hub">Order it</button>'}<span class="meta" id="ch-msg" aria-live="polite"></span></div>${queued}</div>`;
   }
-  function order(body, host) {
+  function order(body, host, route) {
     say(host, 'Recording…');
-    return HUB.post('/ui/act/chat-request', body).then(r => {
-      if (!r.ok) { say(host, 'Refused: ' + r.message); return; }
-      const j = r.json || {};
-      say(host, j.run_id ? 'Ordered; the run has started.' : 'Ordered, but no run started' + (j.run_error ? ' (' + j.run_error + ')' : '') + (j.command ? '. Start it with: ' + j.command : '') + '.');
+    return HUB.post(route || '/ui/act/chat-request', body).then(r => {
+      if (!r.ok) { say(host, 'Refused: ' + r.message); return false; }
+      const j = r.json || {}, many = Array.isArray(j.request_ids) ? j.request_ids.length : 0;
+      const run = j.run_id ? (many > 1 ? 'one run has started; the others wait for the next run.' : 'the run has started.') : 'no run started' + (j.run_error ? ' (' + j.run_error + ')' : '') + (j.command ? '. Start it with: ' + j.command : '') + '.';
+      say(host, (many > 1 ? 'Ordered ' + many + '; ' : 'Ordered; ') + run + ' Saved.');
       refresh();
+      return true;
     });
+  }
+  /* the parent's selection and cited works, read when a follow-up is set */
+  function loadCtx() {
+    st.ctx = null;
+    if (!st.parent || !HUB.served) return Promise.resolve(null);
+    const id = st.parent;
+    return getLive('context=' + encodeURIComponent(id)).then(({ ok, j }) => { if (ok && id === st.parent) st.ctx = j; return st.ctx; }).catch(() => null)
+      .then(c => { const el = main.querySelector('#ch-ctx'); if (el) say(el, ctxLine()); return c; });
+  }
+  function focusForm() {
+    const t = main.querySelector('#ch-text'); if (!t) return;
+    if (t.scrollIntoView) t.scrollIntoView({ block: 'center' });
+    t.focus();
+  }
+  /* pre-fill only: the researcher presses Order it */
+  function prefill(p) {
+    if (p.kind) st.kind = p.kind;
+    if (p.mode) st.mode = p.mode;
+    if (p.text != null) st.hyp = String(p.text).slice(0, 2000);
+    st.parent = p.parent || ''; st.same = true; st.queued = [];
+    writeHash(); paintForm(); loadCtx(); focusForm();
+  }
+  const follow = id => prefill({ parent: id, text: st.hyp });
+  function wireFollow(host) {
+    host.querySelectorAll('[data-follow]').forEach(b => { b.onclick = () => follow(b.dataset.follow); });
+  }
+  /* the note carries the parent's cited works as plain text, within the 600-character limit */
+  function noteWith(user) {
+    const c = st.ctx;
+    if (!(st.parent && st.same && c && c.id === st.parent && c.works.length)) return user;
+    const pre = 'Already read in the parent: ', ids = c.works;
+    const build = k => pre + ids.slice(0, k).join(', ') + (k < ids.length ? ' and ' + (ids.length - k) + ' more' : '') + '.' + (user ? ' ' + user : '');
+    let k = ids.length;
+    while (k > 0 && build(k).length > 600) k--;
+    return k > 0 ? build(k) : user;
   }
   function wireForm() {
     main.querySelectorAll('[data-kind]').forEach(b => { b.onclick = () => { st.kind = b.dataset.kind; writeHash(); paintForm(); }; });
     main.querySelectorAll('[data-mode]').forEach(b => { b.onclick = () => { st.mode = b.dataset.mode; writeHash(); paintForm(); }; });
     const text = main.querySelector('#ch-text'), parent = main.querySelector('#ch-parent');
-    text.oninput = () => { st.hyp = text.value; };
+    text.oninput = () => { st.hyp = text.value; say(main.querySelector('#ch-count'), countLine()); };
     text.onchange = writeHash;
-    parent.onchange = () => { st.parent = parent.value; writeHash(); };
+    parent.onchange = () => { st.parent = parent.value; st.same = true; writeHash(); paintForm(); loadCtx(); };
+    const un = main.querySelector('#ch-unfollow'); if (un) un.onclick = () => { st.parent = ''; st.ctx = null; writeHash(); paintForm(); };
+    const same = main.querySelector('#ch-same'); if (same) same.onchange = () => { st.same = same.checked; say(main.querySelector('#ch-ctx'), ctxLine()); };
     const go = main.querySelector('#ch-go'); if (!go) return;
     go.onclick = () => {
-      const host = main.querySelector('#ch-msg'), note = main.querySelector('#ch-note').value.trim();
-      const body = { kind: st.kind, selection: { ...spec(), only: st.only } };
-      body[st.kind === 'spar' ? 'hypothesis' : 'question'] = text.value.trim();
-      if (st.kind === 'spar') body.mode = st.mode;
-      if (st.parent) body.parent = st.parent;
-      if (note) body.note = note;
-      HUB.confirm(host, 'Order this ' + (st.kind === 'spar' ? 'spar' : 'ask') + ' over ' + (st.size == null ? 'the basket' : fmt(st.size) + ' papers') + '?', () => { go.disabled = true; return order(body, host).finally(() => { go.disabled = false; }); });
+      const host = main.querySelector('#ch-msg'), user = main.querySelector('#ch-note').value.trim(), items = itemsOf(text.value);
+      if (!items.length) { say(host, 'Write the ' + (st.kind === 'spar' ? 'hypothesis' : 'question') + ' first.'); return; }
+      if (items.length > maxBatch()) { say(host, countLine()); return; }
+      const inherit = !!(st.parent && st.same);
+      const ready = inherit && !(st.ctx && st.ctx.id === st.parent) ? loadCtx() : Promise.resolve(st.ctx);
+      ready.then(ctx => {
+        if (inherit && !ctx) { say(host, 'The parent’s papers could not be read; untick “Same papers as the parent” to use the basket.'); return; }
+        const body = { kind: st.kind, selection: inherit ? { ...ctx.selection } : { ...spec(), only: st.only } };
+        if (items.length > 1) body.lines = items; else body[st.kind === 'spar' ? 'hypothesis' : 'question'] = items[0];
+        if (st.kind === 'spar') body.mode = st.mode;
+        if (st.parent) body.parent = st.parent;
+        const note = noteWith(user); if (note) body.note = note;
+        const what = items.length > 1 ? items.length + ' ' + (st.kind === 'spar' ? 'spars' : 'asks') : 'this ' + (st.kind === 'spar' ? 'spar' : 'ask');
+        const over = inherit ? 'the parent’s papers' : st.size == null ? 'the basket' : fmt(st.size) + ' papers';
+        HUB.confirm(host, 'Order ' + what + ' over ' + over + '?', () => { go.disabled = true; return order(body, host, items.length > 1 ? '/ui/act/chat-batch' : null).then(ok => { if (ok) { const m = host.textContent; st.queued = items; st.hyp = ''; writeHash(); paintForm(); say(main.querySelector('#ch-msg'), m); } }).finally(() => { go.disabled = false; }); });
+      });
     };
   }
   const paintForm = () => { main.querySelector('#ch-form').innerHTML = formHtml(); wireForm(); };
@@ -216,16 +300,18 @@ HUB.load(['shell', 'chat']).then(d => {
   function sheetHtml(v) {
     const c = v.counts, entry = (C.sheets || []).find(s => s.sheet_id === v.sheet_id) || {};
     const caseFor = entry.case_for_available ? `<div class="ch-row"><button type="button" class="btn" id="ch-casefor" ${HUB.served ? '' : 'disabled'}>Order the case for</button><span class="meta">The case against is closed. A different session writes the case for.</span><span class="meta" id="ch-cf-msg" aria-live="polite"></span></div>` : '';
-    const items = v.arguments.map((a, i) => `<article class="ch-item ${esc(a.stance)}"><div class="meta"><b>${esc(a.stance)}</b> · strength ${esc(a.strength)} (the writer’s judgement)</div><p>${esc(a.claim)}</p>${where(a)}${quoteBlock(a)}${a.linked_claim ? `<div class="meta">Linked claim: ${a.linked_claim.missing ? '' : `${esc(a.linked_claim.claim_type)} · ${esc(a.linked_claim.about)}`}${a.linked_claim.note ? ` <em class="ch-claim-note">(${esc(a.linked_claim.note)})</em>` : ''}${a.linked_claim.missing ? '' : `<blockquote class="ch-quote">${esc(a.linked_claim.quote)}</blockquote>`}</div>` : ''}${rateRow('argument', a.argument_id, i, a.rating, a.rating_note)}</article>`).join('');
+    const items = v.arguments.map((a, i) => `<article class="ch-item ${esc(a.stance)}"><div class="meta"><b>${esc(a.stance)}</b> · strength ${esc(a.strength)} (the writer’s judgement)</div><p>${esc(a.claim)}</p><div class="ch-row"><button type="button" class="btn" data-ask-i="${i}">Ask about this</button></div>${where(a)}${quoteBlock(a)}${a.linked_claim ? `<div class="meta">Linked claim: ${a.linked_claim.missing ? '' : `${esc(a.linked_claim.claim_type)} · ${esc(a.linked_claim.about)}`}${a.linked_claim.note ? ` <em class="ch-claim-note">(${esc(a.linked_claim.note)})</em>` : ''}${a.linked_claim.missing ? '' : `<blockquote class="ch-quote">${esc(a.linked_claim.quote)}</blockquote>`}</div>` : ''}${rateRow('argument', a.argument_id, i, a.rating, a.rating_note)}</article>`).join('');
     const respar = v.can_respar ? `<div class="ch-row"><button type="button" class="btn" id="ch-respar" ${HUB.served ? '' : 'disabled'}>Re-spar with today’s papers</button><span class="meta">Spars the same hypothesis again over the papers as they are now; the new sheet is compared with this one.</span><span class="meta" id="ch-rs-msg" aria-live="polite"></span></div>` : '';
-    return `<h3>Sheet: ${esc(v.hypothesis)} <span class="meta">${esc(v.mode)}</span></h3>${stalePanel(v)}${balanceBox(v)}${caseFor}${respar}${diffHtml(v.diff)}
+    return `<h3>Sheet: ${esc(v.hypothesis)} <span class="meta">${esc(v.mode)}</span></h3>${savedRow(v.sheet_id)}${stalePanel(v)}${balanceBox(v)}${caseFor}${respar}${diffHtml(v.diff)}
       <div class="meta"><b class="num">${fmt(c.arguments)}</b> arguments (${fmt(c.against)} against, ${fmt(c.for)} for) · rated sound ${fmt(c.ratings.sound || 0)}, weak ${fmt(c.ratings.weak || 0)}, wrong ${fmt(c.ratings.wrong || 0)} · <b class="num">${fmt(c.unrated)}</b> not rated by you</div>
       ${items || '<div class="ch-empty">No argument has been written yet.</div>'}`;
   }
+  /* every exchange is already recorded as events: say so, and offer the next step */
+  const savedRow = id => `<div class="ch-row"><span class="ch-saved">Saved</span>${H.info('Every answer and sheet is recorded as it is written and kept. Find it again under Conversations.', 'About saving')}<button type="button" class="btn" data-follow="${esc(id)}">Follow up</button>${id.startsWith('ans_') ? '<button type="button" class="btn" data-spar-i="-1">Spar this claim</button>' : ''}</div>`;
   function answerHtml(v) {
     const c = v.counts;
-    const items = v.sentences.map((s, i) => `<article class="ch-item"><p>${esc(s.text)}</p>${where(s)}${quoteBlock(s)}${rateRow('sentence', v.answer_id, s.index, s.rating, s.rating_note)}</article>`).join('');
-    return `<h3>Answer: ${esc(v.question)}</h3>
+    const items = v.sentences.map((s, i) => `<article class="ch-item"><p>${esc(s.text)}</p><div class="ch-row"><button type="button" class="btn" data-spar-i="${i}">Spar this claim</button></div>${where(s)}${quoteBlock(s)}${rateRow('sentence', v.answer_id, s.index, s.rating, s.rating_note)}</article>`).join('');
+    return `<h3>Answer: ${esc(v.question)}</h3>${savedRow(v.answer_id)}
       <div class="ch-bal"><h3>Your rating of the whole answer ${H.info('The answer is a proposal. This rating is yours.', 'About the rating')}</h3>${rateRow('answer', v.answer_id, '', v.rating, v.rating_note)}${v.unanswered ? `<p class="meta">Not answered: ${esc(v.unanswered)}</p>` : ''}<p class="note">${esc(v.rating_label || '')}</p></div>
       <div class="meta"><b class="num">${fmt(c.sentences)}</b> sentences from ${fmt(c.works)} papers · rated sound ${fmt(c.ratings.sound || 0)}, weak ${fmt(c.ratings.weak || 0)}, wrong ${fmt(c.ratings.wrong || 0)} · <b class="num">${fmt(c.unrated)}</b> not rated by you</div>${items}`;
   }
@@ -236,6 +322,9 @@ HUB.load(['shell', 'chat']).then(d => {
     if (!v) { host.innerHTML = '<div class="ch-empty">Open a sheet or answer from the list below, or order one above.</div>'; return; }
     host.innerHTML = v.kind === 'sheet' ? sheetHtml(v) : answerHtml(v);
     host.querySelectorAll('.ch-rate').forEach(row => wireRate(row, v));
+    wireFollow(host);
+    host.querySelectorAll('[data-spar-i]').forEach(b => { b.onclick = () => { const i = Number(b.dataset.sparI); prefill({ kind: 'spar', mode: 'explore', text: i < 0 ? v['question'] : v.sentences[i]['text'], parent: v.answer_id }); }; });
+    host.querySelectorAll('[data-ask-i]').forEach(b => { b.onclick = () => prefill({ kind: 'ask', text: v.arguments[Number(b.dataset.askI)].claim, parent: v.sheet_id }); });
     const bs = host.querySelector('#ch-bal-save');
     if (bs) bs.onclick = () => {
       const msg = host.querySelector('#ch-bal-msg'), lean = host.querySelector('#ch-bal-lean').value, note = host.querySelector('#ch-bal-note').value.trim();
@@ -286,14 +375,33 @@ HUB.load(['shell', 'chat']).then(d => {
     host.querySelectorAll('[data-result]').forEach(a => { a.onclick = e => { e.preventDefault(); const id = a.dataset.result; st.sheet = id.startsWith('sht_') ? id : ''; st.answer = id.startsWith('ans_') ? id : ''; writeHash(); openResult(); }; });
   }
 
-  /* ---------- 5. earlier sheets and answers ---------- */
-  function paintEarlier() {
-    const sheets = C.sheets || [], answers = C.answers || [];
-    const sRow = s => `<li><a href="#sheet=${encodeURIComponent(s.sheet_id)}" data-result="${esc(s.sheet_id)}">${esc(s.hypothesis.slice(0, 110))}</a> <span class="meta">${esc(s.mode)} · ${fmt(s.arguments)} arguments · ${fmt(s.unrated)} not rated · ${s.has_balance ? 'balance written' : 'no balance yet'} · ${esc(s.ts.slice(0, 10))}</span></li>`;
-    const aRow = a => `<li><a href="#answer=${encodeURIComponent(a.answer_id)}" data-result="${esc(a.answer_id)}">${esc(a.question.slice(0, 110))}</a> <span class="meta">${fmt(a.sentences)} sentences · ${esc(a.ts.slice(0, 10))}</span></li>`;
-    const host = main.querySelector('#ch-earlier');
-    host.innerHTML = `<div class="h3">Sheets <span class="meta">${fmt(sheets.length)}</span></div>${sheets.length ? `<ul class="ch-list">${sheets.map(sRow).join('')}</ul>` : '<div class="ch-empty">No sheet yet.</div>'}
-      <div class="h3" style="margin-top:14px">Answers <span class="meta">${fmt(answers.length)}</span></div>${answers.length ? `<ul class="ch-list">${answers.map(aRow).join('')}</ul>` : '<div class="ch-empty">No answer yet.</div>'}`;
+  /* ---------- 5. conversations: the parent links, nested; every exchange is already saved ---------- */
+  const STATE = { open: 'waiting', taken: 'running', answered: 'answered', done: 'answered', failed: 'failed' };
+  const stateClass = x => (x === 'answered' ? 'done' : x);
+  function nodeLine(n) {
+    const label = n.type === 'answer' ? 'Answer' : n.type === 'sheet' ? 'Spar · ' + (n.mode || 'explore') : (n.kind === 'spar' ? 'Spar' : 'Ask');
+    const shown = esc(n.text.slice(0, 110));
+    const link = n.type === 'request' ? shown : `<a href="#${n.type === 'answer' ? 'answer' : 'sheet'}=${encodeURIComponent(n.id)}" data-result="${esc(n.id)}">${shown}</a>`;
+    const status = n.type === 'request'
+      ? (n.state === 'failed' ? 'the run ended without a complete result' : n.state === 'taken' ? 'a session is working on it' : 'waiting for a session')
+      : (n.state === 'taken' ? 'a session is working on it' : n.state === 'failed' ? 'the run ended without a complete result' : '');
+    const saved = n.type !== 'request' && n.state === 'done' ? '<span class="ch-saved">Saved</span>' : `<span class="ch-wait">${esc(status)}</span>`;
+    const fu = n.type === 'request' ? '' : `<button type="button" class="btn" data-follow="${esc(n.id)}">Follow up</button>`;
+    return `<li style="margin-left:${Math.min(n.depth, 6) * 18}px;padding-left:8px"><span class="meta">${esc(label)}</span> ${link} ${saved} ${fu}</li>`;
+  }
+  function threadHtml(t) {
+    const open = t.root in st.openT ? st.openT[t.root] : t.state !== 'answered';
+    const rootNode = t.nodes[0], canFollow = rootNode && rootNode.type !== 'request';
+    const head = `<div class="ch-thead"><b>${esc(t.text.slice(0, 110))}</b> <span class="ch-state ${esc(stateClass(t.state))}">${esc(STATE[t.state] || t.state)}</span>
+      <span class="meta">${fmt(t.count)} ${t.count === 1 ? 'exchange' : 'exchanges'} · latest ${esc(t.latest.slice(0, 10))} · Saved</span>
+      <button type="button" class="btn" data-tog="${esc(t.root)}" aria-expanded="${open}">${open ? 'Hide thread' : 'Show thread'}</button>${canFollow ? `<button type="button" class="btn" data-follow="${esc(t.root)}">Follow up</button>` : ''}</div>`;
+    return `<li class="ch-thread">${head}${open ? `<ul class="ch-nodes">${t.nodes.map(nodeLine).join('')}</ul>` : ''}</li>`;
+  }
+  function paintThreads() {
+    const ts = C.threads || [], host = main.querySelector('#ch-earlier');
+    host.innerHTML = ts.length ? `<div class="meta"><b class="num">${fmt(ts.length)}</b> conversations</div><ul class="ch-list" style="padding:0">${ts.slice(0, 50).map(threadHtml).join('')}</ul>${ts.length > 50 ? `<div class="meta">The latest 50 of ${fmt(ts.length)} are listed.</div>` : ''}` : '<div class="ch-empty">No conversation yet.</div>';
+    host.querySelectorAll('[data-tog]').forEach(b => { b.onclick = () => { const t = ts.find(x => x.root === b.dataset.tog); const was = t.root in st.openT ? st.openT[t.root] : t.state !== 'answered'; st.openT[t.root] = !was; paintThreads(); }; });
+    wireFollow(host);
     wireResults(host);
   }
 
@@ -316,8 +424,8 @@ HUB.load(['shell', 'chat']).then(d => {
 
   /* ---------- the whole page, and the poll while an order is waiting or running ---------- */
   function refresh() {
-    if (!HUB.served) { paintProgress(); paintEarlier(); return Promise.resolve(); }
-    return getLive('').then(({ ok, j }) => { if (ok) { C = j; paintProgress(); paintEarlier(); paintPrecision(); const sel = main.querySelector('#ch-parent'); if (sel && document.activeElement !== sel) sel.innerHTML = parentOptions(); } })
+    if (!HUB.served) { paintProgress(); paintThreads(); return Promise.resolve(); }
+    return getLive('').then(({ ok, j }) => { if (ok) { C = j; paintProgress(); paintThreads(); paintPrecision(); const sel = main.querySelector('#ch-parent'); if (sel && document.activeElement !== sel) sel.innerHTML = parentOptions(); } })
       .then(() => { if ((st.sheet || st.answer) && !(document.activeElement && document.activeElement.closest('.ch-rate, .ch-bal') && main.contains(document.activeElement.closest('.ch-rate, .ch-bal')))) return openResult(); })
       .catch(() => {});
   }
@@ -328,9 +436,9 @@ HUB.load(['shell', 'chat']).then(d => {
        <section class="card ch-card"><h3>2. Your order</h3><div id="ch-form"></div></section>
        <section class="card ch-card"><h3>3. Progress</h3><div id="ch-progress"></div></section>
        <section class="card ch-card"><h3>4. Result</h3><div id="ch-result"></div></section>
-       <section class="card ch-card"><h3>5. Earlier sheets and answers</h3><div id="ch-earlier"></div></section>
+       <section class="card ch-card"><h3>5. Conversations ${H.info('A conversation is a question or hypothesis with its follow-ups beneath it, built from the follow-up links. Every answer and sheet is recorded when it is written; nothing here needs saving.', 'About conversations')}</h3><div id="ch-earlier"></div></section>
        <section class="card ch-card"><h3>6. Precision ${H.info(esc((M.precision || 'Your ratings summarised; every figure is computed from them.')), 'About precision')}</h3><div id="ch-precision"></div></section>`;
-    paintBasket(); paintForm(); paintProgress(); paintEarlier(); paintPrecision(); openResult();
+    paintBasket(); paintForm(); paintProgress(); paintThreads(); paintPrecision(); openResult(); loadCtx();
   }
   readHash(); render(); if (HUB.served) refresh();
   window.addEventListener('hashchange', () => { readHash(); render(); });

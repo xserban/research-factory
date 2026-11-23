@@ -108,6 +108,7 @@ PREWARM_ORDER: Final = (
     "method",
     "costs",
     "write",
+    "intuition",
     "platform",
     "learn",
 )

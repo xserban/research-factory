@@ -33,6 +33,7 @@ NEW_PAGES = (
     "platform",
     "contradictions",
     "chat",
+    "intuition",
     "learn",
     "levels",
 )
@@ -244,6 +245,7 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "write",
         "living",
         "costs",
+        "intuition",
         "platform",
         "learn",
         "kit",
