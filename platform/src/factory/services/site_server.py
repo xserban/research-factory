@@ -99,6 +99,7 @@ from factory.services import export_works as export_works_service
 from factory.services import feed as feed_service
 from factory.services import (
     hub_chat,
+    hub_hypotheses,
     hub_learn,
     hub_serve,
     site_auth,
@@ -142,6 +143,10 @@ UI_CHAT_ROUTES: Final = {
 }
 """The hub Chat page's researcher acts (night feature N5): route, the command it is authorised
 as, and the service act. Each is the local human's; nothing else on `/ui/` writes."""
+UI_HYPOTHESES_ROUTES: Final = hub_hypotheses.ACTS
+"""The hub Hypotheses page's researcher acts: decide a lead, register or abandon a hypothesis. Each
+is authorised as the CLI command of its kind and is the local human's; the service applies the
+gate and the proposer separation."""
 UI_DOC_PREFIX: Final = "data/sources-doc-"
 """The lazy payload family of one converted document (`hub_sources.document_detail`)."""
 UI_PREFIX: Final = "/ui"
@@ -568,6 +573,19 @@ def _chat_route(
     return route
 
 
+def _hypotheses_route(
+    command_of: Callable[[dict[str, Any]], str | None],
+    act: Callable[[Project, Any, dict[str, Any]], dict[str, object]],
+) -> Callable[[Project, dict[str, Any]], tuple[int, dict[str, object]]]:
+    def route(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
+        name = command_of(body)
+        if name is None:  # no access row is chosen for an unknown decision
+            return 400, _issues(ValidationIssue("decision", "must be promote, park or discard"))
+        return _layer_act(project, name, [], lambda actor: act(project, actor, body))
+
+    return route
+
+
 def layers_payload(project: Project) -> dict[str, object]:
     """The latest scheme's layer ids and each known work's layer (read-only; the page's selects)."""
     from factory.services.reference_layers import current_scheme
@@ -704,6 +722,7 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
     EXPORT_ROUTE: export_works_zip,
     UI_SNOWBALL_ROUTE: ui_snowball_add,
     **{path: _chat_route(command, act) for path, (command, act) in UI_CHAT_ROUTES.items()},
+    **{path: _hypotheses_route(cmd, act) for path, (cmd, act) in UI_HYPOTHESES_ROUTES.items()},
     "/api/inbox/add": project_inbox_add,
     "/api/feed/run": feed_run_here,
     "/api/feed/refetch": feed_refetch_here,
@@ -711,6 +730,7 @@ _ROUTES: Final[dict[str, Callable[..., tuple[int, dict[str, object]]]]] = {
 
 
 _CHAT_ACTS: Final = tuple(_ROUTES[path] for path in UI_CHAT_ROUTES)
+_HYPOTHESES_ACTS: Final = tuple(_ROUTES[path] for path in UI_HYPOTHESES_ROUTES)
 
 Freshness = Literal["fresh", "stale", "queued", "building", "failed"]
 """What `Rebuilder.ensure` answers for a product: `fresh` (serve it), `stale` (serve the previous
@@ -1736,6 +1756,7 @@ def _handler_class(
                 move_layer,
                 ui_snowball_add,
                 *_CHAT_ACTS,
+                *_HYPOTHESES_ACTS,
             ):
                 with slot.write_lock:
                     code, payload = route(project, body)
