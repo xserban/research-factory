@@ -163,7 +163,8 @@ def test_a_token_from_one_project_writes_nothing_to_another(
     # the right token reaches the act, which refuses the missing entry (400): routed, not forbidden
     assert _post(port, "/p/other/api/feed/react", act, other_token) == 400
     assert _post(port, "/p/nope/api/feed/react", act, other_token) == 404
-    assert _post(port, "/api/feed/react", act, other_token) == 404
+    # the hub's own route (the factory feed's reaction) takes the hub token, not a project's
+    assert _post(port, "/api/feed/react", act, other_token) == 403
 
 
 def test_projects_do_not_share_a_write_lock(

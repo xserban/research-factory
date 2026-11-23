@@ -98,3 +98,8 @@ On a fixture project with three core works and a recorded arXiv listing of about
 ## Not in this slice
 
 Changes to the protocol channel (slice 4b), screening order by feed score (R-34; the screening ranker of decision 116 is separate), any automatic send, and any agent step inside the feed cycle.
+
+## Status notes (dated; rulings above are not rewritten)
+
+- 2026-11-23, ruling 8 (learned preference ranker): built for the factory scope on branch `factory-feed`, reviewed, not merged. Scope as built: a general like/dislike ranker over the factory pool, training by button only (never automatic), dislikes only as negatives (plan assumption A1), project pages ordered by core-work similarity without learning. Decision 169 proposed. See `docs/plans/2026-11-23-factory-feed.md` (section 8, build notes). Per-project learned ranking is not built.
+- 2026-11-23, "cross-project view of one day's feed" (IDEA-01, Later): built for the factory scope as the main-hub `/feed/` Today list, with project badges. See the same plan and IDEA-58 in `docs/backlog.md`.
