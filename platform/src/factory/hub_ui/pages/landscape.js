@@ -77,6 +77,20 @@ HUB.load(['shell']).then(d => {
 .ls svg.ego a{cursor:pointer;text-decoration:none}
 .ls svg.ego a:hover text{text-decoration:underline}
 .ls svg.ego .dot{fill:var(--acc)}
+.ls .gseg{display:inline-flex;gap:0;margin:8px 0 6px;border:1px solid var(--line);border-radius:var(--r-s);overflow:hidden}
+.ls .gseg button{all:unset;cursor:pointer;padding:6px 14px;font-size:var(--t-s);color:var(--mut)}
+.ls .gseg button[aria-pressed=true]{background:var(--acc-soft);color:var(--fg);font-weight:500}
+.ls .gseg button:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+.ls svg.gr{display:block;width:100%;min-width:880px;height:auto;background:var(--surface);border-radius:var(--r)}
+.ls svg.gr text{fill:var(--fg);font:400 11px var(--f-ui);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
+.ls svg.gr .colh{fill:var(--mut);font-weight:500;letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.ls svg.gr .ge{fill:none;opacity:.5}
+.ls svg.gr .gn{cursor:pointer}
+.ls svg.gr .gn circle,.ls svg.gr .gn rect{stroke:var(--fg);stroke-width:1}
+.ls svg.gr .gn:focus-visible circle,.ls svg.gr .gn:focus-visible rect{stroke-width:3;stroke:var(--acc)}
+.ls svg.gr.hot .ge,.ls svg.gr.hot .gn{opacity:.18}
+.ls svg.gr.hot .ge.on{opacity:.95}.ls svg.gr.hot .gn.on{opacity:1}
+.ls svg.gr .gn:hover text{text-decoration:underline}
 .ls .empty{color:var(--mut);padding:10px 0;font-size:var(--t-s)}
 .ls td.q{max-width:520px}
 .ls .t td.r{white-space:nowrap}
@@ -229,6 +243,100 @@ HUB.load(['shell']).then(d => {
     }
 
     /* ---------- candidates (default lens, ranked on the server) ---------- */
+
+    /* ---------- graph view: approaches as nodes, co-use or descent as edges ---------- */
+    /* Deterministic layout: one column per stage (co-used) or per year (descent), nodes in a column ordered by
+       papers (ties by id), evenly spaced; edges are cubic curves. No randomness, no library. */
+    const GCOL = ['--l-core', '--l-benchmark', '--l-applied', '--l-adjacent', '--h-collab', '--h-review', '--h-none', '--h-feedback', '--h-physical', '--l-background'];
+    const GMAX = 120, GX = 210, GY = 24, GTOP = 46;
+    let graphKind = 'co-used';
+    const stCol = st => 'var(' + GCOL[Math.max(0, stages.indexOf(st)) % GCOL.length] + ')';
+    const plural = (n, w) => fmt(n) + ' ' + w + (n === 1 ? '' : 's');
+    function graphModel(C) {
+      if (graphKind === 'co-used') {
+        /* papers per approach and per pair, in the current lens (layer, evidence, status), counted from the rows */
+        const byWork = new Map();
+        for (const r of R) { if (!inLens(r)) continue; (byWork.get(r[1]) || byWork.set(r[1], new Set()).get(r[1])).add(CAT[r[0]].id); }
+        const pair = new Map();
+        for (const set of byWork.values()) { const a = [...set].sort(); for (let i = 0; i < a.length; i++) for (let j = i + 1; j < a.length; j++) { const k = a[i] + '\u0000' + a[j]; pair.set(k, (pair.get(k) || 0) + 1); } }
+        const all = [...pair].map(([k, w]) => { const [s, t] = k.split('\u0000'); return { s, t, w }; }).filter(e => e.w >= D.default.min_co_works)
+          .sort((x, y) => y.w - x.w || (x.s + x.t < y.s + y.t ? -1 : 1));
+        const edges = all.slice(0, GMAX), used = new Set(edges.flatMap(e => [e.s, e.t]));
+        const nodes = [...used].map(id => { const c = CAT[catById.get(id)], x = C.by.get(id); return { id, label: c.name, col: c.stage, n: x ? x.works.size : 0, tip: c.name + ' · ' + stLabel(c.stage) + ' · ' + plural(x ? x.works.size : 0, 'paper') }; });
+        return { nodes, edges: edges.map(e => ({ s: e.s, t: e.t, w: e.w, st: CAT[catById.get(e.s)].stage, tip: CAT[catById.get(e.s)].name + ' with ' + CAT[catById.get(e.t)].name + ' · ' + plural(e.w, 'paper') + ' together' })),
+          omitted: all.length - edges.length, colKeys: stages.filter(st => nodes.some(n => n.col === st)), colName: stLabel, directed: false };
+      }
+      /* descent: a paper reports reusing an approach it cites; shown between the two papers, arrow from the cited one */
+      const all = D.derives_from.filter(e => lens.layer === 'all' || (e.source_layer === lens.layer && e.target_layer === lens.layer))
+        .map(e => ({ s: e.target, t: e.source, ap: e.approach })).sort((x, y) => (x.s + x.t + x.ap < y.s + y.t + y.ap ? -1 : 1));
+      const edges = all.slice(0, GMAX), used = new Set(edges.flatMap(e => [e.s, e.t]));
+      const nodes = [...used].filter(id => workIdx.has(id)).map(id => { const w = W[workIdx.get(id)];
+        return { id, label: w.title, col: String(w.year || 'undated'), n: 1, work: true, tip: w.title + ' · ' + (w.year || 'undated') }; });
+      const ok = new Set(nodes.map(n => n.id));
+      const kept = edges.filter(e => ok.has(e.s) && ok.has(e.t) && catById.has(e.ap));
+      return { nodes, edges: kept.map(e => ({ s: e.s, t: e.t, w: 1, st: CAT[catById.get(e.ap)].stage, ap: e.ap,
+        tip: W[workIdx.get(e.t)].title + ' reuses ' + CAT[catById.get(e.ap)].name + ' from ' + W[workIdx.get(e.s)].title })),
+        omitted: all.length - kept.length, colKeys: [...new Set(nodes.map(n => n.col))].sort(), colName: x => x, directed: true };
+    }
+    function graphSvg(g) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const mk = (tag, at, par) => { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); if (par) par.appendChild(e); return e; };
+      const cols = g.colKeys, byCol = new Map(cols.map(c => [c, []]));
+      for (const n of g.nodes) byCol.get(n.col).push(n);
+      let rows = 1;
+      for (const [, a] of byCol) { a.sort((x, y) => y.n - x.n || (x.id < y.id ? -1 : 1)); rows = Math.max(rows, a.length); }
+      const Wd = 60 + cols.length * GX, Ht = GTOP + rows * GY + 16, maxN = g.nodes.reduce((m, n) => Math.max(m, n.n), 1);
+      const pos = new Map();
+      cols.forEach((c, ci) => byCol.get(c).forEach((n, i) => pos.set(n.id, { x: 30 + ci * GX + 8, y: GTOP + i * GY + GY / 2 })));
+      const svg = mk('svg', { viewBox: `0 0 ${Wd} ${Ht}`, class: 'gr', role: 'group', 'aria-label': g.directed ? 'Candidate lines of descent between papers' : 'Approaches used together, by stage' }, null);
+      const defs = mk('defs', {}, svg);
+      if (g.directed) stages.forEach((st, i) => { const m = mk('marker', { id: 'gar' + i, viewBox: '0 0 8 8', refX: 8, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto' }, defs); mk('path', { d: 'M0,0 L8,4 L0,8 z', fill: stCol(st) }, m); });
+      cols.forEach((c, ci) => { const t = mk('text', { x: 30 + ci * GX, y: 20, class: 'colh' }, svg); t.textContent = short(g.colName(c), 24); });
+      const maxW = g.edges.reduce((m, e) => Math.max(m, e.w), 1), eEls = [], nEls = new Map();
+      for (const e of g.edges) {
+        const a = pos.get(e.s), b = pos.get(e.t), same = Math.abs(a.x - b.x) < 1, bow = same ? -(40 + Math.abs(a.y - b.y) / 6) : (b.x - a.x) / 2;
+        const d = same ? `M${a.x},${a.y} C${a.x + bow},${a.y} ${b.x + bow},${b.y} ${b.x},${b.y}` : `M${a.x},${a.y} C${a.x + bow},${a.y} ${b.x - bow},${b.y} ${b.x},${b.y}`;
+        const at = { d, class: 'ge', stroke: stCol(e.st), 'stroke-width': (g.directed ? 1.6 : 1 + 5 * e.w / maxW).toFixed(1) };
+        if (g.directed) at['marker-end'] = 'url(#gar' + Math.max(0, stages.indexOf(e.st)) + ')';
+        const p = mk('path', at, svg); mk('title', {}, p).textContent = e.tip; eEls.push([p, e]);
+        if (g.directed) { p.style.cursor = 'pointer'; p.setAttribute('data-go', e.ap); }
+      }
+      for (const n of g.nodes) {
+        const q = pos.get(n.id), gg = mk('g', { class: 'gn', tabindex: 0, role: 'button', 'aria-label': n.tip, transform: `translate(${q.x},${q.y})` }, svg);
+        if (!g.directed) gg.setAttribute('data-go', n.id); else if (H.byId.has(n.id)) gg.setAttribute('data-paper', n.id);
+        mk(n.work ? 'rect' : 'circle', n.work ? { x: -4, y: -4, width: 8, height: 8, fill: 'var(--raised)' } : { r: (3.5 + 6 * Math.sqrt(n.n / maxN)).toFixed(1), fill: stCol(n.col) }, gg);
+        const t = mk('text', { x: 13, y: 4 }, gg); t.textContent = short(n.label, 26) + (n.work ? '' : ' · ' + fmt(n.n));
+        mk('title', {}, gg).textContent = n.tip; nEls.set(n.id, gg);
+      }
+      const hot = id => { const on = new Set([id]); svg.classList.add('hot'); for (const [p, e] of eEls) if (e.s === id || e.t === id) { p.classList.add('on'); on.add(e.s); on.add(e.t); } for (const i of on) nEls.get(i).classList.add('on'); };
+      const cool = () => { svg.classList.remove('hot'); svg.querySelectorAll('.on').forEach(x => x.classList.remove('on')); };
+      for (const [id, gg] of nEls) { gg.addEventListener('mouseenter', () => hot(id)); gg.addEventListener('mouseleave', cool); gg.addEventListener('focus', () => hot(id)); gg.addEventListener('blur', cool); }
+      return svg;
+    }
+    function graphView(C) {
+      const g = graphModel(C);
+      const kinds = [['co-used', 'Used together'], ['descent', 'Descent']];
+      const info = '<b>What it shows</b> Approaches as dots, grouped in columns by stage.<p><span class=k>How to read it.</span> '
+        + 'In <i>Used together</i>, a line joins two approaches that share at least ' + fmt(D.default.min_co_works) + ' papers in the current lens; a thicker line means more shared papers, and a bigger dot means more papers use the approach. '
+        + 'In <i>Descent</i>, dots are papers in columns by year, and an arrow runs from a cited paper to a paper that reports reusing the same approach from it; the colour is the approach’s stage. Click a dot (or an arrow, in Descent) to open the approach.</p>'
+        + '<p><span class=k>Caution.</span> Exploratory. Shared papers show that approaches appear together, not that one builds on the other; a descent arrow is a candidate to check, not an origin claim. The layout carries no meaning beyond the columns and the order by papers.</p>';
+      const note = g.directed
+        ? `${esc(D.derives_lens_note)}. ${fmt(g.edges.length)} lines between ${fmt(g.nodes.length)} papers${g.omitted ? `; ${fmt(g.omitted)} more left out by the cap of ${fmt(GMAX)}` : ''}.`
+        : `${fmt(g.edges.length)} pairs among ${fmt(g.nodes.length)} approaches, at least ${fmt(D.default.min_co_works)} papers each, in the current lens${g.omitted ? `; ${fmt(g.omitted)} weaker pairs left out by the cap of ${fmt(GMAX)}` : ''}.`;
+      return `<section class="sec">${H.header({ title: 'Graph', level: 2, infoHtml: info, sub: 'Exploratory. Follows the lens above' })}
+        <div class="gseg" role="group" aria-label="Kind of line">${kinds.map(([k, t]) => `<button type="button" data-gk="${k}" aria-pressed="${k === graphKind}">${esc(t)}</button>`).join('')}</div>
+        ${g.nodes.length ? `<div class="scrollx" id="ls-graph"></div><p class="meta">${note}</p>` : `<p class="empty">${graphKind === 'co-used' ? 'No two approaches share enough papers in this lens. Widen the lens above.' : 'No candidate line of descent in this layer.'}</p>`}</section>`;
+    }
+    function bindGraph(C) {
+      const host = document.getElementById('ls-graph');
+      if (host) {
+        const g = graphModel(C), svg = graphSvg(g); host.appendChild(svg);
+        const open = el => { const id = el.getAttribute('data-go'), pp = el.getAttribute('data-paper'); if (id) go(id); else if (pp) H.openDrawer(pp); };
+        svg.addEventListener('click', e => { const t = e.target.closest('[data-go],[data-paper]'); if (t) open(t); });
+        svg.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.getAttribute && (e.target.getAttribute('data-go') || e.target.getAttribute('data-paper'))) { e.preventDefault(); open(e.target); } });
+      }
+      main.querySelectorAll('[data-gk]').forEach(b => b.onclick = () => { graphKind = b.dataset.gk; overview(); const again = main.querySelector(`[data-gk="${graphKind}"]`); if (again) again.focus(); });
+    }
     function scoreLine(sc) {
       if (!sc) return '';
       const parts = [['composite', sc.composite], ['popularity', sc.popularity], ['stage', sc.stage], ['strength', sc.strength], ['bridge', sc.bridge], ['evidence', sc.evidence], ['generic', sc.generic]].filter(x => x[1] != null);
@@ -268,9 +376,10 @@ HUB.load(['shell']).then(d => {
           <section class="sec">${H.header({ title: 'Stages', level: 2, infoHtml: M.agreement })}${stagesView(C)}</section>
           <section class="sec">${H.header({ title: 'Approaches by stage', level: 2, infoHtml: M.matrix })}${legend()}${matrixView(C)}</section>
           <section class="sec">${H.header({ title: 'Used together', level: 2, sub: 'Core layer, the server’s default lens' })}${coUsedView()}</section>
+          ${graphView(C)}
           <section class="sec">${H.header({ title: 'Candidates to check', level: 2, infoHtml: M.candidates })}${candidatesView()}</section>`)
         + `<p class="foot">${esc(D.sets.what)}: ${fmt(D.sets.works)} papers, ${fmt(D.sets.rows)} rows; ${esc(H.SETS_NOTE)} ${H.info('The Landscape counts papers read by the technique miners. That set can differ from the included papers; the Flow page lists every difference by id.', 'About these papers')}</p>`;
-      bindLens(overview); bindPapers(main);
+      bindLens(overview); bindPapers(main); if (!empty) bindGraph(C);
     }
 
     /* ---------- one approach ---------- */
