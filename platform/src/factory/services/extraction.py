@@ -116,6 +116,7 @@ from factory.services.budgets import budget_issue, require_for, spent_for, task_
 from factory.services.call_memo import memoised
 from factory.services.context import Project
 from factory.services.conversions import conversion_manifest
+from factory.services.dedup import absorbed_ids
 from factory.services.document_read import ConversionRef, default_conversion
 from factory.services.extraction_verify import VALUE_FIELD, verify_row_in
 from factory.services.notices import work_states
@@ -810,7 +811,9 @@ def next_unit(
         ):  # a unit closed once is never mined for the calibration again
             closed = calibration_closed_works(project, scope, calibration_id)
             population = [w for w in population if w not in closed]
-        queue = _queue(label, population, config.seed, schema)
+        # An absorbed duplicate is read (its rows stay) but never served again: one paper, one unit.
+        canonical = absorbed_ids(project)
+        queue = _queue(label, [w for w in population if w not in canonical], config.seed, schema)
         queued, remaining, unconverted = _enqueue(
             project,
             actor,
@@ -2297,11 +2300,14 @@ def unit_states(
     else:
         sample = set()
     ledger = ledger or _ledger(project, scope, calibration_id)
+    absorbed = absorbed_ids(project)
     out: list[UnitState] = []
     for work_id in population:
-        out.append(ledger.state(work_id, PassLabel.A, schema, pack))
+        units = [ledger.state(work_id, PassLabel.A, schema, pack)]
         if work_id in sample:
-            out.append(ledger.state(work_id, PassLabel.B, schema, pack))
+            units.append(ledger.state(work_id, PassLabel.B, schema, pack))
+        # An absorbed duplicate awaits nothing: only its current units stay, so its rows are read.
+        out.extend(u for u in units if work_id not in absorbed or u.state == "current")
     return out
 
 
