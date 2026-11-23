@@ -316,7 +316,12 @@ def test_the_runner_runs_one_feed_at_a_time_and_keeps_the_outcome() -> None:
     release.set()
     _wait(lambda: not runner.running and runner.last is not None)
     assert seen == [True]
-    assert runner.last == {"refetch": True, "exit_code": 0, "outcomes": []}
+    assert runner.last == {
+        "refetch": True,
+        "exit_code": 0,
+        "outcomes": [],
+        "factory_ranking": None,
+    }
     assert runner.start() is True  # free again
     _wait(lambda: not runner.running)
     assert seen == [True, False]

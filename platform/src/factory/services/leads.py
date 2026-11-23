@@ -86,6 +86,7 @@ class LeadView(StrictModel):
     framework: str | None
     prior: tuple[str, ...]
     prior_total: int
+    serves_rq: str | None = None
     state: LeadState
     author_session: str
     event_id: str
@@ -308,6 +309,24 @@ def _works_as_stored(project: Project, item: LeadInput) -> LeadInput:
     return item.model_copy(update={"triggers": triggers})
 
 
+def serves_rq_issues(
+    project: Project, serves_rq: str | None, field: str = "serves_rq"
+) -> list[ValidationIssue]:
+    """Absent is allowed. A given id must be a sub-question id of the current recorded question;
+    when no question, or no sub-question, is recorded, any well-formed id is accepted."""
+    if serves_rq is None:
+        return []
+    from factory.services.question import current_question
+
+    version = current_question(project)
+    known = [] if version is None else [sq.id for sq in version.spec.sub_questions]
+    if known and serves_rq not in known:
+        return [
+            ValidationIssue(field, f"unknown question id; recorded: {', '.join(sorted(known))}")
+        ]
+    return []
+
+
 def record_lead(project: Project, actor: Actor, item: LeadInput) -> str:
     """Record a lead and return its id. Refused, with nothing written: an actor that is neither
     an agent nor a human (`actor`); a trigger that names no row (`triggers.<i>`: `unknown`) or a
@@ -319,6 +338,7 @@ def record_lead(project: Project, actor: Actor, item: LeadInput) -> str:
         project.index.sync()
         item = _works_as_stored(project, item)
         issues = trigger_issues(project, item.triggers)
+        issues.extend(serves_rq_issues(project, item.serves_rq))
         if issues:
             raise FactoryValidationError(issues)
         keys = lead_keys(project, item.triggers)
@@ -332,6 +352,7 @@ def record_lead(project: Project, actor: Actor, item: LeadInput) -> str:
             prior=tuple(prior),
             prior_total=total,
             keys=keys,
+            serves_rq=item.serves_rq,
         )
         input_blob = (
             project.blobs.put_json(item.model_dump(mode="json")) if actor.kind == "agent" else None
@@ -354,6 +375,7 @@ def _row_view(project: Project, row: object) -> LeadView:
         framework=None if m["framework"] is None else str(m["framework"]),
         prior=tuple(json.loads(str(m["prior_json"]))),
         prior_total=int(m["prior_total"]),
+        serves_rq=None if m["serves_rq"] is None else str(m["serves_rq"]),
         state=m["state"],
         author_session=str(m["author_session"]),
         event_id=str(m["event_id"]),

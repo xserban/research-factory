@@ -13,6 +13,7 @@ HUB.load(['shell', 'hypotheses']).then(d => {
   const L = D.leads || { by_state: {}, totals: {}, cap: 0 };
   const HY = D.hypotheses || { items: [], totals: {}, total: 0, cap: 0 };
   const S = D.stats || {};
+  const RQ = D.rq || [];
 
   if (!document.getElementById('hy-style')) {
     const st = document.createElement('style'); st.id = 'hy-style';
@@ -69,9 +70,15 @@ HUB.load(['shell', 'hypotheses']).then(d => {
   const served = !!HUB.served;
   const disabledNote = 'Available in the live hub';
 
-  const st = { state: 'open' };
+  const st = { state: 'open', rq: '' };
   const STATES = ['open', 'promoted', 'parked', 'discarded'];
-  const readHash = () => { const s = H.hash.get().get('state'); st.state = STATES.includes(s) ? s : 'open'; };
+  const readHash = () => { const h = H.hash.get(), s = h.get('state'), q = h.get('rq'); st.state = STATES.includes(s) ? s : 'open'; st.rq = RQ.some(g => g.id === q) ? q : ''; };
+  const inRq = x => !st.rq || (x.serves_rq || 'default') === st.rq;
+  const rqTag = x => `<span class="hy-tag" title="The research question it serves">${x.serves_rq ? esc(x.serves_rq) : 'RQ4, RQ5 (default)'}</span>`;
+  function rqChips() {
+    if (RQ.length < 2) return '';
+    return '<div class="hy-sel" role="group" aria-label="Research question"><button type="button" class="chip" data-rq="" aria-pressed="' + (st.rq === '') + '">All</button>' + RQ.map(g => `<button type="button" class="chip" data-rq="${esc(g.id)}" aria-pressed="${st.rq === g.id}">${esc(g.label)} <span class="n">${fmt(g.leads + g.hypotheses)}</span></button>`).join('') + '</div>';
+  }
 
   /* ---------- acts: one inline form per item; the service decides and may refuse ---------- */
   function ask(host, path, base, opts) {
@@ -168,13 +175,13 @@ HUB.load(['shell', 'hypotheses']).then(d => {
     const works = (l.works || []).length ? `<p class="meta">Works: ${l.works.map(w => workLink(w, w)).join(' · ')}</p>` : '';
     const priorTxt = l.prior_total ? `<p class="meta">Shares rows with ${fmt(l.prior_total)} earlier lead, hypothesis or closed direction.</p>` : '';
     const canDecide = l.state === 'open' || l.state === 'parked';
-    return `<li class="hy-item"><p class="tt">${prop}<span class="hy-tag">${esc(l.state)}</span> ${esc(l.text)}</p><p class="meta">Cites ${kinds || 'nothing'}${l.framework ? ' · framework ' + esc(l.framework) : ''}</p>` + ev + works + priorTxt + dec + (canDecide ? leadButtons(l) : '') + '</li>';
+    return `<li class="hy-item"><p class="tt">${prop}<span class="hy-tag">${esc(l.state)}</span>${rqTag(l)} ${esc(l.text)}</p><p class="meta">Cites ${kinds || 'nothing'}${l.framework ? ' · framework ' + esc(l.framework) : ''}</p>` + ev + works + priorTxt + dec + (canDecide ? leadButtons(l) : '') + '</li>';
   }
   function leads() {
     const chips = '<div class="hy-sel" role="group" aria-label="Lead state">' + STATES.map(s => `<button type="button" class="chip" data-state="${s}" aria-pressed="${st.state === s}">${esc(H.pretty(s))} <span class="n">${fmt((L.totals || {})[s] || 0)}</span></button>`).join('') + '</div>';
     const total = Object.values(L.totals || {}).reduce((a, b) => a + b, 0);
     if (!total) return sect('Leads', panel('Leads by state: proposals you promote, park or discard.', M.leads), empty('No lead is recorded yet. A lead is a short note a session writes from an observation, citing rows that resolve. Run the skill below to produce some.'));
-    const list = (L.by_state || {})[st.state] || [];
+    const list = ((L.by_state || {})[st.state] || []).filter(inRq);
     const shown = list.length, tot = (L.totals || {})[st.state] || 0;
     const body = list.length ? `<ol class="hy-list">${list.map(leadItem).join('')}</ol>` + (tot > shown ? `<p class="meta">${fmt(shown)} of ${fmt(tot)} shown, newest first.</p>` : '') : empty('No lead in this state.');
     return sect('Leads', panel('Leads by state. Every lead is a proposal; only you decide it.', M.leads), body, chips);
@@ -186,7 +193,7 @@ HUB.load(['shell', 'hypotheses']).then(d => {
     const dis = h.abandon_reason ? `<p class="meta">Abandoned: ${esc(H.pretty(h.abandon_reason))}</p>` : '';
     const con = h.conclusion ? `<p class="meta">Your conclusion (interpretation): ${esc(h.conclusion)}</p>` : '';
     const flags = (h.flags || []).length ? `<div class="hy-flags">${h.flags.map(f => `<span class="hy-tag">${esc(H.pretty(f))}</span>`).join('')}</div>` : '';
-    return `<li class="hy-item"><p class="tt">${prop}<span class="hy-tag">${esc(h.state)}</span><span class="hy-tag">${esc(h.kind)}</span> ${esc(h.statement)}</p>` +
+    return `<li class="hy-item"><p class="tt">${prop}<span class="hy-tag">${esc(h.state)}</span><span class="hy-tag">${esc(h.kind)}</span>${rqTag(h)} ${esc(h.statement)}</p>` +
       `<p class="meta">${esc(h.treatment)} against ${esc(h.baseline)} on ${esc(h.metric)} · version ${esc(h.h_version)}${h.lead ? ' · from lead ' + esc(h.lead) : ''}</p>` +
       `<p class="hy-why">Falsifier: ${esc(h.falsifier)}</p><div class="hy-gates" aria-label="Gates">${gates}</div>` + rv + dis + con + flags + hypButtons(h) + '</li>';
   }
@@ -194,7 +201,7 @@ HUB.load(['shell', 'hypotheses']).then(d => {
     if (!HY.total) return sect('Hypotheses', panel('Hypotheses drafted from promoted leads, with their gates and reviews.', M.hypotheses), empty('No hypothesis is drafted yet. A draft starts from a promoted lead; a fresh session then reviews it, and you register or abandon it.'));
     const tot = Object.entries(HY.totals || {}).filter(([, v]) => v).map(([k, v]) => `${fmt(v)} ${esc(k)}`).join(' · ');
     const more = HY.total > HY.items.length ? `<p class="meta">${fmt(HY.items.length)} of ${fmt(HY.total)} shown, newest first.</p>` : '';
-    return sect('Hypotheses', panel('Hypotheses with their state, gates and review. A hypothesis is a proposal, not a finding.', M.hypotheses), `<ol class="hy-list">${HY.items.map(hypItem).join('')}</ol>${more}`, `<p class="meta">${tot}</p>`);
+    return sect('Hypotheses', panel('Hypotheses with their state, gates and review. A hypothesis is a proposal, not a finding.', M.hypotheses), `<ol class="hy-list">${HY.items.filter(inRq).map(hypItem).join('')}</ol>${more}`, `<p class="meta">${tot}</p>`);
   }
 
   function stats() {
@@ -216,12 +223,13 @@ HUB.load(['shell', 'hypotheses']).then(d => {
     main.innerHTML = H.header({ title: 'Hypotheses', sub, level: 1, infoHtml: panel('The hypothesis engine: leads, their order, and the hypotheses drafted from them.', M.page) }) +
       `<p class="lead">${esc(lead)}</p>` +
       `<p class="hy-notice">${esc(D.notice || '')} Leads and hypotheses written by an agent are proposals; exploratory outputs are never counted as evidence.</p>` +
-      strip() + (D.empty ? howTo() : '') + grounding() + queue() + leads() + hypotheses() + stats() + (D.empty ? '' : howTo());
+      strip() + (D.empty ? howTo() : '') + grounding() + queue() + rqChips() + leads() + hypotheses() + stats() + (D.empty ? '' : howTo());
     wire();
   }
   function wire() {
     const on = (sel, fn) => main.querySelectorAll(sel).forEach(el => { el.onclick = e => { e.preventDefault(); fn(el); }; });
     const host = id => main.querySelector(`[data-host="${CSS.escape(id)}"]`);
+    on('[data-rq]', el => { st.rq = el.dataset.rq; H.hash.set({ rq: st.rq || null }); render(); });
     on('[data-state]', el => { st.state = el.dataset.state; H.hash.set({ state: st.state === 'open' ? null : st.state }); render(); });
     on('[data-decide]', el => {
       const kind = el.dataset.decide, id = el.dataset.lead;

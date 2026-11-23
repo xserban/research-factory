@@ -71,8 +71,10 @@ def site_status_cmd(ctx: typer.Context) -> None:
 
 def _feed_runner(state: Any) -> server_service.FeedRunner:
     """The hub's feed runner: `feed_run_all` over every configured project with one shared
-    fetch (`refetch` skips the shared cache). Built lazily: the source and the ranker are only
-    created when a run starts."""
+    fetch (`refetch` skips the shared cache), then the factory ranking when the pool holds new
+    fetches (so Today shows them without a Train). Built lazily: the source and the ranker are
+    only created when a run starts."""
+    from factory.services import factory_feed_actions
     from factory.services import feed as feed_service
     from factory.services.ranking_model import Specter2Embedder
     from factory.sources.arxiv import ArxivSource
@@ -82,7 +84,7 @@ def _feed_runner(state: Any) -> server_service.FeedRunner:
         source = ArxivSource(
             default_http(state.settings), clock=state.clock, mailto=state.settings.mailto
         )
-        return feed_service.feed_run_all(
+        outcome = feed_service.feed_run_all(
             state.settings,
             embedder_factory=Specter2Embedder,
             source=source,
@@ -90,6 +92,10 @@ def _feed_runner(state: Any) -> server_service.FeedRunner:
             clock=state.clock,
             bypass_cache=refetch,
         )
+        note = factory_feed_actions.rank_after_fetch(
+            state.settings, Specter2Embedder, session=state.session, clock=state.clock
+        )
+        return outcome.model_copy(update={"factory_ranking": note})
 
     return server_service.FeedRunner(run)
 

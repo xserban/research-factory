@@ -595,9 +595,102 @@ def reading_list(settings: Settings, *, clock: Clock | None = None) -> list[Feed
     return _by_state(settings, clock, "save")
 
 
+# --- freshness and the ranking after a fetch ---
+
+
+@dataclass(frozen=True)
+class Freshness:
+    """How current the factory feed is, for the page's date line. Timestamps are event `ts`
+    values (UTC ISO strings); dates are ISO dates."""
+
+    last_fetch_at: str | None
+    """When the newest readable `feed.fetched` of any project was recorded; None before any."""
+    window_to: str | None
+    """The latest submission-date window end of a complete fetch (arXiv lists with a lag)."""
+    newest_submitted: str | None
+    """The newest submission date in the pool."""
+    ranked_at: str | None
+    """When the newest factory ranking was recorded; None before the first."""
+    pool: int
+    unranked_fetches: int
+    """Fetches in the pool that the newest factory ranking did not include (all of them when
+    there is no ranking yet)."""
+
+    @property
+    def stale(self) -> bool:
+        """The pool holds papers the newest ranking has not ordered: Today lags behind them."""
+        return self.pool > 0 and self.unranked_fetches > 0
+
+
+def freshness(settings: Settings, *, clock: Clock | None = None) -> Freshness:
+    """The feed's freshness, kept by `cached` while no event is appended."""
+    return cached(settings, "freshness", lambda: _read_freshness(settings, clock))
+
+
+def _read_freshness(settings: Settings, clock: Clock | None) -> Freshness:
+    clock = clock or SystemClock()
+    last_at: str | None = None
+    window_to: str | None = None
+    for slug in list_projects(settings):
+        project = open_project(settings, slug, session=_READ_SESSION, clock=clock)
+        for event in feed_events(project.paths.events_dir, project.catalog):
+            if event.type != "feed.fetched" or event.actor.kind == "human":
+                continue
+            try:
+                payload = FeedFetched.model_validate(event.payload)
+            except ValidationError:
+                continue
+            ts = event.ts.isoformat()
+            last_at = ts if last_at is None or ts > last_at else last_at
+            if payload.complete:
+                end = payload.window_to.isoformat()
+                window_to = end if window_to is None or end > window_to else window_to
+    pool = load_pool(settings, clock=clock)
+    pool_fetches = {f for e in pool for f in e.fetch_ids}
+    ranked_at: str | None = None
+    ranked_fetches: set[str] = set()
+    if factory_scope_exists(settings):
+        scope = open_factory_scope(settings, session=_READ_SESSION, clock=clock)
+        for event in reversed(feed_events(scope.paths.events_dir, scope.catalog)):
+            if event.type != "feed.ranked":
+                continue
+            try:
+                ranked = FeedRanked.model_validate(event.payload)
+            except ValidationError:
+                continue
+            ranked_at = event.ts.isoformat()
+            ranked_fetches = set(ranked.fetch_ids)
+            break
+    dates = [e.submitted for e in pool if e.submitted]
+    return Freshness(
+        last_fetch_at=last_at,
+        window_to=window_to,
+        newest_submitted=max(dates)[:10] if dates else None,
+        ranked_at=ranked_at,
+        pool=len(pool),
+        unranked_fetches=len(pool_fetches - ranked_fetches),
+    )
+
+
+def rank_if_stale(
+    settings: Settings,
+    embedder_factory: Callable[[], Embedder],
+    *,
+    session: str,
+    clock: Clock,
+) -> RankResult | None:
+    """Rank the pool when it holds fetches the newest factory ranking did not include (or when
+    there is none yet); None when Today is already current. The encoder is built only when a
+    ranking is due. Called after every hub feed run, so a fetch reaches Today without a Train."""
+    if not _read_freshness(settings, clock).stale:
+        return None
+    return rank_pool(settings, embedder_factory(), session=session, clock=clock)
+
+
 __all__ = [
     "FeedCard",
     "FeedCounts",
+    "Freshness",
     "PoolEntry",
     "ProjectBadge",
     "ProjectScore",
@@ -605,9 +698,11 @@ __all__ = [
     "TodayPage",
     "counts",
     "disliked",
+    "freshness",
     "liked",
     "load_pool",
     "project_view",
+    "rank_if_stale",
     "rank_pool",
     "reading_list",
     "today",

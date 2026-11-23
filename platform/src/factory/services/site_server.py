@@ -2256,6 +2256,8 @@ class MainHub:
             counts=factory_feed.counts(env.settings, clock=env.clock),
             status=factory_feed_actions.ranker_status(env.settings, clock=env.clock),
             ranking_id=snapshot.ranking_id,
+            freshness=factory_feed.freshness(env.settings, clock=env.clock),
+            can_fetch=self.feed is not None,
         )
 
     def feed_page(self) -> str:

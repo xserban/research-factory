@@ -180,6 +180,9 @@ class FeedProjectOutcome(StrictModel):
 class FeedRunAll(StrictModel):
     exit_code: int
     outcomes: tuple[FeedProjectOutcome, ...]
+    factory_ranking: str | None = None
+    """The hub runner's note on the factory ranking after the run (`ranked N papers`, `up to
+    date`, `failed: ...`); None outside the hub."""
 
 
 def _refuse(field: str, reason: str) -> FactoryValidationError:

@@ -159,3 +159,7 @@ Deviations from the plan, as recorded in the commit messages:
 - Train runs inside the request; it returns 409 when a training is already running.
 
 Testing: tests were run per file for the touched test files. The full suite was not run locally; CI is the gate (`docs/runbook-ci.md`).
+
+### 8.1 Follow-up (2026-11-23): Fetch now and freshness
+
+First live use showed Today empty with 2,831 papers in the pool: only Train ranked the pool, so a fetch never reached Today. Now the hub's feed run (timer or the new **Fetch now** button, `POST /api/feed/run`) ranks the factory pool after fetching whenever the pool holds fetches the newest factory ranking did not include (`factory_feed.rank_if_stale`, `factory_feed_actions.rank_after_fetch`; the note is `factory_ranking` in `/api/feed/runner`). Today and the project pages show a date line (`factory_feed.freshness`): when the feed last fetched, the newest submission date, the pool size, when the list was ranked, and a warning when new papers are not ranked yet. A project still fetches at most once per its interval; Fetch now does not force a fetch.
