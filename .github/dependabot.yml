@@ -8,6 +8,9 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 3
+    # bibtexparser stays on 1.x (slice 3d ruling 18: the entry hash depends on its serialisation).
+    ignore:
+      - dependency-name: "bibtexparser"
     groups:
       python-dependencies:
         patterns: ["*"]
