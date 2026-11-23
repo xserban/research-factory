@@ -37,6 +37,7 @@ from factory.services import (
     hub_findings,
     hub_graph,
     hub_hypotheses,
+    hub_intuition,
     hub_landscape,
     hub_learn,
     hub_lenses,
@@ -664,6 +665,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "sources": hub_sources.build,
     "method": hub_method.build,
     "costs": hub_costs.build,
+    "intuition": hub_intuition.build,
     "write": hub_write.build,
     "platform": hub_platform.build,
     "learn": hub_learn.build,
@@ -725,6 +727,16 @@ PAYLOAD_INPUTS: dict[str, tuple[str, ...]] = {
         "gate.",
         "decision.",
         "document.",
+    ),
+    # the intuition layer: interpretations, concepts, their ideas and the converted passages
+    "intuition": (
+        "interpretation.",
+        "concept.",
+        "idea.",
+        "contribution.",
+        "document.",
+        "search.",
+        "import.",
     ),
     # the call ledger and the budget: agent-written work and its runs, not inbox, feed or pages
     "costs": (

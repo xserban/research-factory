@@ -217,6 +217,7 @@ RAIL_ORDER = [
     "contradictions",
     "hypotheses",
     "chat",
+    "intuition",
     "write",
     "living",
     "costs",
