@@ -93,7 +93,7 @@ def _authors(authors: Sequence[str]) -> str:
 def _badge(b: ProjectBadge) -> str:
     slug = _e(b.slug)
     href = f"/feed/project/{slug}/"
-    if b.held and b.score <= 0.0:
+    if b.held and abs(b.score) < 1e-12:
         return f"<a class=chip data-held data-score='0' href='{href}'>in {slug}</a>"
     held = " data-held" if b.held else ""
     label = f"{slug} {round(b.score * 100)}%" + (" · in project" if b.held else "")
