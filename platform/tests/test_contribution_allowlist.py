@@ -28,7 +28,7 @@ def _set_works(project: Project, agent: Actor, works: tuple[str, ...] | None) ->
         agent,
         current.spec.model_copy(update={"contribution_schema": schema}),
         reason="restrict contribution mining",
-        semantic=False,
+        semantic=True,
         effects={},
     )
 
@@ -81,7 +81,7 @@ def test_status_reports_the_list_and_unserveable_ids(
     with project.index.connect() as conn:
         ids = [str(r[0]) for r in conn.execute(text("SELECT work_id FROM works")).all()]
     outside = next(w for w in sorted(ids) if w not in world)
-    _set_works(project, agent, (world[0], outside))
+    _set_works(project, agent, tuple(sorted((world[0], outside))))
     status = contribution_status(project)
     state = status.allow_list
     assert state is not None
@@ -107,7 +107,7 @@ def test_list_is_refused_on_the_evidence_schema(
             agent,
             current.spec.model_copy(update={"extraction_schema": schema}),
             reason="x",
-            semantic=False,
+            semantic=True,
             effects={},
         )
 
