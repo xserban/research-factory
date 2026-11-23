@@ -208,6 +208,7 @@ RAIL_ORDER = [
     "lenses",
     "explore",
     "graph",
+    "ideas",
     "landscape",
     "sources",
     "method",
