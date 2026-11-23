@@ -219,9 +219,12 @@ def test_site_cli_feed_runner_never_carries_the_address(
 
     def fake_run_all(*_a: Any, source: Any, **_kw: Any) -> Any:
         source._http.get("https://export.arxiv.org/api/query", {"search_query": "all:x"})
-        return None
+        return feed_service.FeedRunAll(exit_code=0, outcomes=())
 
     monkeypatch.setattr(feed_service, "feed_run_all", fake_run_all)
+    from factory.services import factory_feed_actions
+
+    monkeypatch.setattr(factory_feed_actions, "rank_after_fetch", lambda *_a, **_k: "up to date")
     state = SimpleNamespace(
         settings=Settings(root=tmp_path, user="obd", mailto=ADDRESS),
         clock=FixedClock(T0),

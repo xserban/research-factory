@@ -236,7 +236,7 @@ def draft_hypothesis(
                 {
                     "spec": spec.model_dump(mode="json"),
                     "supersedes": supersedes,
-                    "serves_rq": serves_rq,
+                    **({} if serves_rq is None else {"serves_rq": serves_rq}),
                 }
             )
             if actor.kind == "agent"

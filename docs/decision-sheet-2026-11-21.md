@@ -16,8 +16,8 @@ Conflicts with *Decided* entries: none contradicts one. D3 (165) amends 84 item 
 | 166 (D4) | An agent's selection of a decision | Not built (`index/decisions.py:126` still drops non-human selections) | DECIDE (Q4) | Needed only for `pilot` and `systematic` at `autonomous`. |
 | 167 (D5) | Trust thresholds and stop rule | `services/gate_trust.py` (0.05 watch, 0.10 pause, 20 audited); `tests/test_autonomy.py` | DECIDE (Q5) | 5% equals the existing gate-audit ceiling. |
 | 168 (D6) | Promotion between tiers is by import | Nothing built; `tiers/` has no promotion; builds on 161 | DECIDE (Q6) | Keeps mode fixed at init. |
-| 169 (D7) | Relax "categories are the researcher's" for miner proposals (decision 120) | `services/miner_proposal.py`, skill `rf-miner-suggest`; design only, no admission change | DECIDE (Q7) | Label on every row; taxonomies stay the researcher's. |
-| 170 (D8) | Independent review of a miner schema | `services/miner_proposal.py` (check only); review not enforced in code | DECIDE (Q8) | Admission stays human; revisit after a benchmark. |
+| 171 (D7, was 169) | Relax "categories are the researcher's" for miner proposals (decision 120) | `services/miner_proposal.py`, skill `rf-miner-suggest`; design only, no admission change | DECIDE (Q7) | Label on every row; taxonomies stay the researcher's. |
+| 172 (D8, was 170) | Independent review of a miner schema | `services/miner_proposal.py` (check only); review not enforced in code | DECIDE (Q8) | Admission stays human; revisit after a benchmark. |
 | D-V1 | Validation profile per tier and level (reconstructed) | `tiers/validation.py`, `services/validation_profile.py`, `enforcement_for` in five consumers; `tests/test_validation_profile.py` | DECIDE (list) | Pilot, systematic and legacy projects keep today's `ENFORCEMENT`. |
 | D-V2 | Independent judge under `supervised` and `autonomous` (reconstructed) | `tiers/validation.py` (`independent_judge`, `calibration_required`) | DECIDE (list) | Same rule as D8 and R-154; label says `unvalidated` without human gold. |
 | D-V3 | Miner admission stays human at every level (reconstructed) | `tiers/validation.py` (`admission = "human"`); `services/miners.py` `admit_miner` | DECIDE (Q9) | No autonomous admission until ruled. |
@@ -85,13 +85,13 @@ Four batches, 16 questions. Option text can be pasted into a questionnaire.
 - C. No promotion; start the deeper study from scratch.
 - Other.
 
-**Q7 (169, D7: the researcher's categories and agent-proposed miner schemas).**
+**Q7 (171, D7: the researcher's categories and agent-proposed miner schemas).**
 - A (recommended). Relax decision 120 for miner schemas under `brief`, `deep` and `autonomous`, with the label `agent-proposed schema` on the level statement and every row view; taxonomies stay the researcher's.
 - B. No relaxation; a researcher ticks every proposed schema first.
 - C. Relax for `brief` only.
 - Other.
 
-**Q8 (170, D8: independent review of a miner schema).**
+**Q8 (172, D8: independent review of a miner schema).**
 - A (recommended). Under `supervised`, `autonomous` and `deep` a session and model other than the proposer's reviews the schema before the first run and judges its gold sample; admission stays human.
 - B. As A, and allow audited admission by an independent judge after a measured overturn rate.
 - C. No review below `supervised`.

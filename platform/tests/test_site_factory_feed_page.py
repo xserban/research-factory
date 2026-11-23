@@ -316,6 +316,13 @@ DRIVER = r"""<script>
       var go = $('.fx-pick .btn.primary', card); go.click();
       await until(function () { return $('.fx-msg', card); }, 'msg');
       out.steps.msg = ($('.fx-msg', card) || {}).textContent || '';
+    } else if (SCENARIO === 'fetch') {
+      var fb = $('#fx-fetch'), fl = $('#fx-fetch-line');
+      out.steps.label_before = fb.textContent;
+      out.steps.time_local = !/UTC/.test(($('.fx-fresh time') || {}).textContent || 'UTC');
+      fb.click();
+      await until(function () { return /Fetched, but ranking/.test(fl.textContent); }, 'fetched');
+      out.steps.line = fl.textContent; out.steps.disabled_after = fb.disabled;
     } else if (SCENARIO === 'filter') {
       var all = $$('.fx-card').length;
       var q = $('#fx-q'); q.value = 'Paper 3'; q.dispatchEvent(new Event('input', {bubbles: true}));
@@ -565,3 +572,115 @@ def test_redirects_keep_the_query(served: tuple[int, Settings]) -> None:
         resp.read()
         conn.close()
         assert resp.status == 301 and resp.getheader("Location") == location
+
+
+# ---------------------------------------------------------------- fetch now and freshness
+
+
+def _serve_with_runner(
+    settings: Settings, clock: FixedClock, runs: list[bool], note: str
+) -> tuple[ThreadingHTTPServer, int]:
+    """The hub with a factory feed and a feed runner whose run only records the call and returns
+    `note` as the factory ranking (no arXiv, no encoder)."""
+    from factory.services import site_server
+    from factory.services.context import list_projects, open_project
+
+    def run(refetch: bool) -> feed_service.FeedRunAll:
+        runs.append(refetch)
+        return feed_service.FeedRunAll(exit_code=0, outcomes=(), factory_ranking=note)
+
+    hub = site_server.MainHub(
+        settings.root,
+        lambda: list_projects(settings),
+        lambda slug: open_project(settings, slug, session=SESSION, clock=clock),
+        min_gap=300.0,
+        background=False,
+        feed=site_server.FeedRunner(run),
+        factory_feed=site_server.FactoryFeedEnv(settings, SESSION, clock, FakeEmbedder),
+    )
+    httpd = site_server.make_main_server(hub, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, httpd.server_address[1]
+
+
+def test_today_shows_the_date_line_and_says_the_runner_is_off_without_one(
+    served: tuple[int, Settings],
+) -> None:
+    port, _ = served
+    _, page = _get(port, "/feed/")
+    line = page[page.index("class=fx-fresh") :][:1500]
+    assert "Fetched <time datetime=" in line and "newest paper submitted 22 Nov 2026" in line
+    assert "6 papers" in line and "ranked <time datetime=" in line
+    assert "not ranked yet" not in line and "id=fx-fetch" not in line
+    assert "feed runner is off" in line
+    _, project = _get(port, "/feed/project/alpha/")
+    assert "class=fx-fresh" in project
+
+
+def test_unranked_pool_says_so_and_fetch_now_starts_the_hub_run(
+    six: tuple[Settings, Project, Project],  # noqa: F811
+    clock: FixedClock,
+) -> None:
+    settings, alpha, beta = six
+    for project in (alpha, beta):
+        feed_service.configure(project, project.human_actor(), {"categories": ("cs.AI",)})
+    runs: list[bool] = []
+    httpd, port = _serve_with_runner(settings, clock, runs, "up to date")
+    try:
+        _, page = _get(port, "/feed/")
+        assert "New papers are not ranked yet." in page and "id=fx-fetch" in page
+        assert "6 papers are fetched but not ranked yet. Press Fetch now" in page
+        assert "ranked never" in page
+        status, _ = _req(port, "POST", "/api/feed/run", {}, None)
+        assert status in (401, 403) and runs == []  # the hub token is required
+        status, text = _req(port, "POST", "/api/feed/run", {}, _hub_token(port, "/feed/"))
+        assert status == 202, text
+        for _ in range(100):
+            if runs and not json.loads(_get(port, "/api/feed/runner")[1])["running"]:
+                break
+            threading.Event().wait(0.02)
+        assert runs == [False]
+        last = json.loads(_get(port, "/api/feed/runner")[1])["last"]
+        assert last["factory_ranking"] == "up to date"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_empty_pool_asks_for_a_fetch(tmp_path: Path, clock: FixedClock) -> None:
+    from factory.services.project import init_project
+
+    settings = Settings(root=tmp_path, user="obd")
+    project = init_project(settings, "alpha", "exploratory", session=SESSION, clock=clock)
+    feed_service.configure(project, project.human_actor(), {"categories": ("cs.AI",)})
+    httpd, port = _serve_with_runner(settings, clock, [], "up to date")
+    try:
+        _, page = _get(port, "/feed/")
+        assert "No papers fetched yet. Press Fetch now." in page and "Fetched never" in page
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@browser
+@pytest.mark.browser
+def test_click_fetch_now_runs_the_feed_and_reports_a_failed_ranking(
+    six: tuple[Settings, Project, Project],  # noqa: F811
+    clock: FixedClock,
+) -> None:
+    settings, alpha, beta = six
+    for project in (alpha, beta):
+        feed_service.configure(project, project.human_actor(), {"categories": ("cs.AI",)})
+    ff.rank_pool(settings, FakeEmbedder(), session=SESSION, clock=clock)
+    runs: list[bool] = []
+    httpd, port = _serve_with_runner(settings, clock, runs, "failed: OSError: no weights")
+    try:
+        result = _drive(port, "/feed/", "fetch")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert result["done"] and not result["errors"], result
+    s = result["steps"]
+    assert s["label_before"] == "Fetch now" and s["time_local"] is True
+    assert s["line"] == "Fetched, but ranking failed: OSError: no weights"
+    assert s["disabled_after"] is False and runs == [False]
