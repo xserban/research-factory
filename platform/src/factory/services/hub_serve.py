@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import logging
 import os
 import re
@@ -401,6 +402,15 @@ class PayloadService:
             memo = (etag, gzip.compress(raw, 6, mtime=0))
             self._gz_memo[name] = memo
         return memo[1], True
+
+    def last_built(self, name: str) -> dict[str, Any] | None:
+        """The payload `name` as last built, fresh or not; None when there is none or it does not
+        parse as a JSON object. Never builds and never reads the index."""
+        try:
+            data = json.loads((self._dir / f"{name}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def is_fresh(self, name: str) -> bool:
         """Whether `name` is on disk at its current fingerprint."""
