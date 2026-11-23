@@ -137,6 +137,7 @@ EXPORT_ROUTE: Final = "/api/export/works"
 UI_SNOWBALL_ROUTE: Final = "/ui/act/snowball-add"
 UI_CHAT_ROUTES: Final = {
     "/ui/act/chat-request": ("cli:chat request", hub_chat.order_chat),
+    "/ui/act/chat-batch": ("cli:chat request", hub_chat.order_chat_batch),
     "/ui/act/chat-rate-argument": ("cli:sheets rate", hub_chat.rate_argument_act),
     "/ui/act/chat-rate-sentence": ("cli:answers rate", hub_chat.rate_sentence_act),
     "/ui/act/chat-balance": ("cli:sheets balance", hub_chat.balance_act),

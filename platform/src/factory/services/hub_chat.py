@@ -30,6 +30,7 @@ from factory.document.quotes import quote_span
 from factory.errors import FactoryError, FactoryValidationError, ValidationIssue
 from factory.events.envelope import Actor
 from factory.mining.spec import Population
+from factory.model.chat_requests import NOTE_MAX, TEXT_MAX
 from factory.services import answers as answers_service
 from factory.services import chat_requests, spar_metrics
 from factory.services import runner as runner_service
@@ -57,12 +58,15 @@ __all__ = [
     "basket_payload",
     "build",
     "chat_payload",
+    "context_view",
     "live",
     "order_chat",
+    "order_chat_batch",
     "parse_spec",
     "rate_argument_act",
     "rate_sentence_act",
     "sheet_view",
+    "threads",
 ]
 
 METHODS: dict[str, str] = {
@@ -78,6 +82,9 @@ METHODS: dict[str, str] = {
 }
 _REQUEST_FIELDS = ("kind", "hypothesis", "question", "mode", "parent", "note", "selection")
 _RUNS_SHOWN = 200
+BATCH_MAX = 10
+"""The most questions one batch order takes (`order_chat_batch`)."""
+_THREAD_STATES = ("taken", "open")  # a thread shows the most urgent state of its exchanges
 
 
 def _issue(field: str, message: str) -> FactoryValidationError:
@@ -256,6 +263,109 @@ def _lists(project: Project) -> tuple[list[dict[str, Any]], list[dict[str, Any]]
     return copy.deepcopy((sheets, answers))
 
 
+def _node_text(row: dict[str, Any]) -> str:
+    return str(row.get("hypothesis") or row.get("question") or "")
+
+
+def threads(
+    requests: list[dict[str, Any]], sheets: list[dict[str, Any]], answers: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The conversations of the page, derived from the `parent` links only (no event of its own).
+
+    A node is a sheet, an answer, or a request that has no result node yet (open, taken or failed;
+    a finished case-for request writes into its parent sheet and is no node). A result's parent is
+    the parent of the request that produced it (an answer also records its own), or the sheet it
+    re-sparred. A parent that is not a node, or a cycle, makes a root. Each thread lists its nodes
+    depth first, children by time then id, with `depth`; `state` is `taken`, else `open`, else
+    `answered`; `count` is the nodes; `latest` the newest `ts`. Threads are newest activity first.
+    Pure: the same rows give the same threads."""
+    by_result: dict[str, dict[str, Any]] = {}
+    for r in requests:
+        res = r.get("result")
+        if res and res != r.get("parent"):
+            by_result.setdefault(res, r)
+    nodes: dict[str, dict[str, Any]] = {}
+    for sh in sheets:
+        req = by_result.get(sh["sheet_id"])
+        nodes[sh["sheet_id"]] = {
+            "id": sh["sheet_id"],
+            "type": "sheet",
+            "kind": "spar",
+            "text": sh["hypothesis"],
+            "mode": sh["mode"],
+            "parent": (req or {}).get("parent") or sh.get("respar_of"),
+            "ts": sh["ts"],
+            "state": "done" if req is None else str(req["state"]),
+        }
+    for an in answers:
+        req = by_result.get(an["answer_id"])
+        nodes[an["answer_id"]] = {
+            "id": an["answer_id"],
+            "type": "answer",
+            "kind": "ask",
+            "text": an["question"],
+            "mode": None,
+            "parent": an.get("parent") or (req or {}).get("parent"),
+            "ts": an["ts"],
+            "state": "done" if req is None else str(req["state"]),
+        }
+    for r in requests:
+        if r["state"] == "done" or (r.get("result") in nodes and r.get("result") != r["parent"]):
+            continue
+        nodes[r["request_id"]] = {
+            "id": r["request_id"],
+            "type": "request",
+            "kind": r["kind"],
+            "text": _node_text(r),
+            "mode": r["mode"],
+            "parent": r["parent"],
+            "ts": r["ts"],
+            "state": r["state"],
+        }
+    children: dict[str, list[str]] = {}
+    roots: list[str] = []
+    for nid, n in nodes.items():
+        par = n["parent"]
+        cur, seen, cyclic = par, set(), False
+        while cur in nodes and cur not in seen:
+            if cur == nid:
+                cyclic = True
+                break
+            seen.add(cur)
+            cur = nodes[cur]["parent"]
+        if par in nodes and not cyclic:
+            children.setdefault(par, []).append(nid)
+        else:
+            roots.append(nid)
+
+    def order(i: str) -> tuple[str, str]:
+        return (nodes[i]["ts"], i)
+
+    out: list[dict[str, Any]] = []
+    for root in roots:
+        listed: list[dict[str, Any]] = []
+        stack = [(root, 0)]
+        while stack:
+            nid, depth = stack.pop()
+            listed.append({**nodes[nid], "depth": depth})
+            kids = sorted(children.get(nid, []), key=order, reverse=True)
+            stack.extend((c, depth + 1) for c in kids)
+        states = {n["state"] for n in listed}
+        out.append(
+            {
+                "root": root,
+                "text": nodes[root]["text"],
+                "kind": nodes[root]["kind"],
+                "count": len(listed),
+                "latest": max(n["ts"] for n in listed),
+                "state": next((x for x in _THREAD_STATES if x in states), "answered"),
+                "nodes": listed,
+            }
+        )
+    out.sort(key=lambda t: (t["latest"], t["root"]), reverse=True)
+    return out
+
+
 def chat_payload(project: Project) -> dict[str, Any]:
     """The Chat page data: requests (newest first, by state), earlier sheets and answers (newest
     first) and computed counts. The sheet and answer rows are cached on the event-log signature
@@ -273,6 +383,8 @@ def chat_payload(project: Project) -> dict[str, Any]:
         "requests": requests,
         "sheets": sheets,
         "answers": answers,
+        "threads": threads(requests, sheets, answers),
+        "batch_max": BATCH_MAX,
         "precision": precision_payload(project),
     }
 
@@ -525,9 +637,30 @@ def answer_view(project: Project, answer_id: str) -> dict[str, Any]:
     }
 
 
+def context_view(project: Project, result_id: str) -> dict[str, Any]:
+    """What a follow-up inherits from the sheet or answer `result_id`: its selection spec and the
+    works its arguments or sentences cite (sorted, each once). Read-only."""
+    if result_id.startswith("ans_"):
+        a = answers_service.view_answer(project, result_id)
+        return {
+            "id": result_id,
+            "selection": a.selection,
+            "works": sorted({s.work_id for s in a.sentences}),
+        }
+    sh = sheets_service.view_sheet(project, result_id)
+    return {
+        "id": result_id,
+        "selection": sh.selection,
+        "works": sorted({x.work_id for x in sh.arguments}),
+    }
+
+
 def live(project: Project, query: dict[str, str]) -> dict[str, Any]:
     """The read route `GET ui/chat`: `?basket=1&layers=&include=&exclude=` the basket, `?sheet=`
-    or `?answer=` one view, else the page lists. Raises `FactoryValidationError` (400)."""
+    or `?answer=` one view, `?context=` what a follow-up inherits, else the page lists. Raises
+    `FactoryValidationError` (400)."""
+    if query.get("context"):
+        return context_view(project, query["context"])
     if query.get("sheet"):
         return sheet_view(project, query["sheet"])
     if query.get("answer"):
@@ -582,17 +715,11 @@ def _spec_of(body: dict[str, Any], issues: list[ValidationIssue]) -> SelectionSp
         return SelectionSpec(**lists, closed=closed)
 
 
-def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str, object]:
-    """Record the researcher's spar or ask (`chat.requested`) and start its headless run.
-
-    `body`: `kind`, `hypothesis` or `question`, `mode`, `parent`, `note`, `selection` and `start`
-    (default true). Raises `FactoryValidationError` (nothing written) for a bad body, an unknown
-    layer or work in the selection, or what `request_chat` refuses. When the run cannot start
-    (another run is open, no `claude` on PATH) the request stays recorded: `run_id` is None and
-    `run_error` and `command` say how to start it."""
-    if "respar" in body:
-        return _order_respar(project, actor, body)
-    issues: list[ValidationIssue] = []
+def _parse_order(
+    body: dict[str, Any], issues: list[ValidationIssue]
+) -> tuple[str, SelectionSpec, bool, dict[str, str | None]] | None:
+    """The shape of an order body: `(kind, spec, only, texts)`; problems are appended to `issues`
+    (None when `kind` is missing). Writes and reads nothing."""
     kind = _text(body, "kind", issues)
     texts = {
         k: _text(body, k, issues) for k in ("hypothesis", "question", "mode", "parent", "note")
@@ -606,14 +733,31 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
     if not isinstance(only, bool):
         issues.append(ValidationIssue("selection.only", "must be true or false"))
         only = False
+    if kind is None and not issues:
+        issues.append(ValidationIssue("kind", "must be spar or ask"))
+    if kind is None:
+        return None
+    return kind, spec, only, texts
+
+
+def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str, object]:
+    """Record the researcher's spar or ask (`chat.requested`) and start its headless run.
+
+    `body`: `kind`, `hypothesis` or `question`, `mode`, `parent`, `note`, `selection` and `start`
+    (default true). Raises `FactoryValidationError` (nothing written) for a bad body, an unknown
+    layer or work in the selection, or what `request_chat` refuses. When the run cannot start
+    (another run is open, no `claude` on PATH) the request stays recorded: `run_id` is None and
+    `run_error` and `command` say how to start it."""
+    if "respar" in body:
+        return _order_respar(project, actor, body)
+    issues: list[ValidationIssue] = []
+    parsed = _parse_order(body, issues)
     start = body.get("start", True)
     if not isinstance(start, bool):
         issues.append(ValidationIssue("start", "must be true or false"))
-    if kind is None and not issues:
-        issues.append(ValidationIssue("kind", "must be spar or ask"))
-    if issues:
+    if issues or parsed is None:
         raise FactoryValidationError(issues)
-    assert kind is not None
+    kind, spec, only, texts = parsed
     if only:
         spec = spec.model_copy(update={"closed": True})
     # an unknown layer or work is refused before anything is written
@@ -637,6 +781,92 @@ def order_chat(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str
         )
     out: dict[str, object] = {"request_id": payload.request_id, "kind": kind, "run_id": None}
     return out if start is False else _start(project, kind, out)
+
+
+def order_chat_batch(project: Project, actor: Actor, body: dict[str, Any]) -> dict[str, object]:
+    """Record several requests of one kind in order (`chat.requested` each), one run started.
+
+    `body`: `lines` (1 to `BATCH_MAX` texts: hypotheses for a spar, questions for an ask), and
+    the shared `kind`, `mode`, `parent`, `note`, `selection` and `start`. Every line is checked
+    first (text, mode, parent, the selection, a repeat inside the batch, an order already
+    waiting); one bad line refuses the whole batch on field `lines[i]` and nothing is written.
+    One run is started (a run takes one request); the others wait for the next run. Returns
+    `request_ids` in order."""
+    issues: list[ValidationIssue] = []
+    lines = body.get("lines")
+    if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
+        raise _issue("lines", "must be a list of text")
+    texts = [x.strip() for x in lines if x.strip()]
+    if not texts:
+        issues.append(ValidationIssue("lines", "give at least one line"))
+    if len(texts) > BATCH_MAX:
+        issues.append(
+            ValidationIssue("lines", f"at most {BATCH_MAX} at once; you gave {len(texts)}")
+        )
+    shared = {k: v for k, v in body.items() if k not in ("lines", "start")}
+    parsed = _parse_order(shared, issues)
+    if issues or parsed is None:
+        raise FactoryValidationError(issues)
+    kind, spec, only, texts_shared = parsed
+    mode, parent, note = texts_shared["mode"], texts_shared["parent"], texts_shared["note"]
+    if (
+        kind == "spar"
+        and mode == "prepare"
+        and (parent or "").startswith("sht_")
+        and len(texts) > 1
+    ):
+        raise _issue("lines", "the case for a sheet is one order; give one line")
+    if only:
+        spec = spec.model_copy(update={"closed": True})
+    chosen = resolve_selection(project, spec)
+    if not chosen.works:
+        raise _issue("selection", "the selection resolves to no papers; pick some")
+    cap = TEXT_MAX
+    seen: set[str] = set()
+    for i, line in enumerate(texts):
+        at = f"lines[{i}]"
+        if len(line) > cap:
+            issues.append(ValidationIssue(at, f"at most {cap} characters"))
+        if line.casefold() in seen:
+            issues.append(ValidationIssue(at, "the same as an earlier line"))
+        seen.add(line.casefold())
+    if note is not None and len(note) > NOTE_MAX:
+        issues.append(ValidationIssue("note", f"at most {NOTE_MAX} characters"))
+    if mode is not None and (kind == "ask" or mode not in ("explore", "prepare")):
+        issues.append(ValidationIssue("mode", "only a spar has a mode: explore or prepare"))
+    if issues:
+        raise FactoryValidationError(issues)
+    ids: list[str] = []
+    with project.index.exclusive():
+        project.index.sync()
+        if parent is not None:
+            bad = chat_requests.check_parent(project, kind, mode, parent)
+            if bad:
+                raise FactoryValidationError(bad)
+        for i, line in enumerate(texts):
+            try:
+                _refuse_duplicate(
+                    project, kind, chosen.digest, {"hypothesis": line, "question": line}
+                )
+            except FactoryValidationError as exc:
+                raise FactoryValidationError(
+                    [ValidationIssue(f"lines[{i}]", x.reason) for x in exc.issues]
+                ) from None
+        for line in texts:
+            payload = chat_requests.request_chat(
+                project,
+                actor,
+                kind,
+                spec,
+                hypothesis=line if kind == "spar" else None,
+                question=line if kind == "ask" else None,
+                mode=mode,
+                parent=parent,
+                note=note,
+            )
+            ids.append(payload.request_id)
+    out: dict[str, object] = {"request_ids": ids, "kind": kind, "run_id": None}
+    return out if body.get("start", True) is False else _start(project, kind, out)
 
 
 def _start(project: Project, kind: str, out: dict[str, object]) -> dict[str, object]:
