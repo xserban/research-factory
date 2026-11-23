@@ -572,11 +572,11 @@ def test_trace_route_answers_the_adapter_and_refuses_bad_requests(
         got.append((figure, offset, limit))
         return SimpleNamespace(to_payload=lambda: {"figure_id": figure, "entries": []})
 
-    monkeypatch.setattr(hub_serve, "trace_figure", fake)
-    status, _, body = _req(port, "GET", f"{UI}/trace?figure=prisma.included&offset=2&limit=5")
-    assert status == 200 and json.loads(body)["figure_id"] == "prisma.included"
-    assert got == [("prisma.included", 2, 5)]
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(hub_serve, "trace_figure", fake)
+        status, _, body = _req(port, "GET", f"{UI}/trace?figure=prisma.included&offset=2&limit=5")
+        assert status == 200 and json.loads(body)["figure_id"] == "prisma.included"
+        assert got == [("prisma.included", 2, 5)]
     for query in ("", "figure=", "figure=x&offset=a", "figure=x&limit=0", "figure=x&offset=-1"):
         status, _, body = _req(port, "GET", f"{UI}/trace?{query}")
         assert status == 400, query
@@ -771,7 +771,7 @@ def test_the_page_scripts_call_those_routes_only_when_served() -> None:
     assert "Retry-After" in shell and "Updating" in shell
 
 
-NEW_PAGES = ("protocol", "pipeline", "sources", "method", "costs", "write", "platform")
+NEW_PAGES = ("protocol", "levels", "pipeline", "sources", "method", "costs", "write", "platform")
 
 
 def test_the_seven_new_pages_and_payloads_are_served(served: tuple[int, Project]) -> None:

@@ -1,0 +1,59 @@
+name: Security
+
+# Report-only first: the audit never fails the run; its findings are in the run summary and the
+# downloadable artifact. Method as in weekly-quality.yml: export the locked dependencies, audit
+# them with pip-audit. Runs on pull requests that touch dependency files, weekly, and by hand.
+# Needs no secret and only read permission.
+
+on:
+  pull_request:
+    paths:
+      - "platform/pyproject.toml"
+      - "platform/uv.lock"
+      - ".github/workflows/**"
+  schedule:
+    - cron: "0 5 * * 1"  # Mondays 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Audit the locked dependencies
+        run: |
+          mkdir -p ../report
+          uv tool install pip-audit
+          uv export --frozen --no-hashes --no-emit-project > ../report/requirements.txt
+          status=0
+          pip-audit -r ../report/requirements.txt > ../report/pip-audit.txt 2>&1 || status=$?
+          echo "$status" > ../report/pip-audit.status
+      - name: Summary
+        if: always()
+        working-directory: .
+        run: |
+          {
+            echo "# Dependency audit (report-only)"
+            echo "pip-audit exit status: $(cat report/pip-audit.status 2>/dev/null || echo 'not run') (0 = no known vulnerabilities)"
+            echo '```'; tail -n 40 report/pip-audit.txt 2>/dev/null || echo "no report"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit
+          path: report/
+          retention-days: 30

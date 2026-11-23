@@ -43,9 +43,11 @@ from factory.model.hypotheses import (
     ModelCutoffDeclared,
     TriggerKind,
 )
+from factory.model.levels import AutonomyLevel
 from factory.model.project import RigorMode
 from factory.model.protocol import ProtocolSpec
-from factory.modules.contract import PolicyKind
+from factory.modules.autonomy import resolve_policy
+from factory.modules.contract import GatePolicy, PolicyKind
 from factory.modules.presets import preset
 
 MIN_SEEDS_BY_MODE = {RigorMode.EXPLORATORY: 2, RigorMode.PILOT: 3, RigorMode.SYSTEMATIC: 5}
@@ -227,20 +229,39 @@ def policy_in_force(conn: Connection, t: HypothesisTables, gate_id: str) -> Poli
     return policy_of(conn, t.protocols, t.project, gate_id)
 
 
+LEVEL_READER_KEY = "autonomy_level_reader"
+"""Key in `project.info` of the callable that tells the fold the project's autonomy level."""
+
+
+def autonomy_level_of(project: Table) -> AutonomyLevel:
+    """The autonomy level the fold sees: the reader attached to the `project` table (see
+    `index.levels.attach_level_reader`), else `attended`. No table or column holds it."""
+    reader = project.info.get(LEVEL_READER_KEY)
+    return AutonomyLevel.ATTENDED if reader is None else AutonomyLevel(reader())
+
+
 def policy_of(conn: Connection, protocols: Table, project: Table, gate_id: str) -> PolicyKind:
     """`policy_in_force` over the protocol and project tables, for folds that do not hold
-    `HypothesisTables` (the experiment gates use it too)."""
+    `HypothesisTables` (the experiment gates use it too). Under `attended` this is the protocol's
+    entry, else the rigor preset's, exactly as before the levels; under another level the entry is
+    read through the autonomy profile (`modules.autonomy.resolve_policy`)."""
+    entry: GatePolicy | None = None
     row = conn.execute(
         select(protocols.c.spec).order_by(protocols.c.event_id.desc()).limit(1)
     ).first()
     if row is not None:
         policies = ProtocolSpec.model_validate_json(str(row[0])).gate_policies
         if policies is not None:
-            for entry in policies.entries:
-                if entry.gate == gate_id:
-                    return entry.policy
-    mode = conn.execute(select(project.c.rigor_mode).limit(1)).first()
-    return preset(RigorMode(str(mode[0])) if mode else RigorMode.PILOT, gate_id).kind
+            for candidate in policies.entries:
+                if candidate.gate == gate_id:
+                    entry = candidate.as_policy()
+                    break
+    mode_row = conn.execute(select(project.c.rigor_mode).limit(1)).first()
+    mode = RigorMode(str(mode_row[0])) if mode_row else RigorMode.PILOT
+    level = autonomy_level_of(project)
+    if level is AutonomyLevel.ATTENDED:
+        return preset(mode, gate_id).kind if entry is None else entry.kind
+    return resolve_policy(level, mode, gate_id, entry).kind
 
 
 def act_is_consistent(

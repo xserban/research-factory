@@ -436,11 +436,13 @@ def miner_population(project: Project, name: str, *, include_requested: bool = T
 
     With `layers`, only the selector population's works whose layer (`work_layers.layer_of`) is
     one of them are kept; the population is capped by `selector.max_units` as `population` caps
-    it (the first works with a conversion, before the layer filter). When the use is `on_demand`,
-    with or without `layers`, the works of the researcher's mining requests are added: they are
-    included works and are served even outside the selector population or the layers (still with
-    a default conversion, still never a calibration unit), and they do not count towards
-    `max_units`. A use with neither `layers` nor `on_demand` is the base population only,
+    it (the first works with a conversion, before the layer filter). With `origins`, only works
+    whose computed origin tag (`capture_hints.origins_of`) is listed are kept, after the layer
+    filter. When the use is `on_demand`, with or without `layers`, the works of the researcher's
+    mining requests are added: they are included works and are served even outside the selector
+    population or the layers (still with a default conversion, still never a calibration unit),
+    and they do not count towards `max_units`. A use with neither `layers`, `origins` nor
+    `on_demand` is the base population only,
     unchanged. Order is work id, or with `order: by-layer` by the layer's ring in the latest
     scheme, then work id (pending and unknown layers last). Refused on field `miners` when a
     derived layer miner (one projecting dimension zero) lists `layers`: it classifies every work
@@ -453,7 +455,7 @@ def miner_population(project: Project, name: str, *, include_requested: bool = T
     _, use, spec = _listed(project, name)
     apart = calibration_sample(project, name)
     on_demand = use.on_demand and include_requested
-    if not use.layers and not on_demand:
+    if not use.layers and not on_demand and not use.origins:
         return [work for work, _ in population(project, spec.selector) if work not in apart]
     from factory.services.work_layers import (
         layer_dimension,
@@ -477,6 +479,11 @@ def miner_population(project: Project, name: str, *, include_requested: bool = T
             )
         wanted = set(use.layers)
         chosen = [w for w in chosen if w in layers and layers[w].layer in wanted]
+    if use.origins:
+        from factory.services.capture_hints import origin_matches, origins_of
+
+        origins = origins_of(project)
+        chosen = [w for w in chosen if origin_matches(origins.get(w), use.origins)]
     if on_demand:
         extra = requested_works(project, name) - set(chosen) - apart
         chosen.extend(w for w in extra if default_conversion(project, w) is not None)
@@ -715,6 +722,11 @@ def _mine_next(
         from factory.services.miner_independence import require_production_pass
 
         require_production_pass(project, actor, name)
+        from factory.services.validation_profile import miner_use_refusal
+
+        refusal = miner_use_refusal(project, evidence=use.evidence, pass_label=label.value)
+        if refusal is not None:
+            raise FactoryValidationError([ValidationIssue("miners", refusal)])
         if not exploratory:
             _require_calibrated(project, name, version)
     reopened: frozenset[str] = frozenset()
@@ -743,6 +755,13 @@ def _mine_next(
                 + "\n\n"
                 + derived_task_text(proj, spec, base.records[0]["work_id"])
             )
+        if use.hint_context and not calibration:
+            # IDEA-81: behind an explicit protocol option, default off (anchoring risk)
+            from factory.services.capture_hints import hint_context_text
+
+            hint = hint_context_text(proj, base.records[0]["work_id"])
+            if hint:
+                instructions = f"{instructions}\n\n{hint}"
         return MineBatchContent(
             **{**base.model_dump(), "instructions": instructions},
             miner=name,

@@ -42,7 +42,7 @@ from factory.model.extraction import (
 )
 from factory.model.protocol import ExtractionSchema
 from factory.model.screening import Channel
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.quality.stats import audit_size, draw_uniform
 from factory.services import audit_core
 from factory.services.audit_core import AuditPopulation
@@ -57,6 +57,7 @@ from factory.services.human_channel import require_human_channel
 from factory.services.protocol import ProtocolVersion, current_protocol
 from factory.services.seeds import _rigor_mode
 from factory.services.tolerance import tolerated_within
+from factory.services.validation_profile import enforcement_for
 from factory.services.work_ref import resolve_work_id
 
 __all__ = [
@@ -437,7 +438,8 @@ def extraction_audit_report(
         rate,
         EXTRACTION_ERROR_CEILING,
         enforced=(
-            enforcement(_rigor_mode(project), "extraction.audit_ceiling") is Enforcement.ENFORCED
+            enforcement_for(project, "extraction.audit_ceiling", mode=_rigor_mode(project))
+            is Enforcement.ENFORCED
         ),
     )
     return ExtractionAuditReport(

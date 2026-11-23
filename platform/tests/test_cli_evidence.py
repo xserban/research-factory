@@ -1,5 +1,6 @@
 """`factory report evidence` (plan E, task 8)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,9 @@ def test_json_equals_model_dump(
 ) -> None:
     code, out, err = _run(settings.root, "--format", "json")
     assert code == 0, err
-    assert out.strip() == report.model_dump_json()
+    loaded = json.loads(out)
+    assert loaded.pop("level_statement")["autonomy_level"] == "attended"
+    assert loaded == json.loads(report.model_dump_json())
 
 
 def test_csv_points_header_exact(

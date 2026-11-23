@@ -66,6 +66,7 @@ from factory.services.budgets import remaining as remaining_budget
 from factory.services.budgets import require_for
 from factory.services.context import Project
 from factory.services.search import get_work, list_works
+from factory.services.tier_caps import ACQUIRE_CAP, cap_refusal, tier_cap
 from factory.services.work_ref import resolve_work_ids
 from factory.sources.fulltext.base import FullTextRoute, RouteResult
 from factory.sources.http import redact
@@ -181,6 +182,7 @@ def fetch_fulltext(
             raise FactoryValidationError(issues)
         require_for(project, trigger, REQUESTS_FULLTEXT)
         targets = _targets(project, promoted, work_ids, revisit, limit)
+        targets = _within_tier_cap(project, targets, explicit=work_ids is not None)
         fetch_id = project.ids.new("fft")
         request = _request(work_ids, only, refresh, limit)
         blob = input_blob if input_blob is not None else _trigger_blob(project, trigger, request)
@@ -300,6 +302,25 @@ def _targets(
         excluded = _documented_works(project) | _attempted_works(project)
         chosen = sorted(w for w in promoted if w not in excluded)
     return chosen[:limit]
+
+
+def _within_tier_cap(project: Project, targets: list[str], *, explicit: bool) -> list[str]:
+    """Keep the new works (those with no attempt and no document yet) within the `acquire` cap of a
+    `brief` or `deep` tier. Works already sought stay. Explicit ids over the headroom, and any
+    call with no headroom left, are refused `tier-cap-reached`; a default selection is cut to the
+    headroom. An uncapped project is returned unchanged."""
+    cap = tier_cap(project, ACQUIRE_CAP)
+    if cap is None:
+        return targets
+    sought = _documented_works(project) | _attempted_works(project)
+    new = [w for w in targets if w not in sought]
+    room = cap - len(sought)
+    if new and (room <= 0 or (explicit and len(new) > room)):
+        raise cap_refusal(ACQUIRE_CAP, cap, "the works whose full text is sought")
+    if len(new) <= room:
+        return targets
+    keep = set(new[:room])
+    return [w for w in targets if w in sought or w in keep]
 
 
 def _request(

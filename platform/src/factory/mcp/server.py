@@ -1,5 +1,13 @@
 """The MCP server. Tools parse input, call a service and format output; each call runs as the
-principal and session its transport names (`factory.mcp.sessions`)."""
+principal and session its transport names (`factory.mcp.sessions`).
+
+Pass sessions. A session that has joined a screening or extraction pass (or a miner pass) is kept
+apart from the tools that show results across passes: counts, agreement, the other pass's
+verdicts, the flow, reports, the held-out seeds and the answer key. Those tools, which say
+"Refused to a session that has joined a pass" in their docs, answer such a session with a
+`session` refusal and write nothing (R-20, decision 43). The refusal is not a fault: the pass
+session gets what it needs in its own batches, and the tool is used from a session that has not
+joined a pass (a separate Claude Code session; subagents share their parent's session)."""
 
 import json
 import os
@@ -145,6 +153,7 @@ from factory.services import feed_read as feed_read_service
 from factory.services import finders as findings_service
 from factory.services import fulltext as fulltext_service
 from factory.services import fulltext_status as fulltext_status_service
+from factory.services import gate_trust as gate_trust_service
 from factory.services import gates as gates_service
 from factory.services import grey as grey_service
 from factory.services import horizon as horizon_service
@@ -175,7 +184,7 @@ from factory.services import probe as probe_service
 from factory.services import progress as progress_service
 from factory.services import properties as properties_service
 from factory.services import protocol as protocol_service
-from factory.services import pubmed_slices
+from factory.services import pubmed_slices, tool_source
 from factory.services import question as question_service
 from factory.services import ranking as ranking_service
 from factory.services import ranking_model as ranking_model_service
@@ -209,6 +218,7 @@ from factory.services.context import Project, list_projects
 from factory.services.context import open_project as open_as
 from factory.services.extraction import ExtractResult
 from factory.services.gate_status import GateStatusRow, gates_status
+from factory.services.hint_input import HintInput
 from factory.services.hypothesis_gates import GateName, gate_policy
 from factory.services.lab import Lab, lab_exists, open_lab
 from factory.services.lead_candidates import lead_candidates as lead_candidates_service
@@ -233,6 +243,15 @@ _SYSTEM_CLOCK = SystemClock()
 _FIELD_NAMES = {"text": "query"}  # QuerySpec calls the query text `text`; the tool calls it `query`
 
 
+class _HintItem(StrictModel):
+    """A relayed human's capture hints (IDEA-81): a layer, a category, notes for the miners."""
+
+    layer: str | None = None
+    category: str | None = None
+    taxonomy: str | None = None
+    miner_notes: str | None = None
+
+
 class _LinkItem(StrictModel):
     """One `inbox_add` item as sent: the link, a relayed human note, or an agent's basis."""
 
@@ -240,6 +259,7 @@ class _LinkItem(StrictModel):
     note: str | None = None
     basis: Basis | None = None
     page: bool = False
+    hints: _HintItem | None = None
 
 
 class _ProbeQuery(StrictModel):
@@ -346,7 +366,8 @@ def build_server(
 
     @server.tool()
     def project_status(project: str) -> dict[str, JsonValue]:
-        """Report a project's rigor mode, event counts, task queue state, derived `stage` (null to
+        """Report a project's rigor mode, `tier` (null: not declared), `autonomy_level`, event
+        counts, task queue state, derived `stage` (null to
         a session that has joined a pass) and `human`: what waits on the researcher, each with the
         command that does it. Imports, conversion and gate decisions are the researcher's acts on
         the CLI: relay the command, there is no tool for them."""
@@ -560,6 +581,55 @@ def build_server(
             return _withheld(opened, {"gates": rows}, include_work_ids=False)
 
         return _reply(project, status, include_work_ids=False)
+
+    @server.tool()
+    def gate_audit_pending(project: str) -> dict[str, JsonValue]:
+        """The acts of platform-drawn audit samples that no one has labelled yet (audit id, gate,
+        act event id, act event type), for the auditor role of a supervised or autonomous run.
+        Read-only; no act content. Refused to a session that has joined a pass."""
+
+        def pending() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            rows: list[JsonValue] = [
+                {
+                    "audit_id": i.audit_id,
+                    "gate_id": i.gate_id,
+                    "act_event_id": i.act_event_id,
+                    "act_type": i.act_type,
+                }
+                for i in gate_trust_service.pending_audit_items(opened)
+            ]
+            return {"items": rows}
+
+        return _reply(project, pending, include_work_ids=False)
+
+    @server.tool()
+    def gate_audit_label(
+        project: str,
+        audit_id: str,
+        act_event_id: str,
+        correct: bool,
+        role: str,
+        model: str,
+        skill: str,
+        note: str | None = None,
+    ) -> dict[str, JsonValue]:
+        """Label one sampled act of a platform-drawn audit as correct or incorrect (the auditor
+        role of a supervised or autonomous run; contract C4). Refused for an attended project, a
+        sample not drawn by the platform, an act outside the sample, or the session that closed
+        the act. The label never enters the human overturn rate. Refused to a pass session."""
+
+        def label() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            actor = make_agent_actor(settings, session, role, model, skill)
+            event_id = gates_service.gate_audit_record_agent(
+                opened, actor, audit_id, act_event_id, correct, note
+            )
+            return {"event_id": event_id}
+
+        return _reply(project, label, include_work_ids=False)
 
     @server.tool()
     def watch_status(project: str) -> dict[str, JsonValue]:
@@ -1481,13 +1551,16 @@ def build_server(
         model: str | None = None,
         skill: str | None = None,
     ) -> dict[str, JsonValue]:
-        """Capture links (arXiv, DOI or OpenAlex) as inbox items: each `{link, note?, basis?}`.
+        """Capture links (arXiv, DOI or OpenAlex) as inbox items: each `{link, note?, basis?,
+        hints?}`.
         `channel="agent"`: an agent proposes the link and must give `basis`, either
         `{"kind": "document", "document_id": "doc_...", "anchor": "..."}` for a citing span it
         read or `{"kind": "knowledge"}`; it gives no note. `channel="mcp"`: a human's link relayed
         verbatim, with an optional note and no basis. `page: true` on an item keeps an http(s) link
         with no identifier as a publisher page, whose `citation_doi` is read once at resolve.
-        Offline; each item is written or rejected
+        `hints` (`channel="mcp"` only: the human's own `{layer?, category?, taxonomy?,
+        miner_notes?}`, a layer of the current scheme and a taxonomy category) is recorded with
+        the human's name and time; screeners never see it. Offline; each item is written or rejected
         on its own. Refused to a session that has joined a pass; a session that captures a link
         cannot later screen. Screeners never see how a work was found."""
 
@@ -1510,7 +1583,18 @@ def build_server(
                         (
                             index,
                             inbox_service.LinkInput(
-                                parsed.link, parsed.note, parsed.basis, parsed.page
+                                parsed.link,
+                                parsed.note,
+                                parsed.basis,
+                                parsed.page,
+                                None
+                                if parsed.hints is None
+                                else HintInput(
+                                    parsed.hints.layer,
+                                    parsed.hints.category,
+                                    parsed.hints.taxonomy,
+                                    parsed.hints.miner_notes,
+                                ),
                             ),
                         )
                     )
@@ -6885,7 +6969,14 @@ def _refuse_pass_session(project: Project) -> None:
     surfaces or the answer key (R-20)."""
     if passes_service.is_pass_session(project, project.session):
         raise FactoryValidationError(
-            [ValidationIssue("session", "this session has joined a pass and cannot use this tool")]
+            [
+                ValidationIssue(
+                    "session",
+                    "this session has joined a pass and cannot use this tool: it shows results "
+                    "across passes (R-20). Use a session that has not joined a pass; a pass "
+                    "session gets what it needs in its own batches",
+                )
+            ]
         )
     human_pass_service.refuse_blind_reader(project, project.principal.user)
 
@@ -7371,3 +7462,6 @@ def _round_direction(value: str) -> Direction:
 
 def run(settings: Settings) -> None:
     build_server(settings).run("stdio")
+
+
+tool_source.register(build_server)

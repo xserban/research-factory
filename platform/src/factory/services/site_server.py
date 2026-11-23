@@ -122,6 +122,7 @@ from factory.services import snapshots as snapshots_service
 from factory.services import watch_config as watch_config_service
 from factory.services.access import authorize_command, authorize_export_works
 from factory.services.context import Project
+from factory.services.hint_input import HintInput
 from factory.sources.fulltext.registry import default_routes
 from factory.sources.registry import default_sources
 
@@ -226,12 +227,41 @@ def feed_react(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, o
     return 200, {"ok": True, "event_id": event_id, "reaction": reaction.value}
 
 
+def _hint_input(value: object) -> tuple[HintInput | None, list[ValidationIssue]]:
+    """The optional `hints` object of a feed add: strings `layer`, `category`, `taxonomy` and
+    `miner_notes`, each optional; anything else is a 400 issue."""
+    if value is None:
+        return None, []
+    if not isinstance(value, dict):
+        return None, [ValidationIssue("hints", "must be an object")]
+    known = {"layer", "category", "taxonomy", "miner_notes"}
+    issues = [ValidationIssue(f"hints.{k}", "unknown field") for k in value if k not in known]
+    issues += [
+        ValidationIssue(f"hints.{k}", "must be a string")
+        for k, v in value.items()
+        if k in known and v is not None and not isinstance(v, str)
+    ]
+    if issues:
+        return None, issues
+    return (
+        HintInput(
+            value.get("layer"),
+            value.get("category"),
+            value.get("taxonomy"),
+            value.get("miner_notes"),
+        ),
+        [],
+    )
+
+
 def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, object]]:
     """Send the entry to the inbox and look it up, as the local human; returns (status, body)."""
     entry_id = body.get("entry_id")
     ranking_id, bad = _optional_str(body, "ranking_id")
     note_text, more = _optional_str(body, "note")
     bad += more
+    hints, hint_bad = _hint_input(body.get("hints"))
+    bad += hint_bad
     if not isinstance(entry_id, str) or not entry_id:
         bad.append(ValidationIssue("entry_id", "required"))
     note: FeedNote | None = None
@@ -247,7 +277,13 @@ def feed_add(project: Project, body: dict[str, Any]) -> tuple[int, dict[str, obj
         actor = project.human_actor()
         authorize_command(project, project.principal, "cli:feed add")
         result = feed_service.add(
-            project, actor, entry_id, sources=_sources(), note=note, ranking_id=ranking_id
+            project,
+            actor,
+            entry_id,
+            sources=_sources(),
+            note=note,
+            ranking_id=ranking_id,
+            hints=hints,
         )
     except FactoryValidationError as exc:
         return 400, _issues(*exc.issues)

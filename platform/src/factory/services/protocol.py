@@ -58,7 +58,7 @@ from factory.model.protocol import (
 from factory.model.reviews import ReviewKind
 from factory.model.search import QueryKind, QueryPurpose, QuerySpec
 from factory.model.watch import CycleStatus
-from factory.modules.presets import Enforcement, enforcement
+from factory.modules.presets import Enforcement
 from factory.services.context import Project
 from factory.services.decision_binding import bind
 from factory.services.gates import gate_issues, indexed_rigor_mode
@@ -72,6 +72,7 @@ from factory.services.protocol_rules import (
 from factory.services.question import QuestionVersion, current_question, get_question
 from factory.services.reviews import require_protocol_change
 from factory.services.seeds import all_seeds
+from factory.services.validation_profile import enforcement_for
 from factory.sources.registry import default_sources, window_filter_sources
 
 
@@ -872,13 +873,43 @@ def list_deviations(project: Project) -> list[DeviationRecorded]:
     ]
 
 
+def _author_session(project: Project) -> str | None:
+    """The session that recorded the current protocol version (the latest `protocols` row's
+    event), or None when there is none."""
+    with project.index.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT e.session FROM events e WHERE e.id = "
+                "(SELECT event_id FROM protocols ORDER BY event_id DESC LIMIT 1)"
+            )
+        ).one_or_none()
+    return None if row is None else str(row[0])
+
+
+def _needs_separate_reviewer(project: Project) -> bool:
+    """A PRESS review must come from another session than the protocol's author in `pilot` and
+    `systematic` projects and under any autonomy level but `attended`; exploratory attended
+    projects keep the old rule."""
+    from factory.model.levels import AutonomyLevel
+    from factory.model.rigor import RigorMode
+    from factory.services.project import project_levels
+
+    levels = project_levels(project)
+    return (
+        levels.rigor_mode is not RigorMode.EXPLORATORY
+        or levels.autonomy_level is not AutonomyLevel.ATTENDED
+    )
+
+
 def press_review(
     project: Project,
     actor: Actor,
     protocol_id: str,
     findings: Sequence[PressFinding],
 ) -> str:
-    """Record an agent's PRESS review of the current protocol, and return its review id."""
+    """Record an agent's PRESS review of the current protocol, and return its review id. In a
+    pilot or systematic project, or at a non-attended level, the session must differ from the
+    one that recorded the current protocol version (refused on `session`, nothing written)."""
     issues: list[ValidationIssue] = []
     if actor.kind != "agent":
         issues.append(ValidationIssue("actor", "a PRESS review is written by an agent"))
@@ -886,6 +917,18 @@ def press_review(
         current = current_protocol(project)
         if current is None or current.protocol_id != protocol_id:
             issues.append(ValidationIssue("protocol_id", "must be the current protocol"))
+        elif (
+            actor.kind == "agent"
+            and _needs_separate_reviewer(project)
+            and actor.session == _author_session(project)
+        ):
+            issues.append(
+                ValidationIssue(
+                    "session",
+                    "same-session-as-author: the PRESS review must come from another "
+                    "session than the one that recorded the protocol",
+                )
+            )
         if issues:
             raise FactoryValidationError(issues)
         review_id = project.ids.new("prs")
@@ -1016,7 +1059,10 @@ def exploratory_search_notice(project: Project) -> str | None:
     """The notice a search carries while the rigor mode has the protocol gate off, else None.
     It changes no rule: `search_authorization` is unchanged; this only makes the absence visible."""
     project.index.sync()
-    if enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF:
+    if (
+        enforcement_for(project, "protocol.ready", mode=indexed_rigor_mode(project))
+        is Enforcement.OFF
+    ):
         return EXPLORATORY_SEARCH_NOTICE
     return None
 
@@ -1062,7 +1108,8 @@ def search_authorization(
     """
     import_issues = _import_issues(project, spec, import_id)
     if spec.purpose is QueryPurpose.PROBE or (
-        enforcement(indexed_rigor_mode(project), "protocol.ready") is Enforcement.OFF
+        enforcement_for(project, "protocol.ready", mode=indexed_rigor_mode(project))
+        is Enforcement.OFF
     ):
         return import_issues
     current = current_protocol(project)

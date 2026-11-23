@@ -168,7 +168,8 @@ def test_cli_export_prisma_svg(
     assert out.read_text(encoding="utf-8") == svg
     assert runner.invoke(app, ["export", "prisma"], env=env).stdout == svg
     report = runner.invoke(app, ["report", "prisma", "--format", "svg"], env=env)
-    assert report.exit_code == 0 and report.stdout == svg
+    assert report.exit_code == 0 and report.stdout.startswith(svg.rstrip("\n"))
+    assert report.stdout.rstrip("\n").endswith("-->")  # the statement, as an XML comment (I1)
     markdown = runner.invoke(app, ["report", "prisma"], env=env)
     assert markdown.stdout.startswith("# PRISMA 2020 flow")
     both = runner.invoke(app, ["report", "prisma", "--format", "svg", "--json"], env=env)

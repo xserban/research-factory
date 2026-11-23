@@ -57,7 +57,10 @@ def test_inbox_round_trip(
     as_json = runner.invoke(app, ["report", "discovery", "--json"], env=env)
     assert as_json.exit_code == 0, as_json.output
     project = open_project(settings, "demo", session=SESSION, clock=clock)
-    assert json.loads(as_json.stdout) == discovery_report(project).model_dump(mode="json")
+    loaded = json.loads(as_json.stdout)
+    assert "level_statement" in loaded  # I1
+    del loaded["level_statement"]
+    assert loaded == discovery_report(project).model_dump(mode="json")
     text = runner.invoke(app, ["report", "discovery"], env=env)
     assert "| supplied-human | 1 | 0 | 0 |" in text.stdout
 

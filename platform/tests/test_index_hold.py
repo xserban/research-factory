@@ -88,7 +88,6 @@ def test_older_version_is_refused_inside_the_window(tmp_path: Path) -> None:
             older.rebuild()
         message = str(refused.value)
         assert "version 84" in message
-        assert f"process {pid}" in message
         assert "version 83" in message
         # Nothing was rebuilt: the newer version still holds the index, by the same process.
         holder = _index(tmp_path, "84").holder()
@@ -96,19 +95,30 @@ def test_older_version_is_refused_inside_the_window(tmp_path: Path) -> None:
     assert _events_snapshot(tmp_path) == before
 
 
-def test_rebuild_is_allowed_after_the_window(tmp_path: Path) -> None:
+def test_older_version_is_refused_after_the_window(tmp_path: Path) -> None:
+    """Decision 157: the window no longer frees the index for an older version."""
     with _holder(tmp_path, "84"):
         later = datetime.now(UTC) + DEFAULT_HOLD_WINDOW + timedelta(seconds=1)
-        older = _index(tmp_path, "83", now=lambda: later)
-        assert older.sync().rebuilt
-        holder = older.holder()
-        assert holder is not None and holder.version == "83" and holder.pid == os.getpid()
+        with pytest.raises(IndexHeldError):
+            _index(tmp_path, "83", now=lambda: later).sync()
+
+
+def test_unordered_rebuild_is_allowed_after_the_window(tmp_path: Path) -> None:
+    with _holder(tmp_path, "t1"):
+        later = datetime.now(UTC) + DEFAULT_HOLD_WINDOW + timedelta(seconds=1)
+        other = _index(tmp_path, "t2", now=lambda: later)
+        assert other.sync().rebuilt
+        holder = other.holder()
+        assert holder is not None and holder.version == "t2" and holder.pid == os.getpid()
 
 
 def test_a_configured_window_is_honoured(tmp_path: Path) -> None:
+    with _holder(tmp_path, "84"), pytest.raises(IndexHeldError):
+        _index(tmp_path, "83", hold_window=timedelta(hours=1)).sync()
+
+
+def test_a_zero_window_lets_an_older_version_rebuild(tmp_path: Path) -> None:
     with _holder(tmp_path, "84"):
-        with pytest.raises(IndexHeldError):
-            _index(tmp_path, "83", hold_window=timedelta(hours=1)).sync()
         assert _index(tmp_path, "83", hold_window=timedelta(0)).sync().rebuilt
 
 
@@ -132,10 +142,15 @@ def test_unordered_versions_refuse_each_other(tmp_path: Path) -> None:
         _index(tmp_path, "t2").sync()
 
 
-def test_a_crashed_holder_does_not_block(tmp_path: Path) -> None:
-    with _holder(tmp_path, "84", stay=False):
-        older = _index(tmp_path, "83")
-        assert older.sync().rebuilt
+def test_older_is_refused_when_the_holder_is_dead(tmp_path: Path) -> None:
+    """Decision 157: a holder that exited (a short-lived newer process) still bars older code."""
+    with _holder(tmp_path, "84", stay=False), pytest.raises(IndexHeldError):
+        _index(tmp_path, "83").sync()
+
+
+def test_a_crashed_unordered_holder_does_not_block(tmp_path: Path) -> None:
+    with _holder(tmp_path, "t1", stay=False):
+        assert _index(tmp_path, "t2").sync().rebuilt
 
 
 def test_a_short_lived_same_version_process_does_not_take_the_hold(tmp_path: Path) -> None:
@@ -160,13 +175,37 @@ def test_the_refusal_is_a_structured_mcp_error(tmp_path: Path) -> None:
     assert "version 84" in str(result)
 
 
-def test_an_index_without_a_marker_is_not_held(tmp_path: Path) -> None:
-    """An index built before the marker existed carries a version but no hold."""
+def test_the_version_order_refusal_names_both_versions_and_says_restart(tmp_path: Path) -> None:
+    _index(tmp_path, "84").sync()
+    with pytest.raises(IndexHeldError) as refused:
+        _index(tmp_path, "83").sync()
+    message = str(refused.value)
+    assert "84" in message and "83" in message
+    assert "restart" in message.lower()
+    assert "FACTORY_INDEX_HOLD_MINUTES=0" in message
+    assert "before" not in message  # no "until" in the version-order case
+
+
+def _unmark(index: Index) -> None:
+    with index._engine.begin() as conn:
+        conn.exec_driver_sql("DELETE FROM meta WHERE key LIKE 'holder_%' OR key = 'held_at'")
+
+
+def test_older_is_refused_with_no_marker(tmp_path: Path) -> None:
+    """Decision 157: an index built before the marker existed still carries its version."""
     first = _index(tmp_path, "84")
     first.sync()
-    with first._engine.begin() as conn:
-        conn.exec_driver_sql("DELETE FROM meta WHERE key LIKE 'holder_%' OR key = 'held_at'")
-    assert _index(tmp_path, "83").sync().rebuilt
+    _unmark(first)
+    with pytest.raises(IndexHeldError):
+        _index(tmp_path, "83").sync()
+    assert _index(tmp_path, "85").sync().rebuilt  # newer still rebuilds
+
+
+def test_an_unordered_index_without_a_marker_is_not_held(tmp_path: Path) -> None:
+    first = _index(tmp_path, "t1")
+    first.sync()
+    _unmark(first)
+    assert _index(tmp_path, "t2").sync().rebuilt
 
 
 def test_sync_renews_the_hold(tmp_path: Path) -> None:
@@ -231,22 +270,49 @@ def test_rule_older_inside_the_window_is_blocked() -> None:
     assert _blocks(_held())
 
 
-def test_rule_window_edge() -> None:
-    assert _blocks(_held(ago=timedelta(minutes=10) - timedelta(milliseconds=1)))
-    assert not _blocks(_held(ago=timedelta(minutes=10)))
+def test_rule_older_is_blocked_whatever_the_age_liveness_host_pid_or_marker() -> None:
+    assert _blocks(_held(ago=timedelta(minutes=10)))  # window edge
+    assert _blocks(_held(ago=timedelta(days=30)))  # aged
+    assert _blocks(_held(), alive=False)  # holder gone on this host
+    assert _blocks(_held(pid=1000))  # this very process's pid
+    assert _blocks(_held(host="elsewhere", ago=timedelta(minutes=11)), alive=False)
+    assert _blocks(_held(held_at=None))  # no marker
+    assert _blocks(_held(ago=-timedelta(minutes=11)))  # far-future held_at
 
 
-def test_rule_exemptions() -> None:
+def test_rule_a_zero_window_turns_the_guard_off() -> None:
+    assert not holder_blocks(
+        _held(),
+        "83",
+        now=_NOW,
+        window=timedelta(0),
+        pid=1000,
+        host="here",
+        alive=lambda _pid: True,
+    )
+
+
+def test_rule_never_blocks_same_or_newer() -> None:
     assert not _blocks(_held("83"))  # same version
     assert not _blocks(_held("82"))  # newer over older
-    assert not _blocks(_held(held_at=None))  # no marker
-    assert not _blocks(_held(pid=1000))  # this very process
-    assert not _blocks(_held(), alive=False)  # holder gone on this host
+    assert not _blocks(_held("83", held_at=None))
+    assert not _blocks(_held("82", held_at=None))
 
 
-def test_rule_a_holder_on_another_host_is_trusted_until_the_window_ends() -> None:
-    assert _blocks(_held(host="elsewhere"), alive=False)
-    assert not _blocks(_held(host="elsewhere", ago=timedelta(minutes=11)), alive=False)
+def test_rule_unordered_window_edge() -> None:
+    assert _blocks(_held("t1", ago=timedelta(minutes=10) - timedelta(milliseconds=1)), "t2")
+    assert not _blocks(_held("t1", ago=timedelta(minutes=10)), "t2")
+
+
+def test_rule_unordered_exemptions() -> None:
+    assert not _blocks(_held("t1", held_at=None), "t2")  # no marker
+    assert not _blocks(_held("t1", pid=1000), "t2")  # this very process
+    assert not _blocks(_held("t1"), "t2", alive=False)  # holder gone on this host
+
+
+def test_rule_an_unordered_holder_on_another_host_is_trusted_until_the_window_ends() -> None:
+    assert _blocks(_held("t1", host="elsewhere"), "t2", alive=False)
+    assert not _blocks(_held("t1", host="elsewhere", ago=timedelta(minutes=11)), "t2", alive=False)
 
 
 def test_rule_versions_without_order() -> None:
@@ -254,9 +320,9 @@ def test_rule_versions_without_order() -> None:
     assert _blocks(_held("84"), "t2")
 
 
-def test_rule_a_held_at_far_in_the_future_does_not_hold_for_ever() -> None:
-    assert _blocks(_held(ago=-timedelta(minutes=5)))  # small skew still holds
-    assert not _blocks(_held(ago=-timedelta(minutes=11)))
+def test_rule_an_unordered_held_at_far_in_the_future_does_not_hold_for_ever() -> None:
+    assert _blocks(_held("t1", ago=-timedelta(minutes=5)), "t2")  # small skew still holds
+    assert not _blocks(_held("t1", ago=-timedelta(minutes=11)), "t2")
 
 
 def test_rule_non_ascii_digits_are_unordered_not_a_crash() -> None:

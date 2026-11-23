@@ -32,6 +32,8 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "dedup_run",
             "ranking_compute",
             "gate_status",
+            "gate_audit_pending",
+            "gate_audit_label",
             "watch_status",
             "watch_run",
             "feed_list",

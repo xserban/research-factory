@@ -1,0 +1,113 @@
+"""Events of the lifecycle conductor (plan tiers-and-autonomy C8, spec slice-9 section 7):
+`conductor.*`.
+
+A conductor run takes a tier's plan through its stages one step at a time. Every step is one outside
+`claude -p` run started through `factory.services.runner` (a proposer), and, where an agent may
+close a gate of the step at the study's autonomy level, a second run of a verifier and a third of
+an auditor, each its own session. The conductor is bookkeeping: it starts runs, counts and stops;
+every judgement is a role's, and it records no human act.
+
+`conductor.*` are system events. The service refuses a human or an agent actor and the derivation
+(`factory.services.conductor`) ignores a hand-written one; there is no projection table: the state
+is derived from the events, as the plan of a v2 spar is derived from the sheet. Pure value types.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import Field
+
+from factory.model.base import StrictModel
+from factory.model.identity import BLOB_REF_RE, ULID_RE
+from factory.model.runner import RUNNER_RUN_ID_RE
+from factory.model.screening import NonBlank
+
+CONDUCTOR_ID_RE = rf"^cnd_{ULID_RE}$"
+
+ConductorRole = Literal[
+    "proposer", "second-pass", "verifier", "auditor", "lead", "drafter", "critic", "automatic"
+]
+"""`lead`, `drafter` and `critic` are the three runs of the develop step (the hypothesis engine's
+independence rule: three distinct sessions). `second-pass` is the run that opens the second,
+independent pass of a step whose plan asks for one (extraction pass B), in a session and with a
+model of its own. `automatic` is the role of the deterministic step between `acquire` and the
+full-text screening (resolve, fetch, convert): the platform runs it as the system, with no run."""
+StepOutcome = Literal["complete", "failed", "lost"]
+PauseReason = Literal[
+    "failed-run",
+    "lost-run",
+    "budget",
+    "trust-pause",
+    "human-gate",
+    "refused",
+]
+
+
+class ConductorStarted(StrictModel):
+    """The plan being run: the tier and autonomy level it ran at, the ordered stage ids, the budget
+    and the plan as a blob (the input of the run). `steps` are the stage ids not skipped."""
+
+    conductor_id: str = Field(pattern=CONDUCTOR_ID_RE)
+    tier: NonBlank
+    autonomy_level: NonBlank
+    steps: tuple[NonBlank, ...] = Field(min_length=1)
+    max_minutes: int = Field(ge=1)
+    max_runs: int = Field(ge=1)
+    max_units_per_run: int = Field(ge=1)
+    automatic_limit: int | None = Field(default=None, ge=1)
+    """The works the `automatic` step may take on (the plan's `acquire.max_included`); None when
+    the plan sets none (the step then uses `max_units_per_run`)."""
+    second_pass_steps: tuple[NonBlank, ...] = ()
+    """The steps whose plan asks for a second pass (a `second-pass` role run after the proposer)."""
+    plan_blob: Annotated[str, Field(pattern=BLOB_REF_RE)]
+
+
+class ConductorStepStarted(StrictModel):
+    """One role run of one step was started (`run_id` is the runner's run)."""
+
+    conductor_id: str = Field(pattern=CONDUCTOR_ID_RE)
+    step: int = Field(ge=0)
+    stage_id: NonBlank
+    role: ConductorRole
+    run_id: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
+    """None for the `automatic` step, which starts no run."""
+    attempt: int = Field(ge=1)
+    pending: int | None = Field(default=None, ge=0)
+    """The units pending in the step's work queue when a queue step's proposer run started (counted
+    by the platform); None for any other run, and in logs written before the field."""
+
+
+class ConductorStepFinished(StrictModel):
+    """The runner's outcome of that run, copied once it is known. `run_id` is None for a work-queue
+    step (`screen`, `extract`) that had nothing pending: it is complete without a run."""
+
+    conductor_id: str = Field(pattern=CONDUCTOR_ID_RE)
+    step: int = Field(ge=0)
+    stage_id: NonBlank
+    role: ConductorRole
+    run_id: str | None = Field(default=None, pattern=RUNNER_RUN_ID_RE)
+    outcome: StepOutcome
+    pending: int | None = Field(default=None, ge=0)
+    """The units still pending in the work queue when a queue step's proposer run ended (counted by
+    the platform): with `ConductorStepStarted.pending` it tells whether the run made progress."""
+
+
+class ConductorPaused(StrictModel):
+    """The conductor stopped; `reason` is computed, never typed by an agent. `gate_id` names the
+    gate of a `human-gate` or `trust-pause` stop."""
+
+    conductor_id: str = Field(pattern=CONDUCTOR_ID_RE)
+    reason: PauseReason
+    step: int | None = Field(default=None, ge=0)
+    stage_id: str | None = None
+    gate_id: str | None = None
+    detail: str = ""
+
+
+class ConductorFinished(StrictModel):
+    """Every planned step ran to a complete run (and no gate waits)."""
+
+    conductor_id: str = Field(pattern=CONDUCTOR_ID_RE)
+    steps_done: int = Field(ge=1)
+    runs: int = Field(ge=0)

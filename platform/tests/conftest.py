@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+import factory.mcp.server
 from factory.clock import FixedClock
 from factory.config import Settings
 from factory.events.blobs import BlobStore

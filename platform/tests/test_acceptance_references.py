@@ -252,10 +252,10 @@ def test_round_whose_queries_failed_to_register_is_noted_not_stopped(
     def down(*_a: Any, **_k: Any) -> Any:
         raise RuntimeError("scripted crash")
 
-    monkeypatch.setattr(snowball, "register_query", down)
-    with pytest.raises(RuntimeError):
-        snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(snowball, "register_query", down)
+        with pytest.raises(RuntimeError):
+            snowball_round(project, agent, Direction.BACKWARD, sources=_sources(), dry_run=False)
     state = plan_round(project, Direction.BACKWARD).state
     assert "previous_round" not in [i.field for i in state.refusals]
     assert any("only 0 of" in note and "queries ran" in note for note in state.notes), state.notes

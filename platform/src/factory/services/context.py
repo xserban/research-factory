@@ -17,6 +17,7 @@ from factory.events.library import LabLibrary, ProjectLibrary
 from factory.events.writer import EventWriter
 from factory.index.default import default_projection
 from factory.index.index import Index
+from factory.index.levels import attach_level_reader
 from factory.index.library import referenced_check
 from factory.index.project import latest_host
 from factory.model.identity import SLUG_RE, IdGenerator, ulid_time
@@ -188,11 +189,13 @@ def build_project(
         if not future_dated(last_event_id, clock.now()):
             ids.floor(last_event_id.removeprefix("ev_"))
 
+    projection = default_projection(blobs)
+    attach_level_reader(projection, paths.events_dir, catalog)
     index = Index(
         paths.index_path,
         paths.events_dir,
         catalog,
-        default_projection(blobs),
+        projection,
         on_exclusive=floor_ids,
         on_write_lock=invalidate,  # a decision under the lock never uses a pre-lock memo value
         hold_window=settings.index_hold,

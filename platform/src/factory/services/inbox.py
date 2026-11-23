@@ -64,6 +64,7 @@ from factory.services import passes
 from factory.services.budgets import budget_issues
 from factory.services.context import Project
 from factory.services.coverage import held_out_visible
+from factory.services.hint_input import HintInput, resolve_hints
 from factory.services.protocol import search_authorization
 from factory.services.results import BatchResult, ItemError
 from factory.services.search import get_work, list_works, query_issues, register_query, run_query
@@ -84,6 +85,8 @@ class LinkInput:
     basis: Basis | None = None
     page: bool = False
     """The link is a publisher page, not an identifier: its `citation_doi` is read at resolution."""
+    hints: HintInput | None = None
+    """The researcher's capture hints (IDEA-81); a human capture only."""
 
 
 @dataclass(frozen=True)
@@ -213,6 +216,9 @@ def link_event(
     identifier, issues = _item_issues(actor, item)
     if issues or identifier is None:
         return None, None, issues
+    hints, hint_issues = resolve_hints(project, actor, item.hints)
+    if hint_issues:
+        return None, None, hint_issues
     note = item.note.strip() if item.note is not None and item.note.strip() else None
     item_id = project.ids.new("inb")
     payload = InboxLinkAdded(
@@ -225,6 +231,7 @@ def link_event(
         note=note,
         basis=item.basis,
         channel=channel,
+        hints=hints,
     )
     input_blob = project.blobs.put_json(_as_sent(item)) if actor.kind == "agent" else None
     event = project.events.make(

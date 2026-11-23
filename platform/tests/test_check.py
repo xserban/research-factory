@@ -52,7 +52,7 @@ from factory.services.seeds import (
 )
 from tests import helpers
 from tests.fulltext_helpers import _include_all
-from tests.helpers import SourcesFor, _protocol, _seed_item, _setup
+from tests.helpers import SourcesFor, _protocol, _seed_item, _setup, reviewer_of
 from tests.route_helpers import always, retrieved, routes_for
 from tests.screening_helpers import (
     _calibrate,
@@ -370,7 +370,7 @@ def test_press_missing(
     finding = PressFinding(
         element=PressElement.TEXT_WORDS, finding="Add a synonym.", severity="minor"
     )
-    review_id = press_review(project, agent, protocol_id, (finding,))
+    review_id = press_review(project, reviewer_of(agent), protocol_id, (finding,))
 
     _assert_row(project, "press-missing", mode, expected, refs=[review_id])
 

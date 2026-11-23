@@ -53,7 +53,7 @@ def gate_tables(metadata: MetaData) -> GateTables:
 
 def gate_handlers(t: GateTables) -> dict[str, Handler]:
     def sampled(conn: Connection, event: Event) -> None:
-        if event.actor.kind != "human":
+        if event.actor.kind not in ("human", "system"):  # system: the platform's draw (C4)
             return
         payload = GateAuditSampled.model_validate(event.payload)
         conn.execute(

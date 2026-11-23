@@ -183,7 +183,11 @@ def _miner_stages(project: Project) -> list[tuple[str, bool, str]]:
     applicable."""
     from factory.services.miners import MinerState, miner_state  # miners imports the mining stack
     from factory.services.mining import use_is_exploratory
+    from factory.services.validation_profile import miner_use_refusal
 
+    protocol = current_protocol(project)
+    uses = (protocol.spec.miners or ()) if protocol is not None else ()
+    listed_evidence = {u.name: u.evidence for u in uses}
     names: set[str] = set()
     listed: dict[str, int] = {}
     for entry in miner_listing(project):
@@ -196,6 +200,10 @@ def _miner_stages(project: Project) -> list[tuple[str, bool, str]]:
         version = listed.get(name)
         if version is None:
             plan.append((key, False, "the miner is not listed in the protocol"))
+            continue
+        refusal = miner_use_refusal(project, evidence=listed_evidence.get(name, False))
+        if refusal is not None:
+            plan.append((key, False, refusal))
             continue
         state = miner_state(project, name, version)
         if state is MinerState.CALIBRATED:

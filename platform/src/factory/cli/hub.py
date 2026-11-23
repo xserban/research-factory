@@ -11,6 +11,7 @@ from typing import Annotated
 
 import typer
 
+import factory.mcp.server  # noqa: F401  (registers the server builder for the tool catalog)
 from factory.services import hub_build
 
 hub_app = typer.Typer(

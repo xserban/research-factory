@@ -213,7 +213,9 @@ From each promoted lead, and only from a promoted lead, call `hypothesis_draft` 
   Tell the researcher plainly that, in a project with no evidence-scope rows naming the methods,
   a registered literature hypothesis cannot be evaluated: its evaluation is `incomplete` with the
   flags `cutoff-unknown`, `insufficient-evidence` and `method-unresolved`, and
-  `evaluate_hypothesis` runs only with `request_incomplete`, until an evidence schema with a
+  the evaluation (a human command, `factory hypotheses evaluate`; `evaluate_hypothesis` is the service
+  function behind it, not an MCP tool) runs only with `--incomplete` (service argument
+  `request_incomplete`), until an evidence schema with a
   method name and comparability keys exists. Where the evidence schema is missing, `conditions` must be `{}` and the methods are
   given by `name`; a method given as a card must be a method card, and a `row_key` a final
   evidence row.
@@ -274,7 +276,8 @@ combination cites up to 10 rows), and only the text of a long quote is cut (mark
    `verification`, `diversity`, `score`), `top`, `exclude_prior`, `recorded` (`after` by default,
    `first` or `hide`; see below), and `balance` (default true: the top is shared across the sources in play, so
    the many combinations do not crowd out challenges, gaps and limitations; `per_source_top` sets
-   the share; `balance=false` is the plain global order). `group_claims_by_work` (default true)
+   the share; `balance=false` is the plain global order). `group_claims_by_work` (default true;
+   a parameter of the lead-candidate tools, `--group-claims` on the command line, not a tool)
    gives one claims candidate per paper (`claims-work:<work_id>`, flags `grouped` and `rows=<n>`,
    support = its limitation rows, independence 1, at most 19 rows cited); false gives one candidate
    per limitation row (CLI `--no-group-claims`).

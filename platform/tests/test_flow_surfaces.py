@@ -140,7 +140,7 @@ def test_cli_report_flow_trail_full_and_refused_ids(
     work_id = flow_ledger(project)[0].work_id
     as_json = runner.invoke(app, ["report", "flow-trail", work_id, "--json"], env=env)
     assert as_json.exit_code == 0, as_json.stderr
-    assert set(json.loads(as_json.stdout)) == {"work_id", "steps"}
+    assert set(json.loads(as_json.stdout)) == {"work_id", "steps", "level_statement"}
     text_out = runner.invoke(app, ["report", "flow-trail", work_id], env=env)
     assert text_out.exit_code == 0, text_out.stderr
     assert f"# Trail of {work_id}" in text_out.stdout
@@ -168,7 +168,11 @@ async def test_flow_views_are_refused_to_a_pass_session_and_answer_before_a_pass
     assert early["data"]["items"] == [
         row.model_dump(mode="json") for row in flow_works(project).items
     ]
-    assert early_gaps["ok"] is True and set(early_gaps["data"]) == {"skipped", "run_gaps"}
+    assert early_gaps["ok"] is True and set(early_gaps["data"]) == {
+        "skipped",
+        "run_gaps",
+        "level_statement",
+    }
     expected = {key: v.model_dump(mode="json") for key, v in flow_by_source(project).items()}
     assert early_flow["data"]["by_source"] == expected
     assert early_flow["data"]["reconciles"] == ledger_reconciles(project)
@@ -217,7 +221,7 @@ async def test_flow_views_return_the_service_figures_once_a_pass_is_open(
     assert [item["work_id"] for item in works["data"]["items"]] == [
         row.work_id for row in page.items
     ]
-    assert set(gaps["data"]) == {"skipped", "run_gaps"}
+    assert set(gaps["data"]) == {"skipped", "run_gaps", "level_statement"}
     assert _fields(bad) == ["outcome"]
     assert _fields(bad_trail) == ["work_id"]
 
@@ -264,7 +268,7 @@ def test_cli_report_flow_works_and_skipped_listings(
     )
     assert page.exit_code == 0, page.stderr
     data = json.loads(page.stdout)
-    assert set(data) == {"items", "next_cursor"}
+    assert set(data) == {"items", "next_cursor", "level_statement"}
     assert all(item["ft_outcome"] == "excluded" for item in data["items"])
 
     text_out = runner.invoke(app, ["report", "flow-works", "--limit", "1"], env=env)
@@ -274,7 +278,7 @@ def test_cli_report_flow_works_and_skipped_listings(
     assert skipped.exit_code == 0, skipped.stderr
     assert "Run gaps by query" in skipped.stdout
     as_json = runner.invoke(app, ["report", "flow-skipped", "--json"], env=env)
-    assert set(json.loads(as_json.stdout)) == {"skipped", "run_gaps"}
+    assert set(json.loads(as_json.stdout)) == {"skipped", "run_gaps", "level_statement"}
 
 
 def test_cli_report_flow_works_refuses_a_criterion_without_a_step(

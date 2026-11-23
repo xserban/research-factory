@@ -94,7 +94,7 @@ RUN_MAP: dict[str, Any] = {
     "lead": (
         "A project moves through nine stages, with three loops back. Claude reads and judges through "
         "MCP tools, led by one skill per stage. The platform records every act as an event, computes "
-        "every count and holds the gates. The researcher decides at the gates, from the CLI and this hub."
+        "every count and holds the gates. At the attended level the researcher decides at the gates, from the CLI and this hub; at the supervised and autonomous levels an agent may close the gates that allow it and the researcher reviews afterwards."
     ),
     "entry": (
         "Every session starts with rf-run: it calls project_status, which reads the stage and the "
