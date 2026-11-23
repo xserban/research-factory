@@ -8,6 +8,7 @@ from pathlib import Path
 
 from factory.services.site_catalog import STAGE_IDS, Catalog, ToolSpec
 from factory.services.site_catalog_page import render, stage_summary
+from factory.services.site_chrome import BAR_CSS
 from tests.test_site_catalog import _derive, _skill
 
 
@@ -75,4 +76,14 @@ def test_no_hard_coded_colours_in_map(tmp_path: Path) -> None:
     css = html[start:end]
     css = re.sub(r"var\(--[a-z-]+,\s*#[0-9a-fA-F]{3,8}\)", "", css)
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b", css)
-    assert "prefers-reduced-motion" in css
+    assert "animation" not in css
+
+
+def test_page_uses_the_kit_frame(tmp_path: Path) -> None:
+    html = render(_cat(tmp_path), "now", "code")
+    assert "kit.css" in html and "main-hub.css" in html
+    assert html.count("class=hubbar") == 1
+    own = [c for c in re.findall(r"<style>(.*?)</style>", html, re.S) if c != BAR_CSS]
+    assert any(".ct-figs" in c for c in own)
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", "".join(own))
+    assert "Count check passed" in html or "Count check failed" in html

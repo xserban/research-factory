@@ -45,7 +45,7 @@ def test_the_portal_has_the_short_feed_list_above_the_project_cards(
     port, _ = served
     body = _get(port, "/")[2]
     assert "New papers" in body
-    assert body.index("New papers") < body.index("href='/p/demo/'")
+    assert body.index("New papers") < body.index("href='/p/demo/ui/'")
 
 
 def test_backlog_and_catalog_paths_without_a_slash_redirect(

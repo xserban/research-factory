@@ -117,7 +117,6 @@ from factory.services import (
     site_auth,
     site_backlog,
     site_catalog_page,
-    site_chrome,
     site_create,
     site_factory_feed,
     site_hub_feed,
@@ -2123,7 +2122,7 @@ class MainHub:
         if path in ("/backlog", "/catalog"):
             return 301, path + "/", b""
         if path == "/backlog/":
-            doc = site_chrome.with_bar(site_backlog.render_backlog(), "backlog")
+            doc = site_backlog.render_backlog()
             return 200, "text/html; charset=utf-8", doc.encode()
         if path == "/catalog/":
             return 200, "text/html; charset=utf-8", self.catalog_page().encode()
@@ -2272,14 +2271,8 @@ class MainHub:
         for slug in self._slugs():
             found = self.slot(slug)
             if found is not None:
-                doc = site_catalog_page.render_catalog(found.project.settings)
-                return site_chrome.with_bar(doc, "catalog")
-        return site_chrome.with_bar(
-            site_service.page(
-                "Capability catalog", "<p>No project found under the factory root.</p>"
-            ),
-            "catalog",
-        )
+                return site_catalog_page.render_catalog(found.project.settings)
+        return site_catalog_page.render_unavailable()
 
     def start_feed_run(self, *, refetch: bool) -> tuple[int, dict[str, object]]:
         """Start one feed run for every project (the hub acts); one at a time."""

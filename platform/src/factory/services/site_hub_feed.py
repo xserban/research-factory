@@ -599,7 +599,7 @@ def top_entries(views: Sequence[ProjectFeed], limit: int) -> list[TopEntry]:
 
 _PANEL_SCRIPT: Final = """
 (function(){
-document.querySelectorAll('.fp .pe').forEach(function(card){
+document.querySelectorAll('.pt-paper').forEach(function(card){
   var slug=card.dataset.slug,token=card.dataset.token,ranking=card.dataset.rankingId;
   var msg=card.querySelector('.msg');
   card.querySelectorAll('button[data-act]').forEach(function(b){
@@ -609,8 +609,8 @@ document.querySelectorAll('.fp .pe').forEach(function(card){
       fetch('/p/'+slug+'/api/feed/react',{method:'POST',headers:{'Content-Type':'application/json','X-Factory-Token':token},
         body:JSON.stringify({entry_id:card.dataset.entryId,ranking_id:ranking,reaction:b.dataset.act})})
       .then(function(r){return r.json().catch(function(){return {ok:false,issues:[{field:'response',reason:'status '+r.status}]};});})
-      .then(function(r){msg.textContent=r.ok?('saved: '+r.reaction):((r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'refused');})
-      .catch(function(x){msg.textContent='request failed: '+x;})
+      .then(function(r){msg.textContent=r.ok?('Saved: '+r.reaction):((r.issues||[]).map(function(i){return i.field+': '+i.reason;}).join('; ')||'Refused');})
+      .catch(function(x){msg.textContent='Request failed: '+x;})
       .then(function(){btns.forEach(function(x){x.disabled=false;});});
     });
   });
@@ -632,12 +632,15 @@ def ranked_total(views: Sequence[ProjectFeed]) -> int:
 
 
 def render_feed_panel(entries: Sequence[TopEntry], *, ranked_total: int) -> str:
-    """The short New papers list for the portal: each entry with its score, project, nearest core
-    work and the like and dislike buttons; the full page has the abstract and Add to inbox."""
+    """The short New papers list for the portal (kit classes of `main-hub.css`): each entry with its
+    score, project, nearest core work and the like and dislike buttons; the full page has the
+    abstract and Add to inbox."""
     if not entries:
         return (
-            "<section class=fp><h2>New papers <a href='/feed/'>Open the feed</a></h2>"
-            "<p class=sub>No new papers yet: nothing has been fetched for any project.</p></section>"
+            "<section class=mh-sec><header><h2>New papers</h2><span class=grow></span>"
+            "<a href='/feed/'>Open the feed &rarr;</a></header>"
+            "<p class='card pt-empty'>No new papers yet: nothing has been fetched for any project. "
+            "Press Fetch now on the feed page.</p></section>"
         )
     rows = []
     for t in entries:
@@ -645,19 +648,22 @@ def render_feed_panel(entries: Sequence[TopEntry], *, ranked_total: int) -> str:
         entry = e(item.entry_id, quote=True)
         nearest = item.nearest_reference_title or item.nearest_reference
         reaction = (
-            f" &middot; reaction: {e(str(item.reaction))}" if item.reaction is not None else ""
+            f" &middot; your reaction: {e(str(item.reaction))}" if item.reaction is not None else ""
         )
         rows.append(
-            f"<div class=pe data-slug='{e(t.slug, quote=True)}' data-token='{e(t.token, quote=True)}' "
+            f"<div class=pt-paper data-slug='{e(t.slug, quote=True)}' data-token='{e(t.token, quote=True)}' "
             f"data-ranking-id='{e(t.ranking_id, quote=True)}' data-entry-id='{entry}'>"
-            f"<div><span class=sc>{item.score:.3f}</span>"
-            f"<a class=tt href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a></div>"
+            f"<span class=sc title='Similarity to the core works'>{item.score:.3f}</span>"
+            f"<a class=tt href='https://arxiv.org/abs/{entry}'>{e(item.title or item.entry_id)}</a>"
             f"<div class=mm>{e(t.title)} &middot; nearest core work: {e(nearest) if nearest else 'none nearby'}{reaction}</div>"
-            "<div class=ac><button type=button data-act='like' disabled>Like</button>"
-            "<button type=button data-act='dislike' disabled>Dislike</button><span class=msg></span></div></div>"
+            "<div class=ac><span class=msg role=status></span>"
+            "<button type=button class=btn data-act='like' disabled>Like</button>"
+            "<button type=button class=btn data-act='dislike' disabled>Dislike</button></div></div>"
         )
     return (
-        f"<section class=fp><h2>New papers <a href='/feed/'>See all {ranked_total} ranked &rarr;</a></h2>"
-        + "".join(rows)
-        + f"</section><script>{_PANEL_SCRIPT}</script>"
+        "<section class=mh-sec><header><h2>New papers</h2>"
+        f"<span class=meta>top {len(entries)} by score</span><span class=grow></span>"
+        f"<a href='/feed/'>See all {ranked_total} ranked &rarr;</a></header>"
+        "<div class=pt-papers>" + "".join(rows) + "</div>"
+        f"</section><script>{_PANEL_SCRIPT}</script>"
     )
