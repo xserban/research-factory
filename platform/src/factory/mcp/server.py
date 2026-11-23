@@ -2687,7 +2687,8 @@ def build_server(
         served. The batch names the declared fields, the work, the pinned conversion to read with
         `document_read`, and the reference entries available for `cited_entry` (`references`;
         status `current`, `none` or `other-conversion`). Joins this session to the contribution
-        pass on its first call."""
+        pass on its first call. While the protocol declares a work allow-list, only listed works
+        are served and `allow_list` gives listed, eligible and not-eligible ids."""
 
         def serve() -> JsonValue:
             with unit_cap.serving() as done:

@@ -32,7 +32,9 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
+from typing import Any
 
+from pydantic import SerializerFunctionWrapHandler, model_serializer
 from sqlalchemy import text
 
 from factory.errors import FactoryValidationError, ValidationIssue
@@ -50,6 +52,7 @@ from factory.model.extraction import (
 )
 from factory.model.screening import Channel, PassLabel
 from factory.services.context import Project
+from factory.services.document_read import default_conversion
 from factory.services.extraction import (
     DUPLICATE_ITEM,
     ContributionBatchContent,
@@ -60,6 +63,7 @@ from factory.services.extraction import (
     ExtractResult,
     ExtraVerdict,
     UnitPin,
+    contribution_allow_list,
     live_rows,
     next_unit,
     record_unit,
@@ -84,7 +88,7 @@ from factory.services.extraction_audit import (
     extraction_audit_sample,
 )
 from factory.services.reference_view import briefs, reference_view_of
-from factory.services.references import current_extraction
+from factory.services.references import current_extraction, included_works
 from factory.services.stages import scope_of_kind
 from factory.services.tasks import get_task
 
@@ -101,10 +105,13 @@ __all__ = [
     "NO_RESULT_NEEDS_REASON",
     "OTHER_CONVERSION",
     "RESULT_ROW_UNKNOWN",
+    "AllowListState",
+    "ContributionNext",
     "ContributionStatus",
     "FieldSource",
     "ItemView",
     "NoItemUnit",
+    "allow_list_state",
     "checker_superseding",
     "contribution_agreement",
     "contribution_audit_record",
@@ -317,9 +324,53 @@ def _references(project: Project, work_id: str, conversion_id: str) -> UnitRefer
     return UnitReferences(status="current", extraction_id=view.extraction_id, entries=briefs(view))
 
 
-def contribution_next(project: Project, actor: Actor, label: PassLabel) -> ExtractNext:
+class AllowListState(StrictModel):
+    """The contribution allow-list as the protocol declares it (`contribution_schema.works`).
+    `listed`: ids on the list; `eligible`: listed works that are included and have a pinned
+    (default) conversion, hence served; `not_eligible`: the listed ids that are not, reported
+    rather than dropped. A unit of an eligible work is `queued`, `open` or `current` as usual."""
+
+    listed: int
+    eligible: int
+    not_eligible: list[str]
+
+
+def allow_list_state(project: Project) -> AllowListState | None:
+    """The allow-list's state, or None when the protocol declares none (every included work is
+    served). Read-only."""
+    allowed = contribution_allow_list(project)
+    if allowed is None:
+        return None
+    project.index.sync()
+    included = set(included_works(project))
+    eligible = sorted(
+        w for w in allowed if w in included and default_conversion(project, w) is not None
+    )
+    return AllowListState(
+        listed=len(allowed),
+        eligible=len(eligible),
+        not_eligible=sorted(allowed.difference(eligible)),
+    )
+
+
+class ContributionNext(ExtractNext):
+    """`ExtractNext` that also says when an allow-list is active (absent from the dump otherwise,
+    so a project without one reads as before)."""
+
+    allow_list: AllowListState | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_list(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.allow_list is None:
+            data.pop("allow_list", None)
+        return data
+
+
+def contribution_next(project: Project, actor: Actor, label: PassLabel) -> ContributionNext:
     """Serve the next contribution unit of pass `label`: `next_unit` with scope contribution and
-    a content hook attaching the unit's reference list and the item rules."""
+    a content hook attaching the unit's reference list and the item rules. With an allow-list
+    declared, only listed works are served and `allow_list` says how many are eligible."""
 
     def content(proj: Project, base: ExtractBatchContent) -> ExtractBatchContent:
         record = base.records[0]
@@ -329,7 +380,13 @@ def contribution_next(project: Project, actor: Actor, label: PassLabel) -> Extra
             item_rules=list(ITEM_RULES),
         )
 
-    return next_unit(project, actor, label, scope=Scope.CONTRIBUTION, content=content)
+    served = next_unit(project, actor, label, scope=Scope.CONTRIBUTION, content=content)
+    return ContributionNext(
+        batch=served.batch,
+        blocked=served.blocked,
+        remaining=served.remaining,
+        allow_list=allow_list_state(project),
+    )
 
 
 def contribution_record(
@@ -568,6 +625,17 @@ class ContributionStatus(StrictModel):
     closed_without_items: list[NoItemUnit]
     """Current units closed with a reason and no item: no row exists to audit, so a human reads
     the reasons here."""
+    allow_list: AllowListState | None = None
+    """Present only while the protocol declares a work allow-list. `units`, `no_references` and
+    `other_conversion` then count the listed works alone; items recorded earlier for a work since
+    taken off the list stay in the item counts."""
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_list(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.allow_list is None:
+            data.pop("allow_list", None)
+        return data
 
 
 class NoItemUnit(StrictModel):
@@ -636,6 +704,7 @@ def contribution_status(project: Project) -> ContributionStatus:
         no_references=none,
         other_conversion=other,
         closed_without_items=_closed_without_items(project),
+        allow_list=allow_list_state(project),
     )
 
 
