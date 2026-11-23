@@ -83,6 +83,9 @@ ALLOWED_IMPORTERS = frozenset(
         # pending intuition work to plan a run.
         "factory.services.briefing",
         "factory.services.pipeline",
+        # The hub's intuition review page lists interpretations and records the researcher's
+        # review through the service (no evidence output).
+        "factory.services.hub_intuition",
         "factory.services.check",
         "factory.services.trace",
         "factory.index.default",
@@ -137,6 +140,11 @@ TABLE_READERS = frozenset(
         "factory.learn.stages_late",
         "factory.services.hub_learn",
         "factory.services.hub_platform",
+        # Hub intuition page (checked 2026-11-23): reads layer rows through the services; the
+        # pipeline blurbs and the act route name the layer in prose and route names only.
+        "factory.services.hub_intuition",
+        "factory.services.hub_pipeline",
+        "factory.services.site_server",
     }
 )
 
