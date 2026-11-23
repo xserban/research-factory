@@ -179,6 +179,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
         "text/javascript; charset=utf-8",
     ),
     "pages/chat.js": ("hub_ui/pages/chat.js", "text/javascript; charset=utf-8"),
+    "pages/hypotheses.js": ("hub_ui/pages/hypotheses.js", "text/javascript; charset=utf-8"),
     "pages/living.js": ("hub_ui/pages/living.js", "text/javascript; charset=utf-8"),
     "pages/kit.js": ("hub_ui/pages/kit.js", "text/javascript; charset=utf-8"),
     "pages/protocol.js": ("hub_ui/pages/protocol.js", "text/javascript; charset=utf-8"),
@@ -402,6 +403,9 @@ PAGES: Final[dict[str, PageSpec]] = {
         ("shell", "contradictions"),
     ),
     "chat": PageSpec("chat", "Chat", "pages/chat.js", ("shell", "chat")),
+    "hypotheses": PageSpec(
+        "hypotheses", "Hypotheses", "pages/hypotheses.js", ("shell", "hypotheses")
+    ),
     "write": PageSpec("write", "Write & export", "pages/write.js", ("shell", "write")),
     "living": PageSpec("living", "Living review", "pages/living.js", ("shell", "living")),
     "costs": PageSpec("costs", "Costs & runs", "pages/costs.js", ("shell", "costs")),
