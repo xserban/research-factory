@@ -130,7 +130,31 @@ const ICON = {
 const svgI = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[k]}</svg>`;
 
 /* ---------- theme ---------- */
-const THEMES = [['dark', 'Hub dark'], ['light', 'Hub light'], ['tokyo-night', 'Tokyo Night'], ['catppuccin-mocha', 'Catppuccin Mocha'], ['gruvbox', 'Gruvbox'], ['nord', 'Nord'], ['rose-pine', 'Rosé Pine'], ['lcars', 'LCARS']];
+/* [id, name, group]: the same ids and names as services/site_themes.py; the picker groups by Dark / Light */
+const THEMES = [
+  ['dark', 'Hub dark', 'Dark'],
+  ['tokyo-night', 'Tokyo Night', 'Dark'],
+  ['catppuccin-mocha', 'Catppuccin Mocha', 'Dark'],
+  ['gruvbox', 'Gruvbox', 'Dark'],
+  ['nord', 'Nord', 'Dark'],
+  ['rose-pine', 'Rosé Pine', 'Dark'],
+  ['lcars', 'LCARS', 'Dark'],
+  ['ethereal', 'Ethereal', 'Dark'],
+  ['aetheria', 'Aetheria', 'Dark'],
+  ['cyberpunk-dreams', 'Cyberpunk Dreams', 'Dark'],
+  ['circuit-horizon', 'Circuit Horizon', 'Dark'],
+  ['moon-orbit', 'Moon Orbit', 'Dark'],
+  ['solitude', 'Solitude', 'Dark'],
+  ['vantablack', 'Vantablack', 'Dark'],
+  ['kanagawa', 'Kanagawa', 'Dark'],
+  ['light', 'Hub light', 'Light'],
+  ['paper-blue', 'Paper Blue', 'Light'],
+  ['sepia', 'Sepia', 'Light'],
+  ['cool-grey', 'Cool Grey', 'Light'],
+  ['catppuccin-latte', 'Catppuccin Latte', 'Light'],
+  ['flexoki-light', 'Flexoki Light', 'Light'],
+  ['solarized-light', 'Solarized Light', 'Light'],
+];
 function setTheme(t){ document.documentElement.dataset.theme = t; try{localStorage.setItem('hub-r2-theme',t)}catch(e){} document.dispatchEvent(new CustomEvent('hub:theme')); }
 try{ const t=localStorage.getItem('hub-r2-theme'); if(t) document.documentElement.dataset.theme=t; }catch(e){}
 const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.documentElement.dataset.theme=q0.get('theme');
@@ -187,7 +211,7 @@ function mount(opts){
         <a id="classicHub" class="btn" hidden title="The classic hub, served beside this one">&larr; Classic hub</a>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
         <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
-        <select class="theme-pick" id="themePick" aria-label="Colour theme">${THEMES.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select>
+        <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
       <main id="main"></main>
     </div>
@@ -296,7 +320,7 @@ const hash = { get(){ return new URLSearchParams(location.hash.slice(1)); }, set
 
 /* A page may set HUB.paletteExtra = q => [{label, group, go}] to add its own entries (approaches, …) to Ctrl-K. */
 const HUB = { $, esc, fmt, pct, HUMAN, LAYERS, FIELDS, humanLabel, layerLabel, pretty, humanColor, layerColor, cssv, val, quote,
-  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, closePalette, tip, tipHtml, tipAt, hash, setTheme, init };
+  LABELS, GLOSSARY, term, info, header, mount, openDrawer, closeDrawer, openPalette, closePalette, tip, tipHtml, tipAt, hash, setTheme, THEMES, init };
 
 /* Set once by the page script. Derives every count from the payload; nothing is typed. */
 function init(payload){

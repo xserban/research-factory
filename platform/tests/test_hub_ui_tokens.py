@@ -49,17 +49,87 @@ def _theme(theme_id: str) -> ThemeSpec:
 THEME_IDS = [spec.id for spec in THEMES]
 
 
-def test_eight_themes_in_kit_order() -> None:
-    assert THEME_IDS == [
-        "dark",
-        "light",
-        "tokyo-night",
-        "catppuccin-mocha",
-        "gruvbox",
-        "nord",
-        "rose-pine",
-        "lcars",
-    ]
+EARLIER = [
+    "dark",
+    "light",
+    "tokyo-night",
+    "catppuccin-mocha",
+    "gruvbox",
+    "nord",
+    "rose-pine",
+    "lcars",
+]
+NEW_IDS = [
+    "ethereal",
+    "aetheria",
+    "cyberpunk-dreams",
+    "circuit-horizon",
+    "moon-orbit",
+    "solitude",
+    "vantablack",
+    "kanagawa",
+    "paper-blue",
+    "sepia",
+    "cool-grey",
+    "catppuccin-latte",
+    "flexoki-light",
+    "solarized-light",
+]
+
+
+def test_themes_in_kit_order() -> None:
+    assert [*EARLIER, *NEW_IDS] == THEME_IDS
+
+
+def test_shell_picker_lists_the_same_ids_and_names_in_two_groups() -> None:
+    js = resources.files("factory").joinpath("hub_ui", "shell.js").read_text("utf-8")
+    entries = re.findall(r"\['([a-z-]+)', '([^']+)', '(Dark|Light)'\]", js)
+    by_group = {g: [i for i, _, gg in entries if gg == g] for g in ("Dark", "Light")}
+    assert sorted(i for ids in by_group.values() for i in ids) == sorted(THEME_IDS)
+    assert {n for _, n, _ in entries} == {_theme(i).label for i in THEME_IDS}
+    for i, n, _ in entries:
+        assert _theme(i).label == n
+
+
+@pytest.mark.parametrize("theme_id", NEW_IDS)
+def test_new_theme_text_meets_seven_to_one_and_muted_four_and_a_half(theme_id: str) -> None:
+    t = _theme(theme_id)
+    for ground in (t.bg, t.surface, t.raised):
+        assert contrast_ratio(t.fg, ground) >= 7.0, f"{theme_id}: fg on {ground}"
+        assert contrast_ratio(t.mut, ground) >= 7.0, f"{theme_id}: mut on {ground}"
+        assert contrast_ratio(t.dim, ground) >= 4.5, f"{theme_id}: dim on {ground}"
+    for ground in (t.bg, t.surface):
+        assert contrast_ratio(t.acc, ground) >= 4.5, f"{theme_id}: acc on {ground}"
+        assert contrast_ratio(t.inc, ground) >= 4.5, f"{theme_id}: inc on {ground}"
+        assert contrast_ratio(t.exc, ground) >= 4.5, f"{theme_id}: exc on {ground}"
+
+
+@pytest.mark.parametrize("theme_id", NEW_IDS)
+def test_new_theme_semantic_colours_are_readable_and_distinct(theme_id: str) -> None:
+    tokens = _all_hex_tokens(_kit_css())[theme_id]
+    bg = tokens["bg"]
+    names = ("h-none", "h-goal", "h-review", "h-feedback", "h-collab", "h-physical")
+    for name in (*names, "l-core", "l-adjacent", "l-benchmark", "l-applied"):
+        assert contrast_ratio(tokens[name], bg) >= 4.5, f"{theme_id}: --{name} on bg"
+    # outcome and the warn / violet colours are told apart by hue, not only by lightness
+    assert len({tokens["inc"], tokens["exc"], tokens["h-feedback"], tokens["h-collab"]}) == 4
+
+
+@pytest.mark.parametrize("theme_id", NEW_IDS)
+def test_new_theme_declares_its_colour_scheme(theme_id: str) -> None:
+    css = _kit_css()
+    start = css.index(f':root[data-theme="{theme_id}"]{{')
+    block = css[start : css.index("}", start)]
+    light = theme_id in {
+        "paper-blue",
+        "sepia",
+        "cool-grey",
+        "catppuccin-latte",
+        "flexoki-light",
+        "solarized-light",
+    }
+    assert (f"color-scheme:{'light' if light else 'dark'};") in block
+    assert ("--shadow:" in block) is light
 
 
 @pytest.mark.parametrize("theme_id", THEME_IDS)
