@@ -13,10 +13,12 @@ The build is made once per module run (the first test builds it). Skipped withou
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -144,6 +146,8 @@ DRIVER = r"""<script>
 </script>
 """
 
+CHROMIUM_WAIT_S = 100  # real seconds per attempt; a run takes about 1 s on a quiet machine
+
 _BUILT = pytest.StashKey[Path]()  # on the run's config: it ends with the run, no module state
 
 
@@ -172,14 +176,15 @@ def _instrument(src: Path, dst: Path) -> None:
     dst.write_text(head + DRIVER + "</body>" + tail, encoding="utf-8")
 
 
-def _drive(page: Path) -> dict[str, Any]:
-    """Run the click driver on `page`; return its result JSON (or an error stand-in)."""
-    PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
-    marked = page.with_name(page.stem + ".clicks.html")
-    _instrument(page, marked)
-    profile = tempfile.mkdtemp(prefix="rf-clicks-", dir=PROFILE_ROOT)
-    try:
-        proc = subprocess.run(
+def _chromium_dom(marked: Path, profile: str, out: Path) -> str:
+    """Run headless Chromium on `marked` and return the dumped DOM ("" when none came out).
+
+    The DOM goes to a file, not a pipe, and Chromium runs in its own process group. A pipe is held
+    open by Chromium's helper processes (crashpad, utility), so `subprocess.run(capture_output=True)`
+    can wait out its whole timeout after the DOM was printed; with a file the dump is read as soon as
+    the main process exits or the time is up, and the whole group is killed either way."""
+    with out.open("wb") as sink:
+        proc = subprocess.Popen(
             [
                 "chromium",
                 "--headless=new",
@@ -190,18 +195,46 @@ def _drive(page: Path) -> dict[str, Any]:
                 "--dump-dom",
                 f"file://{marked}",
             ],
-            capture_output=True,
-            text=True,
-            timeout=300,  # real time: a loaded CI runner needs far more than the 120 s of virtual time
-            check=False,
+            stdout=sink,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
+        try:
+            proc.wait(timeout=CHROMIUM_WAIT_S)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+    return out.read_text(encoding="utf-8", errors="replace")
+
+
+def _drive(page: Path) -> dict[str, Any]:
+    """Run the click driver on `page`; return its result JSON (or an error stand-in).
+
+    One Chromium run takes about a second on a quiet machine, so a run that has not finished after
+    `CHROMIUM_WAIT_S` is a hang, not slow work; it is killed and tried once more."""
+    PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
+    marked = page.with_name(page.stem + ".clicks.html")
+    _instrument(page, marked)
+    dom = ""
+    try:
+        for _attempt in range(2):
+            profile = tempfile.mkdtemp(prefix="rf-clicks-", dir=PROFILE_ROOT)
+            try:
+                dom = _chromium_dom(marked, profile, Path(profile + ".dom"))
+            finally:
+                shutil.rmtree(profile, ignore_errors=True)
+                Path(profile + ".dom").unlink(missing_ok=True)
+            if '<pre id="rf-clicks">' in dom:
+                break
     finally:
-        shutil.rmtree(profile, ignore_errors=True)
         marked.unlink(missing_ok=True)
-    start = proc.stdout.find('<pre id="rf-clicks">')
+    start = dom.find('<pre id="rf-clicks">')
     if start < 0:
         return {"done": False, "counts": {}, "errors": ["driver never finished"]}
-    body = proc.stdout[start + len('<pre id="rf-clicks">') :]
+    body = dom[start + len('<pre id="rf-clicks">') :]
     result: dict[str, Any] = json.loads(html.unescape(body[: body.index("</pre>")]))
     return result
 
