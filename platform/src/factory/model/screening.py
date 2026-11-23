@@ -262,9 +262,7 @@ class DecisionRecorded(StrictModel):
         The one exception: a full-text `cannot-assess` with an empty quote names its conversion
         but no anchor (the pinned conversion has no text to cite; gate observation 28)."""
         _check_verdict_fields(self.verdict, self.criterion, self.rationale)
-        no_text = (
-            self.verdict is Verdict.CANNOT_ASSESS and self.quote == "" and self.anchor is None
-        )
+        no_text = self.verdict is Verdict.CANNOT_ASSESS and self.quote == "" and self.anchor is None
         has_both = self.conversion_id is not None and (self.anchor is not None or no_text)
         has_any = self.anchor is not None or self.conversion_id is not None
         if self.stage is ScreeningStage.FULL_TEXT and not has_both:
