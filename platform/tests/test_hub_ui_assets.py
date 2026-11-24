@@ -127,17 +127,14 @@ def test_shell_palette_points_at_hub_pages() -> None:
     assert "results.html" not in shell
 
 
-def test_rail_and_palette_list_exactly_the_registered_pages() -> None:
+def test_sections_and_palette_list_exactly_the_registered_pages() -> None:
     shell = _read("shell.js")
     ids = list(hub_ui.PAGES)
-    rail = re.search(r"const RAIL = \[(.*?)\n\];", shell, re.S)
-    assert rail is not None
-    rail_ids = re.findall(r"\['(\w+)','[^']*','(\w+)\.html'\]", rail.group(1))
-    assert all(a == b for a, b in rail_ids)
-    listed = [a for a, _ in rail_ids]
-    assert len(listed) == len(set(listed))  # one entry per page
-    # the rail has its own reading order, not the registry's; kit is design, off the rail
-    # Kit and Learn have their own links next to the rail, not rail entries.
+    block = re.search(r"const SECTIONS = \[(.*?)\n\];", shell, re.S)
+    assert block is not None
+    listed = re.findall(r"^    \['(\w+)','[^']+','[^']+'\]", block.group(1), re.M)
+    assert len(listed) == len(set(listed))  # one section per page
+    # Kit and Learn have their own links at the foot of the rail, not section pages.
     assert sorted(listed) == sorted(i for i in ids if i not in ("kit", "learn"))
     pal = re.search(r"const PAGES = \[(.*?)\n\];", shell, re.S)
     assert pal is not None
@@ -161,13 +158,32 @@ def test_glossary_has_no_typed_figures_and_hole_names_every_gap_value() -> None:
     assert all(v in hole for v in GAP_VALUES)  # the script's copy names them too
 
 
-def test_the_topbar_has_a_home_link_to_the_portal_only_under_the_main_hub() -> None:
-    """Inside a project's hub (`/p/<slug>/ui/`) the first thing in the top bar leads back to the
+def test_the_rail_has_a_home_link_to_the_portal_only_under_the_main_hub() -> None:
+    """Inside a project's hub (`/p/<slug>/ui/`) the first thing in the rail leads back to the
     portal at `/`; the single-project server has no portal, so there the link stays hidden."""
-    from importlib import resources
-
-    shell = resources.files("factory").joinpath("hub_ui", "shell.js").read_text(encoding="utf-8")
-    bar = shell[shell.index('<header class="topbar">') : shell.index("</header>")]
-    assert bar.index('id="homeLink"') < bar.index('class="crumb"')
-    assert 'href="/"' in bar and 'aria-label="All projects"' in bar
+    shell = _read("shell.js")
+    start = shell.index('<nav class="rail"')
+    rail = shell[start : shell.index("</nav>", start)]
+    home = rail.index('id="homeLink"')
+    assert home < rail.index("aria-current")  # before the section's pages
+    assert 'href="/"' in rail and 'aria-label="All projects"' in rail and "svgI('projects')" in rail
     assert "/^\\/p\\/[^/]+\\/ui(\\/|$)/.test(location.pathname)" in shell
+
+
+def test_section_tabs_menu_and_fold_are_wired() -> None:
+    """Section tabs sit under the top bar; the rail lists only the current section's pages; the
+    All pages menu gives every page its question; `[` folds the rail, remembered per browser."""
+    shell = _read("shell.js")
+    head = shell.index("</header>")
+    assert shell.index('<nav class="sec-tabs"', head) < shell.index('<main id="main">')
+    assert "(sec ? sec[3] : []).map(" in shell
+    assert 'id="menu" role="dialog"' in shell and "<span>${esc(p[2])}</span>" in shell
+    assert "e.key==='['" in shell and "RAIL_FOLD_KEY" in shell
+    for page_id, _label, question in re.findall(
+        r"^    \['(\w+)','([^']+)','([^']+)'\]", shell, re.M
+    ):
+        assert question.endswith((".", "?")), page_id
+    css = _read("kit.css")
+    sels = (".sec-tabs a[aria-current]", ".menu[hidden]", ".rail .home[hidden]", ".shell.folded")
+    for sel in (*sels, ":focus-visible"):
+        assert sel in css, sel

@@ -205,6 +205,14 @@ hover, active, selected, disabled, loading, empty, error); tabular figures, nume
 aligned; `prefers-reduced-motion` keeps the finished state; works at 1440 px, 768 px and degrades at
 390 px (the rail becomes a bottom bar); the drawer closes on Esc.
 
+**Navigation inside a study.** Eight section tabs under the top bar, in research order (Plan ·
+Overview · Papers · Map · Extract · Findings · Write · Ops); a section tab opens its first page. The
+rail lists only the current section's pages (icon and short label), its first entry level with the
+page content; Projects (back to the portal, served hub only) sits in the rail's top corner, All
+pages, Start here and Kit at its foot. All pages opens a menu of every page with the one question it
+answers (P1, P10); `[` folds the rail, remembered per browser (P12); Ctrl K still searches pages and
+papers.
+
 ## 7. Adding a page: the steps
 
 1. **Payload builder** (`services/hub_<name>.py`): `build(ctx: HubContext) -> dict`. Pure over the
@@ -222,7 +230,8 @@ aligned; `prefers-reduced-motion` keeps the finished state; works at 1440 px, 76
    prefix (`.co-…`); shared components come from `kit.css`. Change `kit.css` or `shell.js` only
    for something every page needs, and check the Brand kit page afterwards.
 4. **Register the page**: `PageSpec` in `services/hub_ui.PAGES` (id, human title, script, payload
-   names), the script in `ASSETS`, an entry in `RAIL` and in the palette `PAGES` list (both in
+   names), the script in `ASSETS`, an entry in its section of `SECTIONS` (id, short
+   label, the one question the page answers) and in the palette `PAGES` list (both in
    `shell.js`), and an icon in `ICON` if it is new.
 5. **Shared helpers** (from `window.HUB`): `header`, `info`, `term`, `openDrawer`, `tip`, `hash`,
    `fmt`, `pct`, `esc`, `pretty`, `val`, `quote`, `humanColor`, `layerColor`, `cssv`; for acts
