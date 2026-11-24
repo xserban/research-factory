@@ -193,6 +193,7 @@ async def test_project_status_tool(settings: Settings, project: Project, clock: 
             "flow_trail",
             "extraction_status",
             "contribution_status",
+            "contribution_items",
             "relation_list",
             "idea_list",
             "concept_list",

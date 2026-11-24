@@ -293,6 +293,7 @@ TOOL_PERMISSIONS: Mapping[str, Permission] = {
     "card_list": Permission.PROJECT_READ,
     "concept_list": Permission.PROJECT_READ,
     "contribution_status": Permission.PROJECT_READ,
+    "contribution_items": Permission.PROJECT_READ,
     "dedup_merges": Permission.PROJECT_READ,
     "lessons_list": Permission.PROJECT_READ,
     "curation_propose": Permission.WORK_RUN,

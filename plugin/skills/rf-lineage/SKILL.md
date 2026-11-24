@@ -22,8 +22,9 @@ or rejects, on the command line.
 
 ## Procedure
 
-1. Pick a `base-idea` or `addition` item of an included work (its id is the `basis_item`). Only
-   such an item may be a basis. An item that is superseded, stale, still disputed between the
+1. Read the items with `contribution_items` (filter by `work` and `kind`; it pages). Pick a
+   `base-idea` or `addition` item of an included work (its `id` is the `basis_item`; skip any
+   with `disputed` true). Only such an item may be a basis. An item that is superseded, stale, still disputed between the
    passes, or of kind `result` or `limitation` is refused.
 2. One target per item. If the item names several predecessors, it has been split into one item
    per named predecessor; propose one relation per item. Prefer the work that the item's

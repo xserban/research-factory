@@ -5401,6 +5401,46 @@ def build_server(
         return _reply(project, status, include_work_ids=False)
 
     @server.tool()
+    def contribution_items(
+        project: str,
+        work: str | None = None,
+        kind: str | None = None,
+        cursor: str | None = None,
+        limit: int = PAGE_LIMIT,
+    ) -> dict[str, JsonValue]:
+        """The live contribution items, one page at a time, ordered by work: `id` (the id to
+        name as `basis_item` or `name_item`), `work`, `item_kind`, `name`, `statement`, `quote`,
+        `anchor`, `cited_entry` and `disputed` (true: still open between the passes, no basis).
+        `work` is a work id; `kind` is `base-idea` or `addition`. Shows no agreement, audit or
+        pass. Empty with a notice until a screening pass has opened. Read-only; refused to a
+        session that has joined a pass."""
+
+        def listing() -> JsonValue:
+            opened = open_project(settings, project, session=session, clock=clock)
+            _refuse_pass_session(opened)
+            if kind is not None and kind not in ("base-idea", "addition"):
+                raise FactoryValidationError(
+                    [ValidationIssue("kind", "must be `base-idea` or `addition`")]
+                )
+            paginate((), cursor, limit)  # validates the cursor
+            if _before_any_pass(opened):
+                return NOT_YET
+            found = contributions_service.contribution_listing(
+                opened,
+                work_id=None if work is None else resolve_work_id(opened, work, field="work"),
+                kind=kind,
+            )
+            shown = paginate(found, cursor, limit)
+            rows: list[JsonValue] = [i.model_dump(mode="json") for i in shown.items]
+            return _withheld(
+                opened,
+                _listing(rows, shown.next_cursor, "no contribution item found"),
+                include_work_ids=False,
+            )
+
+        return _reply(project, listing, include_work_ids=False)
+
+    @server.tool()
     def relation_list(
         project: str,
         work_id: str | None = None,

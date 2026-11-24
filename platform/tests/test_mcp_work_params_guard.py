@@ -34,6 +34,7 @@ RESOLVES: dict[str, frozenset[str]] = {
     "reference_decide": frozenset({"work_id"}),
     "relation_propose": frozenset({"source_work"}),
     "relation_list": frozenset({"work_id"}),
+    "contribution_items": frozenset({"work"}),
     "flow_trail": frozenset({"work_id"}),
     "chat_sections": frozenset({"work_id"}),
     "paper_profiles": frozenset({"work_ids"}),
