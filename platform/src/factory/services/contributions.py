@@ -80,6 +80,7 @@ from factory.services.extraction_agreement import (
     extraction_agreement,
     final_rows,
     resolve_extraction,
+    settled_rows,
 )
 from factory.services.extraction_audit import (
     ExtractionAuditReport,
@@ -106,6 +107,7 @@ __all__ = [
     "OTHER_CONVERSION",
     "RESULT_ROW_UNKNOWN",
     "AllowListState",
+    "ContributionListing",
     "ContributionNext",
     "ContributionStatus",
     "FieldSource",
@@ -120,6 +122,7 @@ __all__ = [
     "contribution_check",
     "contribution_close_check",
     "contribution_item",
+    "contribution_listing",
     "contribution_next",
     "contribution_record",
     "contribution_status",
@@ -607,6 +610,61 @@ def final_item(project: Project, extraction_id: str) -> ItemView | None:
         if any(s.extraction_id == extraction_id for s in item.sources.values()):
             return item
     return None
+
+
+class ContributionListing(StrictModel):
+    """One contribution item as a lineage proposer may read it: the id it names as a basis, the
+    item's own text and evidence, and whether it is still disputed between the passes. Carries no
+    pass label, agreement figure or audit datum (the proposer must not see them)."""
+
+    id: str
+    work: str
+    item_kind: str
+    name: str | None
+    statement: str | None
+    quote: str | None
+    anchor: str | None
+    cited_entry: int | None
+    disputed: bool
+
+
+def _listing_of(item: ItemView, *, disputed: bool) -> ContributionListing:
+    return ContributionListing(
+        id=item.extraction_id,
+        work=item.work_id,
+        item_kind=item.item_kind,
+        name=item.name,
+        statement=item.statement,
+        quote=item.quote,
+        anchor=item.anchor,
+        cited_entry=item.cited_entry,
+        disputed=disputed,
+    )
+
+
+def contribution_listing(
+    project: Project, *, work_id: str | None = None, kind: str | None = None
+) -> list[ContributionListing]:
+    """The live, current items of the contribution scope, ordered by work and id: each final item
+    once (`disputed` False) and each live row that no final item draws on (an open disagreement)
+    with `disputed` True. Stale items are left out. Read-only; no pass label is carried."""
+    stale = stale_extractions(project, scope=Scope.CONTRIBUTION)
+    finals = [
+        i
+        for i in final_items(project)
+        if not i.stale and i.absent_kind is None and (work_id is None or i.work_id == work_id)
+    ]
+    covered = {
+        x for row in settled_rows(project, scope=Scope.CONTRIBUTION)[0] for x in row.extraction_ids
+    }
+    out = [_listing_of(i, disputed=False) for i in finals]
+    out += [
+        _listing_of(i, disputed=True)
+        for i in live_items(project, work_id=work_id)
+        if i.extraction_id not in covered and i.extraction_id not in stale and i.absent_kind is None
+    ]
+    out = [i for i in out if kind is None or i.item_kind == kind]
+    return sorted(out, key=lambda i: (i.work, i.id))
 
 
 class ContributionStatus(StrictModel):

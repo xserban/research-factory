@@ -490,6 +490,7 @@ STAGES.update(
                 f"{_P}project_status",
                 f"{_P}document_read",
                 f"{_P}contribution_status",
+                f"{_P}contribution_items",
                 f"{_P}relation_list",
                 f"{_P}relation_propose",
                 f"{_P}idea_list",
