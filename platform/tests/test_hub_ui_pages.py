@@ -198,45 +198,37 @@ def test_no_page_passes_dataset_or_attribute_text_to_an_html_sink() -> None:
 
 
 NEW_PAGES = ("protocol", "levels", "pipeline", "sources", "method", "costs", "write", "platform")
-RAIL_ORDER = [
-    "protocol",
-    "levels",
-    "overview",
-    "pipeline",
-    "flow",
-    "corpus",
-    "lenses",
-    "explore",
-    "graph",
-    "ideas",
-    "landscape",
-    "sources",
-    "method",
-    "miners",
-    "data",
-    "findings",
-    "contradictions",
-    "hypotheses",
-    "chat",
-    "intuition",
-    "write",
-    "living",
-    "costs",
-    "platform",
-]
+SECTION_ORDER = {
+    "plan": ["protocol", "levels"],
+    "overview": ["overview", "pipeline", "flow"],
+    "papers": ["corpus", "explore", "lenses", "sources", "method"],
+    "map": ["graph", "landscape", "ideas"],
+    "extract": ["miners", "data"],
+    "findings": ["findings", "contradictions", "hypotheses", "chat", "intuition"],
+    "write": ["write"],
+    "ops": ["living", "costs", "platform"],
+}
 
 
 def _shell() -> str:
     return resources.files("factory.hub_ui").joinpath("shell.js").read_text(encoding="utf-8")
 
 
-def test_the_rail_lists_the_new_pages_in_order_with_protocol_under_frame() -> None:
-    block = re.search(r"const RAIL = \[(.*?)\n\];", _shell(), flags=re.S)
+def test_the_sections_follow_research_order_with_protocol_under_plan() -> None:
+    block = re.search(r"const SECTIONS = \[(.*?)\n\];", _shell(), flags=re.S)
     assert block is not None
-    entries = re.findall(r"\['([a-z-]+)'(?:,'([^']*)')?", block.group(1))
-    ids = [e[0] for e in entries if e[0] not in ("-", "group")]
-    assert ids == RAIL_ORDER
-    assert entries[0] == ("group", "Frame") and entries[1][0] == "protocol"
+    found: dict[str, list[str]] = {}
+    current = ""
+    for line in block.group(1).splitlines():
+        sec = re.match(r"  \['(\w+)','[^']+','\w+',\[", line)
+        page = re.match(r"    \['(\w+)',", line)
+        if sec:
+            current = sec.group(1)
+            found[current] = []
+        elif page:
+            found[current].append(page.group(1))
+    assert found == SECTION_ORDER  # dict equality checks contents; list(...) checks order
+    assert list(found) == list(SECTION_ORDER)
     for page in NEW_PAGES:
         assert re.search(
             rf"\b{page}:'<path|\b{page}:'<rect|\b{page}:'<circle|\b{page}:'<ellipse", _shell()

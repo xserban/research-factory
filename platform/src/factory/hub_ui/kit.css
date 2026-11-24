@@ -194,16 +194,12 @@ table.t{width:100%;border-collapse:collapse;font-size:var(--t-s)}
 :root[data-theme="solarized-light"]{color-scheme:light;--bg:#fdf6e3;--surface:#eee8d5;--raised:#e3dcc3;--line:#d3cbb0;--hair:color-mix(in srgb,#d3cbb0 55%,#eee8d5);--fg:#073642;--mut:#38464b;--dim:#506167;--acc:#a63e12;--acc-ink:#ffffff;--acc-soft:color-mix(in srgb,#a63e12 18%,transparent);--inc:#596700;--exc:#b42927;--exc-soft:color-mix(in srgb,#b42927 14%,transparent);--h-none:#1c6599;--h-goal:#1c6c66;--h-review:#596700;--h-feedback:#795c00;--h-collab:#55599b;--h-physical:#b42927;--h-null:#d3cbb0;--l-core:#795c00;--l-benchmark:#1c6c66;--l-applied:#1c6599;--l-adjacent:#55599b;--l-background:#506167;--l-off:#d3cbb0;--l-unlayered:#d3cbb0;--seq-0:#eee8d5;--seq-1:color-mix(in srgb,#a63e12 22%,#eee8d5);--seq-2:color-mix(in srgb,#a63e12 45%,#eee8d5);--seq-3:color-mix(in srgb,#a63e12 70%,#eee8d5);--seq-4:#a63e12;--shadow:0 10px 40px rgba(40,30,10,.12);}
 .theme-pick{font:500 var(--t-s) var(--f-ui);height:34px}
 .rail{overflow-y:auto;scrollbar-width:none}
-.rail-grp{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-top:1px;line-height:1.2}
-@media (max-width:760px){.rail-grp{display:none}}
 .proj-sw{position:relative}
 .proj-panel{position:absolute;right:0;top:40px;min-width:280px;max-height:70vh;overflow:auto;background:var(--raised);border-radius:var(--r);padding:10px;z-index:30;border:1px solid var(--line)}
 .proj-panel ul{list-style:none;margin:0 0 8px;padding:0}
 .proj-panel li a{display:block;padding:7px 8px;border-radius:var(--r-s);color:var(--fg);text-decoration:none}
 .proj-panel li a:hover,.proj-panel li a[aria-current]{background:var(--surface);color:var(--acc)}
 .proj-new form{display:grid;gap:6px;margin-top:8px}
-.rail-sep{width:32px;height:1px;background:var(--line);margin:3px 0}
-@media (max-width:760px){.rail-sep{display:none}}
 
 .sx-hint{display:none;margin:6px 2px 0;color:var(--mut);font:400 var(--t-xs) var(--f-ui)}
 @media (max-width:760px){.sx-hint{display:block}}
@@ -214,3 +210,34 @@ table.t{width:100%;border-collapse:collapse;font-size:var(--t-s)}
   background-image:linear-gradient(to right,var(--surface) 30%,transparent),linear-gradient(to left,var(--surface) 30%,transparent),radial-gradient(farthest-side at 0 50%,var(--line),transparent),radial-gradient(farthest-side at 100% 50%,var(--line),transparent);
   background-position:left center,right center,left center,right center;background-size:24px 100%,24px 100%,10px 100%,10px 100%;background-repeat:no-repeat;
   background-attachment:local,local,scroll,scroll}.rail a{flex:none;width:56px}}
+
+/* ---------- section navigation (docs/hub-guide.md §7): section tabs under the top bar, the rail lists
+   the current section's pages level with the content, Projects in the rail's top corner, `[` folds the
+   rail, the All pages menu lists every page with its question ---------- */
+.rail{position:sticky}
+.rail a{padding:6px 2px;font-size:10.5px}
+.rail .home[hidden]{display:none}
+.rail .home{position:absolute;top:12px;left:50%;transform:translateX(-50%);color:var(--fg)}
+.shell.folded{grid-template-columns:0 1fr}
+.shell.folded .rail{visibility:hidden}
+.sec-tabs{display:flex;gap:2px;padding:0 calc(var(--pad) - 10px);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.sec-tabs a{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:6px 10px;color:var(--mut);text-decoration:none;font-size:13px;border-bottom:2px solid transparent;white-space:nowrap}
+.sec-tabs a:hover{color:var(--fg)}
+.sec-tabs a[aria-current]{color:var(--fg);border-bottom-color:var(--acc)}
+.sec-tabs a:focus-visible,.rail a:focus-visible,.menu a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.menu{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding-top:6vh;z-index:60}
+.menu[hidden]{display:none}
+.menu-box{width:min(1100px,94vw);max-height:88vh;overflow:auto;background:var(--surface);border-radius:12px;box-shadow:var(--shadow);padding:20px 24px}
+.menu-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.menu-head h2{margin:0;flex:1;font-family:var(--f-display);font-weight:400}
+.menu-head .note{color:var(--dim);font-size:12px}
+.menu-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 24px}
+.menu-grid h3{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+.menu-grid a{display:block;padding:5px 6px;border-radius:var(--r);text-decoration:none;color:var(--fg)}
+.menu-grid a:hover{background:var(--raised)}
+.menu-grid a[aria-current]{background:var(--acc-soft)}
+.menu-grid a b{display:block;font-weight:500;font-size:13px}
+.menu-grid a span{display:block;color:var(--mut);font-size:12px}
+@media (max-width:1000px){.menu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.menu-grid{grid-template-columns:1fr}.rail .home{position:static;transform:none}.shell.folded{grid-template-columns:1fr}.shell.folded .rail{visibility:visible}.sec-tabs{padding:0 12px}}
+@media (prefers-reduced-motion:reduce){.sec-tabs a,.menu-grid a{transition:none}}

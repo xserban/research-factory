@@ -562,7 +562,7 @@ def test_the_chat_page_is_registered_in_the_rail_and_the_palette() -> None:
     assert spec.script == "pages/chat.js" and "chat" in spec.payloads
     assert "pages/chat.js" in hub_ui.ASSETS
     shell = _js("shell.js")
-    block = re.search(r"const RAIL = \[(.*?)\n\];", shell, flags=re.S)
+    block = re.search(r"const SECTIONS = \[(.*?)\n\];", shell, flags=re.S)
     assert block and "['chat'," in block.group(1)
     assert "'chat.html'" in shell and re.search(r"\bchat:'<path", shell)
     assert "HUB.chatHref" in shell

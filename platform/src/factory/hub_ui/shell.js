@@ -88,13 +88,16 @@ const POPS = new Map(); let popN = 0;
 function term(key, shown){ const g=GLOSSARY[key]; if(!g) return esc(shown??key); return `<span class="term" tabindex="0" data-term="${esc(key)}">${esc(shown??g[0].toLowerCase())}</span>`; }
 function info(html, label='About this'){ const id='p'+(++popN); POPS.set(id, html); return `<button type="button" class="info" data-pop="${id}" aria-label="${esc(label)}">i</button>`; }
 
-/* ---------- pages for the palette (the whole hub, grouped) ---------- */
+/* ---------- pages for the palette (the whole hub, grouped by the sections of SECTIONS) ---------- */
 const PAGES = [
-  ['Frame','Protocol','protocol.html'],['Frame','How this study runs','levels.html'],
+  ['Plan','Protocol','protocol.html'],['Plan','How this study runs','levels.html'],
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
-  ['Corpus','Corpus','corpus.html'],['Corpus','Lenses','lenses.html'],['Corpus','Explore','explore.html'],['Corpus','Graph','graph.html'],['Corpus','Ideas','ideas.html'],['Corpus','Landscape','landscape.html'],['Corpus','Sources','sources.html'],['Corpus','Method','method.html'],
-  ['Mining','Miners','miners.html'],['Mining','Extracted data','data.html'],
-  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Hypotheses','hypotheses.html'],['Findings','Chat with papers','chat.html'],['Findings','Intuition','intuition.html'],['Findings','Write & export','write.html'],['Living','Living review','living.html'],['Living','Costs & runs','costs.html'],['Living','Platform','platform.html'],
+  ['Papers','Corpus','corpus.html'],['Papers','Explore','explore.html'],['Papers','Lenses','lenses.html'],['Papers','Sources','sources.html'],['Papers','Method','method.html'],
+  ['Map','Graph','graph.html'],['Map','Landscape','landscape.html'],['Map','Ideas','ideas.html'],
+  ['Extract','Miners','miners.html'],['Extract','Extracted data','data.html'],
+  ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Hypotheses','hypotheses.html'],['Findings','Chat with papers','chat.html'],['Findings','Intuition','intuition.html'],
+  ['Write','Write & export','write.html'],
+  ['Ops','Living review','living.html'],['Ops','Costs & runs','costs.html'],['Ops','Platform','platform.html'],
   ['Start','Start here','learn.html'],
   ['Design','Brand kit','kit.html'],
 ];
@@ -168,68 +171,89 @@ function setTheme(t){ document.documentElement.dataset.theme = t; try{localStora
 window.addEventListener('storage', ev => { if(ev.key!==THEME_KEY) return; const t=savedTheme()||'dark'; document.documentElement.dataset.theme=t; const tp=document.getElementById('themePick'); if(tp) tp.value=t; document.dispatchEvent(new CustomEvent('hub:theme')); });
 const q0 = new URLSearchParams(location.search); if(q0.get('theme')) document.documentElement.dataset.theme=q0.get('theme');
 
-/* ---------- rail: one entry per line, in order; ['-'] is a divider, ['group', label] a small label ---------- */
-const RAIL = [
-  ['group','Frame'],
-  ['protocol','Protocol','protocol.html'],
-  ['levels','How this study runs','levels.html'],
-  ['-'],
-  ['overview','Overview','overview.html'],
-  ['pipeline','Pipeline','pipeline.html'],
-  ['flow','Flow','flow.html'],
-  ['-'],
-  ['corpus','Corpus','corpus.html'],
-  ['lenses','Lenses','lenses.html'],
-  ['explore','Explore','explore.html'],
-  ['graph','Graph','graph.html'],
-  ['ideas','Ideas','ideas.html'],
-  ['landscape','Landscape','landscape.html'],
-  ['sources','Sources','sources.html'],
-  ['method','Method','method.html'],
-  ['-'],
-  ['miners','Miners','miners.html'],
-  ['data','Data','data.html'],
-  ['-'],
-  ['findings','Findings','findings.html'],
-  ['contradictions','Contradictions','contradictions.html'],
-  ['hypotheses','Hypotheses','hypotheses.html'],
-  ['chat','Chat','chat.html'],
-  ['intuition','Intuition','intuition.html'],
-  ['write','Write & export','write.html'],
-  ['-'],
-  ['living','Living','living.html'],
-  ['costs','Costs & runs','costs.html'],
-  ['platform','Platform','platform.html'],
+/* ---------- navigation: sections (tabs in the top bar, in research order) and their pages (the rail).
+   A section: [id, label, icon, pages]; a page: [id, rail label, the one question it answers].
+   The rail shows only the current section's pages; the All pages menu shows every page with its
+   question. Start here and Kit have their own links at the foot of the rail. ---------- */
+const SECTIONS = [
+  ['plan','Plan','protocol',[
+    ['protocol','Protocol','What did we commit to before searching?'],
+    ['levels','How this study runs','Which tier and autonomy level, and what does it skip?'],
+  ]],
+  ['overview','Overview','overview',[
+    ['overview','Overview','Where does the study stand?'],
+    ['pipeline','Pipeline','What is waiting at each stage?'],
+    ['flow','Flow','Where did each record go, and why?'],
+  ]],
+  ['papers','Papers','corpus',[
+    ['corpus','Corpus','Which papers are in, by layer and year?'],
+    ['explore','Explore','Which papers match any field I pick?'],
+    ['lenses','Lenses','How do the papers split under each taxonomy?'],
+    ['sources','Sources','Where did the full texts come from?'],
+    ['method','Method','How were the papers found and screened?'],
+  ]],
+  ['map','Map','graph',[
+    ['graph','Graph','How do the papers cite each other?'],
+    ['landscape','Landscape','Which combinations exist, and which are gaps?'],
+    ['ideas','Ideas','Which ideas does each paper contribute?'],
+  ]],
+  ['extract','Extract','miners',[
+    ['miners','Miners','How well do the miners agree?'],
+    ['data','Data','Every extracted value, with its quote.'],
+  ]],
+  ['findings','Findings','findings',[
+    ['findings','Findings','What does the evidence say?'],
+    ['contradictions','Contradictions','Where do papers disagree?'],
+    ['hypotheses','Hypotheses','Which conjectures are registered, and how did they fare?'],
+    ['chat','Chat','What do the papers say about my question, with quotes?'],
+    ['intuition','Intuition','Which readings and background concepts frame the papers?'],
+  ]],
+  ['write','Write','write',[
+    ['write','Write & export','Drafts, reports and exports.'],
+  ]],
+  ['ops','Ops','costs',[
+    ['living','Living','What changed since the last cycle?'],
+    ['costs','Costs & runs','What did the runs cost?'],
+    ['platform','Platform','Which tools and skills stand behind the study?'],
+  ]],
 ];
+const sectionOf = page => SECTIONS.find(s => s[3].some(p => p[0] === page)) || null;
+const RAIL_FOLD_KEY = 'hub-rail-folded';
 
 /* ---------- mount ---------- */
 function mount(opts){
   const page = opts.page;
-  const nav = RAIL;
+  const sec = sectionOf(page);
+  const svg16 = k => svgI(k).replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"');
   document.body.innerHTML = `
   <div class="shell">
-    <nav class="rail" aria-label="Hub">
-      ${nav.map(n=>n[0]==='-'?'<span class="rail-sep" aria-hidden="true"></span>':n[0]==='group'?`<span class="rail-grp">${esc(n[1])}</span>`:`<a href="${n[2]}" ${n[0]===page?'aria-current="page"':''}>${svgI(n[0])}${esc(n[1])}</a>`).join('')}
-      <a href="#" data-palette>${svgI('search')}All pages</a>
+    <nav class="rail" aria-label="${esc(sec ? sec[1] : 'Start')} pages">
+      <a id="homeLink" class="home" href="/" hidden aria-label="All projects" title="All projects">${svgI('projects')}Projects</a>
+      ${(sec ? sec[3] : []).map(p=>`<a href="${p[0]}.html" title="${esc(p[2])}" ${p[0]===page?'aria-current="page"':''}>${svgI(p[0])}${esc(p[1])}</a>`).join('')}
       <span class="spacer"></span>
+      <a href="#" data-menu>${svgI('search')}All pages</a>
       <a href="learn.html" ${page==='learn'?'aria-current="page"':''}>${svgI('learn')}Start here</a>
       <a href="kit.html" ${page==='kit'?'aria-current="page"':''}>${svgI('kit')}Kit</a>
     </nav>
     <div>
       <header class="topbar">
-        <a id="homeLink" class="btn" href="/" hidden aria-label="All projects" title="All projects">${svgI('overview').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Projects</a>
         <span class="crumb">${esc((RF.project&&RF.project.title)||RF.slug||'')} · <b>${esc(opts.crumb||'')}</b></span>
         <span class="grow"></span>
         <span id="projSwitch" class="proj-sw" hidden></span>
         <a id="classicHub" class="btn" hidden title="The classic hub, served beside this one">&larr; Classic hub</a>
         <span class="meta">as of <span class="mono">${esc((RF.generated||'').replace('T',' ').slice(0,16))} UTC</span></span>
-        <button class="btn" data-palette aria-label="Go to a page or paper">${svgI('search').replace('<svg','<svg width=16 height=16 style="stroke:currentColor;fill:none;stroke-width:1.6"')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
+        <button class="btn" data-palette aria-label="Go to a page or paper">${svg16('search')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
+      <nav class="sec-tabs" aria-label="Sections">${SECTIONS.map(s=>`<a href="${s[3][0][0]}.html" ${sec&&sec[0]===s[0]?'aria-current="true"':''}>${svg16(s[2])}${esc(s[1])}</a>`).join('')}</nav>
       <main id="main"></main>
     </div>
   </div>
   <aside class="drawer" id="drawer" aria-label="Paper" tabindex="-1"></aside>
+  <div class="menu" id="menu" role="dialog" aria-modal="true" aria-label="All pages" hidden><div class="menu-box">
+    <div class="menu-head"><h2>All pages</h2><span class="note">Esc closes · Ctrl K searches pages and papers</span><button type="button" class="btn" data-menu-close>Close</button></div>
+    <div class="menu-grid">${SECTIONS.map(s=>`<section><h3>${svg16(s[2])}${esc(s[1])}</h3>${s[3].map(p=>`<a href="${p[0]}.html" ${p[0]===page?'aria-current="page"':''}><b>${esc(p[1])}</b><span>${esc(p[2])}</span></a>`).join('')}</section>`).join('')}</div>
+  </div></div>
   <div class="palette" id="palette" role="dialog" aria-label="Go to"><div class="box"><input id="palIn" type="text" placeholder="Type a page or a paper title…" aria-label="Search pages and papers"><ul id="palList" role="listbox"></ul></div></div>
   <div class="tip" id="tip" role="tooltip"></div>
   <div class="pop" id="pop" role="tooltip"></div>`;
@@ -240,14 +264,29 @@ function mount(opts){
   /* served only: the classic hub lives at the prefix this hub sits under (<prefix>/ui/ → <prefix>/) */
   if (HUB.served) { const a = $('#classicHub'); a.href = location.pathname.replace(/\/ui(\/.*)?$/, '/'); a.hidden = false; }
   document.querySelectorAll('[data-palette]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openPalette();}));
+  document.querySelectorAll('[data-menu]').forEach(b=>b.addEventListener('click',e=>{e.preventDefault();openMenu();}));
+  $('#menu').addEventListener('click', e=>{ if(e.target.id==='menu' || e.target.closest('[data-menu-close]')) closeMenu(); });
+  foldRail(railFolded());
+  alignRail(); requestAnimationFrame(alignRail); addEventListener('resize', alignRail);
   const tp=$('#themePick'); tp.value=document.documentElement.dataset.theme||'dark'; tp.onchange=()=>setTheme(tp.value);
   document.addEventListener('keydown', e=>{
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); openPalette(); }
     else if(e.key==='/' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)){ e.preventDefault(); openPalette(); }
-    else if(e.key==='Escape'){ closePalette(); closeDrawer(); }
+    else if(e.key==='Escape'){ closeMenu(); closePalette(); closeDrawer(); }
+    else if(e.key==='[' && !e.ctrlKey && !e.metaKey && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)){ foldRail(!railFolded()); }
   });
   return $('#main');
 }
+
+/* ---------- All pages menu, rail fold and rail alignment ---------- */
+function openMenu(){ const m=$('#menu'); m.hidden=false; (m.querySelector('[aria-current]')||m.querySelector('a')).focus(); }
+function closeMenu(){ const m=$('#menu'); if(m) m.hidden=true; }
+function railFolded(){ try{ return localStorage.getItem(RAIL_FOLD_KEY)==='1'; }catch(e){ return false; } }
+/* `[` folds the rail away (remembered in this browser); the section tabs stay */
+function foldRail(v){ document.querySelector('.shell')?.classList.toggle('folded', v); try{ localStorage.setItem(RAIL_FOLD_KEY, v?'1':''); }catch(e){} alignRail(); }
+/* the rail's first page sits level with the content: below the top bar and the section tabs */
+function alignRail(){ const r=document.querySelector('.rail'), t=document.querySelector('.topbar'), s=document.querySelector('.sec-tabs');
+  if(!r||!t) return; r.style.paddingTop = matchMedia('(max-width:760px)').matches ? '' : ((t.offsetHeight||0)+(s?s.offsetHeight:0)+8)+'px'; }
 
 /* ---------- term and info popovers ---------- */
 let popPinned=null;
