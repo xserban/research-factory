@@ -13,6 +13,7 @@ Invariants:
   nothing. Registration comes first and is idempotent; the listing is a protocol amendment (one
   event) written only if the registration succeeded. If the amendment is then refused (for
   example the protocol is not ready), the registration stays and a second call lists it.
+- A replaced use that was exploratory keeps `exploratory` in the new use.
 - Adding again writes nothing (`registered` and `listed` are False). A use of the same miner name
   at another version is replaced by the new version's use (the protocol holds one use per name).
 - `check_only` runs the same validation and reports what would be written, writing nothing.
@@ -56,12 +57,15 @@ _USE_KEYS = (
 
 
 def _differences(old: MinerUse, new: MinerUse) -> str:
-    """The use settings in which `old` and `new` differ, as `key old -> new`."""
+    """The use settings in which `old` and `new` differ, as `key old -> new`.
+
+    Invariant: the serialiser omits settings at their default, so a key may be missing on either
+    side; a missing key reads as None and never raises."""
     a, b = old.model_dump(mode="json"), new.model_dump(mode="json")
     return ", ".join(
-        f"{k} {a[k]!r} -> {b[k]!r}"
-        for k in sorted(a)
-        if k not in ("name", "version") and a[k] != b[k]
+        f"{k} {a.get(k)!r} -> {b.get(k)!r}"
+        for k in sorted(a.keys() | b.keys())
+        if k not in ("name", "version") and a.get(k) != b.get(k)
     )
 
 
@@ -172,6 +176,10 @@ def add_miner(
         replaced = None if replaced_use is None else replaced_use.version
         notes: list[str] = []
         if replaced_use is not None:
+            if replaced_use.exploratory:
+                # the declaration is a protocol amendment, not a file setting: it carries over
+                use = use.model_copy(update={"exploratory": True})
+                notes.append("the replaced use was exploratory; the new version stays exploratory")
             dropped = _differences(replaced_use, use)
             notes.append(
                 f"replaces version {replaced_use.version}'s use"
