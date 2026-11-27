@@ -470,7 +470,8 @@ def test_the_script_declares_only_registered_payloads() -> None:
 
 def test_the_shell_lists_the_page_in_the_rail_and_the_palette() -> None:
     shell = resources.files("factory.hub_ui").joinpath("shell.js").read_text(encoding="utf-8")
-    assert "['landscape','Landscape','Which combinations exist, and which are gaps?']" in shell  # rail
+    rail = "['landscape','Landscape','Which combinations exist, and which are gaps?']"
+    assert rail in shell
     assert "['Map','Landscape','landscape.html']" in shell  # palette
     assert "HUB.paletteExtra" in shell
 
