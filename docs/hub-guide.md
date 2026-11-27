@@ -211,7 +211,8 @@ rail lists only the current section's pages (icon and short label), its first en
 page content; Projects (back to the portal, served hub only) sits in the rail's top corner, All
 pages, Start here and Kit at its foot. All pages opens a menu of every page with the one question it
 answers (P1, P10); `[` folds the rail, remembered per browser (P12); Ctrl K still searches pages and
-papers.
+papers. Served hubs mark pages whose data is being rebuilt with a spinner and the word "building" (a
+count on the section tab; "!" when a build failed), updated in place every 5 s.
 
 ## 7. Adding a page: the steps
 

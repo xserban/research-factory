@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -639,9 +640,14 @@ def page_html(
     assets = [f'<script src="assets/shell.js?v={v}"></script>'] + [
         f'<script src="assets/{html.escape(s, quote=True)}?v={v}"></script>' for s in scripts
     ]
+    page_map = html.escape(
+        json.dumps({p.id: [n for n in p.payloads if n != "shell"] for p in PAGES.values()}),
+        quote=True,
+    )
     return (
         "<!doctype html>\n"
-        '<html lang="en" data-theme="dark">\n<head>\n<meta charset="utf-8">\n'
+        f'<html lang="en" data-theme="dark" data-hub-pages=\'{page_map}\'>\n'
+        '<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{html.escape(title)}</title>\n"
         f'<link rel="stylesheet" href="assets/kit.css?v={v}">\n</head>\n<body>\n'

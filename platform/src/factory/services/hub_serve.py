@@ -418,7 +418,8 @@ class PayloadService:
 
     def status(self) -> dict[str, dict[str, Any]]:
         """Per payload: `fresh` (on disk at its current fingerprint), `built_at` (UTC time of the
-        file on disk, None when none) and `error` (the build failed at the current fingerprint).
+        file on disk, None when none), `error` (the build failed at the current fingerprint) and
+        `state`: fresh, building, queued, failed or stale (not fresh and neither of the others).
         Reads the index head, the small `.fp` records and file times only."""
         counts = type_counts(self._project)
         out: dict[str, dict[str, Any]] = {}
@@ -432,8 +433,20 @@ class PayloadService:
                 pass
             with self._cond:
                 failed = self._failed.get(name)
+                building = name in self._building
+                queued = name in self._queue
             if failed is not None and failed[0] == fp:
                 row["error"] = "build failed"
+            if row["fresh"]:
+                row["state"] = "fresh"
+            elif building:
+                row["state"] = "building"
+            elif queued:
+                row["state"] = "queued"
+            elif "error" in row:
+                row["state"] = "failed"
+            else:
+                row["state"] = "stale"
             out[name] = row
         return out
 

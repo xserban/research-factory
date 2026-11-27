@@ -187,3 +187,25 @@ def test_section_tabs_menu_and_fold_are_wired() -> None:
     sels = (".sec-tabs a[aria-current]", ".menu[hidden]", ".rail .home[hidden]", ".shell.folded")
     for sel in (*sels, ":focus-visible"):
         assert sel in css, sel
+
+
+def test_page_html_carries_the_page_payload_map_for_every_page() -> None:
+    import html as html_mod
+    import json
+
+    for spec in hub_ui.PAGES.values():
+        page = hub_ui.page_html(spec.id, spec.title, [spec.script], spec.payloads, "v1")
+        m = re.search(r"data-hub-pages='([^']*)'", page)
+        assert m, spec.id
+        pages = json.loads(html_mod.unescape(m.group(1)))
+        assert set(pages) == set(hub_ui.PAGES)
+        for pid, names in pages.items():
+            assert names == [n for n in hub_ui.PAGES[pid].payloads if n != "shell"]
+
+
+def test_shell_polls_status_and_marks_building_pages() -> None:
+    js = _read("shell.js")
+    assert "status.json" in js and "visibilitychange" in js
+    assert "nav-state" in js and "hubPages" in js
+    css = _read("kit.css")
+    assert ".nav-state" in css and "prefers-reduced-motion" in css
