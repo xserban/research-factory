@@ -1845,6 +1845,10 @@ class _Ledger:
     """The event ID of each `mine.reopened` of a miner unit, in recording order (IDEA-99): the unit
     is stale (`reopened`) while its latest task closed before one, and its rows recorded before
     one are stale. Empty for a scope that is not a miner's and for a calibration."""
+    schema_ref: str | None = None
+    """The schema reference (`pack@version`) of the miner version now listed, for a miner scope
+    outside a calibration; None otherwise (also when no version is listed). Invariant: when set,
+    a task of another reference is stale and its rows are stale, so versions never mix."""
     _filled: set[str] | None = None
 
     def filled(self) -> set[str]:
@@ -1909,8 +1913,9 @@ class _Ledger:
     ) -> str | None:
         """Why `task` of the unit is stale, or None. `document-version`: it pins a document
         other than the work's current one. `schema`: for a task not completed, the current
-        schema's reference or fields differ from what it served; for a completed one, an
-        amendment recorded after its closing position (`closed_at`) stales all rows or a live
+        schema's reference or fields differ from what it served; for a completed one, a
+        reference other than the current schema's (a new miner version), or an amendment recorded
+        after its closing position (`closed_at`) stales all rows or a live
         row of the unit that was not already stale at that position (pinned to a replaced
         document, or staled by an amendment recorded between the row and the closing).
         `references`: a completed task's carried row cites a reference extraction replaced after
@@ -1925,6 +1930,8 @@ class _Ledger:
             if served != (_schema_ref(schema), _fields(pack, schema, self.orders[label])):
                 return "schema"
             return None
+        if task.content.schema_ref != _schema_ref(schema):
+            return "schema"  # closed under another version of the schema (a new miner version)
         closed = self.closed_at.get(task.task_id, "")
         if any(when > closed for when in self.reopenings.get((work_id, label), [])):
             return "reopened"
@@ -2035,7 +2042,10 @@ class _Ledger:
 
     def stale_rows(self) -> set[str]:
         """The live rows an amendment recorded after them stales, or that pin a document other
-        than the work's current one."""
+        than the work's current one. For a miner, also the rows recorded under a task of another
+        schema reference than the listed version's (`schema_ref`): a new miner version re-queues
+        the unit, and the previous version's rows neither occupy its row keys nor count in its
+        agreement or status."""
         live = [row for rows in (*self.rows.values(), *self.imported.values()) for row in rows]
         refs = [
             RowRef(
@@ -2065,6 +2075,19 @@ class _Ledger:
             replaced = current is not None and row.document_id != current.document_id
             if replaced or self.cites_old_references(row):
                 stale.add(row.extraction_id)
+        if self.schema_ref is not None:
+            other = {
+                t.task_id
+                for unit in self.tasks.values()
+                for t in unit
+                if t.content.schema_ref != self.schema_ref
+            }
+            stale.update(
+                row.extraction_id
+                for rows in self.rows.values()
+                for row in rows
+                if row.task_id in other
+            )
         for (work_id, label), reopened_at in self.reopenings.items():
             stale.update(  # a reopened unit's earlier rows give way to the fresh task's (IDEA-99)
                 row.extraction_id
@@ -2136,7 +2159,20 @@ def _ledger(
         imported=imported,
         reopened=reopened,
         reopenings=_reopenings(project, scope) if calibration_id is None else {},
+        schema_ref=_listed_schema_ref(project, scope) if calibration_id is None else None,
     )
+
+
+def _listed_schema_ref(project: Project, scope: ScopeKey) -> str | None:
+    """The schema reference of the miner version listed in the protocol, None for another scope
+    or when the miner is not listed."""
+    if not isinstance(scope, MinerScope):
+        return None
+    try:
+        _, schema, _ = require_schema(project, scope=scope)
+    except FactoryValidationError:
+        return None
+    return _schema_ref(schema)
 
 
 def _reopenings(project: Project, scope: ScopeKey) -> dict[tuple[str, PassLabel], list[str]]:
