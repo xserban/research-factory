@@ -451,7 +451,14 @@ def _decision_counts(conn: Connection, event: Event, payload: DecisionRecorded) 
     if payload.quote:
         return True
     if actor.kind != "human":
-        return False
+        # The one quoteless agent decision that folds: a full-text cannot-assess on a pinned
+        # conversion with no text (gate observation 28; the service checks the conversion).
+        return (
+            payload.stage is ScreeningStage.FULL_TEXT
+            and payload.verdict is Verdict.CANNOT_ASSESS
+            and payload.anchor is None
+            and payload.conversion_id is not None
+        )
     mode = conn.execute(text("SELECT rigor_mode FROM project LIMIT 1")).scalar_one_or_none()
     return not (payload.verdict is Verdict.EXCLUDE and mode == RigorMode.SYSTEMATIC.value)
 
