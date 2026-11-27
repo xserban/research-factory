@@ -1091,3 +1091,26 @@ def test_wiki_zip_copies_inside_symlinks_and_lists_outside_ones(
     note = zf.read("SKIPPED-LINKS.txt").decode()
     assert "docs/b.pdf" in note and "docs/dangling.pdf" in note and "secret" not in note
     assert "docs/a.pdf" not in note
+
+
+def test_status_reports_a_state_per_payload(project: Project, calls: list[str]) -> None:
+    service = hub_serve.PayloadService(project)
+    service.get("costs")
+    _idle(service)
+    status = service.status()
+    assert status["costs"]["state"] == "fresh"
+    assert status["corpus"]["state"] == "stale"
+    with service._cond:
+        service._queue.append("corpus")
+        service._building = {"overview"}
+    status = service.status()
+    assert status["corpus"]["state"] == "queued"
+    assert status["overview"]["state"] == "building"
+    with service._cond:
+        service._queue.remove("corpus")
+        service._building = set()
+        fp = hub_serve.fingerprint(project, hub_serve.key_of("corpus"))
+        service._failed["corpus"] = (fp, 0.0)
+    status = service.status()
+    assert status["corpus"]["state"] == "failed" and status["corpus"]["error"] == "build failed"
+    assert status["costs"]["fresh"] is True  # the old keys stay

@@ -229,7 +229,7 @@ function mount(opts){
   <div class="shell">
     <nav class="rail" aria-label="${esc(sec ? sec[1] : 'Start')} pages">
       <a id="homeLink" class="home" href="/" hidden aria-label="All projects" title="All projects">${svgI('projects')}Projects</a>
-      ${(sec ? sec[3] : []).map(p=>`<a href="${p[0]}.html" title="${esc(p[2])}" ${p[0]===page?'aria-current="page"':''}>${svgI(p[0])}${esc(p[1])}</a>`).join('')}
+      ${(sec ? sec[3] : []).map(p=>`<a href="${p[0]}.html" data-page="${p[0]}" title="${esc(p[2])}" ${p[0]===page?'aria-current="page"':''}>${svgI(p[0])}${esc(p[1])}</a>`).join('')}
       <span class="spacer"></span>
       <a href="#" data-menu>${svgI('search')}All pages</a>
       <a href="learn.html" ${page==='learn'?'aria-current="page"':''}>${svgI('learn')}Start here</a>
@@ -245,20 +245,21 @@ function mount(opts){
         <button class="btn" data-palette aria-label="Go to a page or paper">${svg16('search')} Go to a page or paper <span class="kbd">Ctrl K</span></button>
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
-      <nav class="sec-tabs" aria-label="Sections">${SECTIONS.map(s=>`<a href="${s[3][0][0]}.html" ${sec&&sec[0]===s[0]?'aria-current="true"':''}>${svg16(s[2])}${esc(s[1])}</a>`).join('')}</nav>
+      <nav class="sec-tabs" aria-label="Sections">${SECTIONS.map(s=>`<a href="${s[3][0][0]}.html" data-section="${s[0]}" ${sec&&sec[0]===s[0]?'aria-current="true"':''}>${svg16(s[2])}${esc(s[1])}</a>`).join('')}</nav>
       <main id="main"></main>
     </div>
   </div>
   <aside class="drawer" id="drawer" aria-label="Paper" tabindex="-1"></aside>
   <div class="menu" id="menu" role="dialog" aria-modal="true" aria-label="All pages" hidden><div class="menu-box">
     <div class="menu-head"><h2>All pages</h2><span class="note">Esc closes · Ctrl K searches pages and papers</span><button type="button" class="btn" data-menu-close>Close</button></div>
-    <div class="menu-grid">${SECTIONS.map(s=>`<section><h3>${svg16(s[2])}${esc(s[1])}</h3>${s[3].map(p=>`<a href="${p[0]}.html" ${p[0]===page?'aria-current="page"':''}><b>${esc(p[1])}</b><span>${esc(p[2])}</span></a>`).join('')}</section>`).join('')}</div>
+    <div class="menu-grid">${SECTIONS.map(s=>`<section><h3>${svg16(s[2])}${esc(s[1])}</h3>${s[3].map(p=>`<a href="${p[0]}.html" data-page="${p[0]}" ${p[0]===page?'aria-current="page"':''}><b>${esc(p[1])}</b><span>${esc(p[2])}</span></a>`).join('')}</section>`).join('')}</div>
   </div></div>
   <div class="palette" id="palette" role="dialog" aria-label="Go to"><div class="box"><input id="palIn" type="text" placeholder="Type a page or a paper title…" aria-label="Search pages and papers"><ul id="palList" role="listbox"></ul></div></div>
   <div class="tip" id="tip" role="tooltip"></div>
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
   if (HUB.served) projectSwitcher($('#projSwitch'));
+  if (HUB.served) navStatus();
   /* served under the main hub (/p/<slug>/ui/): the portal at / is home; a single-project server has none */
   if (HUB.served && /^\/p\/[^/]+\/ui(\/|$)/.test(location.pathname)) $('#homeLink').hidden = false;
   /* served only: the classic hub lives at the prefix this hub sits under (<prefix>/ui/ → <prefix>/) */
@@ -276,6 +277,49 @@ function mount(opts){
     else if(e.key==='[' && !e.ctrlKey && !e.metaKey && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)){ foldRail(!railFolded()); }
   });
   return $('#main');
+}
+
+/* ---------- which pages are building: served only. Polls ui/status.json every 5 s while the tab is
+   visible and marks nav links in place. A page is building when any of its payloads is building or
+   queued, failed when any failed. data-hub-pages (on <html>) maps each page to its payloads. ---------- */
+const NAV_POLL_MS = 5000;
+function navStatus(){
+  let map = {}; try { map = JSON.parse(document.documentElement.dataset.hubPages || '{}'); } catch(e){}
+  if (!Object.keys(map).length) return;
+  const names = {}; SECTIONS.forEach(s => s[3].forEach(p => { names[p[0]] = p[1]; }));
+  const state = {};
+  const mark = (a, st) => {
+    let el = a.querySelector(':scope > .nav-state');
+    if (!st) { if (el) el.remove(); return; }
+    if (!el) { el = document.createElement('span'); a.appendChild(el); el.className = 'nav-state'; }
+    el.dataset.state = st;
+    el.title = st === 'failed' ? 'Data for this page failed to build' : 'Data for this page is being rebuilt';
+    el.innerHTML = st === 'failed' ? '<span class="ns-icon" aria-hidden="true">!</span><span class="ns-text">failed</span>'
+      : '<span class="ns-icon" aria-hidden="true"></span><span class="ns-text">building</span>';
+  };
+  const apply = status => {
+    Object.keys(map).forEach(pg => {
+      const rows = map[pg].map(n => status[n]).filter(r => r && typeof r === 'object');
+      state[pg] = rows.some(r => r.state === 'failed') ? 'failed'
+        : rows.some(r => r.state === 'building' || r.state === 'queued') ? 'building' : '';
+    });
+    document.querySelectorAll('.rail a[data-page], .menu a[data-page]').forEach(a => mark(a, state[a.dataset.page] || ''));
+    SECTIONS.forEach(s => {
+      const a = document.querySelector('.sec-tabs a[data-section="' + s[0] + '"]'); if (!a) return;
+      const busy = s[3].filter(p => state[p[0]] === 'building').map(p => names[p[0]]);
+      let b = a.querySelector(':scope > .nav-count');
+      if (!busy.length) { if (b) b.remove(); a.removeAttribute('title'); return; }
+      if (!b) { b = document.createElement('span'); b.className = 'nav-count'; a.appendChild(b); }
+      b.textContent = busy.length + ' building'; a.title = 'Building: ' + busy.join(', ');
+    });
+  };
+  let timer = null;
+  const poll = () => fetch('status.json', {cache: 'no-store'}).then(r => r.ok ? r.json() : null)
+    .then(j => { if (j && typeof j === 'object') apply(j); }).catch(() => {});
+  const start = () => { if (timer === null) { poll(); timer = setInterval(poll, NAV_POLL_MS); } };
+  const stop = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+  if (!document.hidden) start();
 }
 
 /* ---------- All pages menu, rail fold and rail alignment ---------- */
