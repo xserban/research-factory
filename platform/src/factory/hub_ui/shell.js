@@ -94,7 +94,7 @@ const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Papers','Corpus','corpus.html'],['Papers','Explore','explore.html'],['Papers','Lenses','lenses.html'],['Papers','Sources','sources.html'],['Papers','Method','method.html'],
   ['Map','Graph','graph.html'],['Map','Landscape','landscape.html'],['Map','Ideas','ideas.html'],
-  ['Extract','Miners','miners.html'],['Extract','Extracted data','data.html'],
+  ['Extract','Miners','miners.html'],['Extract','Extracted data','data.html'],['Extract','Leaderboard','leaderboard.html'],
   ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Hypotheses','hypotheses.html'],['Findings','Chat with papers','chat.html'],['Findings','Intuition','intuition.html'],
   ['Write','Write & export','write.html'],
   ['Ops','Living review','living.html'],['Ops','Costs & runs','costs.html'],['Ops','Platform','platform.html'],
@@ -109,6 +109,7 @@ const ICON = {
   lenses:'<circle cx="9" cy="9" r="5"/><circle cx="15" cy="15" r="5"/>',
   explore:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
   miners:'<path d="M4 20l6-6M14 4l6 6-8 8-6-6z"/><path d="M12 6l6 6"/>',
+  leaderboard:'<path d="M5 20V11M12 20V4M19 20V14"/><path d="M3 20h18"/>',
   data:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/>',
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
@@ -200,6 +201,7 @@ const SECTIONS = [
   ['extract','Extract','miners',[
     ['miners','Miners','How well do the miners agree?'],
     ['data','Data','Every extracted value, with its quote.'],
+    ['leaderboard','Leaderboard','Which models score best on which data, and how often are baselines re-reported?'],
   ]],
   ['findings','Findings','findings',[
     ['findings','Findings','What does the evidence say?'],
