@@ -156,18 +156,20 @@ def test_overview_counts_follow_the_scope_and_aggregates_are_labelled(
     assert _text(scoped, "ovScope").startswith(f"{k} of {n} papers in scope")
 
     def rows(dom: str, ident: str) -> list[int]:
-        box = re.search(
-            rf'<div id="{ident}">(.*?)</div></div>\s*<div class="card">', dom, flags=re.S
-        )
+        box = re.search(rf'<div class="ov-bd" id="{ident}">(.*?)</div>', dom, flags=re.S)
         assert box, ident
-        return [int(x) for x in re.findall(r'<span class="v">(\d+) ·', box.group(1))]
+        return [int(x) for x in re.findall(r'<span class="ov-bd-val">(\d+) ·', box.group(1))]
 
-    comp = rows(scoped, "ovComp")
-    assert sum(comp) == 2 * k  # layer rows and human-role rows each add up to the papers in scope
-    assert sum(rows(whole, "ovComp")) == 2 * n
-    grow = [int(x) for x in re.findall(r'class="gb" data-m="[^"]+" data-n="(\d+)"', scoped)]
-    assert sum(grow) == sum(1 for p in pub.values() if p and p[:7] >= cut)
-    assert "papers</span>" in scoped and f"{k} papers" in re.sub(r"\s+", " ", scoped)
+    # the layer rows and the facet rows each add up to the papers in scope
+    assert sum(rows(scoped, "ovS2Bd")) == k and sum(rows(whole, "ovS2Bd")) == n
+    assert sum(rows(scoped, "ovS3Bd")) == k and sum(rows(whole, "ovS3Bd")) == n
+    flat = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", scoped))
+    assert f"n = {k} of {n} included" in flat  # the first chapter counts the papers in scope
+    assert re.search(rf'id="ovBrowseN">{k}<', scoped)
+    # the growth chapter: the busiest month is recomputed over the papers in scope
+    months = [p[:7] for p in pub.values() if p and p[:7] >= cut]
+    busiest = max(months.count(m) for m in set(months))
+    assert re.search(rf'id="ovS5N"[^>]*>\s*Peak [A-Za-z]{{3}} \'\d\d: {busiest} ', scoped), busiest
     # headline, records pipeline and production line hold whole-corpus aggregates: labelled
     assert len(re.findall(r'data-kind="corpus"', scoped)) >= 3
     assert "whole corpus" in scoped
@@ -179,9 +181,12 @@ def test_overview_empty_scope_shows_the_empty_state_and_zero_rows(
     ui, pub = built
     dom = run_chromium(f"file://{ui}/overview.html#scope.from=2999-01", tmp_path)
     assert _text(dom, "ovScope").startswith(f"0 of {len(pub)} papers in scope")
-    assert dom.count("No paper falls in this scope") >= 2  # the map and the growth chart
+    assert (
+        dom.count("No paper falls in this scope") >= 1
+    )  # the story is replaced by the empty state
     assert "data-scope-reset" in dom
-    vals = re.findall(r'<span class="v">(\d+) ·', dom)
+    assert re.search(r'id="ovBrowseN">0<', dom)
+    vals = re.findall(r'<span class="ov-bd-val">(\d+) ·', dom)
     assert vals and set(vals) == {"0"}  # categories read 0, none missing
 
 
