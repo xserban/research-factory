@@ -217,8 +217,9 @@ Facets now come from the categorical (enum) fields of the project's own protocol
 - HS-64 Cache keys: the `shell`, `explore` and `corpus` payloads read every event but the quiet
   families, so `hub.facets_set` restales them and no other payload; the site products that read the
   corpus payload follow `hub.%` through `EXPLORER_EVENTS`.
-- HS-65 Not in this change: the lens matrices and chains (`lenses.js`) and the overview keep the
-  pilot's four slots and their labels; Findings keeps the pilot's human, span and process columns;
+- HS-65 Not in this change: the lens matrices and chains (`lenses.js`) keep the pilot's four slots and
+  their labels (the overview reads the project's own layers, the `human` slot and its `fields` label, and
+  leaves the chapter out when the project has no such slot); Findings keeps the pilot's human, span and process columns;
   Write's `KIND` names are the kinds of its own scopes, not facets.
 
 ### Event `hub.facets_set` v1
