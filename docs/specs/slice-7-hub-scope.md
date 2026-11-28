@@ -37,7 +37,7 @@ Rigour
   "whole corpus" and is not changed by the scope (never a silently scoped or unscoped mix on one panel).
 - HS-21 Agreement figures (exact, fairer, platform; kappa) stay those of the whole pass. When a scope
   is active they carry "whole pass, not scoped"; no scoped agreement is computed or shown.
-- HS-22 Leaderboard and results rows: a row is in scope when its source paper (the work that reports
+- HS-22 (ruled 2026-11-28: hide and count, no toggle) Leaderboard and results rows: a row is in scope when its source paper (the work that reports
   the value) is in scope. A baseline row whose source paper is out of scope is hidden, and the table
   says "k baseline rows hidden (source paper out of scope)"; it is never kept as a reference line
   without that note, and never re-attributed to an in-scope paper.
