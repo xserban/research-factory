@@ -128,4 +128,8 @@ def test_estate_js_keeps_unread_counts_distinct_and_guards_interactions() -> Non
     assert "ev.ctrlKey || ev.metaKey" in text
     assert "&#39;" in text
     assert "ev.key !== 'Escape'" in text
-    assert "Ctrl + scroll to zoom" in site_portal.render_portal([])
+    row = site_portal.PortalRow(
+        slug="g", title="G", events=1, stale=0, built=0, hub_ready=False,
+        building=False, activity=(), activity_end=None, funnel=None,
+    )
+    assert "Ctrl + scroll to zoom" in site_portal.render_portal([row])
