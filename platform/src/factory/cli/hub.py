@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
 import factory.mcp.server  # noqa: F401  (registers the server builder for the tool catalog)
+from factory.errors import FactoryValidationError, ValidationIssue
 from factory.model.hub_facets import FacetPick
 from factory.services import hub_build, hub_facets
 
@@ -35,7 +37,15 @@ def parse_facet(text: str) -> FacetPick:
     miner, sep, name = spec.partition(":")
     if not sep or not miner or not name:
         raise typer.BadParameter(f"{text!r}: write miner:field or miner:field=Label")
-    return FacetPick(miner=miner, field=name, label=label.strip() or None)
+    try:
+        return FacetPick(miner=miner, field=name, label=label.strip() or None)
+    except ValidationError as exc:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(".".join(str(x) for x in e["loc"]) or "facet", e["msg"])
+                for e in exc.errors()
+            ]
+        ) from None
 
 
 @facets_app.command("set")
@@ -54,8 +64,8 @@ def facets_set_cmd(
     from factory.cli.main import _reporting_errors, _resolve_project, _state
 
     state = _state(ctx)
-    picks = [parse_facet(f) for f in facet]
     with _reporting_errors():
+        picks = [parse_facet(f) for f in facet]
         project = _resolve_project(state)
         event_id = hub_facets.set_facets(project, project.human_actor(), picks)
     typer.echo(f"recorded {len(picks)} facets ({event_id})")

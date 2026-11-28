@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from factory.cli.main import app
@@ -383,6 +384,18 @@ def test_cli_sets_and_shows_the_facets(arch: Project, settings: Settings) -> Non
     ]
 
 
+def test_cli_reports_an_over_long_label_as_an_error_not_a_traceback(
+    arch: Project, settings: Settings
+) -> None:
+    runner = CliRunner()
+    args = ["--project", arch.paths.slug, "hub", "facets", "set", "--facet"]
+    for facet in (f"m-arch:llm_size={'x' * 500}", f"m-arch:{'f' * 200}"):
+        res = runner.invoke(app, [*args, facet], env=_env(settings.root))
+        assert res.exit_code == 1, res.output
+        assert "Traceback" not in res.output and not isinstance(res.exception, ValidationError)
+        assert "label" in res.output or "field" in res.output
+
+
 @pytest.mark.browser
 def test_built_corpus_page_lists_the_projects_own_miner_fields(
     arch: Project, human: Actor, tmp_path: Path
@@ -413,3 +426,35 @@ def test_built_corpus_page_lists_the_projects_own_miner_fields(
     assert re.search(r'data-d="m-arch\.projector" data-v="mlp"', dom)
     payload = json.loads((ui / "data/corpus.json").read_text(encoding="utf-8"))
     assert [d["key"] for d in payload["dims"]][:2] == ["m-arch.projector", "m-model.vision_input"]
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("page", ["corpus", "explore"])
+def test_a_facet_label_with_markup_renders_as_text(
+    arch: Project, human: Actor, tmp_path: Path, page: str
+) -> None:
+    """The researcher's label is data: `<img onerror>` must reach the DOM as text, never as an
+    element, in the filter column, the chips, the DNA keys and the paper drawer."""
+    import shutil
+
+    if shutil.which("chromium") is None:
+        pytest.skip("chromium is not on PATH")
+    evil = "<img src=x onerror=document.body.dataset.pwned=1>"
+    hf.set_facets(
+        arch,
+        human,
+        [
+            FacetPick(miner="m-arch", field="projector", label=evil),
+            FacetPick(miner="m-model", field="vision_input"),
+        ],
+    )
+    ui = tmp_path / "ui"
+    report = hb.build_static(arch, ui)
+    assert not report.errors, report.errors
+    tmp = tmp_path / "run"
+    tmp.mkdir()
+    dom = run_chromium(f"file://{ui}/{page}.html", tmp)
+    assert "data-pwned" not in dom.split("<body", 1)[1].split(">", 1)[0], "the label ran as code"
+    assert not re.search(r"<img[^>]*onerror", dom), "the label became an element"
+    if page == "corpus":
+        assert "&lt;img src=x onerror=document.body" in dom, "the label is not on the page as text"

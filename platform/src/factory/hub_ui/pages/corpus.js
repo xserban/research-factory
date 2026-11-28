@@ -123,7 +123,7 @@ const SEGS = [K_TECH, K_ARCH, K_SPAN, K_HUM].filter(k => DIM[k]).map(k => [k, DI
 const sv = (w, k) => k === 'era' ? w._era : w._d[k][0];
 const segName = (k, v) => v == null ? 'not coded' : k === 'era' ? eraLabel(v) : lab(k, v);
 const dnaHTML = w => `<span class="dna" data-dna="${esc(w.id)}">${SEGS.map(([k]) => `<i style="--c:${colorOf(k, sv(w, k))}"></i>`).join('')}</span>`;
-const tipDNA = w => `<div style="font-weight:600;margin-bottom:4px">DNA</div>` + SEGS.map(([k, l]) => `<div style="font-size:12px"><span class="dot" style="background:${colorOf(k, sv(w, k))};margin-right:6px"></span>${l} · <b>${esc(segName(k, sv(w, k)))}</b></div>`).join('');
+const tipDNA = w => `<div style="font-weight:600;margin-bottom:4px">DNA</div>` + SEGS.map(([k, l]) => `<div style="font-size:12px"><span class="dot" style="background:${colorOf(k, sv(w, k))};margin-right:6px"></span>${esc(l)} · <b>${esc(segName(k, sv(w, k)))}</b></div>`).join('');
 
 /* ---------- state and URL hash ---------- */
 const ST = {view: 'list', grp: K_TECH, sort: 'new', rev: false, q: '', cite: 0, ft: false, id: '', f: {}, sel: new Set(), fq: {}, all: {}, cur: -1, lnAll: false, month: ''};
@@ -193,7 +193,7 @@ function citeNote() {
 const infoOf = ([k, l, , gk, def]) => HUB.info(`<b>${esc(l)}</b><p>${esc(gk && HUB.GLOSSARY[gk] ? HUB.GLOSSARY[gk][1] : def)}</p>${LAYER_NOTE(k)}<p><span class="k">How it's counted.</span> Each number is the papers that match your other filters and have this value. Values with none are dimmed.</p>`, 'About ' + l);
 function sideSkeleton() {
   return GROUPS.map(g => `<details class="fg" data-g="${esc(g)}" ${g === 'Paper' || g === 'System' || g === FACETS ? 'open' : ''}><summary>${esc(g)}<span class="ga"></span><button type="button" class="lnk" data-cg="${esc(g)}">Clear group</button></summary>` +
-    DD.filter(x => x[2] === g).map(x => `<div class="fc" data-d="${x[0]}"><div class="fh">${esc(x[1])}${infoOf(x)}${ORD[x[0]].length > 10 ? `<input type="text" data-fq="${x[0]}" placeholder="Find a value" aria-label="Find a value in ${esc(x[1])}">` : ''}</div><div class="fv"></div></div>`).join('') + '</details>').join('');
+    DD.filter(x => x[2] === g).map(x => `<div class="fc" data-d="${esc(x[0])}"><div class="fh">${esc(x[1])}${infoOf(x)}${ORD[x[0]].length > 10 ? `<input type="text" data-fq="${esc(x[0])}" placeholder="Find a value" aria-label="Find a value in ${esc(x[1])}">` : ''}</div><div class="fv"></div></div>`).join('') + '</details>').join('');
 }
 function paintFacets() {
   for (const [k] of DD) {
@@ -202,7 +202,7 @@ function paintFacets() {
     if (fq) vals = vals.filter(v => lab(k, v).toLowerCase().includes(fq));
     const lim = fq || ST.all[k] || vals.length <= 10 ? vals.length : 8;
     const shown = vals.filter((v, i) => i < lim || act.has(v));
-    $(`.fc[data-d="${k}"] .fv`).innerHTML = shown.map(v => `<label class="fi ${act.has(v) ? 'on' : ''} ${cnt[v] ? '' : 'z'}"><input type="checkbox" data-d="${k}" data-v="${esc(v)}" ${act.has(v) ? 'checked' : ''}><i class="dot" style="background:${colorOf(k, v)}"></i><span class="fl" title="${esc(lab(k, v))}">${esc(lab(k, v))}</span><span class="n">${cnt[v] || 0}</span></label>`).join('')
+    $(`.fc[data-d="${k}"] .fv`).innerHTML = shown.map(v => `<label class="fi ${act.has(v) ? 'on' : ''} ${cnt[v] ? '' : 'z'}"><input type="checkbox" data-d="${esc(k)}" data-v="${esc(v)}" ${act.has(v) ? 'checked' : ''}><i class="dot" style="background:${colorOf(k, v)}"></i><span class="fl" title="${esc(lab(k, v))}">${esc(lab(k, v))}</span><span class="n">${cnt[v] || 0}</span></label>`).join('')
       + (shown.length < vals.length ? `<button type="button" class="fmore" data-more="${k}">Show all ${fmt(vals.length)}</button>` : ST.all[k] && vals.length > 10 ? `<button type="button" class="fmore" data-more="${k}">Show fewer</button>` : '')
       + (vals.length ? '' : '<div class="meta">No match.</div>');
   }
@@ -213,7 +213,7 @@ function paintFacets() {
 /* ---------- chips and bar ---------- */
 function paintBar(ws) {
   const chips = [];
-  for (const [k, l] of DD.map(x => [x[0], x[1]])) for (const v of ST.f[k] || []) chips.push([`${l}: ${lab(k, v)}`, `data-k="${k}" data-v="${esc(v)}"`]);
+  for (const [k, l] of DD.map(x => [x[0], x[1]])) for (const v of ST.f[k] || []) chips.push([`${l}: ${lab(k, v)}`, `data-k="${esc(k)}" data-v="${esc(v)}"`]);
   if (ST.q) chips.push([`Search: ${ST.q}`, 'data-x="q"']); if (ST.cite > 0) chips.push([`Cited here at least ${ST.cite}`, 'data-x="cite"']); if (ST.ft) chips.push(['With full text', 'data-x="ft"']); if (ST.month) chips.push([`Published ${ST.month}`, 'data-x="month"']);
   const one = k => ST.f[k] && ST.f[k].size === 1 ? [...ST.f[k]][0] : '';
   const ex = new URLSearchParams(); if (ST.q) ex.set('t', ST.q); if (one('human')) ex.set('h', one('human')); if (one('layer')) ex.set('l', one('layer'));
@@ -299,7 +299,7 @@ function wireLineage(ws) {
     draw(c.he); openWork(slugMap.get(s)); });
 }
 function viewGraph() {
-  return `<div class="gwrap"><div class="gtog">${[K_TECH, K_FIELD, K_HUM].filter(k => DIM[k]).map(k => [k, DIM[k][1]]).concat([['stage','Lifecycle stage'],['cites','Citations']]).map(([k, l]) => `<button type="button" class="chip" data-g="${k}" aria-pressed="${GD.has(k)}">${l}</button>`).join('')}<span class="meta">Drag, scroll to zoom, click a paper</span></div><canvas></canvas></div>`;
+  return `<div class="gwrap"><div class="gtog">${[K_TECH, K_FIELD, K_HUM].filter(k => DIM[k]).map(k => [k, DIM[k][1]]).concat([['stage','Lifecycle stage'],['cites','Citations']]).map(([k, l]) => `<button type="button" class="chip" data-g="${esc(k)}" aria-pressed="${GD.has(k)}">${esc(l)}</button>`).join('')}<span class="meta">Drag, scroll to zoom, click a paper</span></div><canvas></canvas></div>`;
 }
 let gstop = null;
 function wireGraph(ws) {
@@ -386,7 +386,7 @@ function detailHTML(w) {
   ${w.mapped_from ? `<p class="meta">Its fields were read from a duplicate record of the same paper (<span class="mono">${esc(w.mapped_from)}</span>).</p>` : ''}
   <p style="margin:8px 0">${dnaHTML(w)}</p>
   <details><summary class="h3" style="cursor:pointer">Abstract</summary><p style="font-size:var(--t-s)">${w.abstract ? hl(w.abstract) : '<span class="meta">No abstract recorded.</span>'}</p></details>
-  <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${l}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
+  <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${esc(l)}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
   <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')} ${SCOPE.label('corpus')}</h3>
   <b class="meta">Cites</b><ul>${L(o)}</ul><b class="meta">Cited by</b><ul>${L(i)}</ul>
   <h3 class="h3">Lifecycle stages</h3>${w.stages.map(x => `<div class="kv"><span class="tag">${esc(pretty(x.stage))}</span> <span class="meta">${esc(x.mode || '')}</span><blockquote class="quote">“${hl(x.quote)}” <span class="meta">${esc(x.anchor || '')}</span></blockquote></div>`).join('') || '<div class="meta">None recorded.</div>'}
@@ -425,7 +425,7 @@ const infoPage = `<b>What it shows</b> The included papers, with what the miners
 $('#main').innerHTML = H.header({title: 'Corpus', level: 1, infoHtml: infoPage, sub: 'Filter the papers, then open one to see each value with its quote.'}) + `
 <div class="ctool"><input type="text" class="q" id="cq" placeholder="Search titles, abstracts and quotes" aria-label="Search titles, abstracts and quotes"><span class="kbd" title="Press f to search">f</span>
  <span class="seg" id="viewSeg">${VIEWS.map(v => `<button type="button" data-v="${v[0]}">${v[1]}</button>`).join('')}</span><button type="button" class="btn ftoggle" id="ftog">Filters</button></div>
-<div class="ctool"><label>Group by <select id="grp">${DD.map(x => `<option value="${x[0]}">${x[1]}</option>`).join('')}<option value="none">None</option></select></label>
+<div class="ctool"><label>Group by <select id="grp">${DD.map(x => `<option value="${esc(x[0])}">${esc(x[1])}</option>`).join('')}<option value="none">None</option></select></label>
  <label>Sort <select id="sortby">${SORTS.map(s => `<option value="${s[0]}">${s[1]}</option>`).join('')}</select></label><button type="button" class="btn" id="rev" aria-pressed="false">Reverse</button>
  <label>${HUB.term('cic', 'Cited here')} at least <input type="number" id="cite" min="0" step="1"></label><label><input type="checkbox" id="ft"> With full text</label></div>
 <div id="cscope"></div>

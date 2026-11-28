@@ -229,7 +229,7 @@ function segColor(k,v){
 function refreshColors(){SC={nul:cssv('--h-null'),s2:cssv('--seq-2'),s4:cssv('--seq-4')}}
 const dnaHTML=(d,sw=14,sh=10)=>`<span class="dna" style="--sw:${sw}px;--sh:${sh}px">${SEGS.map(s=>`<i style="--c:${segColor(s.k,s.get(d))}"></i>`).join('')}</span>`;
 const segName=(s,v)=>v==null?'not coded':s.lab(v);
-const tipDNA=d=>`${dnaHTML(d,18,12)}<div class="tdna">${SEGS.map(s=>`<i style="background:${segColor(s.k,s.get(d))}"></i><span>${s.l} · <b>${esc(segName(s,s.get(d)))}</b></span>`).join('')}</div>`;
+const tipDNA=d=>`${dnaHTML(d,18,12)}<div class="tdna">${SEGS.map(s=>`<i style="background:${segColor(s.k,s.get(d))}"></i><span>${esc(s.l)} · <b>${esc(segName(s,s.get(d)))}</b></span>`).join('')}</div>`;
 
 /* ======================= state ======================= */
 const ST={t:'',h:'',l:'',s:'',r:'in',x:'',view:'rings',col:'human',pins:[],sim:'',sort:[],sec:'',o:''};
@@ -672,7 +672,7 @@ cnv.addEventListener('pointermove',e=>{const p=pos(e);
   const nh=h&&h.d?h.d:null;const lab=h&&h.lab?h.lab.key:null;
   if(nh!==hover||(hover&&hover.lab!==lab)){hover=nh;if(nh)cur=nh;if(!nh&&lab)hover=null;dirty()}
   cnv.style.cursor=h?'pointer':'grab';
-  if(h&&h.part==='dna'){const s=SEGS[h.seg];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(h.d)))}</b>`,e)}
+  if(h&&h.part==='dna'){const s=SEGS[h.seg];HUB.tipHtml(`<div class="t2" style="margin:0">${esc(s.l)}</div><b>${esc(segName(s,s.get(h.d)))}</b>`,e)}
   else if(h&&h.part==='pin')HUB.tipHtml('Pin to the compare tray (P)',e);
   else if(h&&h.d)HUB.tipHtml(tipHTML(h.d),e);
   else if(h&&h.lab)HUB.tipHtml(`<div class="t1">${esc(h.lab.label)}</div><div class="t2">${h.lab.n} papers use this technique. Click to fly here.</div>`,e);
@@ -705,8 +705,8 @@ function renderWall(){
   const keys=ST.sort.length?ST.sort:['technique','human'];
   const rank=k=>keys.findIndex(x=>x.replace('-','')===k);
   const sc=w.scrollTop;
-  w.innerHTML=`<div class="wh">${SEGS.map(s=>{const i=rank(s.k),desc=i>=0&&keys[i][0]==='-';return`<button class="sb" data-sb="${s.k}" ${i>=0?`aria-sort="${desc?'descending':'ascending'}"`:''} title="Sort by ${s.l.toLowerCase()}">${s.s}${i>=0?` <small>${i+1}${desc?'↓':'↑'}</small>`:''}</button>`}).join('')}<span class="tc">title · month · cited here · pin</span></div>
-  <details class="wk"><summary>Key to the six squares</summary><div class="kg">${SEGS.map(s=>`<b>${s.l}</b><div>${[...ORD[s.k],null].filter(v=>v!==null||D.some(d=>s.get(d)==null)).map(v=>`<span><i style="background:${segColor(s.k,v)}"></i>${esc(segName(s,v))}</span>`).join('')}</div>`).join('')}</div></details>
+  w.innerHTML=`<div class="wh">${SEGS.map(s=>{const i=rank(s.k),desc=i>=0&&keys[i][0]==='-';return`<button class="sb" data-sb="${s.k}" ${i>=0?`aria-sort="${desc?'descending':'ascending'}"`:''} title="Sort by ${esc(s.l.toLowerCase())}">${s.s}${i>=0?` <small>${i+1}${desc?'↓':'↑'}</small>`:''}</button>`}).join('')}<span class="tc">title · month · cited here · pin</span></div>
+  <details class="wk"><summary>Key to the six squares</summary><div class="kg">${SEGS.map(s=>`<b>${esc(s.l)}</b><div>${[...ORD[s.k],null].filter(v=>v!==null||D.some(d=>s.get(d)==null)).map(v=>`<span><i style="background:${segColor(s.k,v)}"></i>${esc(segName(s,v))}</span>`).join('')}</div>`).join('')}</div></details>
   ${rows.length?rows.map(d=>`<div class="wr" role="button" tabindex="0" data-id="${esc(d.id)}" aria-selected="${ST.pins.includes(d.id)}" aria-label="${esc(d.title)}">${dnaHTML(d,64,13).replace(/<i /g,'<i data-seg="1" ')}<span class="tt">${esc(d.title)}</span><span class="m">${mLabel(d.mi)}</span><span class="ci">${d.cic}</span><button class="pb ${ST.pins.includes(d.id)?'on':''}" tabindex="-1" aria-label="Pin to compare tray" title="Pin (P)">${ST.pins.includes(d.id)?'●':'+'}</button></div>`).join(''):(SRES.n===0&&SRES.N>0?`<div class="empty2">${scopeEmptyHTML()}</div>`:'<div class="empty2"><b>No paper matches this sentence.</b><br>Loosen a slot above.</div>')}`;
   w.scrollTop=sc;
 }
@@ -723,7 +723,7 @@ $('#wall').addEventListener('keydown',e=>{const r=e.target.closest&&e.target.clo
 $('#wall').addEventListener('mousemove',e=>{
   const i=e.target.closest('i[data-seg]');const r=e.target.closest('.wr');if(!r){HUB.tipHtml('',e);return}
   const d=DB.get(r.dataset.id);cur=d;
-  if(i){const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b><div class="t3">${esc(d.title.slice(0,70))}</div>`,e)}
+  if(i){const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${esc(s.l)}</div><b>${esc(segName(s,s.get(d)))}</b><div class="t3">${esc(d.title.slice(0,70))}</div>`,e)}
   else HUB.tipHtml(tipHTML(d),e)});
 $('#wall').addEventListener('mouseleave',e=>HUB.tipHtml('',e));
 $('#wall').addEventListener('focusin',e=>{const r=e.target.closest&&e.target.closest('.wr');if(r)cur=DB.get(r.dataset.id)});
@@ -754,7 +754,7 @@ function renderTray(){
   h+=`<div class="rl"></div>`+P.map((d,i)=>`<div class="cl hd"><div style="display:flex;align-items:flex-start"><span class="badge">${'ABCD'[i]}</span><span class="ptitle" data-o="${esc(d.id)}">${esc(d.title)}</span></div><div class="acts"><button class="btn" data-sim="${esc(d.id)}" aria-pressed="${ST.sim===d.id}">${ST.sim===d.id?'Similar to this: shown':'Similar to this'}</button><button class="btn" data-un="${esc(d.id)}" aria-label="Unpin">− Unpin</button></div></div>`).join('');
   h+=`<div class="rl">DNA</div>`+P.map(d=>`<div class="cl" data-dna="${esc(d.id)}">${dnaHTML(d,26,16).replace(/<i /g,'<i data-seg="1" ')}</div>`).join('');
   for(const[k,l,get,lab] of rowsF){const vals=P.map(d=>get(d)??null);const diff=new Set(vals).size>1&&n>1;
-    h+=`<div class="rl ${diff?'d':''}">${diff?'<span class="g">≠</span> ':''}${l}</div>`+P.map((d,i)=>`<div class="cl ${diff?'diff':''}"><span class="v">${esc(vals[i]==null?'Not coded':lab(vals[i]))}</span>${HUB.quote(d.w,k)?`<q title="${esc(HUB.quote(d.w,k))}">${esc(HUB.quote(d.w,k))}</q>`:`<div class="meta">no ${HUB.term('quote','quote')} recorded</div>`}</div>`).join('')}
+    h+=`<div class="rl ${diff?'d':''}">${diff?'<span class="g">≠</span> ':''}${esc(l)}</div>`+P.map((d,i)=>`<div class="cl ${diff?'diff':''}"><span class="v">${esc(vals[i]==null?'Not coded':lab(vals[i]))}</span>${HUB.quote(d.w,k)?`<q title="${esc(HUB.quote(d.w,k))}">${esc(HUB.quote(d.w,k))}</q>`:`<div class="meta">no ${HUB.term('quote','quote')} recorded</div>`}</div>`).join('')}
   for(const[l,get,lab] of rowsS){const vals=P.map(d=>get(d.w&&l==='Layer'?d:(l==='Month'?d.w:d)));
     const raw=P.map(d=>l==='Layer'?d.layer:l==='Month'?d.mi:d.cic);const diff=new Set(raw).size>1&&n>1;
     h+=`<div class="rl ${diff?'d':''}">${diff?'<span class="g">≠</span> ':''}${l}</div>`+raw.map(v=>`<div class="cl ${diff?'diff':''}"><span class="v">${esc(l==='Layer'?layerLabel(v):l==='Month'?mLabel(v):l==='Cited here'?v+' times':v)}</span></div>`).join('')}
@@ -784,7 +784,7 @@ function renderTray(){
 }
 new ResizeObserver(()=>{document.body.style.paddingBottom=tray.offsetHeight+'px'}).observe(tray);
 tray.addEventListener('mousemove',e=>{const i=e.target.closest('i[data-seg]');if(!i){HUB.tipHtml('',e);return}const d=DB.get(i.closest('.cl').dataset.dna);
-  if(!d)return;const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${s.l}</div><b>${esc(segName(s,s.get(d)))}</b>`,e)});
+  if(!d)return;const idx=[...i.parentNode.children].indexOf(i),s=SEGS[idx];HUB.tipHtml(`<div class="t2" style="margin:0">${esc(s.l)}</div><b>${esc(segName(s,s.get(d)))}</b>`,e)});
 tray.addEventListener('mouseleave',e=>HUB.tipHtml('',e));
 
 /* Layer provenance (EX/LY-2): the corpus payload says which layers the researcher moved. Loaded after the first

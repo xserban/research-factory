@@ -263,3 +263,15 @@ def test_rows_carry_the_source_work_and_its_date_and_quote() -> None:
     r = next(x for x in out["rows"] if x["w"] == "w1" and x["r"] == "own")
     assert (r["p"], r["q"], r["a"]) == ("2026-01", "Table 2 says 0.9", "t2")
     assert out["works"][0] == {"id": "w1", "published": "2026-01"}
+
+
+def test_a_none_final_value_becomes_empty_text_never_the_word_none() -> None:
+    from types import SimpleNamespace
+
+    field = SimpleNamespace(value=None, quote=None, anchor=None)
+    final = SimpleNamespace(work_id="w1", fields={"setting": field})
+    data = SimpleNamespace(
+        sets=SimpleNamespace(included=frozenset({"w1"}), duplicate_mapped=()), rows={}
+    )
+    recs = lb._records(data, SimpleNamespace(name="m"), [final])  # type: ignore[arg-type]
+    assert [r.cells["setting"].value for r in recs] == [""]

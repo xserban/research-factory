@@ -147,6 +147,15 @@ def test_apply_include_undated_adds_them_to_scope() -> None:
     assert (res["n"], res["N"]) == (4, 6)
 
 
+def test_apply_with_an_empty_scope_keeps_nothing_even_undated() -> None:
+    for flag in ("true", "false"):
+        res = js(
+            f"S.apply({json.dumps(ROWS)}, r=>r.d, {{from:'2026-09',to:'2026-07'}}, "
+            f"{{includeUndated:{flag}}})"
+        )
+        assert res["inScope"] == [] and res["n"] == 0 and res["N"] == 6
+
+
 def test_apply_without_bounds_keeps_everything_and_defaults_options() -> None:
     res = js(f"S.apply({json.dumps(ROWS)}, r=>r.d, {{set:'s1'}})")
     assert res["n"] == res["N"] == 6

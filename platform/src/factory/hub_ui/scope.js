@@ -88,13 +88,13 @@ const inRange = (published, scope) => classify(published, scope) === 'in';
 function apply(rows, getDate, scope, opts){
   const includeUndated = !!(opts && opts.includeUndated);
   const list = Array.from(rows || []);
-  const on = active(scope);
+  const on = active(scope), gone = empty(scope); /* to before from: nothing is in scope */
   const inScope = [], outOfScope = [], undated = [], yearOnly = [];
   for (const row of list){
     const c = classify(getDate(row), scope);
     if (c === 'undated'){
       undated.push(row);
-      if (includeUndated || !on) inScope.push(row);
+      if (!gone && (includeUndated || !on)) inScope.push(row);
     } else if (c === 'in') inScope.push(row);
     else {
       outOfScope.push(row);

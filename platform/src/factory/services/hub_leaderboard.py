@@ -245,7 +245,10 @@ def _records(data: MiningData, info: MinerInfo, finals: Sequence[FinalRow] | Non
         work = fr.work_id if fr.work_id in included else canon.get(fr.work_id, "")
         if work not in included:
             continue
-        cells = {n: Cell(str(f.value), f.quote or "", f.anchor or "") for n, f in fr.fields.items()}
+        cells = {
+            n: Cell("" if f.value is None else str(f.value), f.quote or "", f.anchor or "")
+            for n, f in fr.fields.items()
+        }
         recs.append(_Rec(work, cells))
     return sorted(recs, key=lambda r: r.work)
 

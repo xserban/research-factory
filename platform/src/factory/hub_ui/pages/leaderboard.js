@@ -47,6 +47,7 @@ HUB.load(['shell', 'leaderboard']).then(d => {
     : esc(r.m);
 
   /* The same steps as hub_leaderboard.rank(): best per (model, paper), public only, at least K.min_models. */
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0); /* code-point order, as the service sorts */
   function rank(works) {
     const own = new Map(), base = new Map();
     let hb = 0, ho = 0;
@@ -69,10 +70,10 @@ HUB.load(['shell', 'leaderboard']).then(d => {
     for (const [key, slot] of own) {
       if (slot.size < K.min_models) continue;
       const [task, metric, dataset, setting] = JSON.parse(key);
-      const top = [...slot.values()].sort((a, b) => b.v - a.v || (a.m < b.m ? -1 : a.m > b.m ? 1 : 0) || (a.w < b.w ? -1 : 1));
+      const top = [...slot.values()].sort((a, b) => b.v - a.v || cmp(a.m, b.m) || cmp(a.w, b.w));
       tables.push({ task, metric, dataset, setting, models: slot.size, top: top.slice(0, K.top) });
     }
-    tables.sort((a, b) => a.task.localeCompare(b.task) || a.metric.localeCompare(b.metric) || b.models - a.models || a.dataset.localeCompare(b.dataset) || a.setting.localeCompare(b.setting));
+    tables.sort((a, b) => cmp(a.task, b.task) || cmp(a.metric, b.metric) || b.models - a.models || cmp(a.dataset, b.dataset) || cmp(a.setting, b.setting));
     const baselines = [];
     for (const [key, slot] of base) {
       if (slot.size < K.min_papers) continue;
@@ -81,7 +82,7 @@ HUB.load(['shell', 'leaderboard']).then(d => {
       const median = n % 2 ? vs[(n - 1) / 2] : (vs[n / 2 - 1] + vs[n / 2]) / 2;
       baselines.push({ model, task, metric, dataset, setting, papers: n, median, min: vs[0], max: vs[n - 1] });
     }
-    baselines.sort((a, b) => b.papers - a.papers || a.model.localeCompare(b.model));
+    baselines.sort((a, b) => b.papers - a.papers || cmp(a.model, b.model) || cmp(a.task, b.task) || cmp(a.metric, b.metric) || cmp(a.dataset, b.dataset) || cmp(a.setting, b.setting));
     return { tables, baselines, hiddenBaseline: hb, hiddenOwn: ho };
   }
 

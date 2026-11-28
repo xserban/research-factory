@@ -397,7 +397,7 @@ function openDrawer(id){
     <p class="meta"><a href="flow.html#lanes=${encodeURIComponent(id)}">See its path</a> · <a href="corpus.html#id=${encodeURIComponent(id)}">Open in Corpus</a> · <a href="${esc(HUB.chatHref({include:[id], only:true}))}">Spar with this paper</a></p>
     <div class="field"><div class="k">Abstract</div><p style="margin:4px 0">${w.abstract?esc(w.abstract):'<span class="meta">No abstract recorded.</span>'}</p></div>
     <h3 class="h3" style="margin-top:22px">What the paper says, field by field</h3>
-    ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${l}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
+    ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${esc(l)}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
     ${inn.length||out.length?`<h3 class="h3" style="margin-top:22px">Inside the corpus</h3>
       ${inn.length?`<p class="meta">Built on by ${inn.length}:</p><ul>${inn.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}
       ${out.length?`<p class="meta">Builds on ${out.length}:</p><ul>${out.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}`:''}`;
