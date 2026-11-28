@@ -3,10 +3,14 @@
 Invariants:
 - The layer of a work is, in this order: the latest `work.layer_set` of the work (the researcher's
   move, source `moved`); else the layer in the FINAL row of the first protocol-listed derived miner
-  that projects a dimension-zero dimension (source `miner`): agreed, resolved, or single (a work
+  that projects a dimension-zero dimension, or is flagged `paper_layers` and projects any
+  dimension (source `miner`): agreed, resolved, or single (a work
   outside the dual sample has one pass, which is its final value), never an unresolved
   disagreement; else none (source `pending`). A move beats a miner, but only while its layer is
-  an id of the latest recorded scheme: a move to any other layer is not effective, the next rule
+  an id of the latest recorded scheme, or a category of the first projected dimension of a
+  protocol-listed derived miner flagged `paper_layers` (which supplies layers even when its
+  dimension has no layer scheme; its `scheme_version` is then None): a move to any other layer is
+  not effective, the next rule
   applies, and the move stays visible as `WorkLayer.ignored_move`. A miner row whose value is
   `<dim>/not-stated`, `<dim>/other` or `<dim>/not-applicable` is no layer: the work is `pending`
   and `miner_layer` holds that value for display.
@@ -104,26 +108,61 @@ def layer_dimension(project: Project, spec: MinerSpec) -> Dimension | None:
     return None
 
 
-def _miner_layers(
-    project: Project, works: frozenset[str] | None = None
-) -> dict[str, tuple[str, int, bool]]:
-    """`work_id -> (value, scheme_version, is_layer)` from the final rows of the listed layer
-    miners, the first listed miner with a final row for a work winning. `is_layer` is False for an
-    absence value (`not-stated`, `other`, `not-applicable`)."""
+def _paper_layer_dimension(project: Project, spec: MinerSpec) -> Dimension | None:
+    """The first dimension a derived miner projects (the one of `spec.taxonomy.dimensions` that
+    comes first in its taxonomy), or None for a miner that is not derived."""
+    if spec.taxonomy is None:
+        return None
+    taxonomy = registered_taxonomy(project, spec.taxonomy.name, spec.taxonomy.version)
+    if taxonomy is None:
+        return None
+    for dimension in taxonomy.dimensions:
+        if dimension.id in spec.taxonomy.dimensions:
+            return dimension
+    return None
+
+
+def _layer_sources(project: Project) -> list[tuple[str, Dimension, int | None, bool]]:
+    """`(miner name, dimension, scheme version, flagged)` of every protocol-listed miner that
+    supplies layers, in protocol order: a derived miner with a layer-scheme dimension, or one
+    flagged `paper_layers` (scheme version None unless its dimension has one)."""
     protocol = current_protocol(project)
-    found: dict[str, tuple[str, int, bool]] = {}
+    out: list[tuple[str, Dimension, int | None, bool]] = []
     if protocol is None:
-        return found
+        return out
     for use in protocol.spec.miners or ():
         spec = registered_miner(project, use.name, use.version)
-        dimension = None if spec is None else layer_dimension(project, spec)
-        if dimension is None or dimension.layer_scheme is None:
+        if spec is None:
             continue
+        dimension = layer_dimension(project, spec)
+        if dimension is not None:
+            out.append((use.name, dimension, dimension.layer_scheme, False))
+        elif use.paper_layers:
+            flagged = _paper_layer_dimension(project, spec)
+            if flagged is not None:
+                out.append((use.name, flagged, flagged.layer_scheme, True))
+    return out
+
+
+def _flagged_categories(project: Project) -> set[str]:
+    """The category ids of the dimensions of the `paper_layers` miners: layers a move may name."""
+    return {c.id for _n, d, _v, flagged in _layer_sources(project) if flagged for c in d.categories}
+
+
+def _miner_layers(
+    project: Project, works: frozenset[str] | None = None
+) -> dict[str, tuple[str, int | None, bool]]:
+    """`work_id -> (value, scheme_version, is_layer)` from the final rows of the layer miners, the
+    first listed miner with a final row for a work winning. `scheme_version` is None for a
+    `paper_layers` miner whose dimension has no layer scheme. `is_layer` is False for an absence
+    value (`not-stated`, `other`, `not-applicable`)."""
+    found: dict[str, tuple[str, int | None, bool]] = {}
+    for name, dimension, scheme_version, _flagged in _layer_sources(project):
         prefix = f"{dimension.id}/"
         rows = (
-            final_rows(project, scope=MinerScope(use.name))
+            final_rows(project, scope=MinerScope(name))
             if works is None
-            else final_rows_restricted(project, works, scope=MinerScope(use.name))
+            else final_rows_restricted(project, works, scope=MinerScope(name))
         )
         for row in rows:
             cell = row.fields.get(_LAYER_FIELD)
@@ -131,10 +170,7 @@ def _miner_layers(
                 continue
             if cell.value.startswith(prefix) and len(cell.value) > len(prefix):
                 value = cell.value[len(prefix) :]
-                found.setdefault(
-                    row.work_id,
-                    (value, dimension.layer_scheme, value not in _ABSENT_LAYERS),
-                )
+                found.setdefault(row.work_id, (value, scheme_version, value not in _ABSENT_LAYERS))
     return found
 
 
@@ -199,6 +235,7 @@ def _compute(project: Project, works: frozenset[str] | None = None) -> dict[str,
     mined = _miner_layers(project, works)
     scheme = current_scheme(project)
     valid = set() if scheme is None else {d.id for d in scheme.layers}
+    valid |= _flagged_categories(project)
     out: dict[str, WorkLayer] = {}
     for work in moved.keys() | mined.keys():
         found = mined.get(work)
@@ -239,7 +276,7 @@ def move_layer(project: Project, actor: Actor, work_id: str, layer: str, reason:
         scheme = current_scheme(project)
         if scheme is None:
             raise _refuse("layer", "no layer scheme is recorded")
-        if layer not in {d.id for d in scheme.layers}:
+        if layer not in {d.id for d in scheme.layers} | _flagged_categories(project):
             raise _refuse("layer", f"{layer} is not a layer of scheme version {scheme.version}")
         try:
             payload = WorkLayerSet(
