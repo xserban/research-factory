@@ -37,6 +37,7 @@ NEW_PAGES = (
     "intuition",
     "learn",
     "levels",
+    "leaderboard",
 )
 CORE = {
     "shell",
@@ -242,6 +243,7 @@ def test_every_page_has_a_script_and_only_registered_payloads() -> None:
         "method",
         "miners",
         "data",
+        "leaderboard",
         "findings",
         "contradictions",
         "chat",
