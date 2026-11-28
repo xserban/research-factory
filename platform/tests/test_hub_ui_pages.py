@@ -256,3 +256,25 @@ def test_one_acts_helper_is_documented_and_the_switcher_is_served_only() -> None
         assert name in head
     assert "if (HUB.served) projectSwitcher" in shell
     assert "factory-hub-token" not in shell and 'href="/">New project' in shell
+
+
+def test_overview_mounts_morph_canvas_and_stable_sections() -> None:
+    text = code_only(source("overview"))
+    assert "HUB.load(['shell', 'overview'])" in text
+    assert "H.openDrawer(" in text
+    assert "hub:theme" in text
+    assert "prefers-reduced-motion" in text
+    for stable_id in (
+        "ovHero",
+        "ovPreamble",
+        "ovStory",
+        "ovCanvas",
+        "ovCursor",
+        "ovMultiples",
+        "ovEpilogue",
+        "ovFoot",
+    ):
+        assert stable_id in text, f"overview.js missing stable id {stable_id}"
+    for stage_idx in range(6):
+        assert f"ovStep-{stage_idx}" in text, f"overview.js missing stage {stage_idx}"
+
