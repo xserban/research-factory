@@ -1,0 +1,53 @@
+{
+ "_note": "Draft for the researcher; NOT recorded. Propose `definition` with the MCP tool vocabulary_propose (an agent session), then approve with the CLI (a human session): factory --root data --project chest-ct-vlm vocabulary approve pr:leaderboard-dataset --rationale '...'. Only the dataset rules of build_v3.py (canon_ds) imply aliases; it merges no metric or setting spellings, so no pr:leaderboard-metric or pr:leaderboard-setting is proposed. Canonical names are lower-case slugs because value tokens must match ^[a-z0-9][a-z0-9.-]{0,47}$. Spellings equal to a canonical name apart from case, spaces, hyphens and punctuation merge without an alias.",
+ "definition": {
+  "key": "pr:leaderboard-dataset",
+  "kind": "enum",
+  "allowed": [
+   "3d-rad",
+   "amos-mm",
+   "bimcv-r",
+   "cc-ccii",
+   "covctr",
+   "covidx-ct",
+   "ct-rate",
+   "ct-rate-vqa",
+   "ctrg-chest-548k",
+   "inspect",
+   "lidc-idri",
+   "luna16",
+   "lung1",
+   "m3d-cap",
+   "m3d-vqa",
+   "mosmeddata",
+   "nlst",
+   "omnimedvqa",
+   "rad-chestct",
+   "radgenome-chestct",
+   "stoic"
+  ],
+  "match": "equal",
+  "applies_to": "both",
+  "aliases": [],
+  "value_aliases": {
+   "ct-rate": [
+    "CT-RATE (in-domain)"
+   ],
+   "ctrg-chest-548k": [
+    "CTRG-Chest",
+    "CTRG-Chest-584K"
+   ],
+   "lidc-idri": [
+    "LIDC"
+   ],
+   "nlst": [
+    "National Lung Screening Trial (NLST) dataset"
+   ],
+   "rad-chestct": [
+    "RAD-ChestCT (external)"
+   ]
+  },
+  "scope": "project",
+  "description": "Dataset spellings of the results miner merged for the hub leaderboard (the canon_ds rules of ops/results/build_v3.py, 2026-11-27). A spelling not listed stays as extracted."
+ }
+}

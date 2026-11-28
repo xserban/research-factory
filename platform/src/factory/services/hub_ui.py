@@ -392,6 +392,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/platform.js": ("hub_ui/pages/platform.js", "text/javascript; charset=utf-8"),
     "pages/levels.js": ("hub_ui/pages/levels.js", "text/javascript; charset=utf-8"),
     "pages/learn.js": ("hub_ui/pages/learn.js", "text/javascript; charset=utf-8"),
+    "pages/leaderboard.js": ("hub_ui/pages/leaderboard.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -597,6 +598,9 @@ PAGES: Final[dict[str, PageSpec]] = {
     "method": PageSpec("method", "Method", "pages/method.js", ("shell", "method")),
     "miners": PageSpec("miners", "Miners", "pages/miners.js", ("shell", "mining")),
     "data": PageSpec("data", "Extracted data", "pages/data.js", ("shell", "mining")),
+    "leaderboard": PageSpec(
+        "leaderboard", "Leaderboard", "pages/leaderboard.js", ("shell", "leaderboard")
+    ),
     "findings": PageSpec("findings", "Findings", "pages/findings.js", ("shell", "findings")),
     "contradictions": PageSpec(
         "contradictions",

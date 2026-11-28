@@ -203,7 +203,7 @@ SECTION_ORDER = {
     "overview": ["overview", "pipeline", "flow"],
     "papers": ["corpus", "explore", "lenses", "sources", "method"],
     "map": ["graph", "landscape", "ideas"],
-    "extract": ["miners", "data"],
+    "extract": ["miners", "data", "leaderboard"],
     "findings": ["findings", "contradictions", "hypotheses", "chat", "intuition"],
     "write": ["write"],
     "ops": ["living", "costs", "platform"],

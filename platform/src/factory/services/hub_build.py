@@ -40,6 +40,7 @@ from factory.services import (
     hub_ideas,
     hub_intuition,
     hub_landscape,
+    hub_leaderboard,
     hub_learn,
     hub_lenses,
     hub_levels,
@@ -675,6 +676,7 @@ BUILDERS: dict[str, Callable[[HubContext], dict[str, Any]]] = {
     "write": hub_write.build,
     "platform": hub_platform.build,
     "learn": hub_learn.build,
+    hub_leaderboard.NAME: hub_leaderboard.build,
 }
 
 # Payloads whose cache key is narrower than the whole event log: name -> the event type prefixes
@@ -709,6 +711,8 @@ PAYLOAD_INPUTS: dict[str, tuple[str, ...]] = {
     },
     # contribution items, relations and ideas: nothing else changes the lineage graph
     "ideas": hub_ideas.EVENT_PREFIXES,
+    # the results miner's final rows, the approved vocabulary and the works they sit on
+    hub_leaderboard.NAME: hub_leaderboard.EVENT_PREFIXES,
     # the lead engine reads the lead, hypothesis, review and direction tables, the miner rows and
     # their stale ledger, the layers of the works and the protocol's gate policies and plan
     "hypotheses": (

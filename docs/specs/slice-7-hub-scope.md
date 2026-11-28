@@ -110,6 +110,44 @@ Phase 2 adds ticks and set actions to `corpus`, `data`, `miners`, `explore`, and
 `chat`. Out of phase 1: `flow`, `screening` and `pipeline` (PRISMA numbers are whole-pass by definition,
 bar hidden with the sentence "whole corpus"), `graph`, `journeys`, `hypotheses`, `ideas`, `write`.
 
+## 5a. Leaderboard page (HS-50 to HS-55)
+
+Page id `leaderboard` (section Extract, after Data), payload `leaderboard` (`services/hub_leaderboard.py`).
+Rulings of 2026-11-24 and 2026-11-28; the reference is `ops/results/build_v3.py` of the pilot.
+
+- HS-50 Source. One payload entry per final row of the project's results miner: the registered miner
+  whose fields include `model_role`, `metric` and `value` (the pilot's `m-results`, fields task,
+  model_name, model_role own/baseline, dataset, data_access, setting, metric, value, averaging,
+  result_quote), listed miners first. Rows are the final rows of pass A (agreed, resolved or single):
+  with no pass B every live pass-A row, once pass B exists the extraction service's final rows, never a
+  row with an unresolved disagreement. Each entry carries its source work id, `published`, cells, and
+  the quote and anchor of its value.
+- HS-51 Normalisation is not hard-coded. Spellings of dataset, metric and setting merge only through
+  the approved vocabulary: the `value_aliases` of the approved properties `pr:leaderboard-dataset`,
+  `pr:leaderboard-metric` and `pr:leaderboard-setting` (compared without case, spaces, hyphens and
+  punctuation). An unapproved proposal does nothing; without an approved property values are grouped as
+  extracted. The payload keeps both spellings per row; the page shows "as extracted, as merged" on hover.
+- HS-52 Own-model names. A generic own-model name (ours, our model, our method, our approach, proposed
+  method or model) is replaced by the paper's own model name from a model-card miner field
+  (`model_name`, else `model_name_quote`, of the first miner by name that has it, at most 60
+  characters), otherwise by the paper's short id; a size-only remainder (7B) is joined to it. The rule is
+  shown on hover. Baseline names are never changed.
+- HS-53 Part A (own models): per table (task, dataset, setting, metric), the best value per
+  (model, paper); public rows only (`data_access` public, or not stated on a dataset whose stated rows
+  are all public); a table needs at least 3 models; ranked, top 15; every value opens its quote.
+  Part B (baselines): per baseline, task, dataset, setting and metric, how many papers re-reported it
+  (best value per paper, at least 4 papers), with median, minimum and maximum.
+- HS-54 Scope (HS-22 applied). A row is in scope when its source work is in scope. A baseline row whose
+  source paper is out of scope is hidden and the page says "k baseline rows hidden (source paper out of
+  scope)"; rows are never re-attributed. The n of N line counts works with result rows.
+- HS-55 Numbers. Values are read as numbers (a percent sign is dropped, a value above 1 is divided by
+  100, anything else is left out and counted). `rank` in the service is the one definition of both
+  parts; the page repeats its steps over the rows in scope and a test compares the two.
+
+Not reproduced from leaderboard-v3: its hand-curated `model-names.json`, its fixed list of
+(task, metric) tables, its public-dataset list (replaced by the `data_access` rule of HS-53), and its
+restriction of Part B to two datasets.
+
 ## 6. Proposed decision row (not entered in `docs/decisions.md`)
 
 Decision proposed: the hub scope (publication-date range plus a paper set) is a client-side projection
@@ -120,6 +158,6 @@ superseding), a filter set stores its resolved ids, and agreement figures are ne
 
 1. Preprint versus journal date: keep the work record's `dates.published` (HS-10) or add a researcher
    choice per work. Default proposed: keep.
-2. Whether `leaderboard`/`results` tables exist outside `data`; the code search found none by page id.
+2. (Answered: the leaderboard is its own page, section 5a.)
 3. Whether the baseline hidden-row rule (HS-22) should offer a "show as reference" toggle.
 4. Whether a set can be retired without a successor (a `paper_set.retired` event); v1 omits it.
