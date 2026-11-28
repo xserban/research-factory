@@ -59,6 +59,27 @@ Paper sets (phase 2)
 - HS-34 A set id that is unknown or superseded in an address shows the refusal state with the newest
   successor offered, never an empty page.
 
+Paper marks (phase 2, researcher ruling 2026-11-28)
+- HS-40 The paper side panel (the drawer) has three controls: Star (important), Read (we went over it)
+  and a one-line note (max 280 characters). Each is a human act recorded as `work.marked` (section 3b);
+  clicking again undoes it (a new event, latest wins). Marks never change screening, layers or rows.
+- HS-41 Marks show wherever a paper is listed (a star and a read tick beside the title, the note on
+  hover or in the drawer), and are scope filters: "Starred", "Read", "Not read yet", "Has a note",
+  combined with the date range and a set by intersection, with n of N shown.
+- HS-42 Marks belong to the researcher who made them (actor user) within the project; the hub shows the
+  current user's marks. A note is text the researcher wrote, escaped wherever shown, never sent to a model.
+
+## 3b. Event `work.marked`, version 1
+
+| field | type | rule |
+|---|---|---|
+| `work_id` | work id | a corpus work of the project |
+| `mark` | `star`, `read` or `note` | |
+| `on` | bool | false clears the mark (for `note`, clears the note) |
+| `note` | text 1..280 or null | set exactly when `mark` is `note` and `on` is true |
+
+Human actor only; never edited; the latest event per (user, work, mark) is the state.
+
 ## 3. Event
 
 `paper_set.recorded`, version 1 (catalog in `events/catalog.py`, model in `model/`, fold into a
