@@ -5,7 +5,22 @@ HUB.load(['shell', 'lenses']).then(d => {
   const H = HUB.init(d.shell);
   const main = H.mount({ page: 'lenses', crumb: 'Lenses' });
   const LZ = d.lenses, esc = H.esc, fmt = H.fmt, T = H.term, cv = H.cssv;
-  const EW = H.RF.works, EBY = H.byId, SHELL = H.byId;
+  const SHELL = H.byId, SCOPE = window.HUB_SCOPE;
+  /* Scope (HS-02, HS-03, HS-11, HS-20): EW holds the papers inside the date range; lenses that read the shell rows
+     (lineage, evidence, influence and every selection list) follow it. Lenses made only of server counts keep the
+     whole corpus and carry its label. */
+  let EW = [], EBY = new Map(), SRES = null;
+  const scopeOn = () => SCOPE.active(SCOPE.current());
+  function applyScope() {
+    SRES = SCOPE.apply(H.RF.works, w => w.published, SCOPE.current(), { includeUndated: SCOPE.includeUndated() });
+    EW = SRES.inScope; EBY = new Map(EW.map(w => [w.id, w]));
+  }
+  const SCOPED_LENSES = ['constellation', 'wall', 'swarm'];
+  function emptyScopeHTML() {
+    const f = SCOPE.format(SCOPE.current()).replace(/&/g, ', ');
+    return `<p class="empty scope-empty-state" id="lempty">No paper falls in this scope${f ? ' (' + esc(f) + ')' : ''}. <button type="button" class="btn" data-scope-reset>Reset the scope</button></p>`;
+  }
+  applyScope();
 
   /* ---------- page style (kit tokens only) ---------- */
   if (!document.getElementById('lenses-css')) {
@@ -593,15 +608,19 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
 
   /* ================= 9. influence ================= */
   build.swarm = p => {
-    const I = LZ.influence, items = I.items.map(i => ({ ...i, title: (SHELL.get(i.id) || {}).title || i.id, month: (SHELL.get(i.id) || {}).month, year: i.year }));
+    const I = LZ.influence, on = scopeOn();
+    /* in scope: the papers inside the range; their cited-here counts stay those of the whole review, so shares are
+       recomputed over the citations these papers hold */
+    const inItems = on ? I.items.filter(i => EBY.has(i.id)) : I.items, tc = on ? inItems.reduce((a, i) => a + i.cited_here, 0) : I.total_citations;
+    const items = inItems.map(i => ({ ...i, share: on ? (tc ? i.cited_here / tc : 0) : i.share, title: (SHELL.get(i.id) || {}).title || i.id, month: (SHELL.get(i.id) || {}).month, year: i.year }));
     const never = items.filter(i => !i.cited_here).length;
     const t10 = items.slice(0, 10).reduce((a, i) => a + i.share, 0);
     return {
       title: 'Influence',
       info: infoPanel('Which papers carry the field, and whether influence is concentrated in a few.',
         `Each dot is one paper, placed by how many other papers in this review cite it (${T('cic', 'cited here')}), on a log scale where each step multiplies the count; one row per ${T('layer', 'layer')}. Zero cannot sit on a log axis, so never-cited papers form a separate cluster at the left. Dots in a row never overlap; they are only pushed up or down. The ten labelled papers are the most cited.`,
-        `${methodsText('influence')} ${fmt(I.total_citations)} citations among ${fmt(items.length)} papers.`),
-      lead: I.total_citations ? `The ten most-cited papers receive <b>${shareTxt(t10)}</b> of the citations within this review.${I.gini != null ? ` Concentration (${T('gini', 'Gini')}) is <b>${I.gini.toFixed(2)}</b>.` : ''} <b>${pc(never, items.length)}%</b> of papers are never cited.` : '',
+        `${methodsText('influence')} ${fmt(tc)} citations among ${fmt(items.length)} papers.${on ? ' Each paper’s count is its count over the whole review; shares are taken over the papers in scope.' : ''}`),
+      lead: tc ? `The ten most-cited papers receive <b>${shareTxt(t10)}</b> of the citations ${on ? 'held by the papers in scope' : 'within this review'}.${I.gini != null ? ` Concentration (${T('gini', 'Gini')}) is <b>${I.gini.toFixed(2)}</b>${on ? ` over the whole corpus ${SCOPE.label('corpus')}` : ''}.` : ''} <b>${pc(never, items.length)}%</b> of papers are never cited.` : '',
       controls: `<button class="btn" data-sel="top:10">List the top 10</button>`,
       draw(host, W, sel) {
         const wr = document.createElement('div'); wr.className = 'scrollx'; host.appendChild(wr); const Wc = Math.max(W, 560);
@@ -712,25 +731,30 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
       <button class="chip" aria-pressed="true" id="clrSel" aria-label="Remove selection: ${esc(res.parts.join(', '))}"><span>+</span> ${esc(res.parts.join(' and '))} <span class="n">${fmt(n)} paper${n === 1 ? '' : 's'}</span><span class="x" aria-hidden="true">×</span></button></div>
       ${n ? `<div class="scrollx"><table class="t"><thead><tr><th>Title</th><th>Layer</th><th class="c-h">Human role</th><th class="c-m">Month</th><th class="r">Cited</th>${extra ? '<th></th>' : ''}</tr></thead><tbody>
       ${shown.map(w => `<tr tabindex="0" data-open="${esc(w.id)}"><td><span class="ttl">${esc(w.title)}</span><div class="meta2">${esc(lab('human', hv(w)))} · ${esc(monthName(w))}</div></td><td class="lay"><span class="dot" style="background:${H.layerColor(w.layer)}"></span> ${esc(H.layerLabel(w.layer))}</td><td class="c-h"><span class="dot" style="background:${H.humanColor(hv(w))}"></span> ${esc(lab('human', hv(w)))}</td><td class="c-m num">${esc(monthName(w))}</td><td class="r">${w.cited_here}</td>${extra ? `<td>${extra(w)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
-      ${n > shown.length ? `<p><button class="btn" id="showAll">Show all ${fmt(n)} papers</button></p>` : ''}` : '<p class="empty">No paper matches this selection. This combination is a gap in the corpus.</p>'}`;
+      ${n > shown.length ? `<p><button class="btn" id="showAll">Show all ${fmt(n)} papers</button></p>` : ''}` : `<p class="empty">No paper ${scopeOn() ? 'in this scope ' : ''}matches this selection.${scopeOn() ? '' : ' This combination is a gap in the corpus.'}</p>`}`;
   }
   function render() {
     const sy = scrollY, p = H.hash.get();
+    applyScope();
     const id = LENSES.some(l => l[0] === p.get('lens')) ? p.get('lens') : 'matrix';
-    const L = build[id](p);
+    const scoped = SCOPED_LENSES.includes(id), emptyScope = SRES.n === 0 && SRES.N > 0;
+    const L = emptyScope && scoped ? { title: LENSES.find(l => l[0] === id)[1], info: '', lead: '', controls: '', noList: true, draw(host) { host.innerHTML = emptyScopeHTML(); } } : build[id](p);
     let spec = p.get('sel'); if (spec == null) spec = L.defSel || null; if (spec === '-') spec = null;
     if (spec !== lastSel) listAll = false;
-    const res = resolve(spec);
+    const res = emptyScope ? null : resolve(spec);
     main.innerHTML = `${H.header({ level: 1, title: 'Lenses', sub: 'Different cuts through the same papers.', infoHtml: `<b>What it shows</b> The same ${fmt(EW.length)} papers, cut in different ways.<p><span class=k>How to read it.</span> Pick a lens below. Every mark in a chart leads to the papers behind it, listed underneath. Each lens has its own ⓘ with the question it answers and how to read it.</p>` })}
-    <nav class="lens-sw" aria-label="Lens">${LENSES.map(([k, nm]) => `<a class="lcard" href="#lens=${k}" ${k === id ? 'aria-current="true"' : ''}><div>${GL[k]}</div><div class="nm">${nm}</div></a>`).join('')}</nav>
+    <nav class="lens-sw" aria-label="Lens">${LENSES.map(([k, nm]) => `<a class="lcard" href="#${SCOPE.merge('lens=' + k, SCOPE.current())}" ${k === id ? 'aria-current="true"' : ''}><div>${GL[k]}</div><div class="nm">${nm}</div></a>`).join('')}</nav>
+    <div id="lscope"></div>
     <section class="card lens" aria-label="${esc(L.title)}">
       ${H.header({ title: L.title, infoHtml: L.info })}
+      ${!scoped && scopeOn() ? `<p class="meta lens-whole">${SCOPE.label('corpus')} This lens counts every paper of the corpus; the list underneath shows only the papers in scope.</p>` : ''}
       ${L.lead ? `<p class="lead">${L.lead}</p>` : ''}
       ${L.controls ? `<div class="ctl">${L.controls}</div>` : ''}${L.pre || ''}
       <div class="${L.side ? 'two' : ''}"><div><p class="sx-hint">Scroll sideways to see the rest →</p><div id="chart"></div></div>${L.side ? `<aside>${L.side}</aside>` : ''}</div>
     </section>
     <section class="card listpanel" id="listpanel" ${L.noList ? 'hidden' : ''} aria-live="polite">${res ? '' : '<div class="hd"><h3 class="h3" style="margin:0">Papers in this selection</h3></div><p class="empty">Nothing selected. Click a mark in the chart to list the papers behind it.</p>'}${res ? listHtml(res, L.extra) : ''}</section>
     <p class="meta" style="margin-top:22px">About these counts ${H.info(esc(H.SETS_NOTE), 'About these counts')}</p>`;
+    SCOPE.renderLine(document.getElementById('lscope'), SRES, {});
     const host = document.getElementById('chart');
     L.draw(host, host.clientWidth || 900, res);
     scrollTo(0, sy);
@@ -754,6 +778,8 @@ mark{background:var(--acc-soft);color:var(--fg);box-shadow:inset 0 -2px 0 var(--
     else if (e.target.dataset.dim) go({ [e.target.dataset.dim]: e.target.value, sel: null });
   });
   addEventListener('hashchange', render);
+  document.addEventListener('click', e => { if (e.target.closest('[data-scope-reset]')) SCOPE.reset(); });
+  SCOPE.onChange(() => render());
   document.addEventListener('hub:theme', render);
   let rw = innerWidth, rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (innerWidth !== rw) { rw = innerWidth; render(); } }, 200); });
   if (!H.hash.get().get('lens')) H.hash.set({ lens: 'matrix' });

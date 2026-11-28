@@ -168,6 +168,12 @@ const hash32=s=>{let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i)
 const D=RF.works.map((w,i)=>({w,i,id:w.id,title:w.title,cic:w.cic||0,mi:mIdx(w),tech:HUB.val(w,'technique'),arch:HUB.val(w,'architecture'),span:HUB.val(w,'span'),hum:HUB.val(w,'human'),layer:w.layer,ring:ringOf(w.layer),m:true}));
 D.forEach(d=>{d.era=eraOf(d.mi);d.rr=3.2+1.15*Math.sqrt(d.cic)});
 const DB=new Map(D.map(d=>[d.id,d]));
+/* Scope (HS-02, HS-03, HS-11, HS-20): a paper outside the date range is neither drawn nor counted; d.in marks those inside. */
+const SCOPE=window.HUB_SCOPE;let SRES=null;
+function applyScope(){SRES=SCOPE.apply(RF.works,w=>w.published,SCOPE.current(),{includeUndated:SCOPE.includeUndated()});
+  const ins=new Set(SRES.inScope.map(w=>w.id));for(const d of D)d.in=ins.has(d.id)}
+applyScope();
+const inN=()=>SRES.n;
 /* sectors = technique: 7 named values, then everything else (incl. 'other' and unclassified) */
 const dist=k=>{const c=new Map();for(const w of RF.works){const v=HUB.val(w,k);if(v)c.set(v,(c.get(v)||0)+1)}return[...c.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))};
 const techCounts=dist('technique').filter(([v])=>v!=='other');
@@ -228,6 +234,7 @@ const ST={t:'',h:'',l:'',s:'',r:'in',x:'',view:'rings',col:'human',pins:[],sim:'
 const SLOTKEYS=['t','h','l','s','r','x'];
 const sk=v=>v==null?'∅':v;
 function pass(d,skip){
+  if(!d.in)return false;
   if(skip!=='t'&&ST.t&&sk(d.tech)!==ST.t)return false;
   if(skip!=='h'&&ST.h&&sk(d.hum)!==ST.h)return false;
   if(skip!=='l'&&ST.l&&d.ring!==ST.l)return false;
@@ -275,6 +282,7 @@ root.innerHTML=`
   <div id="ph"></div>
   <p class="lead" id="lead"></p>
 </div>
+<div id="xscope"></div>
 <section class="sentence card" aria-label="Sentence query">
   <p class="sq" id="sq">Show <span data-s="t"></span> systems where the ${HUB.term('human','human')} <span data-s="h"></span>, in <span data-s="l"></span> papers, since <span data-s="s"></span>, <span data-s="r"></span> <span data-s="x"></span>.</p>
   <p class="sq-res" id="sqres"></p>
@@ -384,7 +392,7 @@ function stateHash(){
   if(ST.view==='rings'&&(cam.z!==1||cam.cx||cam.cy||cam.rot))p.set('v',[r2(cam.cx),r2(cam.cy),r2(cam.z),Math.round(cam.rot*180/Math.PI)].join(','));
   return p.toString();
 }
-function writeHash(){history.replaceState(null,'','#'+stateHash())}
+function writeHash(){history.replaceState(null,'','#'+SCOPE.merge(stateHash(),SCOPE.current()))}
 let hashT=0;const writeHashSoon=()=>{clearTimeout(hashT);hashT=setTimeout(writeHash,200)};
 function commit(label,force){
   if(applying)return;writeHash();const h=stateHash();
@@ -400,7 +408,7 @@ function renderTrail(){
   const from=Math.max(0,trail.length-6);
   el.innerHTML='<span class="tl">Trail</span>'+(from?`<span class="sep" title="${from} earlier steps">…${from}</span>`:'')+
     trail.slice(from).map((s,j)=>`${j||from?'<span class="sep">›</span>':''}<button class="chip" data-tr="${from+j}" ${from+j===lastIdx?'aria-current="step"':''} title="${esc(s.l)} — click to return">${esc(s.l)}</button>`).join('');
-  el.querySelectorAll('[data-tr]').forEach(b=>b.onclick=()=>{const s=trail[+b.dataset.tr];if(location.hash.slice(1)===s.h){applyHash(true)}else location.hash='#'+s.h});
+  el.querySelectorAll('[data-tr]').forEach(b=>b.onclick=()=>{const s=trail[+b.dataset.tr],tg=SCOPE.merge(s.h,SCOPE.current());if(location.hash.slice(1)===tg){applyHash(true)}else location.hash='#'+tg});
 }
 function applyHash(animate){
   const p=new URLSearchParams(location.hash.slice(1));applying=true;
@@ -423,14 +431,15 @@ window.addEventListener('hashchange',()=>applyHash(true));
 /* ======================= match, lead, legend ======================= */
 const secLabel=k=>(SECT.find(s=>s.key===k)||{}).label||k;
 function refresh(){
+  applyScope();SCOPE.renderLine($('#xscope'),SRES,{});
   for(const d of D)d.m=pass(d);
-  const M=D.filter(d=>d.m),n=M.length,N=D.length;
+  const M=D.filter(d=>d.m),n=M.length,N=inN();
   // sentence faces
   for(const k of SLOTKEYS){const s=SLOTS[k],on=k==='r'?!!ST.x:(k==='s'?ST.s!=='':!!ST[k]);s.host.classList.toggle('on',on);
     s.face.querySelector('.ft').textContent=faceText(k);
     const sup=s.face.querySelector('.n');
     if(k==='r'||k==='x'){sup.textContent=''}else{const{c,total}=counts(k);sup.textContent=on?c.get(ST[k])??0:''}}
-  $('#sqres').innerHTML=`<b>${fmt(n)} of ${fmt(N)} papers match this sentence.</b>${anyFilter()&&n?`<a class="btn" href="${esc(pathsHref([...M].sort((a,b)=>b.cic-a.cic).map(d=>d.id)))}">See their paths</a>`:''}${anyFilter()?'<button class="btn" id="clr">Clear the sentence</button>':''}`;
+  $('#sqres').innerHTML=`<b>${fmt(n)} of ${fmt(N)} papers in scope match this sentence.</b>${anyFilter()&&n?`<a class="btn" href="${esc(pathsHref([...M].sort((a,b)=>b.cic-a.cic).map(d=>d.id)))}">See their paths</a>`:''}${anyFilter()?'<button class="btn" id="clr">Clear the sentence</button>':''}`;
   const clr=$('#clr');if(clr)clr.onclick=()=>{ST.t=ST.h=ST.l=ST.s=ST.x='';commit('cleared the sentence');refresh()};
   // lead
   $('#lead').innerHTML=leadHTML(M);
@@ -439,6 +448,8 @@ function refresh(){
   document.querySelectorAll('[data-col]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.col===ST.col));
   $('#colseg').style.display=ST.view==='rings'?'':'none';
   $('#cv').style.display=ST.view==='rings'?'':'none';$('#wall').hidden=ST.view!=='wall';
+  const scopeEmpty=SRES.n===0&&SRES.N>0;
+  $('#empty').innerHTML=scopeEmpty?scopeEmptyHTML():'<div><b>No paper matches this sentence.</b>Loosen one slot to bring papers back.</div>';
   $('#empty').style.display=n===0&&ST.view==='rings'?'flex':'none';
   $('#sh').innerHTML=SH[ST.view];renderLegend(M);renderTray();
   if(ST.view==='wall')renderWall();else{resize();dirty()}
@@ -447,8 +458,8 @@ function refresh(){
 }
 function topOf(M,f){const c=new Map();for(const d of M){const v=f(d);if(v!=null)c.set(v,(c.get(v)||0)+1)}return[...c.entries()].sort((a,b)=>b[1]-a[1])[0]||[null,0]}
 function leadHTML(M){
-  const n=M.length,N=D.length;
-  if(!n)return `<b>Nothing matches.</b> Loosen a slot to bring papers back.`;
+  const n=M.length,N=inN();
+  if(!n)return SRES.n===0&&SRES.N>0?`<b>No paper falls in this scope.</b>`:`<b>Nothing matches.</b> Loosen a slot to bring papers back.`;
   const [rg]=topOf(M,d=>d.ring),[sc]=topOf(M,d=>d.sec);
   const best=M.reduce((a,d)=>d.cic>a.cic?d:a,M[0]);
   const noH=M.filter(d=>d.hum==='none').length;
@@ -458,17 +469,17 @@ function leadHTML(M){
 }
 function renderLegend(M){
   const el=$('#legend');
-  const sz=[0,10,50,112].map(v=>v).filter((v,i,a)=>true);const maxc=Math.max(...D.map(d=>d.cic));
+  const sz=[0,10,50,112].map(v=>v).filter((v,i,a)=>true);const maxc=Math.max(0,...D.filter(d=>d.in).map(d=>d.cic));
   const szHTML=`<span class="sz" aria-label="Size key">Size = ${HUB.term('cic','cited here')} ${[0,10,50,maxc].map(v=>{const r=Math.max(2,(3.2+1.15*Math.sqrt(v))*.62);return`<span><svg width="${2*r+2}" height="${2*r+2}" aria-hidden="true"><circle cx="${r+1}" cy="${r+1}" r="${r}" fill="none" stroke="currentColor"/></svg> ${v}</span>`}).join('')}</span>`;
   if(ST.view==='wall'){el.innerHTML=`<span class="meta">One row per paper, squares are its ${HUB.term('dna','DNA')} · click a column name to sort</span>`;return}
   if(ST.col==='human'){
     const vals=[...HUMAN.map(h=>h[0]),'∅'];
-    el.innerHTML=vals.map(v=>{const tot=D.filter(d=>sk(d.hum)===v).length,mm=M.filter(d=>sk(d.hum)===v).length;
+    el.innerHTML=vals.map(v=>{const tot=D.filter(d=>d.in&&sk(d.hum)===v).length,mm=M.filter(d=>sk(d.hum)===v).length;
       const col=v==='∅'?cssv('--h-null'):HUB.humanColor(v);
       return `<button class="chip" data-hl="${v}" aria-pressed="${ST.h===v}"><span class="dot" style="background:${col}"></span>${esc(humanLabel(v==='∅'?null:v))} <span class="n">${anyFilter()?mm+'/':''}${tot}</span></button>`}).join('')+szHTML;
     el.querySelectorAll('[data-hl]').forEach(b=>b.onclick=()=>{ST.h=ST.h===b.dataset.hl?'':b.dataset.hl;commit('human: '+(ST.h?ROLE[ST.h]:'any role'));refresh()});
   }else if(ST.col==='era'){
-    el.innerHTML=ERAS.map(e=>{const tot=D.filter(d=>d.era===e).length,mm=M.filter(d=>d.era===e).length;return`<span class="chip" style="cursor:default;background:transparent"><span class="dot" style="background:${segColor('era',e)}"></span>${eraLabel(e)} <span class="n">${anyFilter()?mm+'/':''}${tot}</span></span>`}).join('')+szHTML;
+    el.innerHTML=ERAS.map(e=>{const tot=D.filter(d=>d.in&&d.era===e).length,mm=M.filter(d=>d.era===e).length;return`<span class="chip" style="cursor:default;background:transparent"><span class="dot" style="background:${segColor('era',e)}"></span>${eraLabel(e)} <span class="n">${anyFilter()?mm+'/':''}${tot}</span></span>`}).join('')+szHTML;
   }else el.innerHTML=`<span class="meta">No colour coding</span>`+szHTML;
 }
 
@@ -515,7 +526,7 @@ function draw(){
   ctx.restore();
   // dots
   const ds=Math.pow(z,.55)*k0,vis=[];
-  for(const d of D){const[sx,sy]=proj(d.x,d.y);d.sx=sx;d.sy=sy;d.rs=Math.max(2,d.rr*ds);d.on=sx>-60&&sx<W+60&&sy>-60&&sy<H+60;if(d.on)vis.push(d)}
+  for(const d of D){const[sx,sy]=proj(d.x,d.y);d.sx=sx;d.sy=sy;d.rs=Math.max(2,d.rr*ds);d.on=d.in&&sx>-60&&sx<W+60&&sy>-60&&sy<H+60;if(d.on)vis.push(d)}
   const pinSet=new Set(ST.pins);
   ctx.globalAlpha=1;
   for(const d of vis){if(d.m)continue;ctx.beginPath();ctx.arc(d.sx,d.sy,d.rs,0,7);ctx.fillStyle=CL.dim;ctx.globalAlpha=.2;ctx.fill();ctx.globalAlpha=1}
@@ -582,7 +593,7 @@ function drawCard(d,b,tl,ql,qf,big,pinSet){
 }
 function drawSectorLabels(){
   const items=SECT.map(s=>{const[px,py]=proj((RR+26)*Math.cos(s.am),(RR+26)*Math.sin(s.am));const a=s.am+cam.rot,cs=Math.cos(a);
-    const tot=s.n,mt=D.filter(d=>d.sec===s.key&&d.m).length;const nm=s.label,sub=anyFilter()?`${mt} of ${tot}`:`${tot} papers`;
+    const tot=D.filter(d=>d.sec===s.key&&d.in).length,mt=D.filter(d=>d.sec===s.key&&d.m).length;const nm=s.label,sub=anyFilter()?`${mt} of ${tot}`:`${tot} papers`;
     ctx.font=`600 12.5px ${FU}`;const w1=ctx.measureText(nm).width;ctx.font=`400 11px ${FU}`;const w2=ctx.measureText(sub).width;const w=Math.max(w1,w2);
     const side=cs>.35?1:cs<-.35?-1:0;let x=side>0?px+4:side<0?px-4-w:px-w/2;let y=py+(Math.sin(a)>.5?14:Math.sin(a)<-.5?-24:-10);
     return{s,nm,sub,w,x,y,side}});
@@ -598,7 +609,7 @@ function drawSectorLabels(){
 function drawRingLabels(){
   ctx.font=`500 11px ${FU}`;
   for(const r of RINGS){const rm=(r[2]+r[3])/2+(r[0]==='core'?0:0);
-    const[px,py]=proj(0,-rm);const n=D.filter(d=>d.ring===r[0]).length,mt=D.filter(d=>d.ring===r[0]&&d.m).length;
+    const[px,py]=proj(0,-rm);const n=D.filter(d=>d.in&&d.ring===r[0]).length,mt=D.filter(d=>d.ring===r[0]&&d.m).length;
     const t=r[1]+' '+(anyFilter()?mt+'/'+n:n);const w=ctx.measureText(t).width;
     if(px<-40||px>W+40||py<-20||py>H+20)continue;
     // anchor on the divider that points up in world space; rotate-safe because we use screen coords of the projected point
@@ -694,7 +705,7 @@ function renderWall(){
   const sc=w.scrollTop;
   w.innerHTML=`<div class="wh">${SEGS.map(s=>{const i=rank(s.k),desc=i>=0&&keys[i][0]==='-';return`<button class="sb" data-sb="${s.k}" ${i>=0?`aria-sort="${desc?'descending':'ascending'}"`:''} title="Sort by ${s.l.toLowerCase()}">${s.s}${i>=0?` <small>${i+1}${desc?'↓':'↑'}</small>`:''}</button>`}).join('')}<span class="tc">title · month · cited here · pin</span></div>
   <details class="wk"><summary>Key to the six squares</summary><div class="kg">${SEGS.map(s=>`<b>${s.l}</b><div>${[...ORD[s.k],null].filter(v=>v!==null||D.some(d=>s.get(d)==null)).map(v=>`<span><i style="background:${segColor(s.k,v)}"></i>${esc(segName(s,v))}</span>`).join('')}</div>`).join('')}</div></details>
-  ${rows.length?rows.map(d=>`<div class="wr" role="button" tabindex="0" data-id="${esc(d.id)}" aria-selected="${ST.pins.includes(d.id)}" aria-label="${esc(d.title)}">${dnaHTML(d,64,13).replace(/<i /g,'<i data-seg="1" ')}<span class="tt">${esc(d.title)}</span><span class="m">${mLabel(d.mi)}</span><span class="ci">${d.cic}</span><button class="pb ${ST.pins.includes(d.id)?'on':''}" tabindex="-1" aria-label="Pin to compare tray" title="Pin (P)">${ST.pins.includes(d.id)?'●':'+'}</button></div>`).join(''):'<div class="empty2"><b>No paper matches this sentence.</b><br>Loosen a slot above.</div>'}`;
+  ${rows.length?rows.map(d=>`<div class="wr" role="button" tabindex="0" data-id="${esc(d.id)}" aria-selected="${ST.pins.includes(d.id)}" aria-label="${esc(d.title)}">${dnaHTML(d,64,13).replace(/<i /g,'<i data-seg="1" ')}<span class="tt">${esc(d.title)}</span><span class="m">${mLabel(d.mi)}</span><span class="ci">${d.cic}</span><button class="pb ${ST.pins.includes(d.id)?'on':''}" tabindex="-1" aria-label="Pin to compare tray" title="Pin (P)">${ST.pins.includes(d.id)?'●':'+'}</button></div>`).join(''):(SRES.n===0&&SRES.N>0?`<div class="empty2">${scopeEmptyHTML()}</div>`:'<div class="empty2"><b>No paper matches this sentence.</b><br>Loosen a slot above.</div>')}`;
   w.scrollTop=sc;
 }
 $('#wall').addEventListener('click',e=>{
@@ -758,7 +769,7 @@ function renderTray(){
     <div class="meta" style="margin-top:4px">Cited by two or more pinned papers (${sharedRef.length}):</div>${L(sharedRef)}
     <div class="meta" style="margin-top:10px">Cite two or more pinned papers (${sharedBy.length}):</div>${L(sharedBy)}
     ${direct.length?`<div class="meta" style="margin-top:10px">Direct links: ${direct.join('; ')}</div>`:''}</div>
-    <div><div class="h3">${ST.sim?`Similar to ${'ABCD'[ST.pins.indexOf(ST.sim)]}`:HUB.term('similar','Similar papers')} ${I_SIM}</div>
+    <div><div class="h3">${ST.sim?`Similar to ${'ABCD'[ST.pins.indexOf(ST.sim)]}`:HUB.term('similar','Similar papers')} ${I_SIM} ${SCOPE.label('corpus')}</div>
     ${ST.sim?`<ul>${similarTo(ST.sim).map(r=>`<li><span class="s" title="${r.f} identical segments + ${r.sh} shared cited works">${r.f}+${r.sh}=${r.s}</span>${dnaHTML(r.d,9,9)}<a data-o="${esc(r.d.id)}">${esc(r.d.title.slice(0,64))}${r.d.title.length>64?'…':''}</a><button class="btn" data-pin="${esc(r.d.id)}" style="height:22px;padding:0 8px;font-size:11px;margin-left:auto;white-space:nowrap">${ST.pins.includes(r.d.id)?'Pinned':'+ Pin'}</button></li>`).join('')}</ul>`:'<div class="meta" style="margin-top:6px">Press “Similar to this” on a pinned paper.</div>'}</div></div>`;
   if(trayCollapsed){el.innerHTML=h;el.querySelector('#tcol').onclick=()=>{trayCollapsed=false;renderTray()};el.querySelector('#tclr').onclick=()=>{ST.pins=[];ST.sim='';commit('unpinned all',true);refresh()};return}
   el.innerHTML=h;el.querySelector('#tcol').onclick=()=>{trayCollapsed=true;renderTray()};
@@ -790,6 +801,11 @@ document.addEventListener('hub:theme',()=>{wcache.clear();colors();refresh()});
 document.addEventListener('hub:open',e=>{if(applying)return;ST.o=e.detail;cur=DB.get(e.detail)||cur;commit('opened '+(DB.get(e.detail)||{title:''}).title.replace(/:.*/,'').slice(0,28),true);writeHash()});
 document.addEventListener('hub:close',()=>{if(applying)return;ST.o='';writeHash()});
 
+/* The scope: a date change redraws every count; the reset button of the empty state clears it. */
+function scopeEmptyHTML(){const f=SCOPE.format(SCOPE.current()).replace(/&/g,', ');
+  return `<div class="scope-empty-state" id="xempty"><b>No paper falls in this scope${f?' ('+esc(f)+')':''}.</b><button type="button" class="btn" data-scope-reset>Reset the scope</button></div>`}
+document.addEventListener('click',e=>{if(e.target.closest('[data-scope-reset]'))SCOPE.reset()});
+SCOPE.onChange(()=>refresh());
 /* init */
 colors();
 try{trail=JSON.parse(sessionStorage.getItem('explore-trail')||'[]')}catch(e){trail=[]}
