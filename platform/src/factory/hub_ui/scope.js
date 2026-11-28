@@ -9,6 +9,13 @@
      HUB_SCOPE.inRange(published, scope)  true only for 'in'
      HUB_SCOPE.apply(rows, getDate, scope, {includeUndated}) ->
          {inScope, outOfScope, undated, yearOnly, n, N}
+     HUB_SCOPE.merge(hash, scope)   hash string with the scope.* keys replaced by format(scope); other keys kept
+     HUB_SCOPE.carry(href, scope)   a relative link with its hash scope.* keys replaced the same way (external,
+                                    '#'-only and non-http links are returned unchanged)
+     HUB_SCOPE.showsBar(page)       false for pages without work lists (HS-01)
+     HUB_SCOPE.lineText(res)        {main, undated, yearOnly} sentences for an apply() result (HS-03, HS-11, HS-12)
+     HUB_SCOPE.WHOLE_PASS / WHOLE_CORPUS   the labels of HS-21 / HS-20
+   The DOM part (bar, lines, current(), onChange()) lives in scope-bar.js and extends this object.
    Month granularity. 'YYYY' is in range only when January to December of that year both lie in range, else
    'year-only' (excluded, counted). Empty or invalid dates are 'undated'. With no bound set every dated work
    is 'in'. apply(): outOfScope holds every excluded dated work (yearOnly rows included); undated lists all
@@ -39,7 +46,7 @@ function parse(hash){
     const eq = part.indexOf('=');
     if (eq < 0) continue;
     let k = part.slice(0, eq), v = part.slice(eq + 1);
-    try { v = decodeURIComponent(v); } catch (e) { continue; }
+    try { v = decodeURIComponent(v.replace(/\+/g, ' ')); } catch (e) { continue; }
     if (k === 'scope.from' || k === 'scope.to'){
       if (monthIndex(v) !== null) out[k.slice(6)] = v.trim();
     } else if (k === 'scope.set' && v.trim()) out.set = v.trim();
@@ -94,7 +101,47 @@ function apply(rows, getDate, scope, opts){
   return {inScope, outOfScope, undated, yearOnly, n: inScope.length, N: list.length};
 }
 
-const api = {parse, format, empty, active, classify, inRange, apply};
+const isScopeKey = part => /^scope\.(from|to|set)(=|$)/.test(part);
+
+/* Replace the scope.* keys of a hash string ('#a=1&scope.from=..' or without '#') by format(scope); keep the rest. */
+function merge(hash, scope){
+  const keep = String(hash ?? '').replace(/^#/, '').split('&').filter(p => p && !isScopeKey(p));
+  const f = format(scope);
+  return keep.concat(f ? [f] : []).join('&');
+}
+
+/* A link with the scope carried in its hash. Only relative page links are rewritten. */
+function carry(href, scope){
+  const h = String(href ?? '');
+  if (!h || h[0] === '#' || /^[a-z][a-z0-9+.-]*:/i.test(h) || h.startsWith('//')) return h;
+  const i = h.indexOf('#');
+  const base = i < 0 ? h : h.slice(0, i);
+  const m = merge(i < 0 ? '' : h.slice(i + 1), scope);
+  return m ? base + '#' + m : base;
+}
+
+/* Pages with no work lists (HS-01) show no bar. */
+const NO_BAR = ['kit', 'platform', 'costs', 'learn', 'protocol', 'levels', 'method'];
+const showsBar = page => NO_BAR.indexOf(page) < 0;
+
+const WHOLE_PASS = 'whole pass, not scoped';
+const WHOLE_CORPUS = 'whole corpus';
+
+const plural = (k, one, many) => k + ' ' + (k === 1 ? one : many);
+
+/* Sentences for an apply() result. n and N come from the result; the caller supplies N. */
+function lineText(res){
+  const r = res || {};
+  const k = (r.undated || []).length, y = (r.yearOnly || []).length;
+  return {
+    main: r.n + ' of ' + r.N + ' papers in scope',
+    undated: k ? plural(k, 'paper has', 'papers have') + ' no date' : '',
+    yearOnly: y ? plural(y, 'paper has', 'papers have') + ' only a year, too coarse for this range' : '',
+  };
+}
+
+const api = {parse, format, empty, active, classify, inRange, apply, merge, carry, showsBar, lineText,
+  NO_BAR, WHOLE_PASS, WHOLE_CORPUS};
 root.HUB_SCOPE = api;
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

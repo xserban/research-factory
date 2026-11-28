@@ -246,6 +246,7 @@ function mount(opts){
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
       <nav class="sec-tabs" aria-label="Sections">${SECTIONS.map(s=>`<a href="${s[3][0][0]}.html" data-section="${s[0]}" ${sec&&sec[0]===s[0]?'aria-current="true"':''}>${svg16(s[2])}${esc(s[1])}</a>`).join('')}</nav>
+      <div id="scopeBar" hidden></div>
       <main id="main"></main>
     </div>
   </div>
@@ -258,6 +259,7 @@ function mount(opts){
   <div class="tip" id="tip" role="tooltip"></div>
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
+  if (window.HUB_SCOPE && HUB_SCOPE.mountBar) HUB_SCOPE.mountBar($('#scopeBar'), {page});
   if (HUB.served) projectSwitcher($('#projSwitch'));
   if (HUB.served) navStatus();
   /* served under the main hub (/p/<slug>/ui/): the portal at / is home; a single-project server has none */
