@@ -11,6 +11,22 @@ HUB.load(['shell', 'overview']).then(d => {
   /* The drawer reads w.cic; the slim payload has none, so fill it from the overview payload. */
   W.forEach(w => { w.cic = cic(w.id); });
 
+  /* Scope (HS-02, HS-03, HS-11, HS-20): WS holds the papers inside the date range. The map, the composition, the
+     most-cited list, the growth chart and the legend are recomputed over WS from the shell rows. The records
+     pipeline, the production line, the headline and the waiting list are whole-corpus aggregates and carry the label. */
+  const SCOPE = window.HUB_SCOPE, WHOLE = SCOPE.label('corpus');
+  let SRES = null, WS = W;
+  const scopeOn = () => SCOPE.active(SCOPE.current());
+  function applyScope() {
+    SRES = SCOPE.apply(W, w => w.published, SCOPE.current(), { includeUndated: SCOPE.includeUndated() });
+    WS = SRES.inScope;
+  }
+  applyScope();
+  function emptyScopeHTML() {
+    const f = SCOPE.format(SCOPE.current()).replace(/&/g, ', ');
+    return `<p class="ov-empty scope-empty-state">No paper falls in this scope${f ? ' (' + esc(f) + ')' : ''}. <button type="button" class="btn" data-scope-reset>Reset the scope</button></p>`;
+  }
+
   if (!document.getElementById('ov-style')) {
     const st = document.createElement('style'); st.id = 'ov-style';
     st.textContent = `
@@ -71,7 +87,6 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
   const ym = m => MON[+m.slice(5) - 1] + ' ' + m.slice(0, 4);
   const mkey = w => w.year + '-' + String(w.month).padStart(2, '0');
   const months = (O.papers_per_month || {}).months || [];
-  const mcounts = (O.papers_per_month || {}).counts || [];
   const comp = O.composition || { human: {}, layer: {} };
   const lead = O.lead || {};
   const hum = lead.human || {};
@@ -103,34 +118,38 @@ svg.ov-map .halo{paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-lin
 <section class="ov-hero">
   <div>
     ${H.header({ kicker: `Living review · ${H.term('protocol')}`, title: H.pretty(H.RF.slug), level: 1 })}
-    <p class="lead">${fmt(lead.included)} papers made it through ${H.term('screened', 'screening')}. ${hum.coded ? share(sharePct) + ' of the systems run with no human in the loop.' : ''}${H.info(`<b>What it shows</b>The headline result of the review so far.<p><span class=k>How it's computed.</span> ${fmt(lead.included)} is the number included in the screening flow, out of ${fmt(lead.identified)} records identified. The share is the ${fmt(hum.none)} papers with human role "none" divided by the ${fmt(hum.coded)} papers that have a human role coded (${fmt(hum.not_coded)} not coded are left out): ${sharePct}%.</p><p>${esc((O.methods || {}).human_role || '')}</p>`, 'How these figures are computed')}</p>
+    <p class="lead">${fmt(lead.included)} papers made it through ${H.term('screened', 'screening')}. ${hum.coded ? share(sharePct) + ' of the systems run with no human in the loop.' : ''}${H.info(`<b>What it shows</b>The headline result of the review so far.<p><span class=k>How it's computed.</span> ${fmt(lead.included)} is the number included in the screening flow, out of ${fmt(lead.identified)} records identified. The share is the ${fmt(hum.none)} papers with human role "none" divided by the ${fmt(hum.coded)} papers that have a human role coded (${fmt(hum.not_coded)} not coded are left out): ${sharePct}%.</p><p>${esc((O.methods || {}).human_role || '')}</p>`, 'How these figures are computed')} ${WHOLE}</p>
     ${levelBadges()}
   </div>
   <nav class="ov-next" aria-label="Next actions">
-    <a class="btn primary" href="corpus.html">Browse papers <span class="n">${fmt(lead.included)}</span></a>
+    <a class="btn primary" href="corpus.html">Browse papers <span class="n" id="ovBrowseN">${fmt(lead.included)}</span></a>
     <a class="btn" href="flow.html">Open the flow <span class="n">${fmt(lead.identified)} → ${fmt(lead.included)}</span></a>
     <a class="btn" href="explore.html">Explore papers</a>
     <a class="btn" href="lenses.html">Lenses</a>
+    <p class="meta">Figures on the flow button: ${WHOLE}</p>
   </nav>
 </section>
-${nextHtml ? `<section class="ov-wait" aria-label="Waiting for you"><div class="ov-grp">Waiting for you</div><div class="ov-waitgrid">${nextHtml}</div></section>` : ''}
+<div id="ovScope"></div>
+${nextHtml ? `<section class="ov-wait" aria-label="Waiting for you"><div class="ov-grp">Waiting for you ${WHOLE}</div><div class="ov-waitgrid">${nextHtml}</div></section>` : ''}
 
 ${H.header({ title: 'Where the records went', infoHtml: `<b>What it shows</b>How many records survive each screening step, and what each step removed.<p><span class=k>How to read it.</span> Each bar is the step's count as a share of the ${fmt(lead.identified)} records identified, drawn from zero. A red line is what that step removed.</p><p><span class=k>How it's computed.</span> Counts come from the screening flow; the arithmetic is checked on the <a href="flow.html">flow page</a>.</p>` })}
+<p class="meta">${WHOLE}</p>
 <section class="ov-strip" id="ovStrip" aria-label="Where the records went"></section>
 ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHtml: `<b>What it shows</b>The production line after screening: what has been converted, read, written up and built.<p><span class=k>How to read it.</span> Each figure opens the page where that work happens.</p><p><span class=k>How it's computed.</span> ${esc((O.methods || {}).line || '')}</p>` })}
+<p class="meta">${WHOLE}</p>
 <section class="ov-strip ov-line" id="ovLine" aria-label="Past screening"></section>` : ''}
 
 <section>
   <div class="ov-maphead">
     ${H.header({ title: 'Papers over time', sub: '<span id="ovMapSub"></span>', infoHtml: `<b>What it shows</b>When each paper was published, and where it sits in the corpus.<p><span class=k>How to read it.</span> One dot per paper. Across: publication month. Down: layer band. Dot size: how often other papers here cite it. Hover a dot to see its title; click to open it.</p><p><span class=k>How it's computed.</span> ${esc((O.methods || {}).papers_per_month || '')} Dots are offset slightly within a month so they do not overlap. Band height is proportional to the square root of its count. An outlined dot is a paper with no layer.</p>` })}
   </div>
-  <div class="card" style="padding:16px 12px 12px"><svg class="ov-map" id="ovMap" role="img" aria-label="Papers by month and layer"></svg></div>
+  <div class="card" style="padding:16px 12px 12px"><svg class="ov-map" id="ovMap" role="img" aria-label="Papers by month and layer"></svg><div id="ovMapEmpty"></div></div>
   <div class="ov-legend" id="ovLegend" aria-label="Legend"></div>
 </section>
 
 <section class="ov-panels">
-  <div class="card">${H.header({ title: 'What the corpus is made of', sub: `<span class="meta">${fmt(lead.included)} papers</span>`, infoHtml: `<b>What it shows</b>How the papers split by layer and by human role.<p><span class=k>How to read it.</span> All bars share one scale from zero. Click a bar to see its papers.</p><p><span class=k>How it's computed.</span> ${esc((O.methods || {}).composition || '')}</p>` })}<div id="ovComp"></div></div>
-  <div class="card">${H.header({ title: 'Most cited', sub: `<span class="meta">${H.term('cic', 'Cited here')}, largest first</span>`, infoHtml: `<b>What it shows</b>The papers other papers in the corpus build on most.<p><span class=k>How it's computed.</span> ${esc((O.methods || {}).cited_here || '')}</p>` })}<div id="ovTop"></div></div>
+  <div class="card">${H.header({ title: 'What the corpus is made of', sub: '<span class="meta" id="ovCompN"></span>', infoHtml: `<b>What it shows</b>How the papers split by layer and by human role.<p><span class=k>How to read it.</span> All bars share one scale from zero. Click a bar to see its papers.</p><p><span class=k>How it's computed.</span> ${esc((O.methods || {}).composition || '')}</p>` })}<div id="ovComp"></div></div>
+  <div class="card">${H.header({ title: 'Most cited', sub: `<span class="meta">${H.term('cic', 'Cited here')}, largest first; counted over the whole corpus</span>`, infoHtml: `<b>What it shows</b>The papers other papers in the corpus build on most.<p><span class=k>How it's computed.</span> ${esc((O.methods || {}).cited_here || '')}</p>` })}<div id="ovTop"></div></div>
   <div class="card">${H.header({ title: 'Growth', sub: '<span class="meta" id="ovGsub"></span>', infoHtml: `<b>What it shows</b>How many papers appeared each month.<p><span class=k>How it's computed.</span> ${esc((O.methods || {}).papers_per_month || '')} The last month is partial: data as of ${esc(H.RF.generated || '')}.</p>` })}<div id="ovGrowth"></div></div>
 </section>
 <p class="meta ov-foot" id="ovFoot"></p>`;
@@ -147,7 +166,7 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
     if ((S.mined_but_excluded || []).length) parts.push(`${fmt(S.mined_but_excluded.length)} papers were read but excluded at full text`);
     if ((S.not_read_yet || []).length) parts.push(`${fmt(S.not_read_yet.length)} included papers have not been read yet`);
     const panel = `<b>Two counts, one corpus</b><p>${parts.map(esc).join('; ')}${parts.length ? '.' : ''}</p><p><span class=k>How it's computed.</span> ${esc(S.methods || (O.methods || {}).sets || '')}</p>`;
-    document.getElementById('ovFoot').innerHTML = `${H.info(panel, 'About the paper counts')} ${H.term('mined', 'Papers read in full')}: ${fmt(nRead)}; ${H.term('included', 'included')} by screening: ${fmt(nInc)}.`;
+    document.getElementById('ovFoot').innerHTML = `${H.info(panel, 'About the paper counts')} ${H.term('mined', 'Papers read in full')}: ${fmt(nRead)}; ${H.term('included', 'included')} by screening: ${fmt(nInc)}. ${WHOLE}`;
   })();
 
   /* ---- pipeline strip ---- */
@@ -184,8 +203,16 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
   const BANDS = ['core', 'benchmark', 'applied', 'adjacent', 'other'];
   const bandOf = l => BANDS.includes(l) ? l : 'other';
   const BLAB = { core: 'Core', benchmark: 'Benchmark', applied: 'Applied', adjacent: 'Adjacent', other: 'Other' };
-  const count = f => { const o = {}; W.forEach(w => { const k = f(w); o[k] = (o[k] || 0) + 1; }); return o; };
-  const topW = (O.most_cited || []).slice(0, 8).map(m => W.find(w => w.id === m.id)).filter(Boolean);
+  const count = f => { const o = {}; WS.forEach(w => { const k = f(w); o[k] = (o[k] || 0) + 1; }); return o; };
+  /* The most-cited rows: the payload's top list while no scope is set; with a scope, the papers in scope ranked by
+     their cited-here count (the count itself stays that of the whole review). */
+  const MCM = new Map((O.most_cited || []).map(m => [m.id, m]));
+  function mostCited() {
+    if (!scopeOn()) return O.most_cited || [];
+    return WS.map(w => ({ id: w.id, title: w.title, layer: w.layer, year: w.year, cited_here: cic(w.id), self_cited: (CH[w.id] || [0, 0])[1], external: (MCM.get(w.id) || {}).external ?? null }))
+      .filter(m => m.cited_here > 0).sort((a, b) => b.cited_here - a.cited_here || a.title.localeCompare(b.title)).slice(0, 50);
+  }
+  let topW = [];
   const hashf = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 10000) / 10000; };
   const svg = document.getElementById('ovMap');
   let L = null, LW = 0;
@@ -199,7 +226,7 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
     const R = w => (narrow ? 2.6 : 3.2) + (narrow ? 1.3 : 1.9) * Math.sqrt(cic(w.id));
     const nodes = [];
     BANDS.forEach((b, bi) => {
-      const ns = W.filter(w => bandOf(w.layer) === b && mIndex.has(mkey(w))).map(w => {
+      const ns = WS.filter(w => bandOf(w.layer) === b && mIndex.has(mkey(w))).map(w => {
         const x0 = mL + (mIndex.get(mkey(w)) + .15 + .7 * hashf(w.id)) * mw;
         return { w, r: R(w), x0, x: x0, y: y0[bi] + Hh[bi] * (.2 + .6 * hashf(w.id + 'y')), lo: y0[bi], hi: y0[bi] + Hh[bi] };
       });
@@ -230,6 +257,9 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
   }
   function drawMap() {
     if (!months.length) { svg.parentElement.innerHTML = '<div class="ov-empty">The map appears once papers are included.</div>'; return; }
+    const me = document.getElementById('ovMapEmpty');
+    if (!WS.length && SRES.N > 0) { svg.style.display = 'none'; svg.innerHTML = ''; me.innerHTML = emptyScopeHTML(); return; }
+    svg.style.display = ''; me.innerHTML = '';
     const width = Math.max(320, Math.round(svg.parentElement.clientWidth - 24)), narrow = width < 640;
     if (!L || LW !== width) { L = layout(width, narrow); LW = width; }
     svg.setAttribute('viewBox', `0 0 ${width} ${L.totalH}`);
@@ -278,34 +308,51 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
       c.addEventListener('mouseleave', unfocus);
     });
   }
-  document.getElementById('ovMapSub').textContent = `${fmt(W.length)} papers, coloured by layer; size shows how often each is cited here.`;
-  drawMap(); drawLegend();
+  /* Everything the scope changes, in one pass: the n of N line, the map, the legend, the composition, the list, the growth chart. */
+  function paintScoped() {
+    applyScope(); SCOPE.renderLine(document.getElementById('ovScope'), SRES, {});
+    L = null; topW = mostCited().slice(0, 8).map(m => H.byId.get(m.id)).filter(Boolean);
+    document.getElementById('ovMapSub').textContent = `${fmt(WS.length)} papers, coloured by layer; size shows how often each is cited here.`;
+    document.getElementById('ovBrowseN').textContent = fmt(scopeOn() ? WS.length : lead.included);
+    drawMap(); drawLegend(); drawPanels();
+  }
+  document.addEventListener('click', e => { if (e.target.closest('[data-scope-reset]')) SCOPE.reset(); });
+  SCOPE.onChange(() => paintScoped());
   document.addEventListener('hub:theme', () => { drawMap(); drawLegend(); });
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { LW = 0; drawMap(); }, 150); });
 
   /* ---- panels ---- */
-  (function () {
-    const dh = comp.human || {}, dl = comp.layer || {};
+  function drawPanels() {
+    const on = scopeOn(), cl = comp.layer || {}, ch = comp.human || {};
+    /* with a scope, recount the layers and human roles over the papers in scope; a value the whole corpus holds keeps
+       its row at 0 (HS-24) */
+    const dl = on ? Object.fromEntries(Object.keys(cl).map(k => [k, 0])) : cl, dh = on ? Object.fromEntries(Object.keys(ch).map(k => [k, 0])) : ch;
+    if (on) for (const w of WS) { const l = w.layer || 'unlayered', h = (w.human && w.human.v) || 'null'; dl[l] = (dl[l] || 0) + 1; dh[h] = (dh[h] || 0) + 1; }
     const mx = Math.max(1, ...Object.values(dh), ...Object.values(dl));
-    const tot = lead.included || W.length;
+    const tot = on ? WS.length : (lead.included || W.length);
+    document.getElementById('ovCompN').textContent = fmt(tot) + ' papers';
     const row = (lab, n, tok, hol, href) => `<button class="ov-hb" data-href="${esc(href)}"><span>${esc(lab)}</span><span class="tr"><i style="width:${100 * n / mx}%;${hol ? `box-shadow:inset 0 0 0 1.5px var(${tok})` : `background:var(${tok})`}"></i></span><span class="v">${fmt(n)} · ${pct(n, tot)}%</span></button>`;
     document.getElementById('ovComp').innerHTML =
-      `<div class="ov-grp">Layer ${H.info(`<b>What the layers are</b>${esc((O.methods || {}).composition || '')}`, 'About the layers')}</div>` + LAYERS.filter(l => dl[l[0]]).map(([k, l, t]) => row(l, dl[k], t, k === 'unlayered', `corpus.html#layer=${k}`)).join('') +
-      `<div class="ov-grp" style="margin-top:12px">Human role</div>` + HORDER.filter(k => dh[k]).map(k => row(hLab(k), dh[k], hTok(k), k === 'null', `corpus.html#human=${k}`)).join('');
+      `<div class="ov-grp">Layer ${H.info(`<b>What the layers are</b>${esc((O.methods || {}).composition || '')}`, 'About the layers')}</div>` + LAYERS.filter(l => cl[l[0]] || dl[l[0]]).map(([k, l, t]) => row(l, dl[k], t, k === 'unlayered', `corpus.html#layer=${k}`)).join('') +
+      `<div class="ov-grp" style="margin-top:12px">Human role</div>` + HORDER.filter(k => ch[k] || dh[k]).map(k => row(hLab(k), dh[k], hTok(k), k === 'null', `corpus.html#human=${k}`)).join('');
     document.querySelectorAll('#ovComp .ov-hb').forEach(b => b.onclick = () => { location.href = b.dataset.href; });
 
-    const MC = O.most_cited || [], SHOW = 8;
+    const MC = mostCited(), SHOW = 8;
     const mc = Math.max(1, ...MC.map(m => m.cited_here));
     const dash = v => v == null ? '<span class="meta">–</span>' : fmt(v);
     document.getElementById('ovTop').innerHTML = MC.length
       ? `<table class="t ov-top"><tbody>${MC.slice(0, SHOW).map(m => `<tr tabindex="0" data-id="${esc(m.id)}"><td class="ti"><span class="dot" style="background:var(${lTok(m.layer)});margin-right:6px"></span>${esc(m.title.length > 74 ? m.title.slice(0, 72) + '…' : m.title)}</td><td class="r"><span class="bar" style="width:${Math.round(70 * m.cited_here / mc)}px"></span>${fmt(m.cited_here)}</td></tr>`).join('')}</tbody></table>
         ${MC.length > SHOW ? `<details class="ov-all"><summary>Show all ${fmt(MC.length)}</summary><div class="scroll"><table class="t"><thead><tr><th>Paper</th><th class="num">Year</th><th class="num">${H.term('cic', 'Cited here')}</th><th class="num">Of which same authors</th><th class="num">Cited elsewhere ${H.info('<b>Cited elsewhere</b>The citation count stored with the paper, read from OpenAlex when it was enriched. It counts citations from the whole literature and is a different measure from cited here; the two are never added.', 'About the stored count')}</th></tr></thead><tbody>${MC.map(m => `<tr tabindex="0" data-id="${esc(m.id)}"><td class="ti" title="${esc(m.title)}">${esc(m.title)}</td><td class="num">${m.year == null ? '–' : esc(m.year)}</td><td class="num">${fmt(m.cited_here)}</td><td class="num">${fmt(m.self_cited)}</td><td class="num">${dash(m.external)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}`
-      : '<div class="ov-empty">Citation counts appear once reference lists are extracted.</div>';
+      : (on ? '<div class="ov-empty">No paper in this scope has been cited by another paper of the review.</div>' : '<div class="ov-empty">Citation counts appear once reference lists are extracted.</div>');
     document.querySelectorAll('#ovTop tr[data-id]').forEach(r => { r.onclick = () => H.openDrawer(r.dataset.id); r.onkeydown = e => { if (e.key === 'Enter') H.openDrawer(r.dataset.id); }; });
 
     const g = document.getElementById('ovGrowth');
     if (!months.length) { g.innerHTML = '<div class="ov-empty">Growth appears once papers are included.</div>'; return; }
-    const vm = Math.max(1, ...mcounts), iM = mcounts.indexOf(vm), busy = O.papers_per_month.busiest || { month: months[iM], n: vm };
+    if (on && !WS.length && SRES.N > 0) { document.getElementById('ovGsub').textContent = ''; g.innerHTML = emptyScopeHTML(); return; }
+    /* papers per month is recomputed from the publication dates of the papers in scope */
+    let mcounts = (O.papers_per_month || {}).counts || [];
+    if (on) { const by = {}; for (const w of WS) { const k = String(w.published || '').slice(0, 7); by[k] = (by[k] || 0) + 1; } mcounts = months.map(m => by[m] || 0); }
+    const vm = Math.max(1, ...mcounts), iM = mcounts.indexOf(vm), busy = (!on && O.papers_per_month.busiest) || { month: months[iM], n: vm };
     const W2 = 420, H2 = 230, bw = W2 / mcounts.length;
     document.getElementById('ovGsub').textContent = `Busiest ${ym(busy.month)} (${fmt(busy.n)} papers); ${ym(months[months.length - 1])} is partial.`;
     g.innerHTML = `<svg viewBox="0 0 ${W2} ${H2 + 24}" style="width:100%;display:block" role="img" aria-label="Papers by publication month">` +
@@ -314,9 +361,10 @@ ${(O.line || []).length ? `${H.header({ title: 'From papers to findings', infoHt
       `<text class="axis" x="0" y="${H2 + 16}">${ym(months[0])}</text><text class="axis" x="${W2}" y="${H2 + 16}" text-anchor="end">${ym(months[months.length - 1])}</text><text class="lbl" x="${(iM * bw + bw / 2).toFixed(1)}" y="${(H2 - H2 * vm / vm - 4).toFixed(1)}" text-anchor="middle">${fmt(vm)}</text></svg>`;
     g.querySelectorAll('.gb').forEach(r => {
       r.addEventListener('mousemove', e => H.tipHtml(`<b>${ym(r.dataset.m)}</b><br>${fmt(+r.dataset.n)} papers`, e)); r.addEventListener('mouseleave', () => H.tipHtml(null));
-      r.style.cursor = 'pointer'; r.onclick = () => { location.href = 'corpus.html#month=' + r.dataset.m.slice(0, 7); };
+      r.style.cursor = 'pointer'; r.onclick = () => { location.href = SCOPE.carry('corpus.html#month=' + r.dataset.m.slice(0, 7), SCOPE.current()); };
     });
-  })();
+  }
+  paintScoped();
 }).catch(e => {
   document.body.textContent = 'Overview failed to load: ' + e.message;
 });
