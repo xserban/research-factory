@@ -326,6 +326,7 @@ def _estate_stage(rows: list[PortalRow], *, has_forms: bool) -> str:
         "Rail width &prop; found &rarr; screened &rarr; included</span>"
         "<span class=pt-leg-item><span class='pt-leg-mark pt-leg-smoke' aria-hidden=true></span>"
         "Chimney puffs = daily events (30d)</span>"
+        "<span class=pt-leg-item>Ctrl + scroll to zoom</span>"
         "</div>"
         f"{actions}"
         "</div>"

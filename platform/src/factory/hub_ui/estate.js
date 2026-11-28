@@ -83,8 +83,12 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
+
+  const COUNTS_NOT_READ = 'counts not read';
+  function includedText(proj) { return proj.countsRead ? fmt(proj.funnel.included) : COUNTS_NOT_READ; }
 
   function pointInPoly(px, py, pts) {
     let inside = false;
@@ -189,6 +193,7 @@
     state.days30 = buildDateWindow(endIso, DAYS_WINDOW);
 
     state.projects = raw.map((r, idx) => {
+      const countsRead = r.funnel !== null && r.funnel !== undefined;
       const f = r.funnel || { found: 0, screened: 0, included: 0 };
       const act = Array.isArray(r.activity) ? r.activity : [];
       const daily30 = new Array(DAYS_WINDOW).fill(0);
@@ -215,6 +220,7 @@
         lotNumber: idx + 1,
         hubUrl: r.hub_url || `/p/${encodeURIComponent(r.slug)}/ui/`,
         classicUrl: r.classic_url || `/p/${encodeURIComponent(r.slug)}/`,
+        countsRead,
         funnel: {
           found: f.found || 0,
           screened: f.screened || 0,
@@ -628,8 +634,8 @@
       ],
       tip: {
         kicker: 'CONVEYOR · HONEST WIDTH',
-        title: `${fmt(proj.funnel.found)} → ${fmt(proj.funnel.screened)} → ${fmt(proj.funnel.included)}`,
-        meta: `100% found → ${pct(proj.funnel.screened, proj.funnel.found)} screened → ${pct(proj.funnel.included, proj.funnel.found)} included`
+        title: proj.countsRead ? `${fmt(proj.funnel.found)} → ${fmt(proj.funnel.screened)} → ${fmt(proj.funnel.included)}` : COUNTS_NOT_READ,
+        meta: proj.countsRead ? `100% found → ${pct(proj.funnel.screened, proj.funnel.found)} screened → ${pct(proj.funnel.included, proj.funnel.found)} included` : 'funnel counts could not be read for this project'
       }
     });
   }
@@ -660,9 +666,14 @@
     const { hall, proj } = parcel;
     const stroke = isSelected ? pal.acc : (isHovered ? accent : pal.fg);
 
+    if (!proj.countsRead) ctx.setLineDash([4, 3]);
     drawIsoBox(ctx, hall.x, hall.y, 0, hall.w, hall.d, hall.h, {
-      top: pal.surface, left: pal.raised, right: pal.surface, stroke
+      top: pal.surface, left: pal.raised, right: pal.surface, stroke: proj.countsRead ? stroke : pal.mut
     }, isSelected ? 1.5 : 1.05);
+    if (!proj.countsRead) {
+      ctx.setLineDash([]);
+      return;
+    }
 
     const bays = hall.w >= 80 ? 3 : 2;
     const bayW = hall.w / bays;
@@ -732,7 +743,7 @@
       ],
       tip: {
         kicker: 'FACTORY HALL · CLICK TO FLY IN',
-        title: `${proj.title} (${fmt(proj.funnel.included)} included)`,
+        title: proj.countsRead ? `${proj.title} (${fmt(proj.funnel.included)} included)` : `${proj.title} (${COUNTS_NOT_READ})`,
         meta: `${fmt(proj.built)} pages built · ${staleText}`
       }
     });
@@ -812,7 +823,7 @@
       tip: {
         kicker: `LOT ${String(proj.lotNumber).padStart(2, '0')} · ${proj.slug}`,
         title: proj.title,
-        meta: `${fmt(proj.funnel.included)} included · ${fmt(proj.built)} pages built · click to fly in`
+        meta: `${proj.countsRead ? `${fmt(proj.funnel.included)} included` : COUNTS_NOT_READ} · ${fmt(proj.built)} pages built · click to fly in`
       }
     });
 
@@ -977,7 +988,7 @@
         const anchor = worldToCanvas(hall.cx, hall.cy + hall.d * 0.62, 0);
         const fs = clamp(9.5 * zoom + 2.5, 8.5, 11);
         const shortName = proj.title.length > 16 ? `${proj.title.slice(0, 15)}…` : proj.title;
-        const label = `${shortName} · n=${fmt(proj.funnel.included)}`;
+        const label = `${shortName} · ${proj.countsRead ? `n=${fmt(proj.funnel.included)}` : COUNTS_NOT_READ}`;
         ctx.font = `500 ${fs}px ${pal.fMono}`;
         const tw = ctx.measureText(label).width + 12;
         const th = fs + 7;
@@ -998,7 +1009,7 @@
         const titleSize = clamp(13 * zoom, 10.5, 16);
         const subSize = clamp(9.5 * zoom, 8.5, 11.5);
         const staleTag = !proj.hubReady ? 'not built' : (proj.stale > 0 ? `${proj.stale} to rebuild` : 'up to date');
-        const subStr = `n = ${fmt(proj.funnel.included)} included · ${fmt(proj.built)} built · ${staleTag}`;
+        const subStr = `${proj.countsRead ? `n = ${fmt(proj.funnel.included)} included` : COUNTS_NOT_READ} · ${fmt(proj.built)} built · ${staleTag}`;
 
         ctx.font = `500 ${titleSize}px ${pal.fDisplay}`;
         const tw1 = ctx.measureText(proj.title).width;
@@ -1082,8 +1093,8 @@
         if (!parcel._siloTop) continue;
         const accent = parcel._accent || pal.acc;
         const items = [
-          { pt: parcel._siloTop.topCenter, text: `${fmt(proj.funnel.found)} found`, col: pal.mut },
-          { pt: worldToCanvas(parcel.shed.x, parcel.shed.y, parcel.shed.h + 10), text: `${fmt(proj.funnel.screened)} screened`, col: accent }
+          { pt: parcel._siloTop.topCenter, text: proj.countsRead ? `${fmt(proj.funnel.found)} found` : '? found', col: pal.mut },
+          { pt: worldToCanvas(parcel.shed.x, parcel.shed.y, parcel.shed.h + 10), text: proj.countsRead ? `${fmt(proj.funnel.screened)} screened` : '? screened', col: accent }
         ];
         for (const it of items) {
           const tw = ctx.measureText(it.text).width + 6;
@@ -1283,8 +1294,8 @@
       btn.type = 'button';
       btn.className = 'pt-hotspot';
       btn.dataset.target = p.id;
-      btn.textContent = `${p.proj.title} (${fmt(p.proj.funnel.included)})`;
-      btn.setAttribute('aria-label', `${p.proj.title}: ${fmt(p.proj.funnel.included)} included, ${fmt(p.proj.built)} pages built.`);
+      btn.textContent = `${p.proj.title} (${p.proj.countsRead ? fmt(p.proj.funnel.included) : COUNTS_NOT_READ})`;
+      btn.setAttribute('aria-label', `${p.proj.title}: ${p.proj.countsRead ? `${fmt(p.proj.funnel.included)} included` : COUNTS_NOT_READ}, ${fmt(p.proj.built)} pages built.`);
       btn.addEventListener('click', () => focusParcel(p.id));
       layer.appendChild(btn);
     }
@@ -1323,7 +1334,7 @@
     const staleVal = !proj.hubReady ? 'Not built' : (proj.stale > 0 ? fmt(proj.stale) : '0');
     const staleLbl = !proj.hubReady ? 'hub status' : (proj.stale > 0 ? 'to rebuild' : 'up to date');
     $('pt-gh-metrics').innerHTML = `
-      <div class="pt-gh-stat"><b>${fmt(proj.funnel.included)}</b><span>included / ${fmt(proj.funnel.found)} found</span></div>
+      <div class="pt-gh-stat">${proj.countsRead ? `<b>${fmt(proj.funnel.included)}</b><span>included / ${fmt(proj.funnel.found)} found</span>` : `<b>?</b><span>${COUNTS_NOT_READ}</span>`}</div>
       <div class="pt-gh-stat"><b>${fmt(proj.built)}</b><span>pages built</span></div>
       <div class="pt-gh-stat"><b>${staleVal}</b><span>${staleLbl}</span></div>
     `;
@@ -1347,13 +1358,23 @@
     if (inboxBtn) {
       inboxBtn.onclick = () => jumpToInbox(proj.slug, null);
     }
+    state.hudOpener = document.activeElement && document.activeElement.classList &&
+      document.activeElement.classList.contains('pt-hotspot') ? document.activeElement : null;
+    if (!state.hudOpener) {
+      state.hudOpener = $('pt-hotspots')?.querySelector(`.pt-hotspot[data-target="${parcel.id}"]`) || null;
+    }
     hud.hidden = false;
+    if (!hud.hasAttribute('tabindex')) hud.setAttribute('tabindex', '-1');
+    hud.focus({ preventScroll: true });
   }
 
-  function closeGatehouseHud() {
+  function closeGatehouseHud(returnFocus) {
     const hud = $('pt-gatehouse');
+    const wasOpen = hud && !hud.hidden;
     if (hud) hud.hidden = true;
     state.selectedId = null;
+    if (returnFocus && wasOpen && state.hudOpener && state.hudOpener.focus) state.hudOpener.focus();
+    state.hudOpener = null;
   }
 
   function pulseElement(el) {
@@ -1540,7 +1561,9 @@
       }
     });
 
+    // Zoom only with ctrl/meta + wheel (trackpad pinch arrives as ctrlKey wheel); plain wheel scrolls the page.
     stage.addEventListener('wheel', ev => {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
       ev.preventDefault();
       const factor = ev.deltaY < 0 ? 1.12 : 0.89;
       state.cam.zoom = clamp(state.cam.zoom * factor, 0.35, 3.0);
@@ -1562,7 +1585,13 @@
     $('pt-cam-in')?.addEventListener('click', () => animateCameraTo({ ...state.cam, zoom: clamp(state.cam.zoom * 1.25, 0.35, 3.0) }, 260));
     $('pt-cam-out')?.addEventListener('click', () => animateCameraTo({ ...state.cam, zoom: clamp(state.cam.zoom * 0.8, 0.35, 3.0) }, 260));
     $('pt-cam-fit')?.addEventListener('click', () => { closeGatehouseHud(); animateCameraTo(getFitCamera(), 420); });
-    $('pt-gh-close')?.addEventListener('click', () => { closeGatehouseHud(); animateCameraTo(getFitCamera(), 420); });
+    $('pt-gh-close')?.addEventListener('click', () => { closeGatehouseHud(true); animateCameraTo(getFitCamera(), 420); });
+    $('pt-gatehouse')?.addEventListener('keydown', ev => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      closeGatehouseHud(true);
+      animateCameraTo(getFitCamera(), 420);
+    });
     $('pt-btn-break')?.addEventListener('click', jumpToCreate);
     $('pt-btn-dock')?.addEventListener('click', () => jumpToInbox(null, null));
 

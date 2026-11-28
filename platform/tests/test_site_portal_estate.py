@@ -100,3 +100,32 @@ def test_estate_assets_have_no_literal_colors_or_external_urls() -> None:
         text = (_HUB_UI / name).read_text(encoding="utf-8")
         assert not _LITERAL_COLOR.search(text), f"literal colour found in {name}"
         assert not _EXTERNAL_URL.search(text), f"external URL found in {name}"
+
+
+def test_funnel_none_stays_null_in_payload_and_blob() -> None:
+    row = site_portal.PortalRow(
+        slug="beta",
+        title="Beta",
+        events=0,
+        stale=0,
+        built=0,
+        hub_ready=False,
+        building=False,
+        activity=(),
+        activity_end=None,
+        funnel=None,
+    )
+    assert site_portal.portal_payload([row])["projects"][0]["funnel"] is None  # type: ignore[index]
+    data = _extract_pt_data(site_portal.render_portal([row]))
+    assert data["projects"][0]["funnel"] is None  # type: ignore[index]
+
+
+def test_estate_js_keeps_unread_counts_distinct_and_guards_interactions() -> None:
+    js = site_factory_feed.asset("estate.js")
+    assert js is not None
+    text = js[0].decode()
+    assert "countsRead" in text and "counts not read" in text
+    assert "ev.ctrlKey || ev.metaKey" in text
+    assert "&#39;" in text
+    assert "ev.key !== 'Escape'" in text
+    assert "Ctrl + scroll to zoom" in site_portal.render_portal([])
