@@ -17,7 +17,7 @@ def test_portal_has_the_bar_with_one_toggle_and_no_new_papers_list() -> None:
     page = site_portal.render_portal([])
     assert "class=hubbar" in page and page.count(THEME_TOGGLE) == 1
     assert "data-act" not in page and "pt-paper" not in page
-    assert page.index("class=hubbar") < page.index("Conjecture</h1>")
+    assert page.index("class=hubbar") < page.index("<h1 class=pt-sr>")
 
 
 def _row(**kw: object) -> site_portal.PortalRow:
@@ -134,4 +134,7 @@ def test_the_interface_name_is_conjecture_in_the_bar_and_the_portal() -> None:
     assert UI_NAME == "Conjecture"
     assert "<b>Conjecture</b>" in hub_bar("projects") and "FACTORY" not in hub_bar("projects")
     page = site_portal.render_portal([])
-    assert "<h1>Conjecture</h1>" in page and "<title>Projects · Conjecture</title>" in page
+    assert "<title>Projects · Conjecture</title>" in page
+    # the page title lives in the bar only; the visible heading and its subtitle are gone
+    assert "mh-head" not in page and "on this machine" not in page
+    assert "<h1 class=pt-sr>Projects</h1>" in page
