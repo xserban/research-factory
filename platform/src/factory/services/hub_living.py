@@ -142,6 +142,8 @@ FAMILY_OF_PREFIX: dict[str, str] = {
     # `page.recorded` is a synthesis page the agent wrote (kind "synthesis"), not a fetched page:
     # it is no acquisition and no search, so it is counted as other, stated here.
     "page": OTHER,
+    # `hub.facets_set` is the researcher's choice of hub facets, a display setting: counted as other.
+    "hub": OTHER,
     # conversion
     "document": "conversion",
     # mining and extraction

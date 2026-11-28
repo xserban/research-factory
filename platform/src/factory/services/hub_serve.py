@@ -114,6 +114,7 @@ PREWARM_ORDER: Final = (
     "intuition",
     "platform",
     "learn",
+    "leaderboard",
 )
 GRIDS: Final = "grids"
 """Queue entry that builds every `grid-<miner>` payload (their names are known only once the
