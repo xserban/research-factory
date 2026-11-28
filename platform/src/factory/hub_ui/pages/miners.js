@@ -11,6 +11,24 @@ HUB.load(['shell', 'mining']).then(d => {
   const main = H.mount({ page: 'miners', crumb: 'Miners' });
   main.classList.add('mp');
 
+  /* ---------- scope (HS-03, HS-20, HS-21, HS-24) ----------
+     Per-work lists (distributions' ids, coverage, examples) are recomputed over the works in scope; agreement,
+     platform counts and other aggregates keep their numbers and carry a label. */
+  const SC = window.HUB_SCOPE || null;
+  const scopeOn = () => !!SC && SC.active(SC.current());
+  const slab = k => SC ? SC.label(k) : '';
+  const pubOf = id => { const w = H.byId.get(id); return w && w.published ? w.published : ''; };
+  const applyList = (rows, get) => SC.apply(rows, get, SC.current(), { includeUndated: SC.includeUndated() });
+  const COVW = (MP.coverage && MP.coverage.works) || [];
+  const COVM = (MP.coverage && MP.coverage.miners) || [];
+  const readIds = m => { const c = COVM.find(x => x.name === m.name); return c ? (c.a || []).map(i => COVW[i]) : []; };
+  /* The works one miner read (N) and those of them in scope (n); null when the scope bar is not loaded. */
+  let RES = null, INS = new Set();
+  function setRes(ids) { RES = SC ? applyList(ids, pubOf) : null; INS = new Set(RES ? RES.inScope : ids); return RES; }
+  const lineHtml = '<div id=scopeLine style="margin:0 0 14px"></div>';
+  const paintLine = () => { const el = main.querySelector('#scopeLine'); if (el && SC) SC.renderLine(el, RES, {}); };
+  const note = k => scopeOn() ? `<p class=meta style="margin:0 0 10px">${slab(k)}</p>` : '';
+
   if (!document.getElementById('mp-style')) {
     const st = document.createElement('style'); st.id = 'mp-style';
     st.textContent = `
@@ -134,6 +152,7 @@ HUB.load(['shell', 'mining']).then(d => {
   }
   const pl = (n, one, many) => fmt(n) + ' ' + (n === 1 ? one : many);
   const pc = x => Math.round(100 * x);
+  let ALLIN = new Set();
   const checked = m => m.pass_b.works > 0;
   const subset = m => NINC > 0 && m.pass_a.works < 0.5 * NINC;
 
@@ -161,15 +180,16 @@ HUB.load(['shell', 'mining']).then(d => {
 
   /* ---------- gallery ---------- */
   function card(m) {
-    const [nm, , why] = meta(m), A = m.pass_a.works, frac = NINC ? A / NINC : 0, k = defMeasure(m);
+    const [nm, , why] = meta(m), k = defMeasure(m), on = scopeOn();
+    const rd = on ? readIds(m).filter(i => ALLIN.has(i)).length : m.pass_a.works, den = on ? ALLIN.size : NINC, A = rd, frac = den ? A / den : 0;
     const ov = k && m.agreement[k].overall && m.agreement[k].overall.total ? m.agreement[k].overall : null;
-    const info = infoPop(nm, `<p>${esc(why)}</p><p><span class=k>Coverage.</span> ${esc(HUB.fmt(A))} of ${esc(fmt(NINC))} included papers read in the first reading.${subset(m) ? ' This miner ran on a subset of the papers.' : ''}</p><p><span class=k>Miner name.</span> <span class=mono>${esc(m.name)}</span>, version ${esc(m.version)}.</p>`);
+    const info = infoPop(nm, `<p>${esc(why)}</p><p><span class=k>Coverage.</span> ${esc(HUB.fmt(A))} of ${esc(fmt(den))} included papers${on ? ' in scope' : ''} read in the first reading.${subset(m) ? ' This miner ran on a subset of the papers.' : ''}</p><p><span class=k>Miner name.</span> <span class=mono>${esc(m.name)}</span>, version ${esc(m.version)}.</p>`);
     const sInfo = k ? infoPop(MNAME[k] + ', field by field', `<p>One tick per compared field; the taller the fill, the more often the two readings recorded the same value.</p><p><span class=k>How it's computed.</span> ${esc(MX[k] || '')}</p>`) : infoPop('Agreement', '<p>This miner records quotations or free text, which cannot be compared value by value, or has no second reading yet.</p>');
     return `<article class=mc>
       <a class=cover href="#m=${esc(m.name)}" aria-label="Open ${esc(nm)}"></a>
       <h3 class=nm>${esc(nm)}<span class=ib>${info}</span></h3>
       <p class=why>${esc(why)}</p>
-      <div class=cov>${ring(frac)}<div><div class=t1>${fmt(A)}<span class=meta> / ${fmt(NINC)}</span></div><div class=t2>papers read${subset(m) ? ' · a subset' : ''}</div></div></div>
+      <div class=cov>${ring(frac)}<div><div class=t1>${fmt(A)}<span class=meta> / ${fmt(den)}</span></div><div class=t2>papers read${subset(m) ? ' · a subset' : ''}</div></div></div>
       <div class=row>${checked(m) ? `<span class=chk><i></i>Checked on ${fmt(m.pass_b.works)} · ${esc(model(m.pass_b.models) || '')}</span>` : `<span class="chk no"><i></i>Not checked yet</span>`}</div>
       <div class=row>${strip(m)}<span class="sub-tag">${ov ? pc(ov.rate) + '% ' + (k === 'fairer' ? 'fairer' : 'exact') : ''}</span><span class=ib>${sInfo}</span></div>
     </article>`;
@@ -179,24 +199,27 @@ HUB.load(['shell', 'mining']).then(d => {
     return `<div class=pairs>${pairs.map(p => `<div class=pair><div>${esc(model([p.a]))} <span class=meta>read first</span><br>${esc(model([p.b]))} <span class=meta>checked</span></div><div class=ptr role=img aria-label="${pc(p.rate)}% agreement"><i style="width:${pc(p.rate)}%"></i></div><div class=nn>${pc(p.rate)}% · ${fmt(p.agreed)} of ${fmt(p.total)}<br>${fmt(p.works_both)} papers · ${pl(p.miners.length, 'miner', 'miners')}</div></div>`).join('')}</div>`;
   }
   function overview() {
-    const cov = (MP.coverage && MP.coverage.miners) || [], union = new Set();
-    cov.forEach(c => (c.a || []).forEach(i => union.add(i)));
+    const cov = COVM, union = new Set();
+    setRes(COVW);
+    ALLIN = new Set(INS);
+    cov.forEach(c => (c.a || []).forEach(i => { if (!scopeOn() || ALLIN.has(COVW[i])) union.add(i); }));
     const nChk = M.filter(checked).length;
     const lead = `${fmt(M.length)} miners have read ${fmt(union.size)} papers. ${fmt(nChk)} have a second reading to check them.`;
     main.innerHTML = H.header({
       level: 1, title: 'Miners',
       infoHtml: (MX.tab_miners ? MX.tab_miners + '<br><br>' : '') + `<b>What it shows</b>The ${HUB.term('miner', 'miners')} in the review: what each reads and records, how many papers it has covered, and whether a second reading agrees.<p><span class=k>How to read it.</span> The ring is the share of included papers the first reading covered. The ticks give agreement per compared field; the percentage beside them is the overall rate under the fairer match where it exists, else the exact match.</p><p><span class=k>How it's computed.</span> ${esc(MX.miners || '')}</p>`
-    }) + `<p class=lead>${esc(lead)}</p>`
+    }) + `<p class=lead>${esc(lead)}</p>` + lineHtml
       + GROUPS.map(g => {
         const ms = M.filter(m => meta(m)[1] === g); if (!ms.length) return '';
         const keys = Object.keys(LBM);
         ms.sort((a, b) => keys.indexOf(a.name) - keys.indexOf(b.name));
         return `<section class=grp><div class=gh>${H.header({ title: g })}<span class=meta>${fmt(ms.length)} ${ms.length > 1 ? 'miners' : 'miner'}${ms.every(subset) ? ' · ran on a subset of the papers' : ''}</span></div><div class=cards>${ms.map(card).join('')}</div></section>`;
       }).join('')
-      + `<section class=grp>${H.header({ title: 'All miners at a glance', infoHtml: `<b>What it shows</b>One line per miner: its unit counts from the platform, the share of works read twice, and the three named agreement measures.<p><span class=k>How it's computed.</span> Units, closed, open, rows and stale are the platform's own counts (<span class=mono>mine status</span>); agreement is as defined under Two readings.</p>` })}${glanceTable()}<details style="margin-top:10px"><summary>What the columns mean</summary>${glossary()}</details></section>`
-      + `<section class=grp>${H.header({ title: 'Two readings, per miner', infoHtml: `<b>What it shows</b>For each miner, the works both passes read, the rows each pass wrote, how many rows matched, and the agreement under each named measure.<p><span class=k>How it's computed.</span> ${esc(MX.fairer || '')}</p>` })}${pairsTable()}</section>`
-      + `<section class=grp>${H.header({ title: 'Agreement by model', infoHtml: `<b>What it shows</b>For each pair of models that read the same papers, how often they recorded the same value.<p><span class=k>How it's computed.</span> ${esc(MX.by_model || '')}</p>` })}${pairsSection(PAIRS)}</section>`
+      + `<section class=grp>${H.header({ title: 'All miners at a glance', infoHtml: `<b>What it shows</b>One line per miner: its unit counts from the platform, the share of works read twice, and the three named agreement measures.<p><span class=k>How it's computed.</span> Units, closed, open, rows and stale are the platform's own counts (<span class=mono>mine status</span>); agreement is as defined under Two readings.</p>` })}${note('pass')}${glanceTable()}<details style="margin-top:10px"><summary>What the columns mean</summary>${glossary()}</details></section>`
+      + `<section class=grp>${H.header({ title: 'Two readings, per miner', infoHtml: `<b>What it shows</b>For each miner, the works both passes read, the rows each pass wrote, how many rows matched, and the agreement under each named measure.<p><span class=k>How it's computed.</span> ${esc(MX.fairer || '')}</p>` })}${note('pass')}${pairsTable()}</section>`
+      + `<section class=grp>${H.header({ title: 'Agreement by model', infoHtml: `<b>What it shows</b>For each pair of models that read the same papers, how often they recorded the same value.<p><span class=k>How it's computed.</span> ${esc(MX.by_model || '')}</p>` })}${note('pass')}${pairsSection(PAIRS)}</section>`
       + `<div class=foot>${HUB.info(esc(HUB.SETS_NOTE), 'About the paper counts')} <span>Paper counts</span></div>`;
+    paintLine();
   }
 
   /* ---------- detail ---------- */
@@ -210,7 +233,7 @@ HUB.load(['shell', 'mining']).then(d => {
     }
     const A = model(m.pass_a.models), B = model(m.pass_b.models), thr = pc(m.regime.field_agreement_min);
     return `<div class=anat>
-      <div class=an><div class=st>1 · READS</div><h3 class=h3>The paper</h3><div class=tags><span class="tag">Full text</span></div><p>${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers${subset(m) ? ', a subset' : ''}. Scope: ${esc(m.scope.text)}.</p></div>
+      <div class=an><div class=st>1 · READS</div><h3 class=h3>The paper</h3><div class=tags><span class="tag">Full text</span></div><p>${scopeOn() && RES ? `${fmt(RES.n)} of ${fmt(RES.N)} papers read, in scope` : `${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers${subset(m) ? ', a subset' : ''}`}. Scope: ${esc(m.scope.text)}.</p></div>
       <div class=an><div class=st>2 · RECORDS</div><h3 class=h3>${pl(nf, 'field', 'fields')}</h3><div class=tags>${grs.map(g => `<span class=tag>${esc(cap(g))} · ${fmt(m.fields.filter(f => f.group === g).length)}</span>`).join('')}</div><p>${pl(ne, 'choice', 'choices')}, ${pl(nq, 'quote', 'quotes')}. ${m.multi_row ? '<b>Several rows per paper</b>' + (m.rows_per_work ? ', ' + esc(m.rows_per_work) + ' on average.' : '.') : 'One row per paper.'}</p></div>
       <div class=an><div class=st>3 · EVIDENCE</div><h3 class=h3>A quote for every value</h3>${q ? `<div class=quote>“${esc(q[2])}”</div><p>Sets <b>${esc(flab(q[0]))}</b>${q[1] != null && q[1] !== q[2] ? ' = <b>' + esc(lab(q[1])) + '</b>' : ''}.</p>` : '<p>Every value is stored with the sentence it was based on.</p>'}</div>
       <div class=an><div class=st>4 · CHECK</div><h3 class=h3>${checked(m) ? 'Read again by ' + esc(B) : 'Not checked yet'}</h3><p>${checked(m) ? `The second reading covered <b>${fmt(m.pass_b.works)}</b> of ${fmt(m.pass_a.works)} papers. First reading: ${esc(A)}${A === B ? ' (the same model, so a weaker check)' : ''}.` : `No second reading exists.`} A field passes at ${thr}% agreement; calibration set of ${fmt(m.regime.calibration_size)} papers.</p></div>
@@ -223,12 +246,17 @@ HUB.load(['shell', 'mining']).then(d => {
     const dist = m.distributions && m.distributions[f.name];
     let body = '';
     if (f.type === 'enum' && dist && Object.keys(dist).length) {
-      const unit = m.multi_row ? 'rows' : 'works';
-      const ent = Object.entries(dist).map(([v, o]) => [v, o[unit]]).sort((a, b) => b[1] - a[1]);
+      const on = scopeOn() && RES, unit = m.multi_row && !on ? 'rows' : 'works';
+      /* In scope a count is the papers in scope with the value (rows per paper are not in the payload); a value with none stays as 0 (HS-24). */
+      const inn = o => (o.ids || []).filter(i => INS.has(i));
+      const ent = Object.entries(dist).map(([v, o]) => [v, on ? inn(o).length : o[unit]]).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      const have = on ? new Set(Object.values(dist).flatMap(inn)).size : 0;
       const tot = ent.reduce((s, x) => s + x[1], 0) || 1, lim = open[m.name + f.name] ? ent.length : 8;
       body = `<div class=bars role=group aria-label="Values of ${esc(flab(f.name))}">${ent.slice(0, lim).map(([v, n]) => `<div class=bar tabindex=0 role=button data-vals="${esc(m.name + '|' + f.name + '|' + v)}" title="${esc(lab(v))}"><span class=l>${esc(lab(v))}</span><span class=tr><i style="width:${(100 * n / tot).toFixed(1)}%"></i></span><span class=n>${fmt(n)}</span></div>`).join('')}</div>`
         + (ent.length > 8 ? `<button class=more data-more="${esc(m.name + f.name)}">${open[m.name + f.name] ? 'Show fewer' : 'Show all ' + fmt(ent.length)}</button>` : '')
-        + `<div class=meta style="margin-top:6px">${m.multi_row ? 'rows' : 'papers'}. Select a value to list its papers.</div><div class=vl data-vl="${esc(m.name + '|' + f.name)}"></div>`;
+        + (on ? `<div class=meta style="margin-top:6px" data-ftot="${esc(f.name)}" data-n="${have}" data-of="${RES.n}">${fmt(have)} of ${fmt(RES.n)} papers in scope have a value. Papers per value${m.multi_row ? '; a paper with several rows counts once' : ''}. Select a value to list its papers.</div>`
+          : `<div class=meta style="margin-top:6px">${m.multi_row ? 'rows' : 'papers'}. Select a value to list its papers.</div>`)
+        + `<div class=vl data-vl="${esc(m.name + '|' + f.name)}"></div>`;
     } else if (f.type === 'enum') body = `<div class=empty>No values recorded yet.</div>`;
     else body = `<div class=meta>${f.type === 'quote' ? 'Records a sentence from the paper.' : 'Records a figure as printed.'}</div>`;
     const allowed = (f.values || []).length || f.desc ? infoPop(flab(f.name), (f.desc ? `<p>${esc(f.desc)}</p>` : '') + ((f.values || []).length ? `<p><span class=k>Allowed values.</span> ${f.values.map(v => esc(lab(v))).join(', ')}</p>` : '')) : '';
@@ -267,7 +295,10 @@ HUB.load(['shell', 'mining']).then(d => {
   function examples(m) {
     if (!(m.examples || []).length) return `<div class=empty>No example rows yet.</div>`;
     const ftype = n => (m.fields.find(x => x.name === n) || {}).type;
-    return `<div class=ex>${m.examples.map(ex => {
+    const all = m.examples, shown = scopeOn() && SC ? applyList(all, ex => ex.published || pubOf(ex.work)).inScope : all;
+    const cnt = scopeOn() ? `<div class=meta data-excount style="margin-bottom:8px">${fmt(shown.length)} of ${fmt(all.length)} examples in scope</div>` : '';
+    if (!shown.length) return cnt + `<div class=empty>No example falls in this scope.</div>`;
+    return cnt + `<div class=ex>${shown.map(ex => {
       const ents = Object.entries(ex.cells || {}).filter(([, c]) => c.quote || c.value != null), first = ents.slice(0, 3), rest = ents.length - first.length;
       const known = H.byId.has(ex.work);
       return `<article class=exc>${known ? `<button class=ttl data-w="${esc(ex.work)}">${esc(ex.title)}</button>` : `<div class=h3 style="margin-bottom:8px">${esc(ex.title)}</div>`}${first.map(([f, c]) => {
@@ -277,30 +308,32 @@ HUB.load(['shell', 'mining']).then(d => {
     }).join('')}</div>`;
   }
   function detail(m) {
+    setRes(readIds(m));
     const nm = hname(m), gname = meta(m)[1], thr = m.regime.field_agreement_min, dk = defMeasure(m);
     const r = dk ? fieldRates(m, dk) : [], meet = r.filter(x => x.s >= thr).length;
     const grs = []; for (const f of m.fields) { let g = grs.find(x => x.g === f.group); if (!g) grs.push(g = { g: f.group, fs: [] }); g.fs.push(f); }
     const lead = checked(m)
       ? `Read ${fmt(m.pass_a.works)} papers and checked ${fmt(m.pass_b.works)}. ` + (r.length ? (meet ? `${fmt(meet)} of ${pl(r.length, 'compared field', 'compared fields')} reach the ${pc(thr)}% bar.` : `No compared field reaches the ${pc(thr)}% bar.`) + ` (${MNAME[dk].toLowerCase()})` : 'Its fields are free text, so they are not compared.')
       : `Read ${fmt(m.pass_a.works)} papers. No second reading yet.`;
-    const popLine = subset(m) ? `Ran on a subset: ${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).` : `${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).`;
+    const popLine = scopeOn() && RES ? `${fmt(RES.n)} of ${fmt(RES.N)} papers read by this miner are in scope (${esc(m.scope.text)}).` : subset(m) ? `Ran on a subset: ${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).` : `${fmt(m.pass_a.works)} of ${fmt(NINC)} included papers (${esc(m.scope.text)}).`;
     main.innerHTML = `<div class=crumbs><a href="#">← All miners</a></div>`
       + H.header({ level: 1, kicker: esc(gname) + ' · ' + HUB.term('miner', 'miner') + ' <span class=mono>' + esc(m.name) + '</span> · version ' + esc(m.version) + (m.digest ? ' · digest <span class=mono>' + esc(String(m.digest).slice(0, 12)) + '</span>' : ''), title: nm, infoHtml: `<b>${esc(nm)}</b><p>${esc(m.rationale || '')}</p><p><span class=k>Regime.</span> ${fmt(m.regime.passes)} passes. A field must agree on at least ${pc(thr)}% of checked papers; recall at least ${pc(m.regime.recall_min)}%.</p>` })
-      + `<p class=lead>${esc(lead)}</p><div class=actions><span class=meta>${popLine}</span><a class=btn href="data.html#miner=${encodeURIComponent(m.name)}">See the data</a></div>`
-      + `<section class=dsec>${H.header({ title: 'Status', infoHtml: `<b>What it shows</b>The platform's own counts for this miner.<p><span class=k>How it's computed.</span> Units are reading tasks, one per work and pass; closed ones are finished, open ones are waiting; stale rows were made outdated by a protocol change. These come from <span class=mono>mine status</span>.</p>` })}${statusSection(m)}</section>`
+      + `<p class=lead>${esc(lead)} ${scopeOn() ? slab('pass') : ''}</p>${lineHtml}<div class=actions><span class=meta>${popLine}</span><a class=btn href="data.html#miner=${encodeURIComponent(m.name)}">See the data</a></div>`
+      + `<section class=dsec>${H.header({ title: 'Status', infoHtml: `<b>What it shows</b>The platform's own counts for this miner.<p><span class=k>How it's computed.</span> Units are reading tasks, one per work and pass; closed ones are finished, open ones are waiting; stale rows were made outdated by a protocol change. These come from <span class=mono>mine status</span>.</p>` })}${scopeOn() ? '<p class=meta style="margin:0 0 10px">' + slab('corpus') + '</p>' : ''}${statusSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'How it reads', infoHtml: `<b>What it shows</b>The works, paragraphs and sections the miner is given, and the skill that reads them. Recorded in the registered spec.` })}${readsSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Anatomy', infoHtml: `<b>What it shows</b>What the miner looks at, what it writes down, how each value is backed, and how it is checked.<p><span class=k>How it's computed.</span> ${esc(MX.anatomy || '')}</p>` })}${anatomy(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'What it records', infoHtml: `<b>What it shows</b>The ${fmt(m.fields.length)} fields, grouped as the miner defines them.<p><span class=k>How to read it.</span> Each bar is the number of ${m.multi_row ? 'rows' : 'papers'} with that value in the first reading.</p><p><span class=k>How it's computed.</span> ${esc(MX.miners || '')}</p>` })}`
       + `<p class=meta>${KINDS.map(([k, t]) => `<b>${k}</b>: ${t}`).join(' · ')}</p>`
       + `<div class=fgrid>${m.fields.map(f => fieldCard(m, f)).join('')}</div></section>`
-      + `<section class=dsec>${H.header({ title: 'Two readings', infoHtml: `<b>What it shows</b>For each compared field, how often the second reading recorded the same value as the first, under each named measure.<p><span class=k>How to read it.</span> The dot is the share that match, the thin line is the 95% range given the papers checked, the dashed line is the bar the regime sets.</p><p><b>Fairer match.</b> ${esc(MX.fairer || '')}</p><p><b>Exact match.</b> ${esc(MX.exact || '')}</p><p><b>Platform rate.</b> ${esc(MX.platform || '')}</p>` })}${agreementSection(m)}</section>`
+      + `<section class=dsec>${H.header({ title: 'Two readings', infoHtml: `<b>What it shows</b>For each compared field, how often the second reading recorded the same value as the first, under each named measure.<p><span class=k>How to read it.</span> The dot is the share that match, the thin line is the 95% range given the papers checked, the dashed line is the bar the regime sets.</p><p><b>Fairer match.</b> ${esc(MX.fairer || '')}</p><p><b>Exact match.</b> ${esc(MX.exact || '')}</p><p><b>Platform rate.</b> ${esc(MX.platform || '')}</p>` })}${note('pass')}${agreementSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Quality and use', infoHtml: `<b>What it shows</b>How the protocol uses this miner and the quality checks that apply to it.` })}${useSection(m)}</section>`
-      + `<section class=dsec>${H.header({ title: 'Disagreements by field', infoHtml: `<b>What it shows</b>Every field where the two readings differ, largest first, with both values and the quote behind each. It shows consistency, not which reading is right: that needs gold labels.<p><span class=k>What to do.</span> Many disagreements on a field with overlapping categories mean the definitions need tightening in a new version; a field one pass left empty may need to be required.</p><p><span class=k>How it's computed.</span> ${esc(MX.fairer || '')}</p>` })}${disSection(m)}</section>`
-      + `<section class=dsec>${H.header({ title: 'Agreement by model', infoHtml: `<b>What it shows</b>Which models made the two readings, and how often each pair agreed.<p><span class=k>How it's computed.</span> ${esc(MX.by_model || '')}</p>` })}${modelSection(m)}</section>`
+      + `<section class=dsec>${H.header({ title: 'Disagreements by field', infoHtml: `<b>What it shows</b>Every field where the two readings differ, largest first, with both values and the quote behind each. It shows consistency, not which reading is right: that needs gold labels.<p><span class=k>What to do.</span> Many disagreements on a field with overlapping categories mean the definitions need tightening in a new version; a field one pass left empty may need to be required.</p><p><span class=k>How it's computed.</span> ${esc(MX.fairer || '')}</p>` })}${note('pass')}${disSection(m)}</section>`
+      + `<section class=dsec>${H.header({ title: 'Agreement by model', infoHtml: `<b>What it shows</b>Which models made the two readings, and how often each pair agreed.<p><span class=k>How it's computed.</span> ${esc(MX.by_model || '')}</p>` })}${note('pass')}${modelSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Examples', infoHtml: `<b>What it shows</b>Real rows from the first reading, each with the sentence the miner used.` })}${examples(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'Versions', infoHtml: `<b>What it shows</b>Every registered version of this miner. Only a version the protocol lists produces rows that count.` })}${versionsSection(m)}</section>`
       + `<section class=dsec>${H.header({ title: 'What you can do' })}${commandsSection(m)}</section>`
       + `<div class=foot>${HUB.info(esc(HUB.SETS_NOTE), 'About the paper counts')} <span>Paper counts</span></div>`;
+    paintLine();
     wireDis(m);
     main.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => { try { navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; } catch (e) { b.textContent = 'Select and copy'; } });
     main.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { open[b.dataset.more] = !open[b.dataset.more]; render(); });
@@ -309,7 +342,7 @@ HUB.load(['shell', 'mining']).then(d => {
       const show = () => {
         const [mn, fn, v] = el.dataset.vals.split('|'), mm = M.find(x => x.name === mn), box = main.querySelector(`[data-vl="${mn}|${fn}"]`);
         const ids = (((mm.distributions || {})[fn] || {})[v] || {}).ids || [];
-        const known = ids.filter(i => H.byId.has(i));
+        const known = ids.filter(i => H.byId.has(i) && (!scopeOn() || INS.has(i)));
         box.innerHTML = `<div class=meta style="margin:8px 0 4px">${fmt(known.length)} ${known.length === 1 ? 'paper' : 'papers'} with “${esc(lab(v))}”</div>` + known.map(i => `<button class=ttl data-w="${esc(i)}">${esc(H.byId.get(i).title)}</button>`).join('');
         box.querySelectorAll('[data-w]').forEach(b => b.onclick = () => HUB.openDrawer(b.dataset.w));
       };
@@ -417,6 +450,7 @@ HUB.load(['shell', 'mining']).then(d => {
   }
   addEventListener('hashchange', () => { render(); scrollTo(0, 0); });
   document.addEventListener('hub:theme', render);
+  if (SC) SC.onChange(render);
   render();
 }).catch(e => {
   document.body.textContent = 'Miners failed to load: ' + e.message;
