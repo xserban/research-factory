@@ -63,6 +63,7 @@ EXPLORER_EVENTS: Final = (
     "protocol.%",
     "miner.%",
     "dedup.%",
+    "hub.%",
 )
 # the event types the corpus and screening products read (a mining event never changes them)
 CORPUS_EVENTS: Final = (
