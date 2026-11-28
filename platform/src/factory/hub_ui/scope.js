@@ -1,8 +1,9 @@
 /* Research hub scope model (spec slice-7-hub-scope HS-02, HS-10 to HS-12). Pure functions, no DOM access.
    Loaded before shell.js; exposed as window.HUB_SCOPE (and module.exports under Node, for unit tests).
-     HUB_SCOPE.parse(hash)      '#scope.from=2026-07&scope.to=2026-09&scope.set=s1&x=y' -> {from, to, set}
-                                (strings or null; a malformed value is dropped to null; other keys are ignored)
-     HUB_SCOPE.format(scope)    -> 'scope.from=..&scope.to=..&scope.set=..' (no '#', null/empty keys omitted)
+     HUB_SCOPE.parse(hash)      '#scope.from=2026-07&scope.to=2026-09&scope.set=s1&scope.undated=1&x=y'
+                                -> {from, to, set, undated} (strings or null; undated is a boolean, true only for
+                                'scope.undated=1'; a malformed value is dropped; other keys are ignored)
+     HUB_SCOPE.format(scope)    -> 'scope.from=..&scope.to=..&scope.set=..&scope.undated=1' (no '#', null/empty keys omitted)
      HUB_SCOPE.empty(scope)     true when `to` is before `from`: nothing is in range (not swapped, not an error)
      HUB_SCOPE.active(scope)    true when from or to is set
      HUB_SCOPE.classify(published, scope) -> 'in' | 'out' | 'year-only' | 'undated'
@@ -40,7 +41,7 @@ function parseDate(published){
 }
 
 function parse(hash){
-  const out = {from: null, to: null, set: null};
+  const out = {from: null, to: null, set: null, undated: false};
   const q = String(hash ?? '').replace(/^#/, '');
   for (const part of q.split('&')){
     const eq = part.indexOf('=');
@@ -50,6 +51,7 @@ function parse(hash){
     if (k === 'scope.from' || k === 'scope.to'){
       if (monthIndex(v) !== null) out[k.slice(6)] = v.trim();
     } else if (k === 'scope.set' && v.trim()) out.set = v.trim();
+    else if (k === 'scope.undated' && v.trim() === '1') out.undated = true;
   }
   return out;
 }
@@ -59,6 +61,7 @@ function format(scope){
   if (s.from && monthIndex(s.from) !== null) parts.push('scope.from=' + s.from);
   if (s.to && monthIndex(s.to) !== null) parts.push('scope.to=' + s.to);
   if (s.set) parts.push('scope.set=' + encodeURIComponent(s.set));
+  if (s.undated) parts.push('scope.undated=1');
   return parts.join('&');
 }
 
@@ -101,7 +104,7 @@ function apply(rows, getDate, scope, opts){
   return {inScope, outOfScope, undated, yearOnly, n: inScope.length, N: list.length};
 }
 
-const isScopeKey = part => /^scope\.(from|to|set)(=|$)/.test(part);
+const isScopeKey = part => /^scope\.(from|to|set|undated)(=|$)/.test(part);
 
 /* Replace the scope.* keys of a hash string ('#a=1&scope.from=..' or without '#') by format(scope); keep the rest. */
 function merge(hash, scope){

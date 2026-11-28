@@ -30,9 +30,9 @@ def js(expr: str) -> Any:
 
 def test_parse_reads_keys_and_ignores_others() -> None:
     got = js("S.parse('#tab=x&scope.from=2026-07&scope.to=2026-09&scope.set=s%201')")
-    assert got == {"from": "2026-07", "to": "2026-09", "set": "s 1"}
-    assert js("S.parse('')") == {"from": None, "to": None, "set": None}
-    assert js("S.parse(undefined)") == {"from": None, "to": None, "set": None}
+    assert got == {"from": "2026-07", "to": "2026-09", "set": "s 1", "undated": False}
+    assert js("S.parse('')") == {"from": None, "to": None, "set": None, "undated": False}
+    assert js("S.parse(undefined)") == {"from": None, "to": None, "set": None, "undated": False}
 
 
 @pytest.mark.parametrize("bad", ["2026", "2026-13", "2026-00", "2026-7", "abc", "2026-07-01", ""])
@@ -52,6 +52,7 @@ def test_format_round_trips_and_omits_empty() -> None:
         "from": "2025-01",
         "to": "2025-12",
         "set": "x y",
+        "undated": False,
     }
 
 
@@ -100,6 +101,7 @@ def test_to_before_from_is_empty_not_swapped() -> None:
         "from": "2026-09",
         "to": "2026-07",
         "set": None,
+        "undated": False,
     }
     res = js(
         "S.apply([{d:'2026-08-01'},{d:''}], r=>r.d, {from:'2026-09',to:'2026-07'}, "
@@ -160,6 +162,22 @@ def test_apply_whole_year_in_scope() -> None:
     )
     assert ids(res["inScope"]) == ["a", "b", "c", "e"]
     assert res["yearOnly"] == []
+
+
+def test_undated_is_a_fourth_hash_key() -> None:
+    assert js("S.parse('#scope.undated=1')")["undated"] is True
+    for bad in ("0", "", "yes", "true"):
+        assert js(f"S.parse('#scope.undated={bad}')")["undated"] is False
+    assert js("S.format({from:'2026-07',undated:true})") == "scope.from=2026-07&scope.undated=1"
+    assert js("S.format({undated:false})") == ""
+    assert js("S.parse(S.format({from:'2026-07',undated:true}))")["undated"] is True
+    assert js("S.merge('#tab=x&scope.undated=1', {from:'2026-07'})") == "tab=x&scope.from=2026-07"
+    assert js("S.merge('#tab=x', {to:'2026-09',undated:true})") == (
+        "tab=x&scope.to=2026-09&scope.undated=1"
+    )
+    assert js("S.carry('corpus.html#id=w1', {from:'2026-07',undated:true})") == (
+        "corpus.html#id=w1&scope.from=2026-07&scope.undated=1"
+    )
 
 
 def test_parse_reads_plus_as_space() -> None:

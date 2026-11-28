@@ -112,7 +112,7 @@ out.resetShown = !document.getElementById('scopeReset').hidden;
 """,
     )
     assert out["hash"] == "#tab=x&scope.from=2026-07&scope.to=2026-09"
-    assert out["current"] == {"from": "2026-07", "to": "2026-09", "set": None}
+    assert out["current"] == {"from": "2026-07", "to": "2026-09", "set": None, "undated": False}
     assert len(out["events"]) == 2
     assert out["type"] == "month"
     assert out["links"] == [
@@ -155,7 +155,7 @@ out.labels = [...document.querySelectorAll('.scope-bar label')].map(l => l.textC
     assert out["tag"] == "BUTTON"
     assert out["label"] == "Reset scope"
     assert out["hash"] == "#tab=x"
-    assert out["current"] == {"from": None, "to": None, "set": None}
+    assert out["current"] == {"from": None, "to": None, "set": None, "undated": False}
     assert out["resetHidden"] is True
     assert out["from"] == ""
     assert out["labels"] == ["from", "to"]
@@ -228,6 +228,7 @@ out.tick = !!line.querySelector('[data-scope-undated]');
 const t = line.querySelector('[data-scope-undated]'); t.checked = true; t.dispatchEvent(new Event('change'));
 out.second = line.textContent.replace(/\\s+/g, ' ').trim();
 out.checked = line.querySelector('[data-scope-undated]').checked;
+out.hash = location.hash;
 """,
         hash_="#scope.from=2026-07&scope.to=2026-09",
     )
@@ -238,6 +239,7 @@ out.checked = line.querySelector('[data-scope-undated]').checked;
     assert out["second"].startswith("3 of 5 papers in scope")
     assert "held out" not in out["second"]
     assert out["checked"] is True
+    assert out["hash"].endswith("scope.undated=1")  # the tick is in the address (HS-02)
 
 
 def test_line_states_loading_error_empty_and_unscoped(tmp_path: Path) -> None:
@@ -295,3 +297,79 @@ def test_built_hub_page_shows_scope_and_carries_it_in_nav(
     assert 'href="overview.html#scope.from=2026-07&amp;scope.to=2026-09"' in dom
     kit = run_chromium(f"file://{ui}/kit.html", tmp_path)
     assert re.search(r'<div id="scopeBar"[^>]*hidden', kit)
+
+
+def _facet_counts(dom: str, dim: str) -> list[int]:
+    """The nonzero per-value counts of one facet group, read from the rendered Corpus page."""
+    block = re.search(
+        rf'<div class="fc" data-d="{dim}">.*?<div class="fv">(.*?)</div></div>', dom, flags=re.S
+    )
+    assert block, dim
+    return sorted(
+        int(n) for n in re.findall(r'<span class="n">(\d+)</span>', block.group(1)) if int(n) > 0
+    )
+
+
+def _spread_dates(ui: Path) -> list[dict[str, Any]]:
+    """The fixture dates every work the same month: rewrite the built corpus payload (json and js copy)
+    so the works spread over three months, one work undated."""
+    jpath, spath = ui / "data/corpus.json", ui / "data/corpus.js"
+    data = json.loads(jpath.read_text(encoding="utf-8"))
+    for i, w in enumerate(data["works"]):
+        w["published"] = None if i == 0 else f"2026-0{5 + i % 3}-10"
+        w["month"] = w["published"][:7] if w["published"] else None
+    jpath.write_text(json.dumps(data), encoding="utf-8")
+    spath.write_text(
+        'window.HUB_DATA=window.HUB_DATA||{};HUB_DATA["corpus"]=' + json.dumps(data) + ";\n",
+        encoding="utf-8",
+    )
+    return list(data["works"])
+
+
+def _line(dom: str) -> str:
+    m = re.search(r'<div id="cscope"[^>]*>(.*?)</div>\s*<div class="cbar"', dom, flags=re.S)
+    assert m, dom[:300]
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+
+
+def test_corpus_page_list_facets_and_line_follow_the_scope(
+    mined_world: Project,
+    tmp_path: Path,
+) -> None:
+    from collections import Counter
+
+    ui = tmp_path / "ui"
+    report = hb.build_static(mined_world, ui)
+    assert not report.errors, report.errors
+    works = _spread_dates(ui)
+    months = sorted({w["published"][:7] for w in works if w.get("published")})
+    cut = months[len(months) // 2]
+    inside = [w for w in works if (w.get("published") or "")[:7] >= cut and w.get("published")]
+    assert 0 < len(inside) < len(works)
+    whole = run_chromium(f"file://{ui}/corpus.html", tmp_path)
+    scoped = run_chromium(f"file://{ui}/corpus.html#scope.from={cut}", tmp_path)
+    assert _line(whole).startswith(f"{len(works)} of {len(works)} papers in scope")
+    assert _line(scoped).startswith(f"{len(inside)} of {len(works)} papers in scope")
+    assert "1 paper has no date, held out of the count" in _line(scoped)
+    assert len(re.findall(r'<div class="cr"', whole)) == len(works)
+    assert len(re.findall(r'<div class="cr"', scoped)) == len(inside)
+    want = sorted(Counter(w.get("layer") or "unlayered" for w in inside).values())
+    assert _facet_counts(scoped, "layer") == want  # facet counts equal a recount over visible rows
+    assert sum(_facet_counts(scoped, "layer")) == len(inside)
+    assert _facet_counts(whole, "layer") != want or len(inside) == len(works)
+
+
+def test_corpus_page_empty_scope_shows_the_empty_state_and_zero_counts(
+    mined_world: Project,
+    tmp_path: Path,
+) -> None:
+    ui = tmp_path / "ui"
+    assert not hb.build_static(mined_world, ui).errors
+    n = len(json.loads((ui / "data/corpus.json").read_text(encoding="utf-8"))["works"])
+    dom = run_chromium(f"file://{ui}/corpus.html#scope.from=2999-01", tmp_path)
+    assert _line(dom).startswith(f"0 of {n} papers in scope")
+    assert 'id="cempty"' in dom and "No paper falls in this scope" in dom
+    assert "data-scope-reset" in dom
+    assert len(re.findall(r'<div class="cr"', dom)) == 0
+    assert _facet_counts(dom, "layer") == []  # every value reads 0, none missing
+    assert re.search(r'<span class="n">0</span>', dom)

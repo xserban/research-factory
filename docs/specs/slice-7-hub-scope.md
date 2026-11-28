@@ -15,7 +15,8 @@ builds the bar and the date range; phase 2 builds paper sets.
 Scope bar
 - HS-01 Every hub page that lists or counts works shows one scope bar (published from, to, paper set).
   Pages with no work lists (kit, platform, costs, learn, protocol, levels, method) show no bar.
-- HS-02 The scope is in the address hash: `scope.from=YYYY-MM`, `scope.to=YYYY-MM`, `scope.set=<set_id>`.
+- HS-02 The scope is in the address hash: `scope.from=YYYY-MM`, `scope.to=YYYY-MM`, `scope.set=<set_id>`,
+  and `scope.undated=1` (the "include undated" tick, HS-11; absent means off).
   A link reproduces the view; the scope persists when moving between pages (the nav carries it).
 - HS-03 Every scoped page states "n of N papers in scope", with N the page's own unscoped denominator
   (for example included works for miner pages) and n computed, never typed (hub-guide: n of N).
