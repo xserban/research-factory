@@ -99,6 +99,7 @@ class LensWork:
     layer: str | None = None
     dims: Mapping[str, str | None] = field(default_factory=dict)
     cited_here: int = 0
+    published: str = ""
 
 
 def value_of(work: LensWork, dim: str) -> str | None:
@@ -296,6 +297,7 @@ class InfluenceItem:
     share: float
     year: int | None
     layer: str | None
+    published: str = ""
 
 
 @dataclass(frozen=True)
@@ -326,7 +328,9 @@ def influence(
         counts = {w.id: w.cited_here for w in works}
     total = sum(counts.values())
     items = [
-        InfluenceItem(w.id, counts[w.id], counts[w.id] / total if total else 0.0, w.year, w.layer)
+        InfluenceItem(
+            w.id, counts[w.id], counts[w.id] / total if total else 0.0, w.year, w.layer, w.published
+        )
         for w in works
     ]
     items.sort(key=lambda i: (-i.cited_here, i.id))
@@ -601,6 +605,7 @@ def citation_rate(
     works_total: int,
     as_of_year: int,
     top: int = CITATION_RATE_TOP,
+    published: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Citation rate per year of the included works (`citations.WorkCitations`), top `top`.
 
@@ -626,6 +631,7 @@ def citation_rate(
         "rows": [
             {
                 "id": w.work_id,
+                "published": (published or {}).get(w.work_id, ""),
                 "year": w.year,
                 "cited_by": w.cited_by,
                 "self_cited_by": w.self_cited_by,

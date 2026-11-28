@@ -270,6 +270,7 @@ def build_shell(ctx: HubContext, *, with_abstracts: bool = True) -> dict[str, An
         entry: dict[str, Any] = {
             "id": w,
             "title": ctx.publication.get(w, (w, ""))[0],
+            "published": ctx.publication.get(w, (w, ""))[1],
             "year": year,
             "month": month,
             "layer": ctx.layer_of[w],
@@ -358,6 +359,7 @@ def lens_works(
                 layer=ctx.layer_of[w],
                 dims={k: fields[k].get(w) for k in LENS_DIMS},
                 cited_here=cited[w].count,
+                published=ctx.publication.get(w, (w, ""))[1],
             )
         )
     return out
@@ -483,6 +485,7 @@ def build_explore(ctx: HubContext) -> dict[str, Any]:
             {
                 "id": w,
                 "title": ctx.publication.get(w, (w, ""))[0],
+                "published": ctx.publication.get(w, (w, ""))[1],
                 "year": year,
                 "month": month,
                 "layer": ctx.layer_of[w],
@@ -616,6 +619,7 @@ def build_corpus(ctx: HubContext) -> dict[str, Any]:
             resolved_links=report.resolved_links,
             works_total=report.works_total,
             as_of_year=report.as_of_year,
+            published={w: p for w, (_t, p) in ctx.publication.items()},
         ),
         "results": hub_lenses.results_grid(design, n_design),
     }
