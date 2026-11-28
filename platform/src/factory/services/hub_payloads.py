@@ -768,6 +768,7 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
             {
                 "id": w,
                 "title": pub.get(w, (w, ""))[0],
+                "published": pub.get(w, (w, ""))[1],
                 "cited_here": cites[w].count,
                 "self_cited": cites[w].self_count,
                 "layer": layer_of(w),

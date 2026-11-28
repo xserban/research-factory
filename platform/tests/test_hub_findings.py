@@ -274,6 +274,7 @@ def test_no_human_card(payload: dict[str, Any]) -> None:
     assert ev[0] == {
         "work": "w01",
         "title": "Title w01",
+        "published": "",
         "miner": "m-mapping",
         "field": "human_position",
         "value": "none",

@@ -205,6 +205,9 @@ class MiningData:
     models: Mapping[str, tuple[str, ...]]
     sets: Sets
     titles: Mapping[str, str]
+    published: Mapping[str, str] = field(default_factory=dict)
+    """Included work id -> its `dates.published` string (the value of `ctx.publication`); a work
+    with no date is absent and rows carry the empty string (HS-10)."""
     platform: Mapping[str, tuple[float | None, float | None]] = field(default_factory=dict)
     codebook: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     layers: Mapping[str, str] = field(default_factory=dict)
@@ -428,7 +431,9 @@ def _distribution(info: MinerInfo, rows_by_work: Mapping[str, Sequence[MRow]]) -
 
 
 def _examples(
-    rows_by_work: Mapping[str, Sequence[MRow]], titles: Mapping[str, str]
+    rows_by_work: Mapping[str, Sequence[MRow]],
+    titles: Mapping[str, str],
+    published: Mapping[str, str],
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for w in sorted(rows_by_work):
@@ -442,6 +447,7 @@ def _examples(
             {
                 "work": w,
                 "title": titles.get(w, w),
+                "published": published.get(w, ""),
                 "row": row.eid,
                 "cells": {
                     n: {"value": c.value, "quote": c.quote, "anchor": c.anchor}
@@ -588,7 +594,7 @@ def miners(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> di
                 "multi_row": rpw > MULTI_ROW_RATIO,
                 "rows_per_work": rpw,
                 "distributions": _distribution(info, a),
-                "examples": _examples(a, data.titles),
+                "examples": _examples(a, data.titles, data.published),
             }
         )
     by_pair = [
@@ -671,7 +677,15 @@ def data_grid(
                     "n": len(got),
                 }
             )
-        rows.append({"id": w, "title": data.titles.get(w, w), "cells": cells, "via": via})
+        rows.append(
+            {
+                "id": w,
+                "title": data.titles.get(w, w),
+                "published": data.published.get(w, ""),
+                "cells": cells,
+                "via": via,
+            }
+        )
     return {
         "page": page,
         "page_size": page_size,
@@ -774,6 +788,7 @@ def holes(data: MiningData, atts: Mapping[str, Attributed] | None = None) -> dic
             {
                 "id": w,
                 "title": data.titles.get(w, w),
+                "published": data.published.get(w, ""),
                 "missing": sorted(k for k, g in keys if not g),
                 "undetermined": sorted(k for k, g in keys if g),
             }
@@ -841,7 +856,9 @@ def miner_grid(data: MiningData, info: MinerInfo, att: Attributed) -> dict[str, 
     a = att.by_pass.get("A", {})
     works = [w for w in data.sets.included if w in a]
     columns: list[dict[str, Any]] = []
-    rows: list[dict[str, Any]] = [{"id": w, "c": []} for w in works]
+    rows: list[dict[str, Any]] = [
+        {"id": w, "published": data.published.get(w, ""), "c": []} for w in works
+    ]
     for f in info.fields:
         empty = gap = 0
         for row, w in zip(rows, works, strict=True):
@@ -1131,13 +1148,19 @@ def load_models(project: Project) -> dict[str, tuple[str, ...]]:
     return {k: tuple(sorted(v)) for k, v in found.items()}
 
 
-def _load_titles(project: Project, ids: Iterable[str]) -> dict[str, str]:
+def _load_titles(project: Project, ids: Iterable[str]) -> dict[str, tuple[str, str]]:
+    """work id -> (title, `dates.published` string or ""), the same pair as
+    `hub_payloads._load_publication`."""
     wanted = set(ids)
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, str]] = {}
     with project.index.connect() as conn:
         for w, data in conn.execute(text("SELECT work_id, data FROM works")):
             if str(w) in wanted:
-                out[str(w)] = str(json.loads(str(data)).get("title") or w)
+                d = json.loads(str(data))
+                out[str(w)] = (
+                    str(d.get("title") or w),
+                    str((d.get("dates") or {}).get("published") or ""),
+                )
     return out
 
 
@@ -1177,12 +1200,14 @@ def load_mining_data(
         for name, v in versions.items():
             if name not in detail:  # registered, not listed: versions only
                 detail[name] = {"versions": miner_detail(project, name, v)["versions"]}
+    titled = _load_titles(project, sets.included)
     return MiningData(
         miners=tuple(i for i, _v in chosen),
         rows=load_rows(project, schemas),
         models=load_models(project),
         sets=sets,
-        titles=_load_titles(project, sets.included),
+        titles={w: t for w, (t, _p) in titled.items()},
+        published={w: p for w, (_t, p) in titled.items() if p},
         platform=platform,
         codebook=load_codebook(project),
         detail=detail,

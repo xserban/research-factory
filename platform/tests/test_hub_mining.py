@@ -355,6 +355,7 @@ def test_holes_per_field_and_works_with_most_thin_primary_fields() -> None:
     assert h["works"][0] == {
         "id": "w3",
         "title": "Title w3",
+        "published": "",
         "missing": ["m-test.shape", "m-test.stance"],
         "undetermined": [],
     }
@@ -377,8 +378,20 @@ def test_holes_count_undetermined_values_apart_from_missing_ones() -> None:
     assert f["m-test.shape"]["undetermined"] == 0 and f["m-test.shape"]["missing"] == 1
     assert f["m-test.topic_secondary"]["primary"] is False  # secondaries never rank works
     assert h["works"] == [
-        {"id": "w1", "title": "Title w1", "missing": [], "undetermined": ["m-test.stance"]},
-        {"id": "w2", "title": "Title w2", "missing": ["m-test.shape"], "undetermined": []},
+        {
+            "id": "w1",
+            "title": "Title w1",
+            "published": "",
+            "missing": [],
+            "undetermined": ["m-test.stance"],
+        },
+        {
+            "id": "w2",
+            "title": "Title w2",
+            "published": "",
+            "missing": ["m-test.shape"],
+            "undetermined": [],
+        },
     ]
 
 

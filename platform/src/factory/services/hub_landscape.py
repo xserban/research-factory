@@ -342,6 +342,7 @@ def _uses(inputs: tg.Inputs) -> dict[str, Any]:
             "uses": [
                 {
                     "work": r.work_id,
+                    "published": inputs.works[r.work_id].date or "",
                     "extraction": r.extraction_id,
                     "layer": _layer_key(inputs.works[r.work_id].layer),
                     "status": r.status or NOT_STATED,
@@ -424,6 +425,7 @@ def landscape_payloads(inputs: tg.Inputs) -> tuple[dict[str, Any], dict[str, Any
                 "title": inputs.works[w].title,
                 "year": inputs.works[w].year,
                 "date": inputs.works[w].date,
+                "published": inputs.works[w].date or "",
                 "layer": _layer_key(inputs.works[w].layer),
             }
             for w in work_ids

@@ -237,6 +237,7 @@ class _Ctx:
             {
                 "work": w,
                 "title": self.data.titles.get(w, w),
+                "published": self.data.published.get(w, ""),
                 "miner": miner,
                 "field": name,
                 "value": c.value,
