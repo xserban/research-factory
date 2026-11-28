@@ -277,4 +277,3 @@ def test_overview_mounts_morph_canvas_and_stable_sections() -> None:
         assert stable_id in text, f"overview.js missing stable id {stable_id}"
     for stage_idx in range(6):
         assert f"ovStep-{stage_idx}" in text, f"overview.js missing stage {stage_idx}"
-
