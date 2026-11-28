@@ -191,6 +191,7 @@ def _dim_payload(profile: Profile) -> list[dict[str, Any]]:
                 "field": key if generic else name,
                 "description": facet.description if facet else "",
                 "values": dict(sorted(facet.values.items())) if facet else {},
+                "renamed": facet.renamed if facet else False,
             }
         )
     return out

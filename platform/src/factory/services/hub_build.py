@@ -535,7 +535,6 @@ def build_explore(ctx: HubContext) -> dict[str, Any]:
         "works": works,
         "dims": list(EXPLORE_DIMS),
         **facet_shell(ctx.project),
-        "value_labels": facet_labels(ctx.project),
         "layer_order": _layer_order(),
         "methods": {**EXPLORE_METHODS, "similar": hub_lenses.METHODS["similar"]},
     }

@@ -431,6 +431,8 @@ function init(payload){
   for (const w of RF.works) w.cic = w.cited_here ?? w.cic ?? 0;
   /* The Python copies (services/hub_ui.py) are the source: the payload's wins when present. */
   if (RF.labels) Object.assign(LABELS, RF.labels);
+  /* The project's own facets (services/hub_facets): the drawer's field names follow them. */
+  if (RF.fields) FIELDS.splice(0, FIELDS.length, ...RF.fields);
   if (RF.glossary) Object.assign(GLOSSARY, RF.glossary);
   P = RF.prisma || {};
   byId = new Map(RF.works.map(w=>[w.id,w]));

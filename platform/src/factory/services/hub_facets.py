@@ -104,6 +104,8 @@ class Facet:
     role: str
     description: str = ""
     values: dict[str, str] = dataclasses.field(default_factory=dict)
+    renamed: bool = False
+    """True when the label is the researcher's (a setting's `label`)."""
 
     @property
     def dim(self) -> tuple[str, str, str, str]:
@@ -160,7 +162,9 @@ def _value_labels(project: Project, spec: MinerSpec, name: str) -> dict[str, str
     }
 
 
-def _facet(project: Project, miner: str, spec: MinerSpec, pick: FacetPick) -> Facet | None:
+def _facet(
+    project: Project, miner: str, spec: MinerSpec, pick: FacetPick, *, set_by_researcher: bool
+) -> Facet | None:
     if _enum_field(spec, pick.field) is None:
         return None
     described = next(f.description for f in spec.fields if f.name == pick.field)
@@ -173,6 +177,7 @@ def _facet(project: Project, miner: str, spec: MinerSpec, pick: FacetPick) -> Fa
         role=role,
         description=described,
         values=_value_labels(project, spec, pick.field),
+        renamed=set_by_researcher and pick.label is not None,
     )
 
 
@@ -265,7 +270,8 @@ def facets_of(project: Project) -> tuple[Facet, ...]:
     """The project's facets in order, without Month: the setting, else the default. A pick whose
     miner is not listed or whose field is not an enum field of it is skipped; a repeated
     (miner, field) keeps its first place."""
-    picks = facet_setting(project)
+    setting = facet_setting(project)
+    picks = setting
     by_name = dict(_listed(project))
     if picks is None:
         picks = default_picks(project)
@@ -277,7 +283,7 @@ def facets_of(project: Project) -> tuple[Facet, ...]:
         spec = by_name.get(pick.miner)
         if spec is None or (pick.miner, pick.field) in seen:
             continue
-        found = _facet(project, pick.miner, spec, pick)
+        found = _facet(project, pick.miner, spec, pick, set_by_researcher=setting is not None)
         if found is not None:
             seen.add((pick.miner, pick.field))
             out.append(found)
@@ -304,6 +310,7 @@ def facets_payload(project: Project) -> list[dict[str, object]]:
             "miner": f.miner,
             "field": f.field,
             "values": dict(sorted(f.values.items())),
+            "renamed": f.renamed,
         }
         for f in facets_of(project)
     ]
@@ -315,6 +322,7 @@ def facets_payload(project: Project) -> list[dict[str, object]]:
             "miner": "",
             "field": MONTH[3],
             "values": {},
+            "renamed": False,
         }
     )
     return out
