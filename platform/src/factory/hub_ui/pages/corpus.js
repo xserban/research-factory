@@ -138,8 +138,18 @@ function writeHash() {
   HUB.hash.set(o);
 }
 
+/* ---------- scope (HS-02, HS-03, HS-11, HS-20): the date range narrows every list and count ---------- */
+const SCOPE = window.HUB_SCOPE;
+let INS = new Set(W.map(w => w.id)), SRES = null; // ids in scope; the last apply() result
+function applyScope() {
+  SRES = SCOPE.apply(W, w => w.published, SCOPE.current(), {includeUndated: SCOPE.includeUndated()});
+  INS = new Set(SRES.inScope.map(w => w.id));
+  for (const id of [...ST.sel]) if (!INS.has(id)) ST.sel.delete(id);
+}
+
 /* ---------- filtering ---------- */
 function ok(w, skip) {
+  if (!INS.has(w.id)) return false;
   if (ST.cite > 0 && !(w.cited_in_corpus >= ST.cite)) return false;
   if (ST.ft && !w.doc) return false;
   if (ST.month && w.month !== ST.month) return false;
@@ -201,7 +211,7 @@ function paintBar(ws) {
   const chatIds = (sel.length ? sel : ids), layerOne = one('layer');
   const chatLinks = chatIds.length ? ` · <a href="${esc(HUB.chatHref({include: chatIds, only: true}))}" title="${chatIds.length > 60 ? 'The first 60 papers go into the basket; the Chat page says so.' : 'Open the Chat page with these papers in its basket.'}">Chat with these (${fmt(Math.min(chatIds.length, 60))})</a>` : '';
   const layerLink = layerOne ? ` · <a href="${esc(HUB.chatHref({layers: [layerOne]}))}">Chat with the whole layer: ${esc(H.layerLabel(layerOne))}</a>` : '';
-  $('#cbar').innerHTML = `<span class="cnt">${fmt(ws.length)} of ${fmt(W.length)} papers</span>${chips.map(c => `<button type="button" class="chip" ${c[1]} title="Remove this filter">${esc(c[0])} <span class="x">×</span></button>`).join('')}
+  $('#cbar').innerHTML = `<span class="cnt">${fmt(ws.length)} of ${fmt(INS.size)} papers</span>${chips.map(c => `<button type="button" class="chip" ${c[1]} title="Remove this filter">${esc(c[0])} <span class="x">×</span></button>`).join('')}
     ${chips.length ? '<button type="button" class="chip" data-x="all">Clear all</button>' : ''}<span class="sp"></span>
     <a href="explore.html#${ex}">Explore these in rings</a> · <a href="data.html#${dp}">See their data</a>${pathIds.length && (sel.length || ids.length <= 20) ? ` · <a href="flow.html#lanes=${encodeURIComponent(pathIds.join(','))}">See their paths</a>` : ''}${chatLinks}${layerLink}`;
   const n = ST.sel.size, over = n > 200;
@@ -222,12 +232,18 @@ function rowHTML(w) {
   return `<div class="cr" role="button" tabindex="-1" data-id="${esc(w.id)}" aria-selected="${ST.sel.has(w.id)}"><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${ST.sel.has(w.id) ? 'checked' : ''} aria-label="Select this paper" title="Select"><div class="cm">
     <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}${w.not_read_yet ? ' <span class="meta" title="Included, but no miner has read it yet.">(not read yet)</span>' : ''}</div>
     <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}${w.layer_source === 'moved' ? `<span title="${esc('Moved to this layer by the researcher' + (w.layer_miner ? '; the miner said ' + H.layerLabel(w.layer_miner) : ''))}">moved by the researcher</span>` : ''}</div>
-    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span><a class="chatadd meta" href="${esc(HUB.chatHref({include: [w.id], only: true}))}" title="Open the Chat page with this paper in its basket">Add to chat</a></div></div>`;
+    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it (counted over the whole corpus, not the scope)">${c == null ? '–' : c} cited here</span><a class="chatadd meta" href="${esc(HUB.chatHref({include: [w.id], only: true}))}" title="Open the Chat page with this paper in its basket">Add to chat</a></div></div>`;
 }
 function viewList(ws) {
   VIS = []; let h = '';
+  if (SRES && !SRES.n && SRES.N) return emptyScope();
   for (const [g, l] of groups(ws, ST.grp)) { if (ST.grp !== 'none') h += `<div class="cg">${esc(glab(ST.grp, g))} <span>${fmt(l.length)}</span></div>`; h += l.map(rowHTML).join(''); VIS.push(...l.map(w => w.id)); }
   return h || '<p class="meta">No papers match. Remove a filter to see more.</p>';
+}
+/* HS-04: an empty scope names itself and offers the reset. */
+function emptyScope() {
+  const f = SCOPE.format(SCOPE.current()).replace(/&/g, ', ');
+  return `<p class="meta scope-empty-state" id="cempty">No paper falls in this scope${f ? ' (' + esc(f) + ')' : ''}. <button type="button" class="btn" data-scope-reset>Reset the scope</button></p>`;
 }
 function viewTimeline(ws) {
   const gk = ST.grp === 'none' ? 'technique' : ST.grp, months = [...new Set(W.map(w => w.month).filter(Boolean))].sort();
@@ -359,7 +375,7 @@ function detailHTML(w) {
   <p style="margin:8px 0">${dnaHTML(w)}</p>
   <details><summary class="h3" style="cursor:pointer">Abstract</summary><p style="font-size:var(--t-s)">${w.abstract ? hl(w.abstract) : '<span class="meta">No abstract recorded.</span>'}</p></details>
   <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${l}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
-  <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')}</h3>
+  <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')} ${SCOPE.label('corpus')}</h3>
   <b class="meta">Cites</b><ul>${L(o)}</ul><b class="meta">Cited by</b><ul>${L(i)}</ul>
   <h3 class="h3">Lifecycle stages</h3>${w.stages.map(x => `<div class="kv"><span class="tag">${esc(pretty(x.stage))}</span> <span class="meta">${esc(x.mode || '')}</span><blockquote class="quote">“${hl(x.quote)}” <span class="meta">${esc(x.anchor || '')}</span></blockquote></div>`).join('') || '<div class="meta">None recorded.</div>'}
   <h3 class="h3">Classification</h3>${kv(w.cls)}<h3 class="h3">Process, human role, blueprint</h3>${kv(w.map)}<h3 class="h3">Descriptors</h3>${kv(w.desc)}
@@ -378,12 +394,14 @@ function closeWork() { ST.id = ''; $('#cdet').removeAttribute('open'); writeHash
 /* ---------- render ---------- */
 function render() {
   if (gstop) gstop();
+  applyScope(); SCOPE.renderLine($('#cscope'), SRES, {});
   const ws = W.filter(w => ok(w)); paintFacets(); paintBar(ws);
   $('#viewSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === ST.view));
   $('#cq').value !== ST.q && ($('#cq').value = ST.q); $('#sortby').value = ST.sort; $('#grp').value = ST.grp; $('#rev').setAttribute('aria-pressed', ST.rev);
   $('#cite').value = ST.cite || ''; $('#ft').checked = ST.ft; $('#grp').disabled = false;
   const v = ST.view, cv = $('#cv');
-  cv.innerHTML = v === 'list' ? viewList(ws) : v === 'timeline' ? viewTimeline(ws) : v === 'chrono' ? viewChrono(ws) : v === 'lineage' ? viewLineage(ws) : viewGraph();
+  if (SRES.n === 0 && SRES.N > 0) VIS = [];
+  cv.innerHTML = SRES.n === 0 && SRES.N > 0 ? emptyScope() : v === 'list' ? viewList(ws) : v === 'timeline' ? viewTimeline(ws) : v === 'chrono' ? viewChrono(ws) : v === 'lineage' ? viewLineage(ws) : viewGraph();
   if (v === 'lineage') wireLineage(ws); if (v === 'graph') wireGraph(ws);
   if (v === 'list') { ST.cur = Math.min(ST.cur, VIS.length - 1); mark(); }
   writeHash();
@@ -398,6 +416,7 @@ $('#main').innerHTML = H.header({title: 'Corpus', level: 1, infoHtml: infoPage, 
 <div class="ctool"><label>Group by <select id="grp">${DD.map(x => `<option value="${x[0]}">${x[1]}</option>`).join('')}<option value="none">None</option></select></label>
  <label>Sort <select id="sortby">${SORTS.map(s => `<option value="${s[0]}">${s[1]}</option>`).join('')}</select></label><button type="button" class="btn" id="rev" aria-pressed="false">Reverse</button>
  <label>${HUB.term('cic', 'Cited here')} at least <input type="number" id="cite" min="0" step="1"></label><label><input type="checkbox" id="ft"> With full text</label></div>
+<div id="cscope"></div>
 <div class="cbar" id="cbar"></div>
 <div class="csel"><button type="button" class="btn" id="xall">Select all in filter</button><button type="button" class="btn primary" id="xgo" disabled>Export selected (0)</button><button type="button" class="btn" id="xclr">Clear</button><span class="meta" id="xmsg"></span><span id="xact"></span></div>
 <div class="cwrap"><aside class="cside" id="cside" aria-label="Filters">${sideSkeleton()}</aside><section id="cv" aria-live="polite"></section></div>
@@ -446,6 +465,7 @@ $('#xgo').onclick = () => {
   $('#xmsg').dataset.keep = 'Saved work-ids.txt. To get the documents, run: ' + cmd; paintBar(W.filter(w => ok(w))); };
 const cv = $('#cv');
 cv.addEventListener('click', e => {
+  if (e.target.closest('[data-scope-reset]')) { SCOPE.reset(); return; }
   if (e.target.closest('a.chatadd')) return; /* a plain link to the Chat page: no server write */
   if (e.target.closest('input.xs')) { const c = e.target.closest('input.xs'); c.checked ? ST.sel.add(c.dataset.id) : ST.sel.delete(c.dataset.id); c.closest('.cr').setAttribute('aria-selected', c.checked); paintBar(W.filter(w => ok(w))); return; }
   const r = e.target.closest('.cr, .td, .card2'); if (r && r.dataset.id) { if (r.classList.contains('cr')) { ST.cur = VIS.indexOf(r.dataset.id); mark(); } openWork(idMap.get(r.dataset.id)); } });
@@ -461,6 +481,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'j' || e.key === 'k') { ST.cur = Math.max(0, Math.min(VIS.length - 1, ST.cur + (e.key === 'j' ? 1 : -1))); mark(); }
   else if (e.key === 'Enter' && VIS[ST.cur]) openWork(idMap.get(VIS[ST.cur]));
   else if (e.key === 'x' && VIS[ST.cur]) { const id = VIS[ST.cur]; ST.sel.has(id) ? ST.sel.delete(id) : ST.sel.add(id); const r = document.querySelector(`.cr[data-id="${CSS.escape(id)}"]`); if (r) { r.setAttribute('aria-selected', ST.sel.has(id)); r.querySelector('input.xs').checked = ST.sel.has(id); } paintBar(W.filter(w => ok(w))); } });
+SCOPE.onChange(() => render());
 document.addEventListener('hub:theme', () => { refreshColors(); render(); });
 window.addEventListener('hashchange', () => { const before = ST.id; readHash(); render(); if (ST.id && ST.id !== before) openWork(idMap.get(ST.id), true); else if (!ST.id) $('#cdet').removeAttribute('open'); });
 render(); if (ST.id) openWork(idMap.get(ST.id), true);

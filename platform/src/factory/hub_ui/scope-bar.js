@@ -1,8 +1,8 @@
 /* Research hub scope bar (spec slice-7-hub-scope HS-01 to HS-04, HS-11, HS-20, HS-21). The DOM part of the scope
    module: loaded after scope.js and before shell.js; it extends window.HUB_SCOPE. The pure model stays in scope.js.
    Page-facing API (all on window.HUB_SCOPE):
-     current()                 {from, to, set} read from the address hash now
-     includeUndated()          true when the "include undated" tick is on (kept in memory, not in the hash)
+     current()                 {from, to, set, undated} read from the address hash now
+     includeUndated()          true when the "include undated" tick is on (hash key scope.undated=1, HS-02)
      set(partial)              merge {from, to, set} into the hash (replaceState, other keys kept), fire hub:scope
      reset()                   clear from, to and set
      onChange(fn)              fn(scope) on every change (bar, hash edit, back button, tick); returns an unsubscribe
@@ -19,11 +19,10 @@ const S = root.HUB_SCOPE;
 if (!S || typeof document === 'undefined') return;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const EVENT = 'hub:scope';
-let undatedOn = false;
 const listeners = new Set();
 
 const current = () => S.parse(location.hash);
-const includeUndated = () => undatedOn;
+const includeUndated = () => current().undated;
 
 function emit(){
   const sc = current();
@@ -36,7 +35,7 @@ function set(partial){
   history.replaceState(null, '', location.pathname + location.search + (h ? '#' + h : ''));
   emit();
 }
-const reset = () => set({from: null, to: null, set: null});
+const reset = () => set({from: null, to: null, set: null, undated: false});
 
 function onChange(fn){
   const h = e => fn(e.detail);
@@ -144,16 +143,15 @@ function renderLine(el, res, opts){
   }
   if (t.yearOnly) h += '<span class="scope-year">' + esc(t.yearOnly) + '.</span>';
   if (k){                                          /* partial: held out undated works are always named */
-    h += '<span class="scope-undated">' + esc(t.undated) + (S.active(sc) && !undatedOn ? ', held out of the count' : '') + '.</span>' +
-      (S.active(sc) ? '<label class="scope-tick"><input type="checkbox" data-scope-undated' + (undatedOn ? ' checked' : '') +
+    h += '<span class="scope-undated">' + esc(t.undated) + (S.active(sc) && !sc.undated ? ', held out of the count' : '') + '.</span>' +
+      (S.active(sc) ? '<label class="scope-tick"><input type="checkbox" data-scope-undated' + (sc.undated ? ' checked' : '') +
         '> include undated</label>' : '');
   }
   el.innerHTML = h;
   const tick = el.querySelector('[data-scope-undated]');
   if (tick) tick.addEventListener('change', () => {
-    undatedOn = tick.checked;
-    emit();
-    if (o.onToggle) o.onToggle(undatedOn);
+    set({undated: tick.checked});
+    if (o.onToggle) o.onToggle(tick.checked);
   });
 }
 
