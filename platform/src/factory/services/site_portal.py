@@ -25,7 +25,9 @@ from html import escape as e
 from pathlib import Path
 from typing import Final, NamedTuple
 
+from factory.services import hub_ui
 from factory.services.site_chrome import UI_NAME
+from factory.services.site_factory_feed import ASSET_PREFIX
 from factory.services.site_kit_page import kit_page
 
 REGISTRY: Final = "registry.json"
@@ -259,10 +261,137 @@ def _card(r: PortalRow) -> str:
     )
 
 
+def portal_payload(rows: list[PortalRow]) -> dict[str, object]:
+    """Pure serializer turning `PortalRow` objects into the JSON payload for the estate view."""
+    projects: list[dict[str, object]] = []
+    for r in rows:
+        funnel: dict[str, int] | None = (
+            {"found": r.funnel[0], "screened": r.funnel[1], "included": r.funnel[2]}
+            if r.funnel is not None
+            else None
+        )
+        projects.append(
+            {
+                "slug": r.slug,
+                "title": r.title,
+                "events": r.events,
+                "stale": r.stale,
+                "built": r.built,
+                "hub_ready": r.hub_ready,
+                "building": r.building,
+                "activity": list(r.activity),
+                "activity_end": r.activity_end,
+                "funnel": funnel,
+                "hub_url": f"/p/{r.slug}/ui/",
+                "classic_url": f"/p/{r.slug}/",
+            }
+        )
+    return {"projects": projects}
+
+
+def _json_for_script(data: object) -> str:
+    """JSON safe to embed inside a `<script>` tag (`</` and line separators escaped)."""
+    return (
+        json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        .replace("</", "<\\/")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _estate_stage(rows: list[PortalRow], *, has_forms: bool) -> str:
+    """The aerial isometric estate viewport, gatehouse HUD, and 30-day chimney replay deck."""
+    if not rows:
+        return ""
+    actions = (
+        "<div class=pt-estate-actions role=toolbar aria-label='Estate quick actions'>"
+        "<button type=button class='btn pt-btn' id=pt-btn-break>+ Break ground</button>"
+        "<button type=button class='btn pt-btn' id=pt-btn-dock>&darr; Loading dock</button>"
+        "<button type=button class='btn pt-btn' id=pt-btn-still aria-pressed=false "
+        "title='Toggle still architectural plan (no motion)'>&#9707; Still plan</button>"
+        "</div>"
+        if has_forms
+        else "<div class=pt-estate-actions role=toolbar aria-label='Estate quick actions'>"
+        "<button type=button class='btn pt-btn' id=pt-btn-still aria-pressed=false "
+        "title='Toggle still architectural plan (no motion)'>&#9707; Still plan</button>"
+        "</div>"
+    )
+    return (
+        "<section class=pt-estate id=pt-estate-stage aria-label='The research factory estate'>"
+        "<div class=pt-estate-bar>"
+        "<div class=pt-legend aria-label='Architectural scale key'>"
+        "<span class=pt-leg-item><span class='pt-leg-mark pt-leg-area' aria-hidden=true></span>"
+        "Footprint area &prop; included</span>"
+        "<span class=pt-leg-item><span class='pt-leg-mark pt-leg-rail' aria-hidden=true></span>"
+        "Rail width &prop; found &rarr; screened &rarr; included</span>"
+        "<span class=pt-leg-item><span class='pt-leg-mark pt-leg-smoke' aria-hidden=true></span>"
+        "Chimney puffs = daily events (30d)</span>"
+        "</div>"
+        f"{actions}"
+        "</div>"
+        "<div class=pt-viewport id=pt-viewport>"
+        "<div class=pt-hud-top>"
+        "<div class='pt-hud-coords mono'>"
+        "<span class=pt-coord-dot aria-hidden=true></span>"
+        "<span id=pt-hud-mode>AXONOMETRIC 30&deg; &middot; LIVE REPLAY</span>"
+        "<span class=pt-hud-sep aria-hidden=true>|</span>"
+        "<span>SCALE HONEST</span>"
+        "</div>"
+        "<div class=pt-hud-cam role=group aria-label='Camera controls'>"
+        "<button type=button class='pt-hud-btn mono' id=pt-cam-out aria-label='Zoom out' title='Zoom out'>&minus;</button>"
+        "<button type=button class='pt-hud-btn mono' id=pt-cam-fit aria-label='Fit entire estate' title='Fit estate'>Fit</button>"
+        "<button type=button class='pt-hud-btn mono' id=pt-cam-in aria-label='Zoom in' title='Zoom in'>+</button>"
+        "</div>"
+        "</div>"
+        "<div class=pt-stage id=pt-stage>"
+        "<canvas id=pt-canvas aria-hidden=true></canvas>"
+        "<div class=pt-hotspots id=pt-hotspots role=region aria-label='Interactive estate structures'></div>"
+        "<div class=pt-tip id=pt-tip role=tooltip hidden></div>"
+        "<div class=pt-drop-scrim id=pt-drop-scrim hidden aria-hidden=true>"
+        "<div class=pt-drop-box><span class='mono pt-drop-kicker'>RECEIVING BAY &middot; LOADING DOCK</span>"
+        "<strong>Drop a DOI, arXiv id, or paper link</strong>"
+        "<span class=meta>Fills the Add to inbox form below</span></div></div>"
+        "<div class=pt-gatehouse id=pt-gatehouse role=dialog aria-modal=false aria-labelledby=pt-gh-title hidden>"
+        "<div class=pt-gh-top><div><div class='pt-gh-kicker mono' id=pt-gh-slug></div>"
+        "<h3 class=pt-gh-title id=pt-gh-title></h3></div>"
+        "<button type=button class='btn pt-gh-close' id=pt-gh-close aria-label='Return to aerial estate view'>&larr; Aerial view</button></div>"
+        "<div class=pt-gh-metrics id=pt-gh-metrics></div>"
+        "<div class=pt-gh-actions>"
+        "<a class='btn primary' id=pt-gh-enter href='#'>Enter hub &rarr;</a>"
+        "<a class=btn id=pt-gh-classic href='#'>Classic hub</a>"
+        + (
+            "<button type=button class=btn id=pt-gh-inbox>&darr; Add paper to inbox</button>"
+            if has_forms
+            else ""
+        )
+        + "</div></div>"
+        "<div class=pt-fly-veil id=pt-fly-veil hidden aria-live=polite>"
+        "<div class=pt-fly-card><span class='mono pt-fly-kicker'>ENTERING HUB</span>"
+        "<strong id=pt-fly-title></strong><span class='mono meta' id=pt-fly-url></span></div></div>"
+        "</div>"
+        "<div class=pt-replay id=pt-replay aria-label='30-day activity replay'>"
+        "<button type=button class=pt-replay-play id=pt-replay-play aria-pressed=true aria-label='Pause 30-day smoke replay'>"
+        "<svg class=pt-ic-pause viewBox='0 0 16 16' aria-hidden=true><rect x='3.5' y='3' width='3' height='10' rx='0.5'/><rect x='9.5' y='3' width='3' height='10' rx='0.5'/></svg>"
+        "<svg class=pt-ic-play viewBox='0 0 16 16' aria-hidden=true><path d='M4.5 2.5L13 8l-8.5 5.5z'/></svg>"
+        "</button>"
+        "<div class=pt-replay-tl><div class=pt-replay-spark-wrap>"
+        "<svg class=pt-replay-spark id=pt-replay-spark preserveAspectRatio='none' aria-hidden=true></svg>"
+        "<input type=range id=pt-replay-range class=pt-replay-range min=0 max=29 value=29 step=1 aria-label='Scrub day in the 30-day window'>"
+        "</div><div class='pt-replay-axis mono' id=pt-replay-axis aria-hidden=true></div></div>"
+        "<div class=pt-replay-readout aria-live=polite>"
+        "<div class='pt-replay-day mono' id=pt-replay-day>&mdash;</div>"
+        "<div class='pt-replay-events meta' id=pt-replay-events>&mdash;</div></div>"
+        "<div class=pt-replay-peaks id=pt-replay-peaks aria-label='Jump to busiest day'></div>"
+        "</div></div></section>"
+    )
+
+
 def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> str:
-    """The portal page: one card per project opening its hub under `/p/<slug>/ui/` (the classic hub
-    under `/p/<slug>/` is a second link). With `create_token` (the hub's write token) it also has
-    the create-project and add-to-inbox forms. New papers is a tab of the bar, not a list here."""
+    """The portal page: the aerial isometric estate plus the parcel ledger (one card per project
+    opening its hub under `/p/<slug>/ui/`, with the classic hub under `/p/<slug>/` as a second
+    link). With `create_token` (the hub's write token) it also has the create-project and
+    add-to-inbox forms. New papers is a tab of the bar, not a list here."""
+    v = e(hub_ui.asset_version(), quote=True)
     cards = "".join(_card(r) for r in rows) or (
         "<p class='card pt-empty'>No project yet under the factory root. Create one below, or with "
         "<code>factory init</code>.</p>"
@@ -272,8 +401,9 @@ def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> 
         if create_token
         else ""
     )
+    head = f"{token_meta}<link rel=stylesheet href='{ASSET_PREFIX}estate.css?v={v}'>"
     forms = (
-        "<section class=mh-sec aria-label='Add'><div class=pt-forms>"
+        "<section class=mh-sec id=pt-ops aria-label='Add'><div class=pt-forms>"
         + _FORM
         + (_inbox_form(rows) if rows else "")
         + "</div></section>"
@@ -281,19 +411,26 @@ def render_portal(rows: list[PortalRow], *, create_token: str | None = None) -> 
         else ""
     )
     count = f"{len(rows)} project{'' if len(rows) == 1 else 's'}" if rows else "No project yet"
+    data_blob = (
+        "<script type='application/json' id='pt-data'>"
+        f"{_json_for_script(portal_payload(rows))}"
+        "</script>"
+        f"<script src='{ASSET_PREFIX}estate.js?v={v}' defer></script>"
+    )
     body = (
-        f"<header class=mh-head><h1>{UI_NAME}</h1>"
-        "<p>All projects on this machine. Open one for its hub.</p></header>"
-        f"<section class=mh-sec><header><h2>Projects</h2><span class=meta>{count}</span></header>"
+        "<h1 class=pt-sr>Projects</h1>"
+        f"{_estate_stage(rows, has_forms=bool(create_token))}"
+        f"<section class=mh-sec id=pt-ledger><header><h2>Projects</h2><span class=meta>{count}</span></header>"
         f"<div class=pt-grid>{cards}</div></section>"
         f"{forms}"
         "<p class=note>Projects are found by scanning the factory root; "
         "<code>registry.json</code> can give a title or hide one.</p>"
+        f"{data_blob}"
     )
     return kit_page(
         f"Projects · {UI_NAME}",
         body,
         "projects",
-        head=token_meta,
+        head=head,
         script=f"{_FORM_SCRIPT}{_INBOX_SCRIPT}" if create_token else "",
     )

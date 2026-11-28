@@ -51,6 +51,8 @@ _OWN: Final = {
     "feed.css": ("hub_ui/feed.css", "text/css; charset=utf-8"),
     "feed.js": ("hub_ui/feed.js", "text/javascript; charset=utf-8"),
     "main-hub.css": ("hub_ui/main-hub.css", "text/css; charset=utf-8"),
+    "estate.css": ("hub_ui/estate.css", "text/css; charset=utf-8"),
+    "estate.js": ("hub_ui/estate.js", "text/javascript; charset=utf-8"),
 }
 
 
