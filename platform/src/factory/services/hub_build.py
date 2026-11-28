@@ -34,6 +34,7 @@ from factory.services import (
     hub_chat,
     hub_contradictions,
     hub_costs,
+    hub_facets,
     hub_findings,
     hub_graph,
     hub_hypotheses,
@@ -315,8 +316,36 @@ def build_shell(ctx: HubContext, *, with_abstracts: bool = True) -> dict[str, An
         "dna_dims": list(EXPLORE_DIMS),
         "abstract_chars": SHELL_ABSTRACT_CHARS,
         "glossary": {k: list(v) for k, v in sorted(hub_ui.GLOSSARY.items())},
-        "labels": dict(sorted(hub_ui.LABELS.items())),
+        "labels": dict(sorted(facet_labels(ctx.project).items())),
+        **facet_shell(ctx.project),
     }
+
+
+def facet_labels(project: Project) -> dict[str, str]:
+    """The shared value labels: the code's readable map, overlaid with the names the project's
+    registered specs give to facet values (category names of a derived miner)."""
+    labels = dict(hub_ui.LABELS)
+    for f in hub_facets.facets_of(project):
+        labels.update(f.values)
+    return labels
+
+
+def facet_shell(project: Project) -> dict[str, Any]:
+    """`facets` (the project's facets for every page) and `fields`, the label of each DNA slot the
+    drawer shows; `fields` is sent only where the labels are the project's own (a researcher's
+    setting, or a project whose facets stand in for the pilot's four DNA fields)."""
+    facets = hub_facets.facets_payload(project)
+    profile = site_corpus.load_profile(project)
+    own = hub_facets.facet_setting(project) is not None
+    fields: list[list[str]] = []
+    for slot in EXPLORE_DIMS:
+        dim = profile.dim(slot)
+        if dim is not None and (own or dim[0] != slot):
+            fields.append([slot, dim[1]])
+    out: dict[str, Any] = {"facets": facets}
+    if fields:
+        out["fields"] = fields
+    return out
 
 
 def build_overview(ctx: HubContext) -> dict[str, Any]:
@@ -506,6 +535,7 @@ def build_explore(ctx: HubContext) -> dict[str, Any]:
     return {
         "works": works,
         "dims": list(EXPLORE_DIMS),
+        **facet_shell(ctx.project),
         "layer_order": _layer_order(),
         "methods": {**EXPLORE_METHODS, "similar": hub_lenses.METHODS["similar"]},
     }
@@ -539,6 +569,7 @@ def _unread_entry(ctx: HubContext, work_id: str, meta: dict[str, Any]) -> dict[s
         "map": {},
         "sum": {},
         "desc": {},
+        "facets": {},
         "stages": [],
         "design": [],
         "n_design": 0,

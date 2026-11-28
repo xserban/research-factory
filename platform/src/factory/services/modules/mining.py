@@ -35,6 +35,7 @@ SPEC = ModuleSpec(
             "taxonomy.change_proposed",
             "mining.requested",
             "work.layer_set",
+            "hub.facets_set",
         ),
         tables=(
             "miners",

@@ -161,3 +161,58 @@ superseding), a filter set stores its resolved ids, and agreement figures are ne
 2. (Answered: the leaderboard is its own page, section 5a.)
 3. Whether the baseline hidden-row rule (HS-22) should offer a "show as reference" toggle.
 4. Whether a set can be retired without a successor (a `paper_set.retired` event); v1 omits it.
+
+## 8. Per-project facets (HS-60 to HS-65)
+
+Ruled 2026-11-28. The filters of the Corpus and Explore pages (the "facets") were fixed in code for the
+first pilot (`site_corpus.DEFAULT_DIMS`, a role map to that pilot's miner names, value labels in
+`shell.js`, `explore.js`, `corpus.js`, `write.js`). A project with other miners showed empty facets.
+Facets now come from the categorical (enum) fields of the project's own protocol-listed miners.
+
+- HS-60 A facet is one enum field of one protocol-listed, registered miner. A project's facets are an
+  ordered list: the researcher's setting if one was recorded, else the default rule (HS-61). Month
+  (key `year`) is always the last facet and is not part of a setting; Layer stays a facet of its own.
+- HS-61 Default rule, computed from the registered specs, never typed. (a) A project whose protocol
+  lists no miner, or lists a miner of the first pilot's roles (`m-classification`, `m-mapping`), keeps
+  that pilot's facets (its keys, labels and order, restricted to the listed miners; not checked for being
+  enum fields), so its pages are unchanged. (b) Otherwise the enum fields of the listed miners, taken breadth
+  first (the first enum field of every miner, then the second of every miner, and so on), at most 6 per
+  miner and 12 in all, and shown in protocol then field order. A miner that supplies the layer (a
+  layer-scheme miner or one flagged `paper_layers`) is left out, since Layer is a facet already. A
+  label is the field name made readable, with the miner in brackets when two labels would read alike.
+  The facet key is `<miner>.<field>`, except for the first pilot's fields, which keep their old keys
+  (`technique`, `human`, ...) so addresses keep working.
+- HS-62 Labels and descriptions come from the registered spec: a field's `description` is the facet's
+  description; for a miner derived from a taxonomy the category names label the values of its
+  `category` field. The code keeps one fallback only, the readable form of an id. The researcher's
+  `label` renames a facet.
+- HS-63 The payloads carry the facets: `corpus` (`dims`, each with `key`, `label`, `description`,
+  `values`, and per work `facets[key]` for fields outside the pilot's role miners), `shell` and
+  `explore` (`facets`, the shared value `labels`, and `fields`). The four DNA slots of Explore, the
+  lenses and the drawer (`technique`, `architecture`, `span`, `human`) stand for the project's first
+  four facets when the project has none of those keys; `fields` then names the slots with the
+  project's labels. A project that has the pilot's keys and no setting gets no `fields` (labels as
+  before). The works of the corpus are those a listed miner of any facet or role has read.
+- HS-64 Cache keys: the `shell`, `explore` and `corpus` payloads read every event but the quiet
+  families, so `hub.facets_set` restales them and no other payload; the site products that read the
+  corpus payload follow `hub.%` through `EXPLORER_EVENTS`.
+- HS-65 Not in this change: the lens matrices and chains (`lenses.js`) and the overview keep the
+  pilot's four slots and their labels; Findings keeps the pilot's human, span and process columns;
+  Write's `KIND` names are the kinds of its own scopes, not facets.
+
+### Event `hub.facets_set` v1
+
+| field | type | rule |
+|---|---|---|
+| `facets` | list of 1..24 picks | the whole ordered list; the latest valid event of the project wins |
+| `facets[].miner` | text | a protocol-listed miner with a registered spec |
+| `facets[].field` | text | an enum field of that miner |
+| `facets[].label` | text 1..60 or null | the researcher's name for the facet; null means the readable field name |
+
+Invariants: human actor only (a non-human actor is refused with nothing written, as `work.layer_set`);
+validated against the registered specs at the boundary (unknown miner, unknown or non-enum field, a
+repeated pick, an empty or over-long list are refused, nothing written). The reader ignores an event of
+a non-human actor or with an invalid payload, and skips a pick that no longer resolves; a hand-written
+event failing a guard therefore changes nothing on rebuild. The event is read from the log (it is rare
+and the reader memoises it per last event id); it has no index table. CLI: `factory hub facets set
+--facet miner:field[=Label] ...` and `factory hub facets show`. No MCP tool (the layer move has none).

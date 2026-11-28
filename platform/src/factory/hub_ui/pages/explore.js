@@ -178,7 +178,8 @@ const inN=()=>SRES.n;
 const dist=k=>{const c=new Map();for(const w of RF.works){const v=HUB.val(w,k);if(v)c.set(v,(c.get(v)||0)+1)}return[...c.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))};
 const techCounts=dist('technique').filter(([v])=>v!=='other');
 const TOP=techCounts.slice(0,7).map(a=>a[0]);
-const NICE={'training-finetuning-rl':'Training / RL','code-execution-tools':'Code execution','retrieval-grounding':'Retrieval','memory-skills':'Memory & skills','iterative-loop':'Iterative loop','tree-search':'Tree search','multi-agent':'Multi-agent'};
+/* Short names for the pilot's technique values stay as the fallback; names the project's specs give to facet values win. */
+const NICE=Object.assign({'training-finetuning-rl':'Training / RL','code-execution-tools':'Code execution','retrieval-grounding':'Retrieval','memory-skills':'Memory & skills','iterative-loop':'Iterative loop','tree-search':'Tree search','multi-agent':'Multi-agent'},...(d.explore.facets||[]).map(f=>f.values||{}));
 const SECT=[...TOP.map(v=>({key:v,label:NICE[v]||pretty(v)})),{key:'~rest',label:'Other & smaller'}];
 D.forEach(d=>{d.sec=TOP.includes(d.tech)?d.tech:'~rest'});
 SECT.forEach(s=>{s.n=D.filter(d=>d.sec===s.key).length});
@@ -204,12 +205,13 @@ SECT.forEach(s=>{s.n=D.filter(d=>d.sec===s.key).length});
 })();
 
 /* ======================= DNA: six segments ======================= */
-const ORD={technique:dist('technique').map(a=>a[0]),architecture:dist('architecture').map(a=>a[0]),span:dist('span').map(a=>a[0]),human:HUMAN.map(h=>h[0]),layer:RF.layer_order&&RF.layer_order.length?RF.layer_order:LAYERS.map(l=>l[0]),era:ERAS};
+const FLN=Object.fromEntries(HUB.FIELDS); /* slot -> the project's own facet label (shell payload `fields`) */
+const ORD={technique:dist('technique').map(a=>a[0]),architecture:dist('architecture').map(a=>a[0]),span:dist('span').map(a=>a[0]),human:(()=>{const o=HUMAN.map(h=>h[0]),seen=dist('human').map(x=>x[0]);return seen.every(v=>o.includes(v))?o:seen})(),layer:RF.layer_order&&RF.layer_order.length?RF.layer_order:LAYERS.map(l=>l[0]),era:ERAS};
 const SEGS=[
- {k:'technique',l:'Technique',s:'Tech',get:d=>d.tech,lab:v=>pretty(v),h0:20},
- {k:'architecture',l:'Architecture',s:'Arch',get:d=>d.arch,lab:v=>pretty(v),h0:150},
- {k:'span',l:'Automated span',s:'Span',get:d=>d.span,lab:v=>pretty(v),h0:280},
- {k:'human',l:'Human role',s:'Human',get:d=>d.hum,lab:v=>humanLabel(v)},
+ {k:'technique',l:FLN.technique,s:'Tech',get:d=>d.tech,lab:v=>pretty(v),h0:20},
+ {k:'architecture',l:FLN.architecture,s:'Arch',get:d=>d.arch,lab:v=>pretty(v),h0:150},
+ {k:'span',l:FLN.span,s:'Span',get:d=>d.span,lab:v=>pretty(v),h0:280},
+ {k:'human',l:FLN.human,s:'Human',get:d=>d.hum,lab:v=>humanLabel(v)},
  {k:'layer',l:'Layer',s:'Layer',get:d=>d.layer,lab:v=>layerLabel(v)},
  {k:'era',l:'Era (half-year)',s:'Era',get:d=>d.era,lab:v=>eraLabel(v)},
 ];
@@ -745,7 +747,7 @@ function renderTray(){
   const P=ST.pins.map(id=>DB.get(id)).filter(Boolean);const el=$('#tray');
   if(!P.length){el.innerHTML=`<div class="slim"><span class="h3">Compare ${I_TRAY}</span><span>0 of ${PIN_MAX} pinned. Press <span class="kbd">P</span> over a paper to pin it.</span></div>`;document.body.style.paddingBottom=el.offsetHeight+'px';return}
   const n=P.length;
-  const rowsF=[['technique','Technique',d=>d.tech,v=>pretty(v)],['architecture','Architecture',d=>d.arch,v=>pretty(v)],['span','Automated span',d=>d.span,v=>pretty(v)],['human','Human role',d=>d.hum,v=>humanLabel(v)]];
+  const rowsF=[['technique',FLN.technique,d=>d.tech,v=>pretty(v)],['architecture',FLN.architecture,d=>d.arch,v=>pretty(v)],['span',FLN.span,d=>d.span,v=>pretty(v)],['human',FLN.human,d=>d.hum,v=>humanLabel(v)]];
   const rowsS=[['Layer',d=>d.layer,v=>layerLabel(v)],['Month',d=>mLabel(d.mi),v=>v],['Cited here',d=>d.cic,v=>v+' times']];
   const gt=`grid-template-columns:128px repeat(${n},minmax(210px,1fr))`;
   let h=`<div class="th"><span class="h3">Compare ${I_TRAY}</span><span class="meta">${n} of ${PIN_MAX} pinned</span><span class="grow"></span><a class="btn" href="${esc(pathsHref(P.map(d=>d.id)))}">See their paths</a><button class="btn" id="tcol" aria-expanded="${!trayCollapsed}">${trayCollapsed?'Expand':'Collapse'}</button><button class="btn" id="tclr">Unpin all</button></div><div class="tb" style="${gt}">`;

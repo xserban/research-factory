@@ -92,6 +92,7 @@ from factory.model.fulltext import (
 from factory.model.gate_audit import GateAuditLabelled, GateAuditSampled
 from factory.model.grey import GreyContactLogged, GreySearchReported
 from factory.model.hosting import ProjectHosted
+from factory.model.hub_facets import HubFacetsSet
 from factory.model.hypotheses import (
     HypothesisAbandoned,
     HypothesisConcluded,
@@ -341,6 +342,7 @@ def default_catalog() -> EventCatalog:
     catalog.register(EventType("taxonomy.change_proposed", TaxonomyChangeProposed, 1))
     catalog.register(EventType("mining.requested", MiningRequested, 1))
     catalog.register(EventType("work.layer_set", WorkLayerSet, 1))
+    catalog.register(EventType("hub.facets_set", HubFacetsSet, 1))
     catalog.register(EventType("page.recorded", PageRecorded, 1))
     catalog.register(EventType("sheet.opened", SheetOpened, 1))
     catalog.register(EventType("sheet.argument_recorded", SheetArgumentRecorded, 1))

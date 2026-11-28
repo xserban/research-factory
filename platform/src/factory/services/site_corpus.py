@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
+from factory.services import hub_facets
 from factory.services.capture_hints import WorkOrigin, origins_of
 from factory.services.citations import cited_by_counts
 from factory.services.context import Project
@@ -29,26 +31,8 @@ from factory.services.protocol import current_protocol
 from factory.services.work_layers import WorkLayer, layers_of
 
 PROFILE_FILE = "site-profile.json"
-DEFAULT_ROLES: dict[str, str] = {
-    "cls": "m-classification",
-    "map": "m-mapping",
-    "sum": "m-summary",
-    "desc": "m-descriptors",
-    "stages": "m-stages",
-    "design": "m-design-approach",
-}
-DEFAULT_DIMS: tuple[tuple[str, str, str, str], ...] = (
-    ("technique", "Technique", "cls", "technique_primary"),
-    ("field", "Field of science", "cls", "field_primary"),
-    ("data", "Data", "cls", "data_primary"),
-    ("architecture", "Architecture", "cls", "architecture_primary"),
-    ("evaluation", "Evaluation", "cls", "evaluation_primary"),
-    ("human", "Human position", "map", "human_position"),
-    ("process", "Process shape", "map", "process_shape"),
-    ("span", "Automated span", "map", "automated_span"),
-    ("assess", "Idea assessment", "map", "idea_assessment_method"),
-    ("year", "Month", "meta", "month"),
-)
+DEFAULT_ROLES: dict[str, str] = dict(hub_facets.LEGACY_ROLE_MINERS)
+META_ROLE = "meta"
 SUMMARY_ORDER: tuple[tuple[str, str], ...] = (
     ("problem_gap", "Problem and gap"),
     ("core_innovation", "Core innovation"),
@@ -110,22 +94,51 @@ def origin_fields(origin: WorkOrigin | None) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class Profile:
+    """Roles (role -> miner name) and the dimensions `(key, label, role, field)` of the explorer.
+    `role` is a key of `roles`, `meta` (the work's own metadata) or, for a facet of a project's own
+    miner, the miner name. `extra` holds the facets' descriptions and value labels by key."""
+
     roles: dict[str, str]
     dims: tuple[tuple[str, str, str, str], ...]
+    extra: dict[str, hub_facets.Facet] = field(default_factory=dict)
+
+    def miner_of(self, role: str) -> str:
+        """The miner a role or a miner name stands for (empty for `meta`)."""
+        return "" if role == META_ROLE else self.roles.get(role, role)
+
+    def miners(self) -> list[str]:
+        """Every miner the profile reads: the role miners and the miners of the dimensions."""
+        names = set(self.roles.values()) | {self.miner_of(d[2]) for d in self.dims}
+        return sorted(names - {""})
+
+    def dim(self, key: str) -> tuple[str, str, str, str] | None:
+        """The dimension `key`; for a project with none of the pilot's four DNA keys, a DNA key
+        (technique, architecture, span, human) stands for the facet at its position."""
+        found = next((d for d in self.dims if d[0] == key), None)
+        if found is not None:
+            return found
+        keys = [d[0] for d in self.dims if d[2] != META_ROLE]
+        alias = hub_facets.slot_aliases(keys).get(key)
+        return next((d for d in self.dims if d[0] == alias), None) if alias else None
 
 
 def load_profile(project: Project) -> Profile:
-    """The project's profile: `<project>/site-profile.json` when present, else the default."""
+    """The project's profile. Dimensions: the researcher's facet setting, else `dims` of
+    `<project>/site-profile.json` when it has them, else the default facets (`services.hub_facets`).
+    Roles: the default roles with the file's overrides."""
     path = project.paths.dir / PROFILE_FILE
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return Profile(dict(DEFAULT_ROLES), DEFAULT_DIMS)
+        loaded = {}
     roles = {**DEFAULT_ROLES, **{str(k): str(v) for k, v in loaded.get("roles", {}).items()}}
-    dims = tuple(
-        (str(a), str(b), str(c), str(d)) for a, b, c, d in loaded.get("dims", DEFAULT_DIMS)
-    )
-    return Profile(roles, dims)
+    facets = hub_facets.facets_of(project)
+    extra = {f.key: f for f in facets}
+    if hub_facets.facet_setting(project) is None and "dims" in loaded:
+        dims = tuple((str(a), str(b), str(c), str(d)) for a, b, c, d in loaded["dims"])
+    else:
+        dims = (*(f.dim for f in facets), hub_facets.MONTH)
+    return Profile(roles, dims, extra)
 
 
 def slug_of(work_id: str) -> str:
@@ -147,6 +160,43 @@ def _listed_schemas(project: Project) -> dict[str, str]:
     return {u.name: f"{u.name}@{u.version}" for u in protocol.spec.miners or ()}
 
 
+def _facet_values(
+    profile: Profile,
+    work_id: str,
+    merged: Callable[[str, str], dict[str, tuple[str, str, str]]],
+) -> dict[str, dict[str, str]]:
+    """The values of the dimensions that read a miner outside the legacy roles, by dimension key."""
+    out: dict[str, tuple[str, str, str]] = {}
+    for key, _label, role, name in profile.dims:
+        if role == META_ROLE or role in profile.roles:
+            continue
+        found = merged(work_id, role).get(name)
+        if found is not None:
+            out[key] = found
+    return _pack(out)
+
+
+def _dim_payload(profile: Profile) -> list[dict[str, Any]]:
+    """The `dims` of the corpus payload: key, label, where a work holds the value (`src`, `field`),
+    and from the facet the field's description and the value labels the spec names."""
+    out: list[dict[str, Any]] = []
+    for key, label, role, name in profile.dims:
+        facet = profile.extra.get(key)
+        generic = role != META_ROLE and role not in profile.roles
+        out.append(
+            {
+                "key": key,
+                "label": label,
+                "src": "facets" if generic else role,
+                "field": key if generic else name,
+                "description": facet.description if facet else "",
+                "values": dict(sorted(facet.values.items())) if facet else {},
+                "renamed": facet.renamed if facet else False,
+            }
+        )
+    return out
+
+
 def _pack(fields: dict[str, tuple[str, str, str]]) -> dict[str, dict[str, str]]:
     return {k: {"v": v[0], "q": v[1][:MAX_QUOTE], "a": v[2]} for k, v in fields.items()}
 
@@ -160,7 +210,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
     reference list was extracted, so an unknown count is never shown as 0."""
     profile = load_profile(project)
     listed = _listed_schemas(project)
-    schemas = sorted({listed[m] for m in profile.roles.values() if m in listed})
+    schemas = sorted({listed[m] for m in profile.miners() if m in listed})
     rows_by_work: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     fields: dict[str, dict[str, tuple[str, str, str]]] = defaultdict(dict)
     docs: dict[str, tuple[str, str]] = {}
@@ -219,7 +269,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
         )
 
     def merged(wid: str, role: str) -> dict[str, tuple[str, str, str]]:
-        schema = listed.get(profile.roles.get(role, ""))
+        schema = listed.get(profile.miner_of(role))
         out: dict[str, tuple[str, str, str]] = {}
         for eid in rows_by_work[wid].get(schema or "", []):
             for name, tup in fields[eid].items():
@@ -281,6 +331,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
                 "map": _pack(merged(wid, "map")),
                 "sum": _pack(merged(wid, "sum")),
                 "desc": _pack(merged(wid, "desc")),
+                "facets": _facet_values(profile, wid, merged),
                 "stages": stage_rows,
                 "design": design[:30],
                 "n_design": len(design),
@@ -293,7 +344,7 @@ def corpus_payload(project: Project) -> dict[str, Any]:
 
     by_slug = {w["id"]: w["slug"] for w in works}
     return {
-        "dims": [{"key": k, "label": lab, "src": s, "field": f} for k, lab, s, f in profile.dims],
+        "dims": _dim_payload(profile),
         "works": works,
         "layer_order": list(LAYER_ORDER),
         "cites": [[by_slug[a], by_slug[b]] for a, b in edges],
