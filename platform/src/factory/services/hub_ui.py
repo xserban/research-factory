@@ -361,6 +361,7 @@ THEMES: Final[tuple[ThemeSpec, ...]] = (
 ASSETS: Final[dict[str, tuple[str, str]]] = {
     "kit.css": ("hub_ui/kit.css", "text/css; charset=utf-8"),
     "scope.js": ("hub_ui/scope.js", "text/javascript; charset=utf-8"),
+    "scope-bar.js": ("hub_ui/scope-bar.js", "text/javascript; charset=utf-8"),
     "shell.js": ("hub_ui/shell.js", "text/javascript; charset=utf-8"),
     "pages/overview.js": ("hub_ui/pages/overview.js", "text/javascript; charset=utf-8"),
     "pages/corpus.js": ("hub_ui/pages/corpus.js", "text/javascript; charset=utf-8"),
@@ -626,7 +627,7 @@ def page_html(
     *,
     static_data: bool = True,
 ) -> str:
-    """The static HTML of a page: kit.css, a data script per payload, scope.js, shell.js, `scripts`.
+    """The static HTML of a page: kit.css, payload scripts, scope scripts, shell.js, `scripts`.
 
     Every URL is relative (`assets/<name>?v=<version>`, `data/<name>.js`), so the file works
     from file:// and under the server. With `static_data` the payloads load as `data/<name>.js`
@@ -640,6 +641,7 @@ def page_html(
     )
     assets = [
         f'<script src="assets/scope.js?v={v}"></script>',
+        f'<script src="assets/scope-bar.js?v={v}"></script>',
         f'<script src="assets/shell.js?v={v}"></script>',
     ] + [f'<script src="assets/{html.escape(s, quote=True)}?v={v}"></script>' for s in scripts]
     page_map = html.escape(

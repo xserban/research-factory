@@ -3,6 +3,8 @@
 The module is pure (no DOM), so Node loads it directly. Skipped when `node` is not on PATH.
 """
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
@@ -158,6 +160,74 @@ def test_apply_whole_year_in_scope() -> None:
     )
     assert ids(res["inScope"]) == ["a", "b", "c", "e"]
     assert res["yearOnly"] == []
+
+
+def test_parse_reads_plus_as_space() -> None:
+    """URLSearchParams (HUB.hash.set) writes a space as '+'; the scope must survive a page's own hash write."""
+    assert js("S.parse('#scope.set=a+b')")["set"] == "a b"
+    assert js("S.parse('#scope.set=a%2Bb')")["set"] == "a+b"
+
+
+def test_merge_keeps_other_keys_and_replaces_scope_keys() -> None:
+    assert js("S.merge('#tab=x&scope.from=2025-01&q=a', {from:'2026-07',to:'2026-09'})") == (
+        "tab=x&q=a&scope.from=2026-07&scope.to=2026-09"
+    )
+    assert js("S.merge('tab=x', {from:'2026-07'})") == "tab=x&scope.from=2026-07"
+    assert js("S.merge('#scope.from=2025-01&scope.to=2025-03&scope.set=s&tab=x', {})") == "tab=x"
+    assert js("S.merge('', {})") == ""
+    assert js("S.merge(undefined, {set:'a b'})") == "scope.set=a%20b"
+    # a key that merely starts with 'scope.' but is not ours stays
+    assert js("S.merge('scope.other=1', {from:'2026-01'})") == "scope.other=1&scope.from=2026-01"
+
+
+@pytest.mark.parametrize(
+    ("href", "want"),
+    [
+        ("corpus.html", "corpus.html#scope.from=2026-07"),
+        ("corpus.html#id=w1", "corpus.html#id=w1&scope.from=2026-07"),
+        ("corpus.html#scope.from=2020-01&id=w1", "corpus.html#id=w1&scope.from=2026-07"),
+        ("#", "#"),
+        ("#tab=x", "#tab=x"),
+        ("https://doi.org/10.1/x", "https://doi.org/10.1/x"),
+        ("mailto:a@b.c", "mailto:a@b.c"),
+        ("//cdn.example/x", "//cdn.example/x"),
+        ("", ""),
+    ],
+)
+def test_carry_rewrites_relative_links_only(href: str, want: str) -> None:
+    assert js(f"S.carry({json.dumps(href)}, {{from:'2026-07'}})") == want
+
+
+def test_carry_with_empty_scope_strips_scope_keys() -> None:
+    assert js("S.carry('corpus.html#scope.from=2026-07&id=w1', {})") == "corpus.html#id=w1"
+    assert js("S.carry('corpus.html#scope.from=2026-07', {})") == "corpus.html"
+
+
+def test_pages_without_work_lists_show_no_bar() -> None:
+    hidden = ["kit", "platform", "costs", "learn", "protocol", "levels", "method"]
+    for page in hidden:
+        assert js(f"S.showsBar('{page}')") is False
+    for page in ["corpus", "miners", "overview", "flow", "data"]:
+        assert js(f"S.showsBar('{page}')") is True
+
+
+def test_line_text_uses_the_callers_denominator() -> None:
+    res = {"n": 2, "N": 7, "undated": [1, 2], "yearOnly": [3]}
+    got = js(f"S.lineText({json.dumps(res)})")
+    assert got == {
+        "main": "2 of 7 papers in scope",
+        "undated": "2 papers have no date",
+        "yearOnly": "1 paper has only a year, too coarse for this range",
+    }
+    one = js("S.lineText({n:1,N:1,undated:[0],yearOnly:[]})")
+    assert one["undated"] == "1 paper has no date"
+    assert one["yearOnly"] == ""
+    assert js("S.lineText({n:3,N:3,undated:[],yearOnly:[]})")["undated"] == ""
+
+
+def test_labels_are_the_spec_wording() -> None:
+    assert js("S.WHOLE_PASS") == "whole pass, not scoped"
+    assert js("S.WHOLE_CORPUS") == "whole corpus"
 
 
 def test_module_has_no_dom_access() -> None:
