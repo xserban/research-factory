@@ -10,8 +10,9 @@ Invariants:
   pilot's, so its pages are unchanged: its keys, labels and order, restricted to the listed miners
   (all of them when none is listed, as before this module existed); a legacy facet is not checked
   for being an enum field. (2) Otherwise the enum
-  fields of the protocol-listed miners, in protocol order then field order, at most
-  `DEFAULT_PER_MINER` per miner and `DEFAULT_MAX` in all; the miners that supply the layer (a
+  fields of the protocol-listed miners, taken breadth first (the first enum field of every miner,
+  then the second of every miner, ...) up to `DEFAULT_PER_MINER` per miner and `DEFAULT_MAX` in all,
+  and shown in protocol order then field order; the miners that supply the layer (a
   layer-scheme miner or one flagged `paper_layers`) are left out because Layer is always a facet of
   its own. A label is the field name made readable, with the miner in brackets when two facets
   would read alike. Nothing is judged: the rule reads the registered specs only.
@@ -219,13 +220,17 @@ def default_picks(project: Project) -> tuple[FacetPick, ...]:
     if legacy:
         return legacy
     skip = _paper_layer_miners(project)
-    picks: list[FacetPick] = []
-    for name, spec in listed:
-        if name in skip:
-            continue
-        enums = [f.name for f in spec.fields if isinstance(f.kind, EnumKind)]
-        picks.extend(FacetPick(miner=name, field=f) for f in enums[:DEFAULT_PER_MINER])
-    picks = picks[:DEFAULT_MAX]
+    fields: list[tuple[str, list[str]]] = [
+        (name, [f.name for f in spec.fields if isinstance(f.kind, EnumKind)][:DEFAULT_PER_MINER])
+        for name, spec in listed
+        if name not in skip
+    ]
+    chosen: set[tuple[str, str]] = set()
+    for depth in range(DEFAULT_PER_MINER):  # breadth first: one field of every miner, then the next
+        for name, enums in fields:
+            if len(chosen) < DEFAULT_MAX and depth < len(enums):
+                chosen.add((name, enums[depth]))
+    picks = [FacetPick(miner=n, field=f) for n, enums in fields for f in enums if (n, f) in chosen]
     names = [readable(p.field) for p in picks]
     return tuple(
         FacetPick(

@@ -111,15 +111,15 @@ def test_default_is_the_enum_fields_of_listed_miners_month_last(arch: Project) -
     assert [f["key"] for f in hf.facets_payload(arch)] == [*keys, "year"]
 
 
-def test_default_is_bounded_per_miner_and_in_all(base: Project, agent: Actor) -> None:
+def test_default_is_breadth_first_and_bounded(base: Project, agent: Actor) -> None:
     many = tuple(_enum(f"f{i}", "a", "b") for i in range(9))
     list_miner(base, agent, _spec("m-one", *many))
     list_miner(base, agent, _spec("m-two", *many))
     list_miner(base, agent, _spec("m-three", *many))
     keys = [f.key for f in hf.facets_of(base)]
     assert len(keys) == hf.DEFAULT_MAX == 12
-    assert keys[: hf.DEFAULT_PER_MINER] == [f"m-one.f{i}" for i in range(6)]
-    assert keys[6:12] == [f"m-two.f{i}" for i in range(6)]
+    # breadth first: four fields of each miner, shown miner by miner
+    assert keys == [f"{m}.f{i}" for m in ("m-one", "m-two", "m-three") for i in range(4)]
 
 
 def test_alike_labels_name_their_miner(base: Project, agent: Actor) -> None:

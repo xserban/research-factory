@@ -137,8 +137,9 @@ Facets now come from the categorical (enum) fields of the project's own protocol
 - HS-61 Default rule, computed from the registered specs, never typed. (a) A project whose protocol
   lists no miner, or lists a miner of the first pilot's roles (`m-classification`, `m-mapping`), keeps
   that pilot's facets (its keys, labels and order, restricted to the listed miners; not checked for being
-  enum fields), so its pages are unchanged. (b) Otherwise the enum fields of the listed miners, in
-  protocol then field order, at most 6 per miner and 12 in all. A miner that supplies the layer (a
+  enum fields), so its pages are unchanged. (b) Otherwise the enum fields of the listed miners, taken breadth
+  first (the first enum field of every miner, then the second of every miner, and so on), at most 6 per
+  miner and 12 in all, and shown in protocol then field order. A miner that supplies the layer (a
   layer-scheme miner or one flagged `paper_layers`) is left out, since Layer is a facet already. A
   label is the field name made readable, with the miner in brackets when two labels would read alike.
   The facet key is `<miner>.<field>`, except for the first pilot's fields, which keep their old keys
