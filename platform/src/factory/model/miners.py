@@ -103,6 +103,12 @@ class MinerUse(StrictModel):
     quality claim and never reach the evidence report, so it is refused together with `evidence`.
     Omitted when false, so every protocol hash written before it existed is unchanged."""
 
+    paper_layers: bool = False
+    """True makes this derived miner's dimension-zero categories (its first projected dimension,
+    `<dimension>/<category>`) the project's paper layers, whether or not the dimension has a
+    layer scheme and whatever the recorded reference layer scheme is. Omitted when false, so every
+    protocol hash written before it existed is unchanged. (`layers` is the layer filter.)"""
+
     @model_validator(mode="after")
     def _exploratory_is_not_evidence(self) -> MinerUse:
         if self.exploratory and self.evidence:
@@ -125,4 +131,6 @@ class MinerUse(StrictModel):
             out.pop("hint_context", None)
         if not self.exploratory:
             out.pop("exploratory", None)
+        if not self.paper_layers:
+            out.pop("paper_layers", None)
         return out
