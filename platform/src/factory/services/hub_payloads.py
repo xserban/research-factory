@@ -247,7 +247,7 @@ def load_read_in_full(project: Project) -> set[str]:
     `site_corpus.corpus_payload`, re-queried the same way (read-only)."""
     profile = site_corpus.load_profile(project)
     listed = site_corpus._listed_schemas(project)
-    schemas = sorted({listed[m] for m in profile.roles.values() if m in listed})
+    schemas = sorted({listed[m] for m in profile.miners() if m in listed})
     found: set[str] = set()
     with project.index.connect() as conn:
         for schema in schemas:
@@ -586,12 +586,12 @@ def _load_role_cells(
 ) -> dict[str, tuple[str, str] | None]:
     """The first pass-A (value, quote) of a profile dimension of each work's source, or None."""
     profile = site_corpus.load_profile(project)
-    dim = next((d for d in profile.dims if d[0] == dim_key), None)
+    dim = profile.dim(dim_key)
     out: dict[str, tuple[str, str] | None] = dict.fromkeys(source_of)
     if dim is None:
         return out
     listed = site_corpus._listed_schemas(project)
-    schema = listed.get(profile.roles.get(dim[2], ""))
+    schema = listed.get(profile.miner_of(dim[2]))
     if schema is None:
         return out
     sources = set(source_of.values())
@@ -768,6 +768,7 @@ def overview_payload(project: Project, data: FlowData | None = None) -> dict[str
             {
                 "id": w,
                 "title": pub.get(w, (w, ""))[0],
+                "published": pub.get(w, (w, ""))[1],
                 "cited_here": cites[w].count,
                 "self_cited": cites[w].self_count,
                 "layer": layer_of(w),

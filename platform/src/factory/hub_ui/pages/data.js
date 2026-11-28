@@ -84,7 +84,15 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
   /* Grid columns come from the loaded grid-<miner> payload. */
   const MAN = M.grids || [], MANIFEST = new Map(MAN.map(g => [g.miner, g]));
   const DEFAULT_MINER = MANIFEST.has('m-classification') ? 'm-classification' : (MAN[0] ? MAN[0].miner : null);
-  let COLS = [], COL = {}, ROWS = [], G = null;
+  let COLS = [], COL = {}, ROWS = [], ROWS_ALL = [], G = null;
+  /* Scope (HS-03, HS-20, HS-24): grid rows and the coverage matrix are per-work, so they are recomputed over the works in
+     scope; the holes bars are counts only and keep the whole corpus (labelled). */
+  const SC = window.HUB_SCOPE || null;
+  const scopeOn = () => !!SC && SC.active(SC.current());
+  const slab = k => SC ? SC.label(k) : '';
+  const pubOf = id => { const w = byId.get(id); return w && w.published ? w.published : ''; };
+  const applyList = (rows, get) => SC ? SC.apply(rows, get, SC.current(), {includeUndated: SC.includeUndated()}) : {inScope: rows, n: rows.length, N: rows.length, undated: [], outOfScope: [], yearOnly: []};
+  let GRES = null;   /* apply() result over the grid's rows (the works the miner read) */
   const CB = M.codebook || {};
   const codeLabel = v => { const e = CB[String(v).split('/').pop()]; return e && e.label ? e.label : H.pretty(String(v).split('/').pop()); };
   const vlFor = (c, k) => k === 'm-layer.category' ? H.layerLabel : k === 'm-mapping.human_position' ? H.humanLabel : c.type !== 'enum' ? (v => String(v)) : k.startsWith('m-tech-') && /\.category$/.test(k) ? codeLabel : H.pretty;
@@ -93,8 +101,10 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
     G = g;
     COLS = g.columns.map((c, i) => ({k: c.key, m: g.miner, label: fname(c.name), type: c.type, group: c.group || '', req: c.required, get: getter(i), vl: vlFor(c, c.key)}));
     COL = Object.fromEntries(COLS.map(c => [c.k, c]));
-    ROWS = g.rows.map(r => ({id: r.id, title: (byId.get(r.id) || {}).title || r.id, c: r.c}));
+    ROWS_ALL = g.rows.map(r => ({id: r.id, title: (byId.get(r.id) || {}).title || r.id, c: r.c, published: r.published || pubOf(r.id)}));
+    rescopeGrid();
   }
+  function rescopeGrid() { GRES = applyList(ROWS_ALL, r => r.published); ROWS = GRES.inScope; }
   const cell = (r, c) => { const e = c.get(r); return e && e.v != null && e.v !== '' ? e : null; };
   const cv = (r, c) => { const e = cell(r, c); return e ? e.v : null; };
   const gridCache = new Map();
@@ -189,6 +199,7 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
       <span class=grow></span><span id=ctl class=dbar style="margin:0"></span></div>
     <h2 class=h2 id=vt>${esc(TITLE[S.view])} ${info(INFO[S.view], 'About ' + TITLE[S.view])}</h2>
     <p class=lead id=lead style="max-width:62ch;margin:6px 0 12px"></p>
+    <div id=scopeLine style="margin:0 0 10px"></div>
     <div class=dchips id=chips></div><div id=view></div>
     <p class="meta dfoot">About these paper counts ${info(H.SETS_NOTE, 'About the paper counts')}</p>`;
     main.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; writeHash(); render(); });
@@ -203,7 +214,7 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
     let filled = 0; const emp = {}; for (const c of cols) emp[c.k] = 0;
     for (const r of rows) for (const c of cols) { if (cell(r, c)) filled++; else emp[c.k]++; }
     const worst = cols.slice().sort((a, b) => emp[b.k] - emp[a.k])[0];
-    return `<b>${fmt(rows.length)}</b> papers; <b>${Math.round(100 * filled / (rows.length * cols.length))}%</b> of cells filled. Emptiest column: <b>${esc(worst.label)}</b>, ${fmt(emp[worst.k])} blank.${G.not_read ? ` ${fmt(G.not_read)} included papers were not read by this miner and are not listed.` : ''}`;
+    return `<b>${fmt(rows.length)}</b> papers; <b>${Math.round(100 * filled / (rows.length * cols.length))}%</b> of cells filled. Emptiest column: <b>${esc(worst.label)}</b>, ${fmt(emp[worst.k])} blank.${G.not_read && !scopeOn() ? ` ${fmt(G.not_read)} included papers were not read by this miner and are not listed.` : ''}`;
   }
   function drawGrid() {
     const rows = filtered(), cols = visCols(); cur = {rows, cols};
@@ -230,14 +241,22 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
   /* ---------- coverage view ---------- */
   const LORD = H.LAYERS.map(l => l[0]);
   const covWorks = M.coverage.works || [];
-  const covRows = (M.coverage.miners || []).map(m => ({n: m.name, version: m.version, A: new Set(m.a.map(i => covWorks[i])), B: new Set(m.b.map(i => covWorks[i])), unread: m.unread}))
+  const covBase = (M.coverage.miners || []).map(m => ({n: m.name, version: m.version, A: new Set(m.a.map(i => covWorks[i])), B: new Set(m.b.map(i => covWorks[i])), unread: m.unread}))
     .sort((a, b) => b.A.size - a.A.size || a.n.localeCompare(b.n));
-  const CW = covWorks.map(id => byId.get(id)).filter(Boolean)
+  const CWALL = covWorks.map(id => byId.get(id)).filter(Boolean)
     .sort((a, b) => (LORD.indexOf(a.layer) - LORD.indexOf(b.layer)) || String(a.month).localeCompare(String(b.month)) || a.title.localeCompare(b.title));
+  let CW = CWALL, covRows = covBase, CRES = null, covInScope = null;
+  function rescopeCov() {
+    CRES = applyList(CWALL, w => pubOf(w.id));
+    const ins = new Set(CRES.inScope.map(w => w.id)); covInScope = ins;
+    CW = CWALL.filter(w => ins.has(w.id));
+    covRows = covBase.map(m => Object.assign({}, m, {A: new Set([...m.A].filter(i => ins.has(i))), B: new Set([...m.B].filter(i => ins.has(i)))}));
+  }
+  rescopeCov();
   const covState = {r: 0, c: 0, geom: null};
   const covText = (m, w) => { const a = m.A.has(w.id), b = m.B.has(w.id); return {head: w.title, line: `${mname(m.n)}: ${b ? 'read, and checked by a second reading' : a ? 'read once' : 'not read'}`, meta: `${H.layerLabel(w.layer)} · month ${w.month}`}; };
   function leadCov() {
-    const N = CW.length, near = covRows.filter(m => m.A.size >= 0.8 * N).length, none = (M.coverage.not_read_by_any || []).length;
+    const N = CW.length, near = N ? covRows.filter(m => m.A.size >= 0.8 * N).length : 0, none = (M.coverage.not_read_by_any || []).filter(i => covInScope.has(covWorks[i])).length;
     return `<b>${fmt(near)}</b> of the ${fmt(covRows.length)} ${term('miner', 'miners')} have read almost every paper. ${none ? `<b>${fmt(none)}</b> ${none === 1 ? 'paper has' : 'papers have'} not been read by any.` : 'Every paper has been read by at least one.'}`;
   }
   function announce() {
@@ -277,7 +296,7 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
     const host = view(), W = host.clientWidth || 1000, left = W < 600 ? 120 : 236, right = W < 600 ? 60 : 130, top = 44, rh = 22, Hh = top + covRows.length * rh + 6, dpr = window.devicePixelRatio || 1;
     cvs.width = W * dpr; cvs.height = Hh * dpr; cvs.style.height = Hh + 'px';
     const g = cvs.getContext('2d'); g.scale(dpr, dpr);
-    const css = n => H.cssv(n), cw = (W - left - right) / CW.length; covState.geom = {left, top, rh, cw};
+    const css = n => H.cssv(n), cw = (W - left - right) / Math.max(CW.length, 1); covState.geom = {left, top, rh, cw};
     g.fillStyle = css('--surface'); g.fillRect(0, 0, W, Hh); g.font = '500 12px system-ui,sans-serif'; g.textBaseline = 'middle';
     let i = 0;
     while (i < CW.length) {
@@ -316,17 +335,22 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
     const near = all.filter(f => f.tot <= Math.max(3, 0.01 * f.read)).length;
     $('#lead').innerHTML = top ? `The thinnest field is <b>${esc(top.label)}</b> (${esc(mname(top.miner))}): ${fmt(top.tot)} of the ${fmt(top.read)} papers it read have no value or an undetermined one (${Math.round(100 * top.tot / top.read)}%). <b>${fmt(near)}</b> of the ${fmt(all.length)} coded fields are nearly complete.` : 'Every coded field has a usable value for every paper read.';
     const wk = M.holes.works || [];
-    view().innerHTML = `<div class=dleg><span><i style="background:var(--exc)"></i>No value</span><span><i style="background:var(--dim)"></i>Not determinable, not stated, unclear or other</span></div>
+    view().innerHTML = `<p class=meta style="margin:0 0 8px">${slab('corpus')}</p><div class=dleg><span><i style="background:var(--exc)"></i>No value</span><span><i style="background:var(--dim)"></i>Not determinable, not stated, unclear or other</span></div>
       <div class=card style="padding:10px 8px">${thin.map(f => `<button class=hbar data-hole="${esc(f.key)}" aria-label="${esc(f.label)}: ${f.tot} papers with no usable value. Show them in the grid"><span class=lab>${esc(f.label)}<small>${esc(mname(f.miner))} · ${fmt(f.read)} read${f.required ? ' · required' : ''}</small></span><span class=trk><i style="width:${100 * f.missing / mx}%;background:var(--exc)"></i><i style="width:${100 * f.undetermined / mx}%;background:var(--dim)"></i></span><span class="num tnum">${fmt(f.tot)} <span class=meta>(${(100 * f.tot / f.read).toFixed(1)}%)</span></span></button>`).join('') || '<p class=meta style="padding:8px">No field has a gap.</p>'}</div>
       ${wk.length ? `<h3 class=h3 style="margin-top:22px">Papers missing most coded fields</h3><ul>${wk.map(w => `<li><a href="#" data-open="${esc(w.id)}">${esc((byId.get(w.id) || {}).title || w.title)}</a> <span class=meta>${fmt(w.missing.length)} empty · ${fmt(w.undetermined.length)} undetermined</span></li>`).join('')}</ul>` : ''}`;
   }
 
   /* ---------- controls and render ---------- */
   const loadingGrid = () => S.view === 'grid' && S.miner && (!G || G.miner !== S.miner);
+  function paintLine() {
+    const el = $('#scopeLine'); if (!el || !SC) return;
+    SC.renderLine(el, S.view === 'grid' ? (loadingGrid() || !GRES ? null : GRES) : CRES, {});
+  }
   function render() {
     frame();
     const grid = S.view === 'grid';
     if (grid && !S.miner) { $('#lead').textContent = 'No miner has recorded values yet.'; return; }
+    paintLine();
     if (loadingGrid()) {
       $('#ctl').innerHTML = '';
       view().innerHTML = '<p class=meta role=status style="padding:24px 0">Loading the fields…</p>';
@@ -395,6 +419,7 @@ td button[data-unread]{height:26px;padding:0 10px;font-size:var(--t-xs)}
     else if (e.key === 'Escape') H.tipHtml('', e);
   });
   document.addEventListener('click', e => { const p = $('#picker'); if (p && p.hasAttribute('open') && !e.target.closest('#picker')) p.removeAttribute('open'); });
+  if (SC) SC.onChange(() => { rescopeCov(); if (G) rescopeGrid(); S.page = 0; render(); });
   const redraw = () => { if (S.view === 'coverage' && $('#cov')) paintCov(); };
   document.addEventListener('hub:theme', redraw);
   window.addEventListener('resize', redraw);

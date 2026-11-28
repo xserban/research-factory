@@ -94,7 +94,7 @@ const PAGES = [
   ['Overview','Overview','overview.html'],['Overview','Pipeline','pipeline.html'],['Overview','Flow','flow.html'],
   ['Papers','Corpus','corpus.html'],['Papers','Explore','explore.html'],['Papers','Lenses','lenses.html'],['Papers','Sources','sources.html'],['Papers','Method','method.html'],
   ['Map','Graph','graph.html'],['Map','Landscape','landscape.html'],['Map','Ideas','ideas.html'],
-  ['Extract','Miners','miners.html'],['Extract','Extracted data','data.html'],
+  ['Extract','Miners','miners.html'],['Extract','Extracted data','data.html'],['Extract','Leaderboard','leaderboard.html'],
   ['Findings','Findings','findings.html'],['Findings','Contradictions','contradictions.html'],['Findings','Hypotheses','hypotheses.html'],['Findings','Chat with papers','chat.html'],['Findings','Intuition','intuition.html'],
   ['Write','Write & export','write.html'],
   ['Ops','Living review','living.html'],['Ops','Costs & runs','costs.html'],['Ops','Platform','platform.html'],
@@ -109,6 +109,7 @@ const ICON = {
   lenses:'<circle cx="9" cy="9" r="5"/><circle cx="15" cy="15" r="5"/>',
   explore:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
   miners:'<path d="M4 20l6-6M14 4l6 6-8 8-6-6z"/><path d="M12 6l6 6"/>',
+  leaderboard:'<path d="M5 20V11M12 20V4M19 20V14"/><path d="M3 20h18"/>',
   data:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/>',
   findings:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   contradictions:'<path d="M4 8h12M12 4l4 4-4 4M20 16H8M12 12l-4 4 4 4"/>',
@@ -200,6 +201,7 @@ const SECTIONS = [
   ['extract','Extract','miners',[
     ['miners','Miners','How well do the miners agree?'],
     ['data','Data','Every extracted value, with its quote.'],
+    ['leaderboard','Leaderboard','Which models score best on which data, and how often are baselines re-reported?'],
   ]],
   ['findings','Findings','findings',[
     ['findings','Findings','What does the evidence say?'],
@@ -246,6 +248,7 @@ function mount(opts){
         <select class="theme-pick" id="themePick" aria-label="Colour theme">${['Dark','Light'].map(g=>`<optgroup label="${g}">${THEMES.filter(t=>t[2]===g).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</optgroup>`).join('')}</select>
       </header>
       <nav class="sec-tabs" aria-label="Sections">${SECTIONS.map(s=>`<a href="${s[3][0][0]}.html" data-section="${s[0]}" ${sec&&sec[0]===s[0]?'aria-current="true"':''}>${svg16(s[2])}${esc(s[1])}</a>`).join('')}</nav>
+      <div id="scopeBar" hidden></div>
       <main id="main"></main>
     </div>
   </div>
@@ -258,6 +261,7 @@ function mount(opts){
   <div class="tip" id="tip" role="tooltip"></div>
   <div class="pop" id="pop" role="tooltip"></div>`;
   wirePops();
+  if (window.HUB_SCOPE && HUB_SCOPE.mountBar) HUB_SCOPE.mountBar($('#scopeBar'), {page});
   if (HUB.served) projectSwitcher($('#projSwitch'));
   if (HUB.served) navStatus();
   /* served under the main hub (/p/<slug>/ui/): the portal at / is home; a single-project server has none */
@@ -393,7 +397,7 @@ function openDrawer(id){
     <p class="meta"><a href="flow.html#lanes=${encodeURIComponent(id)}">See its path</a> · <a href="corpus.html#id=${encodeURIComponent(id)}">Open in Corpus</a> · <a href="${esc(HUB.chatHref({include:[id], only:true}))}">Spar with this paper</a></p>
     <div class="field"><div class="k">Abstract</div><p style="margin:4px 0">${w.abstract?esc(w.abstract):'<span class="meta">No abstract recorded.</span>'}</p></div>
     <h3 class="h3" style="margin-top:22px">What the paper says, field by field</h3>
-    ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${l}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
+    ${FIELDS.map(([f,l])=>`<div class="field"><div class="k">${esc(l)}</div><div class="v">${esc(f==='human'?humanLabel(val(w,f)):pretty(val(w,f)))}</div>${quote(w,f)?`<blockquote class="quote">“${esc(quote(w,f))}”</blockquote>`:'<div class="meta">No quote recorded.</div>'}</div>`).join('')}
     ${inn.length||out.length?`<h3 class="h3" style="margin-top:22px">Inside the corpus</h3>
       ${inn.length?`<p class="meta">Built on by ${inn.length}:</p><ul>${inn.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}
       ${out.length?`<p class="meta">Builds on ${out.length}:</p><ul>${out.slice(0,8).map(x=>`<li><a href="#" data-open="${esc(x.id)}">${esc(x.title)}</a></li>`).join('')}</ul>`:''}`:''}`;
@@ -429,6 +433,8 @@ function init(payload){
   for (const w of RF.works) w.cic = w.cited_here ?? w.cic ?? 0;
   /* The Python copies (services/hub_ui.py) are the source: the payload's wins when present. */
   if (RF.labels) Object.assign(LABELS, RF.labels);
+  /* The project's own facets (services/hub_facets): the drawer's field names follow them. */
+  if (RF.fields) FIELDS.splice(0, FIELDS.length, ...RF.fields);
   if (RF.glossary) Object.assign(GLOSSARY, RF.glossary);
   P = RF.prisma || {};
   byId = new Map(RF.works.map(w=>[w.id,w]));

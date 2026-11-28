@@ -15,7 +15,8 @@ builds the bar and the date range; phase 2 builds paper sets.
 Scope bar
 - HS-01 Every hub page that lists or counts works shows one scope bar (published from, to, paper set).
   Pages with no work lists (kit, platform, costs, learn, protocol, levels, method) show no bar.
-- HS-02 The scope is in the address hash: `scope.from=YYYY-MM`, `scope.to=YYYY-MM`, `scope.set=<set_id>`.
+- HS-02 The scope is in the address hash: `scope.from=YYYY-MM`, `scope.to=YYYY-MM`, `scope.set=<set_id>`,
+  and `scope.undated=1` (the "include undated" tick, HS-11; absent means off).
   A link reproduces the view; the scope persists when moving between pages (the nav carries it).
 - HS-03 Every scoped page states "n of N papers in scope", with N the page's own unscoped denominator
   (for example included works for miner pages) and n computed, never typed (hub-guide: n of N).
@@ -130,6 +131,44 @@ Phase 2 adds ticks and set actions to `corpus`, `data`, `miners`, `explore`, and
 `chat`. Out of phase 1: `flow`, `screening` and `pipeline` (PRISMA numbers are whole-pass by definition,
 bar hidden with the sentence "whole corpus"), `graph`, `journeys`, `hypotheses`, `ideas`, `write`.
 
+## 5a. Leaderboard page (HS-50 to HS-55)
+
+Page id `leaderboard` (section Extract, after Data), payload `leaderboard` (`services/hub_leaderboard.py`).
+Rulings of 2026-11-24 and 2026-11-28; the reference is `ops/results/build_v3.py` of the pilot.
+
+- HS-50 Source. One payload entry per final row of the project's results miner: the registered miner
+  whose fields include `model_role`, `metric` and `value` (the pilot's `m-results`, fields task,
+  model_name, model_role own/baseline, dataset, data_access, setting, metric, value, averaging,
+  result_quote), listed miners first. Rows are the final rows of pass A (agreed, resolved or single):
+  with no pass B every live pass-A row, once pass B exists the extraction service's final rows, never a
+  row with an unresolved disagreement. Each entry carries its source work id, `published`, cells, and
+  the quote and anchor of its value.
+- HS-51 Normalisation is not hard-coded. Spellings of dataset, metric and setting merge only through
+  the approved vocabulary: the `value_aliases` of the approved properties `pr:leaderboard-dataset`,
+  `pr:leaderboard-metric` and `pr:leaderboard-setting` (compared without case, spaces, hyphens and
+  punctuation). An unapproved proposal does nothing; without an approved property values are grouped as
+  extracted. The payload keeps both spellings per row; the page shows "as extracted, as merged" on hover.
+- HS-52 Own-model names. A generic own-model name (ours, our model, our method, our approach, proposed
+  method or model) is replaced by the paper's own model name from a model-card miner field
+  (`model_name`, else `model_name_quote`, of the first miner by name that has it, at most 60
+  characters), otherwise by the paper's short id; a size-only remainder (7B) is joined to it. The rule is
+  shown on hover. Baseline names are never changed.
+- HS-53 Part A (own models): per table (task, dataset, setting, metric), the best value per
+  (model, paper); public rows only (`data_access` public, or not stated on a dataset whose stated rows
+  are all public); a table needs at least 3 models; ranked, top 15; every value opens its quote.
+  Part B (baselines): per baseline, task, dataset, setting and metric, how many papers re-reported it
+  (best value per paper, at least 4 papers), with median, minimum and maximum.
+- HS-54 Scope (HS-22 applied). A row is in scope when its source work is in scope. A baseline row whose
+  source paper is out of scope is hidden and the page says "k baseline rows hidden (source paper out of
+  scope)"; rows are never re-attributed. The n of N line counts works with result rows.
+- HS-55 Numbers. Values are read as numbers (a percent sign is dropped, a value above 1 is divided by
+  100, anything else is left out and counted). `rank` in the service is the one definition of both
+  parts; the page repeats its steps over the rows in scope and a test compares the two.
+
+Not reproduced from leaderboard-v3: its hand-curated `model-names.json`, its fixed list of
+(task, metric) tables, its public-dataset list (replaced by the `data_access` rule of HS-53), and its
+restriction of Part B to two datasets.
+
 ## 6. Proposed decision row (not entered in `docs/decisions.md`)
 
 Decision proposed: the hub scope (publication-date range plus a paper set) is a client-side projection
@@ -140,6 +179,61 @@ superseding), a filter set stores its resolved ids, and agreement figures are ne
 
 1. Preprint versus journal date: keep the work record's `dates.published` (HS-10) or add a researcher
    choice per work. Default proposed: keep.
-2. Whether `leaderboard`/`results` tables exist outside `data`; the code search found none by page id.
+2. (Answered: the leaderboard is its own page, section 5a.)
 3. Whether the baseline hidden-row rule (HS-22) should offer a "show as reference" toggle.
 4. Whether a set can be retired without a successor (a `paper_set.retired` event); v1 omits it.
+
+## 8. Per-project facets (HS-60 to HS-65)
+
+Ruled 2026-11-28. The filters of the Corpus and Explore pages (the "facets") were fixed in code for the
+first pilot (`site_corpus.DEFAULT_DIMS`, a role map to that pilot's miner names, value labels in
+`shell.js`, `explore.js`, `corpus.js`, `write.js`). A project with other miners showed empty facets.
+Facets now come from the categorical (enum) fields of the project's own protocol-listed miners.
+
+- HS-60 A facet is one enum field of one protocol-listed, registered miner. A project's facets are an
+  ordered list: the researcher's setting if one was recorded, else the default rule (HS-61). Month
+  (key `year`) is always the last facet and is not part of a setting; Layer stays a facet of its own.
+- HS-61 Default rule, computed from the registered specs, never typed. (a) A project whose protocol
+  lists no miner, or lists a miner of the first pilot's roles (`m-classification`, `m-mapping`), keeps
+  that pilot's facets (its keys, labels and order, restricted to the listed miners; not checked for being
+  enum fields), so its pages are unchanged. (b) Otherwise the enum fields of the listed miners, taken breadth
+  first (the first enum field of every miner, then the second of every miner, and so on), at most 6 per
+  miner and 12 in all, and shown in protocol then field order. A miner that supplies the layer (a
+  layer-scheme miner or one flagged `paper_layers`) is left out, since Layer is a facet already. A
+  label is the field name made readable, with the miner in brackets when two labels would read alike.
+  The facet key is `<miner>.<field>`, except for the first pilot's fields, which keep their old keys
+  (`technique`, `human`, ...) so addresses keep working.
+- HS-62 Labels and descriptions come from the registered spec: a field's `description` is the facet's
+  description; for a miner derived from a taxonomy the category names label the values of its
+  `category` field. The code keeps one fallback only, the readable form of an id. The researcher's
+  `label` renames a facet.
+- HS-63 The payloads carry the facets: `corpus` (`dims`, each with `key`, `label`, `description`,
+  `values`, and per work `facets[key]` for fields outside the pilot's role miners), `shell` and
+  `explore` (`facets`, the shared value `labels`, and `fields`). The four DNA slots of Explore, the
+  lenses and the drawer (`technique`, `architecture`, `span`, `human`) stand for the project's first
+  four facets when the project has none of those keys; `fields` then names the slots with the
+  project's labels. A project that has the pilot's keys and no setting gets no `fields` (labels as
+  before). The works of the corpus are those a listed miner of any facet or role has read.
+- HS-64 Cache keys: the `shell`, `explore` and `corpus` payloads read every event but the quiet
+  families, so `hub.facets_set` restales them and no other payload; the site products that read the
+  corpus payload follow `hub.%` through `EXPLORER_EVENTS`.
+- HS-65 Not in this change: the lens matrices and chains (`lenses.js`) and the overview keep the
+  pilot's four slots and their labels; Findings keeps the pilot's human, span and process columns;
+  Write's `KIND` names are the kinds of its own scopes, not facets.
+
+### Event `hub.facets_set` v1
+
+| field | type | rule |
+|---|---|---|
+| `facets` | list of 1..24 picks | the whole ordered list; the latest valid event of the project wins |
+| `facets[].miner` | text | a protocol-listed miner with a registered spec |
+| `facets[].field` | text | an enum field of that miner |
+| `facets[].label` | text 1..60 or null | the researcher's name for the facet; null means the readable field name |
+
+Invariants: human actor only (a non-human actor is refused with nothing written, as `work.layer_set`);
+validated against the registered specs at the boundary (unknown miner, unknown or non-enum field, a
+repeated pick, an empty or over-long list are refused, nothing written). The reader ignores an event of
+a non-human actor or with an invalid payload, and skips a pick that no longer resolves; a hand-written
+event failing a guard therefore changes nothing on rebuild. The event is read from the log (it is rare
+and the reader memoises it per last event id); it has no index table. CLI: `factory hub facets set
+--facet miner:field[=Label] ...` and `factory hub facets show`. No MCP tool (the layer move has none).

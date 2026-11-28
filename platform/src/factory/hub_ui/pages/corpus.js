@@ -55,7 +55,9 @@ mark{background:var(--acc-soft);color:var(--fg);border-radius:2px;box-shadow:0 0
 </style>`);
 
 /* ---------- data prep ---------- */
-const DD = [ // key, label, group, glossary key, plain definition
+/* The pilot's own display of its facets (group, glossary key, plain definition), kept as the fallback for its keys so
+   its page is unchanged; every other facet comes from the payload (`C.dims`: label, description from the miner spec). */
+const LEG = [ // key, label, group, glossary key, plain definition
  ['layer','Layer','Paper','layer'],['year','Year','Paper',0,'Year the paper was published.'],
  ['field','Field of science','Paper',0,'The scientific field the system is applied to.'],['data','Data','Paper',0,'The kind of data the system works on.'],
  ['technique','Technique','System','technique'],['architecture','Architecture','System','architecture'],
@@ -63,22 +65,32 @@ const DD = [ // key, label, group, glossary key, plain definition
  ['span','Automated span','Human & process','span'],['assess','Idea assessment','Human & process',0,'How the system judges the ideas it produces.'],
  ['stage','Lifecycle stage','Human & process',0,'Stages of the research cycle a paper covers. A paper can cover several.'],
  ['evaluation','Evaluation','Evaluation',0,'How the system is evaluated.']];
-const GROUPS = ['Paper','System','Human & process','Evaluation'], DIM = Object.fromEntries(DD.map(x => [x[0], x]));
+const LEGK = Object.fromEntries(LEG.map(x => [x[0], x]));
 const dsrc = Object.fromEntries(C.dims.map(x => [x.key, x]));
+const HAS_STAGES = W.some(w => w.stages && w.stages.length);
+const FACETS = 'Project facets';
+const DD = [
+ ...LEG.filter(x => x[0] === 'layer' || x[0] === 'year' || (x[0] === 'stage' ? HAS_STAGES : dsrc[x[0]]))
+   .map(x => dsrc[x[0]] && dsrc[x[0]].renamed && x[0] !== 'year' ? [x[0], dsrc[x[0]].label, ...x.slice(2)] : x),
+ ...C.dims.filter(x => !LEGK[x.key]).map(x => [x.key, x.label, FACETS, 0, x.description || 'A categorical field of one of the project’s miners.'])];
+const GROUPS = ['Paper', 'System', 'Human & process', 'Evaluation', FACETS].filter(g => DD.some(x => x[2] === g)), DIM = Object.fromEntries(DD.map(x => [x[0], x]));
+/* The pilot's slots (technique, field, architecture, span, human) stand for the project's own first facets when it has none of them. */
+const FK = C.dims.filter(x => x.key !== 'year').map(x => x.key), PK = (k, i) => dsrc[k] ? k : (FK[i] || '_none');
+const K_TECH = PK('technique', 0), K_ARCH = PK('architecture', 1), K_SPAN = PK('span', 2), K_HUM = PK('human', 3), K_FIELD = PK('field', 4);
 const LORD = [...(C.layer_order || []), 'unlayered'], HORD = HUB.HUMAN.map(h => h[0]);
 const eraOf = m => m ? m.slice(0,4) + '-H' + (+m.slice(5,7) <= 6 ? 1 : 2) : null;
 const eraLabel = e => { const [y,h] = e.split('-H'); return (h === '1' ? 'Jan–Jun ' : 'Jul–Dec ') + y; };
 const slugMap = new Map(), idMap = new Map();
 for (const w of W) {
-  w._d = {};
+  w._d = {_none: [], stage: [...new Set((w.stages || []).map(s => s.stage))]};
   for (const [k] of DD) {
-    if (k === 'stage') w._d[k] = [...new Set(w.stages.map(s => s.stage))];
+    if (k === 'stage') continue;
     else if (k === 'year') w._d[k] = (w.published || w.year) ? [String(w.published || w.year).slice(0,4)] : [];
     else if (k === 'layer') w._d[k] = [w.layer || 'unlayered'];
     else { const x = dsrc[k], o = x && w[x.src] && w[x.src][x.field]; w._d[k] = o && o.v ? [o.v] : []; }
   }
   w._era = eraOf(w.month);
-  w._q = [w.cls, w.map, w.desc, w.sum].flatMap(o => Object.values(o || {}).map(x => x.q)).concat(w.stages.map(s => s.quote)).filter(Boolean);
+  w._q = [w.cls, w.map, w.desc, w.sum, w.facets].flatMap(o => Object.values(o || {}).map(x => x.q)).concat(w.stages.map(s => s.quote)).filter(Boolean);
   w._t = (w.title + ' ' + (w.abstract || '') + ' ' + w._q.join(' ')).toLowerCase();
   slugMap.set(w.slug, w); idMap.set(w.id, w); if (w.mapped_from) idMap.set(w.mapped_from, w);
 }
@@ -107,15 +119,15 @@ function colorOf(k, v) {
   const i = Math.max(0, (ORD[k] || []).indexOf(v)), light = document.documentElement.dataset.theme === 'light', hue = ((H0[k] || 0) + i * 137.508) % 360;
   return light ? `hsl(${hue} 52% ${i % 2 ? 36 : 46}%)` : `hsl(${hue} 56% ${i % 2 ? 58 : 70}%)`;
 }
-const SEGS = [['technique','Technique'],['architecture','Architecture'],['span','Automated span'],['human','Human role'],['layer','Layer'],['era','Era (half-year)']];
+const SEGS = [K_TECH, K_ARCH, K_SPAN, K_HUM].filter(k => DIM[k]).map(k => [k, DIM[k][1]]).concat([['layer','Layer'],['era','Era (half-year)']]);
 const sv = (w, k) => k === 'era' ? w._era : w._d[k][0];
 const segName = (k, v) => v == null ? 'not coded' : k === 'era' ? eraLabel(v) : lab(k, v);
 const dnaHTML = w => `<span class="dna" data-dna="${esc(w.id)}">${SEGS.map(([k]) => `<i style="--c:${colorOf(k, sv(w, k))}"></i>`).join('')}</span>`;
-const tipDNA = w => `<div style="font-weight:600;margin-bottom:4px">DNA</div>` + SEGS.map(([k, l]) => `<div style="font-size:12px"><span class="dot" style="background:${colorOf(k, sv(w, k))};margin-right:6px"></span>${l} · <b>${esc(segName(k, sv(w, k)))}</b></div>`).join('');
+const tipDNA = w => `<div style="font-weight:600;margin-bottom:4px">DNA</div>` + SEGS.map(([k, l]) => `<div style="font-size:12px"><span class="dot" style="background:${colorOf(k, sv(w, k))};margin-right:6px"></span>${esc(l)} · <b>${esc(segName(k, sv(w, k)))}</b></div>`).join('');
 
 /* ---------- state and URL hash ---------- */
-const ST = {view: 'list', grp: 'technique', sort: 'new', rev: false, q: '', cite: 0, ft: false, id: '', f: {}, sel: new Set(), fq: {}, all: {}, cur: -1, lnAll: false, month: ''};
-const GD = new Set(['technique', 'stage', 'cites']);
+const ST = {view: 'list', grp: K_TECH, sort: 'new', rev: false, q: '', cite: 0, ft: false, id: '', f: {}, sel: new Set(), fq: {}, all: {}, cur: -1, lnAll: false, month: ''};
+const GD = new Set([K_TECH, 'stage', 'cites']);
 const VIEWS = [['list','List'],['timeline','Timeline'],['chrono','Chronology'],['lineage','Lineage'],['graph','Graph']];
 const SORTS = [['new','Date, newest first'],['old','Date, oldest first'],['cited','Most cited here'],['title','Title A to Z']];
 let TERMS = [], RX = null, VIS = [];
@@ -125,21 +137,31 @@ const hl = s => { s = String(s ?? ''); return RX ? s.split(RX).map((p, i) => i %
 function readHash() {
   const p = HUB.hash.get();
   ST.view = VIEWS.some(v => v[0] === p.get('view')) ? p.get('view') : 'list';
-  ST.grp = p.get('grp') && (p.get('grp') === 'none' || DIM[p.get('grp')]) ? p.get('grp') : 'technique';
+  ST.grp = p.get('grp') && (p.get('grp') === 'none' || DIM[p.get('grp')]) ? p.get('grp') : K_TECH;
   ST.sort = SORTS.some(s => s[0] === p.get('sort')) ? p.get('sort') : 'new'; ST.rev = p.get('rev') === '1';
   setQ(p.get('q') || ''); ST.cite = parseInt(p.get('cite'), 10) || 0; ST.ft = p.get('ft') === '1'; ST.month = /^\d{4}-\d{2}$/.test(p.get('month') || '') ? p.get('month') : '';
   ST.f = {}; for (const [k] of DD) { const v = (p.get(k) || '').split(/[~,]/).filter(Boolean); if (v.length) ST.f[k] = new Set(v); }
   ST.id = p.get('id') || '';
 }
 function writeHash() {
-  const o = {view: ST.view === 'list' ? null : ST.view, grp: ST.grp === 'technique' ? null : ST.grp, sort: ST.sort === 'new' ? null : ST.sort,
+  const o = {view: ST.view === 'list' ? null : ST.view, grp: ST.grp === K_TECH ? null : ST.grp, sort: ST.sort === 'new' ? null : ST.sort,
     rev: ST.rev ? 1 : null, q: ST.q || null, cite: ST.cite || null, ft: ST.ft ? 1 : null, month: ST.month || null, id: ST.id || null};
   for (const [k] of DD) o[k] = ST.f[k] && ST.f[k].size ? [...ST.f[k]].join('~') : null;
   HUB.hash.set(o);
 }
 
+/* ---------- scope (HS-02, HS-03, HS-11, HS-20): the date range narrows every list and count ---------- */
+const SCOPE = window.HUB_SCOPE;
+let INS = new Set(W.map(w => w.id)), SRES = null; // ids in scope; the last apply() result
+function applyScope() {
+  SRES = SCOPE.apply(W, w => w.published, SCOPE.current(), {includeUndated: SCOPE.includeUndated()});
+  INS = new Set(SRES.inScope.map(w => w.id));
+  for (const id of [...ST.sel]) if (!INS.has(id)) ST.sel.delete(id);
+}
+
 /* ---------- filtering ---------- */
 function ok(w, skip) {
+  if (!INS.has(w.id)) return false;
   if (ST.cite > 0 && !(w.cited_in_corpus >= ST.cite)) return false;
   if (ST.ft && !w.doc) return false;
   if (ST.month && w.month !== ST.month) return false;
@@ -170,8 +192,8 @@ function citeNote() {
 }
 const infoOf = ([k, l, , gk, def]) => HUB.info(`<b>${esc(l)}</b><p>${esc(gk && HUB.GLOSSARY[gk] ? HUB.GLOSSARY[gk][1] : def)}</p>${LAYER_NOTE(k)}<p><span class="k">How it's counted.</span> Each number is the papers that match your other filters and have this value. Values with none are dimmed.</p>`, 'About ' + l);
 function sideSkeleton() {
-  return GROUPS.map(g => `<details class="fg" data-g="${esc(g)}" ${g === 'Paper' || g === 'System' ? 'open' : ''}><summary>${esc(g)}<span class="ga"></span><button type="button" class="lnk" data-cg="${esc(g)}">Clear group</button></summary>` +
-    DD.filter(x => x[2] === g).map(x => `<div class="fc" data-d="${x[0]}"><div class="fh">${esc(x[1])}${infoOf(x)}${ORD[x[0]].length > 10 ? `<input type="text" data-fq="${x[0]}" placeholder="Find a value" aria-label="Find a value in ${esc(x[1])}">` : ''}</div><div class="fv"></div></div>`).join('') + '</details>').join('');
+  return GROUPS.map(g => `<details class="fg" data-g="${esc(g)}" ${g === 'Paper' || g === 'System' || g === FACETS ? 'open' : ''}><summary>${esc(g)}<span class="ga"></span><button type="button" class="lnk" data-cg="${esc(g)}">Clear group</button></summary>` +
+    DD.filter(x => x[2] === g).map(x => `<div class="fc" data-d="${esc(x[0])}"><div class="fh">${esc(x[1])}${infoOf(x)}${ORD[x[0]].length > 10 ? `<input type="text" data-fq="${esc(x[0])}" placeholder="Find a value" aria-label="Find a value in ${esc(x[1])}">` : ''}</div><div class="fv"></div></div>`).join('') + '</details>').join('');
 }
 function paintFacets() {
   for (const [k] of DD) {
@@ -180,7 +202,7 @@ function paintFacets() {
     if (fq) vals = vals.filter(v => lab(k, v).toLowerCase().includes(fq));
     const lim = fq || ST.all[k] || vals.length <= 10 ? vals.length : 8;
     const shown = vals.filter((v, i) => i < lim || act.has(v));
-    $(`.fc[data-d="${k}"] .fv`).innerHTML = shown.map(v => `<label class="fi ${act.has(v) ? 'on' : ''} ${cnt[v] ? '' : 'z'}"><input type="checkbox" data-d="${k}" data-v="${esc(v)}" ${act.has(v) ? 'checked' : ''}><i class="dot" style="background:${colorOf(k, v)}"></i><span class="fl" title="${esc(lab(k, v))}">${esc(lab(k, v))}</span><span class="n">${cnt[v] || 0}</span></label>`).join('')
+    $(`.fc[data-d="${k}"] .fv`).innerHTML = shown.map(v => `<label class="fi ${act.has(v) ? 'on' : ''} ${cnt[v] ? '' : 'z'}"><input type="checkbox" data-d="${esc(k)}" data-v="${esc(v)}" ${act.has(v) ? 'checked' : ''}><i class="dot" style="background:${colorOf(k, v)}"></i><span class="fl" title="${esc(lab(k, v))}">${esc(lab(k, v))}</span><span class="n">${cnt[v] || 0}</span></label>`).join('')
       + (shown.length < vals.length ? `<button type="button" class="fmore" data-more="${k}">Show all ${fmt(vals.length)}</button>` : ST.all[k] && vals.length > 10 ? `<button type="button" class="fmore" data-more="${k}">Show fewer</button>` : '')
       + (vals.length ? '' : '<div class="meta">No match.</div>');
   }
@@ -191,7 +213,7 @@ function paintFacets() {
 /* ---------- chips and bar ---------- */
 function paintBar(ws) {
   const chips = [];
-  for (const [k, l] of DD.map(x => [x[0], x[1]])) for (const v of ST.f[k] || []) chips.push([`${l}: ${lab(k, v)}`, `data-k="${k}" data-v="${esc(v)}"`]);
+  for (const [k, l] of DD.map(x => [x[0], x[1]])) for (const v of ST.f[k] || []) chips.push([`${l}: ${lab(k, v)}`, `data-k="${esc(k)}" data-v="${esc(v)}"`]);
   if (ST.q) chips.push([`Search: ${ST.q}`, 'data-x="q"']); if (ST.cite > 0) chips.push([`Cited here at least ${ST.cite}`, 'data-x="cite"']); if (ST.ft) chips.push(['With full text', 'data-x="ft"']); if (ST.month) chips.push([`Published ${ST.month}`, 'data-x="month"']);
   const one = k => ST.f[k] && ST.f[k].size === 1 ? [...ST.f[k]][0] : '';
   const ex = new URLSearchParams(); if (ST.q) ex.set('t', ST.q); if (one('human')) ex.set('h', one('human')); if (one('layer')) ex.set('l', one('layer'));
@@ -201,7 +223,7 @@ function paintBar(ws) {
   const chatIds = (sel.length ? sel : ids), layerOne = one('layer');
   const chatLinks = chatIds.length ? ` · <a href="${esc(HUB.chatHref({include: chatIds, only: true}))}" title="${chatIds.length > 60 ? 'The first 60 papers go into the basket; the Chat page says so.' : 'Open the Chat page with these papers in its basket.'}">Chat with these (${fmt(Math.min(chatIds.length, 60))})</a>` : '';
   const layerLink = layerOne ? ` · <a href="${esc(HUB.chatHref({layers: [layerOne]}))}">Chat with the whole layer: ${esc(H.layerLabel(layerOne))}</a>` : '';
-  $('#cbar').innerHTML = `<span class="cnt">${fmt(ws.length)} of ${fmt(W.length)} papers</span>${chips.map(c => `<button type="button" class="chip" ${c[1]} title="Remove this filter">${esc(c[0])} <span class="x">×</span></button>`).join('')}
+  $('#cbar').innerHTML = `<span class="cnt">${fmt(ws.length)} of ${fmt(INS.size)} papers</span>${chips.map(c => `<button type="button" class="chip" ${c[1]} title="Remove this filter">${esc(c[0])} <span class="x">×</span></button>`).join('')}
     ${chips.length ? '<button type="button" class="chip" data-x="all">Clear all</button>' : ''}<span class="sp"></span>
     <a href="explore.html#${ex}">Explore these in rings</a> · <a href="data.html#${dp}">See their data</a>${pathIds.length && (sel.length || ids.length <= 20) ? ` · <a href="flow.html#lanes=${encodeURIComponent(pathIds.join(','))}">See their paths</a>` : ''}${chatLinks}${layerLink}`;
   const n = ST.sel.size, over = n > 200;
@@ -218,22 +240,28 @@ function snip(w) {
   return '';
 }
 function rowHTML(w) {
-  const hv = w._d.human[0], c = w.cited_in_corpus;
+  const hv = w._d[K_HUM][0], c = w.cited_in_corpus;
   return `<div class="cr" role="button" tabindex="-1" data-id="${esc(w.id)}" aria-selected="${ST.sel.has(w.id)}"><input type="checkbox" class="xs" data-id="${esc(w.id)}" ${ST.sel.has(w.id) ? 'checked' : ''} aria-label="Select this paper" title="Select"><div class="cm">
     <div class="ct">${hl(w.title)}${w.mapped_from ? ' <span class="meta" title="Its fields were read from a duplicate record of the same paper.">(read under a duplicate)</span>' : ''}${w.not_read_yet ? ' <span class="meta" title="Included, but no miner has read it yet.">(not read yet)</span>' : ''}</div>
-    <div class="mt"><span>${esc(dateOf(w))}</span>${w._d.technique[0] ? `<span>${esc(lab('technique', w._d.technique[0]))}</span>` : ''}${w._d.field[0] ? `<span>${esc(lab('field', w._d.field[0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf('human', hv)}"></i>${esc(lab('human', hv))}</span>` : ''}${w.layer_source === 'moved' ? `<span title="${esc('Moved to this layer by the researcher' + (w.layer_miner ? '; the miner said ' + H.layerLabel(w.layer_miner) : ''))}">moved by the researcher</span>` : ''}</div>
-    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it">${c == null ? '–' : c} cited here</span><a class="chatadd meta" href="${esc(HUB.chatHref({include: [w.id], only: true}))}" title="Open the Chat page with this paper in its basket">Add to chat</a></div></div>`;
+    <div class="mt"><span>${esc(dateOf(w))}</span>${w._d[K_TECH][0] ? `<span>${esc(lab(K_TECH, w._d[K_TECH][0]))}</span>` : ''}${w._d[K_FIELD][0] ? `<span>${esc(lab(K_FIELD, w._d[K_FIELD][0]))}</span>` : ''}${hv ? `<span><i class="dot" style="background:${colorOf(K_HUM, hv)}"></i>${esc(lab(K_HUM, hv))}</span>` : ''}${w.layer_source === 'moved' ? `<span title="${esc('Moved to this layer by the researcher' + (w.layer_miner ? '; the miner said ' + H.layerLabel(w.layer_miner) : ''))}">moved by the researcher</span>` : ''}</div>
+    ${snip(w)}<div class="stg">${tagsOf(w)}</div></div><div class="rt">${dnaHTML(w)}<span class="ci" title="Cited here: papers in this review that cite it (counted over the whole corpus, not the scope)">${c == null ? '–' : c} cited here</span><a class="chatadd meta" href="${esc(HUB.chatHref({include: [w.id], only: true}))}" title="Open the Chat page with this paper in its basket">Add to chat</a></div></div>`;
 }
 function viewList(ws) {
   VIS = []; let h = '';
+  if (SRES && !SRES.n && SRES.N) return emptyScope();
   for (const [g, l] of groups(ws, ST.grp)) { if (ST.grp !== 'none') h += `<div class="cg">${esc(glab(ST.grp, g))} <span>${fmt(l.length)}</span></div>`; h += l.map(rowHTML).join(''); VIS.push(...l.map(w => w.id)); }
   return h || '<p class="meta">No papers match. Remove a filter to see more.</p>';
 }
+/* HS-04: an empty scope names itself and offers the reset. */
+function emptyScope() {
+  const f = SCOPE.format(SCOPE.current()).replace(/&/g, ', ');
+  return `<p class="meta scope-empty-state" id="cempty">No paper falls in this scope${f ? ' (' + esc(f) + ')' : ''}. <button type="button" class="btn" data-scope-reset>Reset the scope</button></p>`;
+}
 function viewTimeline(ws) {
-  const gk = ST.grp === 'none' ? 'technique' : ST.grp, months = [...new Set(W.map(w => w.month).filter(Boolean))].sort();
+  const gk = ST.grp === 'none' ? K_TECH : ST.grp, months = [...new Set(W.map(w => w.month).filter(Boolean))].sort();
   let h = `<div class="scroll"><div class="axs">${months.map(m => `<div>${m.slice(2)}</div>`).join('')}</div>`;
   for (const [g, l] of groups(ws, gk)) { const by = {}; for (const w of l) (by[w.month] = by[w.month] || []).push(w);
-    h += `<div class="lane"><b>${esc(glab(gk, g))} <span>${l.length}</span></b><div class="cells">${months.map(m => `<div class="cell">${(by[m] || []).map(w => `<span class="td" data-id="${esc(w.id)}" data-tt="${esc(w.title)}" style="background:${colorOf('technique', w._d.technique[0])}"></span>`).join('')}</div>`).join('')}</div></div>`; }
+    h += `<div class="lane"><b>${esc(glab(gk, g))} <span>${l.length}</span></b><div class="cells">${months.map(m => `<div class="cell">${(by[m] || []).map(w => `<span class="td" data-id="${esc(w.id)}" data-tt="${esc(w.title)}" style="background:${colorOf(K_TECH, w._d[K_TECH][0])}"></span>`).join('')}</div>`).join('')}</div></div>`; }
   return h + '</div><p class="meta">Colour is the technique.</p>';
 }
 function viewChrono(ws) {
@@ -241,7 +269,7 @@ function viewChrono(ws) {
   const by = {}; for (const w of ws) (by[w.month] = by[w.month] || []).push(w);
   return `<div class="scroll"><div class="chr">${months.map(m => `<div class="mon"><h4>${esc(m)} <span>${by[m].length}</span></h4>${by[m].sort(cmp).map(w => {
     const q = (w.desc.contribution && w.desc.contribution.q) || (w.cls.technique_primary && w.cls.technique_primary.q) || '', o = (OUT[w.slug] || []).length, i = (INN[w.slug] || []).length;
-    return `<div class="card2" data-id="${esc(w.id)}">${esc(dateOf(w))}<b>${hl(w.title)}</b><span class="tag">${esc(lab('technique', w._d.technique[0] || ''))}</span> <span class="tag">${esc(lab('architecture', w._d.architecture[0] || ''))}</span> <span class="tag">${esc(lab('human', w._d.human[0] || ''))}</span>
+    return `<div class="card2" data-id="${esc(w.id)}">${esc(dateOf(w))}<b>${hl(w.title)}</b><span class="tag">${esc(lab(K_TECH, w._d[K_TECH][0] || ''))}</span> <span class="tag">${esc(lab(K_ARCH, w._d[K_ARCH][0] || ''))}</span> <span class="tag">${esc(lab(K_HUM, w._d[K_HUM][0] || ''))}</span>
       <div style="margin-top:5px">${w._d.stage.map(s => `<span class="sd" title="${esc(pretty(s))}" style="background:${colorOf('stage', s)}"></span>`).join('')}</div>${o || i ? `<div>cites ${o} · cited by ${i} here</div>` : ''}${q ? `<div class="qt">“${esc(q.slice(0, 200))}”</div>` : ''}${w.doc ? `<div><a href="${esc(w.doc.inspector)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Open the converted document (${esc(w.doc.kind)})</a></div>` : ''}</div>`; }).join('')}</div>`).join('') || '<p class="meta">No papers match.</p>'}</div></div>`;
 }
 function viewLineage(ws) {
@@ -253,7 +281,7 @@ function viewLineage(ws) {
   const Wd = months.length * CW + 20, Ht = TOP + mr * RH + 20;
   return `<label class="meta" style="display:inline-flex;gap:6px;margin-bottom:8px"><input type="checkbox" id="lnall" ${ST.lnAll ? 'checked' : ''}> Show papers without links</label>
    <div class="lnw" id="lnw"><div style="position:relative;width:${Wd}px;height:${Ht}px"><svg width="${Wd}" height="${Ht}"></svg>${months.map(m => `<div class="mh" style="left:${col[m] * CW + 8}px">${esc(m)} (${by[m].length})</div>`).join('')}
-   ${list.map(w => { const p = pos[w.slug], bo = w.sum && w.sum.builds_on ? ' · builds on: ' + w.sum.builds_on.v : ''; return `<div class="nd" data-s="${esc(w.slug)}" data-id="${esc(w.id)}" title="${esc(w.title + bo)}" style="left:${p.x}px;top:${p.y}px;border-left-color:${colorOf('technique', w._d.technique[0])}"><div class="d">${esc(dateOf(w))} · ${esc(lab('technique', w._d.technique[0] || ''))}</div>${esc(w.title.slice(0, 70))}</div>`; }).join('')}</div></div>
+   ${list.map(w => { const p = pos[w.slug], bo = w.sum && w.sum.builds_on ? ' · builds on: ' + w.sum.builds_on.v : ''; return `<div class="nd" data-s="${esc(w.slug)}" data-id="${esc(w.id)}" title="${esc(w.title + bo)}" style="left:${p.x}px;top:${p.y}px;border-left-color:${colorOf(K_TECH, w._d[K_TECH][0])}"><div class="d">${esc(dateOf(w))} · ${esc(lab(K_TECH, w._d[K_TECH][0] || ''))}</div>${esc(w.title.slice(0, 70))}</div>`; }).join('')}</div></div>
    <p class="meta">${fmt(linked.size)} papers have a citation link here (${fmt(edges.length)} links).</p>`;
 }
 function wireLineage(ws) {
@@ -271,7 +299,7 @@ function wireLineage(ws) {
     draw(c.he); openWork(slugMap.get(s)); });
 }
 function viewGraph() {
-  return `<div class="gwrap"><div class="gtog">${[['technique','Technique'],['field','Field'],['human','Human role'],['stage','Lifecycle stage'],['cites','Citations']].map(([k, l]) => `<button type="button" class="chip" data-g="${k}" aria-pressed="${GD.has(k)}">${l}</button>`).join('')}<span class="meta">Drag, scroll to zoom, click a paper</span></div><canvas></canvas></div>`;
+  return `<div class="gwrap"><div class="gtog">${[K_TECH, K_FIELD, K_HUM].filter(k => DIM[k]).map(k => [k, DIM[k][1]]).concat([['stage','Lifecycle stage'],['cites','Citations']]).map(([k, l]) => `<button type="button" class="chip" data-g="${esc(k)}" aria-pressed="${GD.has(k)}">${esc(l)}</button>`).join('')}<span class="meta">Drag, scroll to zoom, click a paper</span></div><canvas></canvas></div>`;
 }
 let gstop = null;
 function wireGraph(ws) {
@@ -280,11 +308,11 @@ function wireGraph(ws) {
   const cv = box.querySelector('canvas'), dpr = window.devicePixelRatio || 1, cw = cv.clientWidth, ch = cv.clientHeight; cv.width = cw * dpr; cv.height = ch * dpr; const g = cv.getContext('2d');
   const nodes = [], idx = {}, edges = [], ced = [], node = (k, o) => { if (!(k in idx)) { idx[k] = nodes.length; nodes.push(Object.assign({k, x: Math.random() * 600 - 300, y: Math.random() * 400 - 200, vx: 0, vy: 0, deg: 0}, o)); } return idx[k]; };
   for (const w of ws) { const a = node('w:' + w.id, {w, r: 3});
-    for (const k of ['technique', 'field', 'human']) { const v = GD.has(k) ? w._d[k][0] : ''; if (v) { const b = node(k + ':' + v, {label: lab(k, v), cat: k, r: 6}); edges.push([a, b]); nodes[b].deg++; } }
+    for (const k of [K_TECH, K_FIELD, K_HUM]) { const v = GD.has(k) ? w._d[k][0] : ''; if (v) { const b = node(k + ':' + v, {label: lab(k, v), cat: k, r: 6}); edges.push([a, b]); nodes[b].deg++; } }
     if (GD.has('stage')) for (const s of w._d.stage) { const b = node('stage:' + s, {label: pretty(s), cat: 'stage', r: 6}); edges.push([a, b]); nodes[b].deg++; } }
   if (GD.has('cites')) for (const [a, b] of C.cites) { const x = slugMap.get(a), y = slugMap.get(b); if (x && y && ('w:' + x.id) in idx && ('w:' + y.id) in idx) ced.push([idx['w:' + x.id], idx['w:' + y.id]]); }
   for (const n of nodes) if (n.cat) n.r = 5 + Math.sqrt(n.deg) * 1.6;
-  const catCol = () => ({technique: HUB.cssv('--l-core'), field: HUB.cssv('--l-benchmark'), human: HUB.cssv('--h-collab'), stage: HUB.cssv('--h-physical')});
+  const catCol = () => ({[K_TECH]: HUB.cssv('--l-core'), [K_FIELD]: HUB.cssv('--l-benchmark'), [K_HUM]: HUB.cssv('--h-collab'), stage: HUB.cssv('--h-physical')});
   let cam = {x: 0, y: 0, z: 0.9}, drag = null, hover = null, it = 0, alive = true, CC = catCol(); const fg = HUB.cssv('--fg'), edge = HUB.cssv('--dim'), cite = HUB.cssv('--exc');
   const step = () => { const a = Math.max(0.02, 1 - it / 400); it++;
     for (let i = 0; i < nodes.length; i++) { const p = nodes[i]; for (let j = i + 1; j < nodes.length; j++) { const q = nodes[j]; const dx = p.x - q.x, dy = p.y - q.y, d2 = dx * dx + dy * dy + 0.1; if (d2 > 250000) continue; const f = (p.cat && q.cat ? 9000 : (p.cat || q.cat ? 1800 : 220)) / d2; p.vx += dx * f; p.vy += dy * f; q.vx -= dx * f; q.vy -= dy * f; } }
@@ -296,7 +324,7 @@ function wireGraph(ws) {
     g.strokeStyle = cite; g.fillStyle = cite; g.lineWidth = 1.4 / cam.z;
     for (const [i, j] of ced) { const p = nodes[i], q = nodes[j]; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(q.x, q.y); g.stroke(); const an = Math.atan2(q.y - p.y, q.x - p.x), s = 6 / cam.z, cx = q.x - Math.cos(an) * q.r, cy = q.y - Math.sin(an) * q.r;
       g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx - Math.cos(an) * s + Math.sin(an) * s / 2, cy - Math.sin(an) * s - Math.cos(an) * s / 2); g.lineTo(cx - Math.cos(an) * s - Math.sin(an) * s / 2, cy - Math.sin(an) * s + Math.cos(an) * s / 2); g.closePath(); g.fill(); }
-    for (const n of nodes) { g.beginPath(); g.arc(n.x, n.y, n.r, 0, 7); g.fillStyle = n.cat ? CC[n.cat] : colorOf('technique', n.w._d.technique[0]); g.globalAlpha = n === hover || (n.w && n.w.id === ST.id) ? 1 : .85; g.fill();
+    for (const n of nodes) { g.beginPath(); g.arc(n.x, n.y, n.r, 0, 7); g.fillStyle = n.cat ? CC[n.cat] : colorOf(K_TECH, n.w._d[K_TECH][0]); g.globalAlpha = n === hover || (n.w && n.w.id === ST.id) ? 1 : .85; g.fill();
       if (n.w && n.w.id === ST.id) { g.lineWidth = 2 / cam.z; g.strokeStyle = fg; g.stroke(); } }
     g.globalAlpha = 1; g.fillStyle = fg; g.font = (11 / cam.z) + 'px Inter,system-ui,sans-serif'; for (const n of nodes) if (n.cat || n === hover) g.fillText(n.label || n.w.title.slice(0, 70), n.x + n.r + 2, n.y + 3); };
   const loop = () => { if (!alive || !document.body.contains(cv)) return; if (it < 700 || drag) step(); draw(); requestAnimationFrame(loop); }; loop();
@@ -358,8 +386,8 @@ function detailHTML(w) {
   ${w.mapped_from ? `<p class="meta">Its fields were read from a duplicate record of the same paper (<span class="mono">${esc(w.mapped_from)}</span>).</p>` : ''}
   <p style="margin:8px 0">${dnaHTML(w)}</p>
   <details><summary class="h3" style="cursor:pointer">Abstract</summary><p style="font-size:var(--t-s)">${w.abstract ? hl(w.abstract) : '<span class="meta">No abstract recorded.</span>'}</p></details>
-  <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${l}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
-  <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')}</h3>
+  <h3 class="h3">Structured summary</h3>${Object.keys(s).length ? SUMF.filter(([k]) => s[k]).map(([k, l]) => `<div class="kv"><b>${esc(l)}</b> ${esc(s[k].v)}${s[k].q && s[k].q !== s[k].v && !s[k].v.startsWith(s[k].q.slice(0, 30)) ? `<blockquote class="quote">“${hl(s[k].q)}” <span class="meta">${esc(s[k].a || '')}</span></blockquote>` : ''}</div>`).join('') : '<div class="meta">Not read for this paper yet.</div>'}
+  <h3 class="h3">Citations within the corpus ${HUB.info(esc(citeNote()), 'About citations')} ${SCOPE.label('corpus')}</h3>
   <b class="meta">Cites</b><ul>${L(o)}</ul><b class="meta">Cited by</b><ul>${L(i)}</ul>
   <h3 class="h3">Lifecycle stages</h3>${w.stages.map(x => `<div class="kv"><span class="tag">${esc(pretty(x.stage))}</span> <span class="meta">${esc(x.mode || '')}</span><blockquote class="quote">“${hl(x.quote)}” <span class="meta">${esc(x.anchor || '')}</span></blockquote></div>`).join('') || '<div class="meta">None recorded.</div>'}
   <h3 class="h3">Classification</h3>${kv(w.cls)}<h3 class="h3">Process, human role, blueprint</h3>${kv(w.map)}<h3 class="h3">Descriptors</h3>${kv(w.desc)}
@@ -378,12 +406,14 @@ function closeWork() { ST.id = ''; $('#cdet').removeAttribute('open'); writeHash
 /* ---------- render ---------- */
 function render() {
   if (gstop) gstop();
+  applyScope(); SCOPE.renderLine($('#cscope'), SRES, {});
   const ws = W.filter(w => ok(w)); paintFacets(); paintBar(ws);
   $('#viewSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === ST.view));
   $('#cq').value !== ST.q && ($('#cq').value = ST.q); $('#sortby').value = ST.sort; $('#grp').value = ST.grp; $('#rev').setAttribute('aria-pressed', ST.rev);
   $('#cite').value = ST.cite || ''; $('#ft').checked = ST.ft; $('#grp').disabled = false;
   const v = ST.view, cv = $('#cv');
-  cv.innerHTML = v === 'list' ? viewList(ws) : v === 'timeline' ? viewTimeline(ws) : v === 'chrono' ? viewChrono(ws) : v === 'lineage' ? viewLineage(ws) : viewGraph();
+  if (SRES.n === 0 && SRES.N > 0) VIS = [];
+  cv.innerHTML = SRES.n === 0 && SRES.N > 0 ? emptyScope() : v === 'list' ? viewList(ws) : v === 'timeline' ? viewTimeline(ws) : v === 'chrono' ? viewChrono(ws) : v === 'lineage' ? viewLineage(ws) : viewGraph();
   if (v === 'lineage') wireLineage(ws); if (v === 'graph') wireGraph(ws);
   if (v === 'list') { ST.cur = Math.min(ST.cur, VIS.length - 1); mark(); }
   writeHash();
@@ -395,9 +425,10 @@ const infoPage = `<b>What it shows</b> The included papers, with what the miners
 $('#main').innerHTML = H.header({title: 'Corpus', level: 1, infoHtml: infoPage, sub: 'Filter the papers, then open one to see each value with its quote.'}) + `
 <div class="ctool"><input type="text" class="q" id="cq" placeholder="Search titles, abstracts and quotes" aria-label="Search titles, abstracts and quotes"><span class="kbd" title="Press f to search">f</span>
  <span class="seg" id="viewSeg">${VIEWS.map(v => `<button type="button" data-v="${v[0]}">${v[1]}</button>`).join('')}</span><button type="button" class="btn ftoggle" id="ftog">Filters</button></div>
-<div class="ctool"><label>Group by <select id="grp">${DD.map(x => `<option value="${x[0]}">${x[1]}</option>`).join('')}<option value="none">None</option></select></label>
+<div class="ctool"><label>Group by <select id="grp">${DD.map(x => `<option value="${esc(x[0])}">${esc(x[1])}</option>`).join('')}<option value="none">None</option></select></label>
  <label>Sort <select id="sortby">${SORTS.map(s => `<option value="${s[0]}">${s[1]}</option>`).join('')}</select></label><button type="button" class="btn" id="rev" aria-pressed="false">Reverse</button>
  <label>${HUB.term('cic', 'Cited here')} at least <input type="number" id="cite" min="0" step="1"></label><label><input type="checkbox" id="ft"> With full text</label></div>
+<div id="cscope"></div>
 <div class="cbar" id="cbar"></div>
 <div class="csel"><button type="button" class="btn" id="xall">Select all in filter</button><button type="button" class="btn primary" id="xgo" disabled>Export selected (0)</button><button type="button" class="btn" id="xclr">Clear</button><span class="meta" id="xmsg"></span><span id="xact"></span></div>
 <div class="cwrap"><aside class="cside" id="cside" aria-label="Filters">${sideSkeleton()}</aside><section id="cv" aria-live="polite"></section></div>
@@ -446,6 +477,7 @@ $('#xgo').onclick = () => {
   $('#xmsg').dataset.keep = 'Saved work-ids.txt. To get the documents, run: ' + cmd; paintBar(W.filter(w => ok(w))); };
 const cv = $('#cv');
 cv.addEventListener('click', e => {
+  if (e.target.closest('[data-scope-reset]')) { SCOPE.reset(); return; }
   if (e.target.closest('a.chatadd')) return; /* a plain link to the Chat page: no server write */
   if (e.target.closest('input.xs')) { const c = e.target.closest('input.xs'); c.checked ? ST.sel.add(c.dataset.id) : ST.sel.delete(c.dataset.id); c.closest('.cr').setAttribute('aria-selected', c.checked); paintBar(W.filter(w => ok(w))); return; }
   const r = e.target.closest('.cr, .td, .card2'); if (r && r.dataset.id) { if (r.classList.contains('cr')) { ST.cur = VIS.indexOf(r.dataset.id); mark(); } openWork(idMap.get(r.dataset.id)); } });
@@ -461,6 +493,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'j' || e.key === 'k') { ST.cur = Math.max(0, Math.min(VIS.length - 1, ST.cur + (e.key === 'j' ? 1 : -1))); mark(); }
   else if (e.key === 'Enter' && VIS[ST.cur]) openWork(idMap.get(VIS[ST.cur]));
   else if (e.key === 'x' && VIS[ST.cur]) { const id = VIS[ST.cur]; ST.sel.has(id) ? ST.sel.delete(id) : ST.sel.add(id); const r = document.querySelector(`.cr[data-id="${CSS.escape(id)}"]`); if (r) { r.setAttribute('aria-selected', ST.sel.has(id)); r.querySelector('input.xs').checked = ST.sel.has(id); } paintBar(W.filter(w => ok(w))); } });
+SCOPE.onChange(() => render());
 document.addEventListener('hub:theme', () => { refreshColors(); render(); });
 window.addEventListener('hashchange', () => { const before = ST.id; readHash(); render(); if (ST.id && ST.id !== before) openWork(idMap.get(ST.id), true); else if (!ST.id) $('#cdet').removeAttribute('open'); });
 render(); if (ST.id) openWork(idMap.get(ST.id), true);

@@ -154,6 +154,7 @@ METHODS: Final[dict[str, str]] = {
 BLURBS: Final[dict[str, str]] = {
     "protocol": "The question, criteria, decisions, press reviews and deviations.",
     "overview": "The state of the review at a glance.",
+    "leaderboard": "Models ranked by the results the papers report, per dataset and metric.",
     "pipeline": "Where the work stands and what runs next.",
     "corpus": "Browse the papers and open any one with its quotes.",
     "flow": "Where the records went, step by step.",

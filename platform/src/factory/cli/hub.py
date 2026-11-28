@@ -10,15 +10,78 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
 import factory.mcp.server  # noqa: F401  (registers the server builder for the tool catalog)
-from factory.services import hub_build
+from factory.errors import FactoryValidationError, ValidationIssue
+from factory.model.hub_facets import FacetPick
+from factory.services import hub_build, hub_facets
 
 hub_app = typer.Typer(
     name="hub",
     help="The hub v2 pages: build them as static files.",
     no_args_is_help=True,
 )
+
+facets_app = typer.Typer(
+    name="facets",
+    help="The facets of the hub: set them (the researcher) or show them.",
+    no_args_is_help=True,
+)
+hub_app.add_typer(facets_app)
+
+
+def parse_facet(text: str) -> FacetPick:
+    """`miner:field` or `miner:field=Label` as a pick; raises typer.BadParameter otherwise."""
+    spec, _, label = text.partition("=")
+    miner, sep, name = spec.partition(":")
+    if not sep or not miner or not name:
+        raise typer.BadParameter(f"{text!r}: write miner:field or miner:field=Label")
+    try:
+        return FacetPick(miner=miner, field=name, label=label.strip() or None)
+    except ValidationError as exc:
+        raise FactoryValidationError(
+            [
+                ValidationIssue(".".join(str(x) for x in e["loc"]) or "facet", e["msg"])
+                for e in exc.errors()
+            ]
+        ) from None
+
+
+@facets_app.command("set")
+def facets_set_cmd(
+    ctx: typer.Context,
+    facet: Annotated[
+        list[str],
+        typer.Option(
+            "--facet",
+            help="An enum field of a listed miner as miner:field or miner:field=Label; repeat "
+            "for each facet, in the order the hub shows them.",
+        ),
+    ],
+) -> None:
+    """Record the hub's facets (the researcher's act); the latest list replaces the earlier."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        picks = [parse_facet(f) for f in facet]
+        project = _resolve_project(state)
+        event_id = hub_facets.set_facets(project, project.human_actor(), picks)
+    typer.echo(f"recorded {len(picks)} facets ({event_id})")
+
+
+@facets_app.command("show")
+def facets_show_cmd(ctx: typer.Context) -> None:
+    """The facets the hub shows now: key, label, miner and field, in order."""
+    from factory.cli.main import _reporting_errors, _resolve_project, _state
+
+    state = _state(ctx)
+    with _reporting_errors():
+        project = _resolve_project(state)
+        facets = hub_facets.facets_of(project)
+    for f in facets:
+        typer.echo(f"{f.key}\t{f.label}\t{f.miner}:{f.field}")
 
 
 @hub_app.command("build")

@@ -360,6 +360,8 @@ THEMES: Final[tuple[ThemeSpec, ...]] = (
 # Served name -> (package-relative path under factory/, content type).
 ASSETS: Final[dict[str, tuple[str, str]]] = {
     "kit.css": ("hub_ui/kit.css", "text/css; charset=utf-8"),
+    "scope.js": ("hub_ui/scope.js", "text/javascript; charset=utf-8"),
+    "scope-bar.js": ("hub_ui/scope-bar.js", "text/javascript; charset=utf-8"),
     "shell.js": ("hub_ui/shell.js", "text/javascript; charset=utf-8"),
     "pages/overview.js": ("hub_ui/pages/overview.js", "text/javascript; charset=utf-8"),
     "pages/corpus.js": ("hub_ui/pages/corpus.js", "text/javascript; charset=utf-8"),
@@ -390,6 +392,7 @@ ASSETS: Final[dict[str, tuple[str, str]]] = {
     "pages/platform.js": ("hub_ui/pages/platform.js", "text/javascript; charset=utf-8"),
     "pages/levels.js": ("hub_ui/pages/levels.js", "text/javascript; charset=utf-8"),
     "pages/learn.js": ("hub_ui/pages/learn.js", "text/javascript; charset=utf-8"),
+    "pages/leaderboard.js": ("hub_ui/pages/leaderboard.js", "text/javascript; charset=utf-8"),
     "fonts/inter-latin.woff2": ("hub_ui/fonts/inter-latin.woff2", "font/woff2"),
     "fonts/newsreader-latin-roman.woff2": (
         "hub_ui/fonts/newsreader-latin-roman.woff2",
@@ -595,6 +598,9 @@ PAGES: Final[dict[str, PageSpec]] = {
     "method": PageSpec("method", "Method", "pages/method.js", ("shell", "method")),
     "miners": PageSpec("miners", "Miners", "pages/miners.js", ("shell", "mining")),
     "data": PageSpec("data", "Extracted data", "pages/data.js", ("shell", "mining")),
+    "leaderboard": PageSpec(
+        "leaderboard", "Leaderboard", "pages/leaderboard.js", ("shell", "leaderboard")
+    ),
     "findings": PageSpec("findings", "Findings", "pages/findings.js", ("shell", "findings")),
     "contradictions": PageSpec(
         "contradictions",
@@ -625,7 +631,7 @@ def page_html(
     *,
     static_data: bool = True,
 ) -> str:
-    """The static HTML of a page: kit.css, one data script per payload, shell.js, `scripts`.
+    """The static HTML of a page: kit.css, payload scripts, scope scripts, shell.js, `scripts`.
 
     Every URL is relative (`assets/<name>?v=<version>`, `data/<name>.js`), so the file works
     from file:// and under the server. With `static_data` the payloads load as `data/<name>.js`
@@ -637,9 +643,11 @@ def page_html(
         if static_data
         else []
     )
-    assets = [f'<script src="assets/shell.js?v={v}"></script>'] + [
-        f'<script src="assets/{html.escape(s, quote=True)}?v={v}"></script>' for s in scripts
-    ]
+    assets = [
+        f'<script src="assets/scope.js?v={v}"></script>',
+        f'<script src="assets/scope-bar.js?v={v}"></script>',
+        f'<script src="assets/shell.js?v={v}"></script>',
+    ] + [f'<script src="assets/{html.escape(s, quote=True)}?v={v}"></script>' for s in scripts]
     page_map = html.escape(
         json.dumps({p.id: [n for n in p.payloads if n != "shell"] for p in PAGES.values()}),
         quote=True,

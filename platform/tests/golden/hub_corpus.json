@@ -14,64 +14,94 @@
  "cites": [],
  "dims": [
   {
+   "description": "",
    "field": "technique_primary",
    "key": "technique",
    "label": "Technique",
-   "src": "cls"
+   "renamed": false,
+   "src": "cls",
+   "values": {}
   },
   {
+   "description": "",
    "field": "field_primary",
    "key": "field",
    "label": "Field of science",
-   "src": "cls"
+   "renamed": false,
+   "src": "cls",
+   "values": {}
   },
   {
+   "description": "",
    "field": "data_primary",
    "key": "data",
    "label": "Data",
-   "src": "cls"
+   "renamed": false,
+   "src": "cls",
+   "values": {}
   },
   {
+   "description": "",
    "field": "architecture_primary",
    "key": "architecture",
    "label": "Architecture",
-   "src": "cls"
+   "renamed": false,
+   "src": "cls",
+   "values": {}
   },
   {
+   "description": "",
    "field": "evaluation_primary",
    "key": "evaluation",
    "label": "Evaluation",
-   "src": "cls"
+   "renamed": false,
+   "src": "cls",
+   "values": {}
   },
   {
+   "description": "",
    "field": "human_position",
    "key": "human",
    "label": "Human position",
-   "src": "map"
+   "renamed": false,
+   "src": "map",
+   "values": {}
   },
   {
+   "description": "",
    "field": "process_shape",
    "key": "process",
    "label": "Process shape",
-   "src": "map"
+   "renamed": false,
+   "src": "map",
+   "values": {}
   },
   {
+   "description": "",
    "field": "automated_span",
    "key": "span",
    "label": "Automated span",
-   "src": "map"
+   "renamed": false,
+   "src": "map",
+   "values": {}
   },
   {
+   "description": "",
    "field": "idea_assessment_method",
    "key": "assess",
    "label": "Idea assessment",
-   "src": "map"
+   "renamed": false,
+   "src": "map",
+   "values": {}
   },
   {
+   "description": "",
    "field": "month",
    "key": "year",
    "label": "Month",
-   "src": "meta"
+   "renamed": false,
+   "src": "meta",
+   "values": {}
   }
  ],
  "layer_order": [
@@ -137,6 +167,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/p1",
+   "facets": {},
    "id": "rf:zhou2020-paper-1-b82ed975",
    "layer": "unlayered",
    "map": {},
@@ -164,6 +195,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/p2",
+   "facets": {},
    "id": "rf:zhou2020-paper-2-5d247d23",
    "layer": "unlayered",
    "map": {},
@@ -191,6 +223,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/p3",
+   "facets": {},
    "id": "rf:zhou2020-paper-3-d3b73473",
    "layer": "unlayered",
    "map": {},
@@ -218,6 +251,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/r1",
+   "facets": {},
    "id": "rf:zhou2020-random-0001-5274b5ff",
    "layer": "unlayered",
    "map": {},
@@ -245,6 +279,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/r2",
+   "facets": {},
    "id": "rf:zhou2020-random-0002-e4aaafe1",
    "layer": "unlayered",
    "map": {},
@@ -272,6 +307,7 @@
    "design": [],
    "doc": null,
    "doi": "10.1000/r3",
+   "facets": {},
    "id": "rf:zhou2020-random-0003-c1364f67",
    "layer": "unlayered",
    "map": {},

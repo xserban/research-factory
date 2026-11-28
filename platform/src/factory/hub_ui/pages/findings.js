@@ -3,7 +3,40 @@
 HUB.load(['shell', 'findings']).then(d => {
   const H = HUB.init(d.shell);
   const { esc, fmt, pretty, term, info, header, byId, layerLabel, layerColor, openDrawer } = H;
-  const F = d.findings, cards = F.cards || [], cyc = F.cycle || {}, opn = F.openness || {}, clm = F.claims || {};
+  const F = d.findings, SCOPE = window.HUB_SCOPE;
+  /* Scope (HS-02, HS-03, HS-11, HS-20): the id lists behind every card, stage, technique, release segment and
+     claims cell are cut to the papers in the date range and every count is re-taken from them. A share needs the
+     denominator's ids, which the payload does not carry; so with a scope a card shows the papers in scope behind it,
+     and the sentence, the share and the value distribution carry the whole-corpus label. */
+  const ORIG = { cards: F.cards || [], cyc: F.cycle || {}, opn: F.openness || {}, clm: F.claims || {} };
+  let cards = ORIG.cards, cyc = ORIG.cyc, opn = ORIG.opn, clm = ORIG.clm, SRES = null, SIDS = new Set();
+  const scopeOn = () => SCOPE.active(SCOPE.current());
+  const WHOLE = () => scopeOn() ? ' ' + SCOPE.label('corpus') : '';
+  const emptyScopeHTML = () => { const f = SCOPE.format(SCOPE.current()).replace(/&/g, ', ');
+    return `<p class="empty scope-empty-state" id="fempty">No paper falls in this scope${f ? ' (' + esc(f) + ')' : ''}. <button type="button" class="btn" data-scope-reset>Reset the scope</button></p>`; };
+  function deriveScoped() {
+    SRES = SCOPE.apply(H.RF.works, w => w.published, SCOPE.current(), { includeUndated: SCOPE.includeUndated() });
+    SIDS = new Set(SRES.inScope.map(w => w.id));
+    if (!scopeOn()) { cards = ORIG.cards; cyc = ORIG.cyc; opn = ORIG.opn; clm = ORIG.clm; return; }
+    const keep = ids => (ids || []).filter(id => SIDS.has(id));
+    const keepQ = q => Object.fromEntries(Object.entries(q || {}).filter(([id]) => SIDS.has(id)));
+    cards = ORIG.cards.map(c => ({ ...c, ids: keep(c.ids), evidence: (c.evidence || []).filter(e => SIDS.has(e.work)) }));
+    const stages = (ORIG.cyc.stages || []).map(s => {
+      const ids = keep(s.ids), techniques = (s.techniques || []).map(t => { const ti = keep(t.ids); return { ...t, ids: ti, n: ti.length, quotes: keepQ(t.quotes) }; });
+      return { ...s, ids, automated: ids.length, quotes: keepQ(s.quotes), techniques, techniques_used: techniques.filter(t => t.n).length };
+    });
+    const top = Math.max(1, ...stages.map(s => s.automated));
+    cyc = { ...ORIG.cyc, stages: stages.map(s => ({ ...s, share: s.automated / top })), _top: top };
+    const seg = b => { const segments = (b.segments || []).map(x => { const ids = keep(x.ids); return { ...x, ids, n: ids.length }; }); return { ...b, segments, n: segments.reduce((a, x) => a + x.n, 0) }; };
+    const groups = (ORIG.opn.groups || []).map(g => { const code = seg(g.code), data = seg(g.data);
+      return { ...g, code, data, n: new Set([...code.segments, ...data.segments].flatMap(x => x.ids)).size }; });
+    const all = groups.find(g => g.key === 'all');
+    opn = { ...ORIG.opn, groups, n: all ? all.n : new Set(groups.flatMap(g => [...g.code.segments, ...g.data.segments].flatMap(x => x.ids))).size };
+    const crow = (ORIG.clm.rows || []).map(r => { const cells = {}; for (const k of Object.keys(r.cells || {})) { const ids = keep(r.cells[k].ids); cells[k] = { ...r.cells[k], ids, n: ids.length }; }
+      return { ...r, cells, n: new Set(Object.values(cells).flatMap(c => c.ids)).size }; });
+    const totals = {}; for (const k of (ORIG.clm.columns || [])) totals[k.key] = crow.reduce((a, r) => a + ((r.cells[k.key] || {}).n || 0), 0);
+    clm = { ...ORIG.clm, rows: crow, column_totals: totals, n: new Set(crow.flatMap(r => Object.values(r.cells).flatMap(c => c.ids))).size };
+  }
   const main = H.mount({ page: 'findings', crumb: 'Findings' });
 
   /* ---------- page styles (kit tokens only) ---------- */
@@ -166,6 +199,7 @@ HUB.load(['shell', 'findings']).then(d => {
     const ex = c.extra || {}, m = { big: pctN(c.numerator, c.denominator), unit: '%', line: `${fmt(c.numerator)} of ${fmt(c.denominator)} papers`, chart: '', rows: null };
     const ev = (c.evidence || []).map(e => [e.work, e.quote]);
     m.list = { ids: c.ids, ev, tag: () => '' };
+    const on = scopeOn();
     switch (c.rule) {
       case 'no_human': m.chart = distWaffle(c, H.humanLabel, v => (H.HUMAN.find(h => h[0] === v) || [, , '--h-null'])[2]); m.list.tag = id => H.humanLabel(H.val(byId.get(id), 'human')); break;
       case 'full_lifecycle':
@@ -173,34 +207,43 @@ HUB.load(['shell', 'findings']).then(d => {
         if (ex.alternative) m.line += ` · most common alternative: ${pretty(ex.alternative.value)} (${fmt(ex.alternative.n)})`;
         m.list.tag = () => 'Full research cycle'; break;
       case 'least_automated_stage': {
-        const ss = cyc.stages || [], max = Math.max(1, ...ss.map(s => s.share || 0));
-        m.rows = ss.map(s => ({ l: s.label.split(/ and | /)[0], full: s.label, v: s.share || 0, txt: pctN(s.automated, s.of) + '%', hi: s.stage === ex.stage, ids: s.ids, quotes: s.quotes, tag: () => 'Automates it' }));
+        const ss = cyc.stages || [], max = Math.max(1, ...ss.map(s => on ? s.automated : (s.share || 0)));
+        m.rows = ss.map(s => ({ l: s.label.split(/ and | /)[0], full: s.label, v: on ? s.automated : (s.share || 0), txt: on ? fmt(s.automated) : pctN(s.automated, s.of) + '%', hi: !on && s.stage === ex.stage, ids: s.ids, quotes: s.quotes, tag: () => 'Automates it' }));
         m.max = max; m.chart = rowsChart(m.rows, max);
-        if (ex.most_automated) m.line += ` · most automated: ${lower(stageLabel(ex.most_automated.stage))} (${pctN(ex.most_automated.n, c.denominator)}%)`;
+        if (ex.most_automated && !on) m.line += ` · most automated: ${lower(stageLabel(ex.most_automated.stage))} (${pctN(ex.most_automated.n, c.denominator)}%)`;
         m.list.tag = () => 'Automates it'; break; }
       case 'most_varied_stage': {
         const ss = cyc.stages || [], max = Math.max(1, ...ss.map(s => s.techniques_used));
         const byTech = s => { const q = {}; (s.techniques || []).forEach(t => Object.assign(q, Object.fromEntries(Object.entries(t.quotes || {}).filter(([k]) => !(k in q))))); return q; };
         m.rows = ss.map(s => ({ l: s.label.split(/ and | /)[0], full: s.label, v: s.techniques_used, txt: String(s.techniques_used), hi: s.stage === ex.stage, ids: [...new Set((s.techniques || []).flatMap(t => t.ids))], quotes: byTech(s), tag: () => '' }));
-        m.big = c.numerator; m.unit = ''; m.max = max; m.chart = rowsChart(m.rows, max);
-        m.line = `Among the ${term('core', fmt(cyc.core) + ' core papers')}` + (ex.fewest ? ` · fewest: ${lower(stageLabel(ex.fewest.stage))} (${fmt(ex.fewest.n)})` : '');
+        m.big = on ? ((m.rows.find(r => r.hi) || {}).v || 0) : c.numerator; m.unit = ''; m.max = max; m.chart = rowsChart(m.rows, max);
+        m.line = `Among the ${term('core', fmt(cyc.core) + ' core papers')}${on ? WHOLE() : ''}` + (ex.fewest ? ` · fewest: ${lower(stageLabel(ex.fewest.stage))} (${fmt(ex.fewest.n)})` : '');
         m.list.quotes = (m.rows.find(r => r.hi) || {}).quotes; break; }
       case 'iterative_loop': m.chart = distWaffle(c, pretty); m.list.tag = () => 'Iterative loop'; break;
       case 'benchmark_validation': {
         const segs = (clm.columns || []).map(k => ({ key: k.key, label: k.label, n: (clm.column_totals || {})[k.key] || 0 }));
-        m.chart = segs.length ? stack(segs, 'simulation-or-benchmark') : '';
+        m.chart = segs.some(x => x.n) ? stack(segs, 'simulation-or-benchmark') : '';
         m.line += ` · real experiment ${fmt((ex.real_experiment || {}).n || 0)}, deployment ${fmt((ex.deployment || {}).n || 0)}`;
         m.list.tag = () => 'Benchmark or simulation'; break; }
       case 'compare_with_humans': m.chart = distWaffle(c, pretty); m.list.tag = () => 'Compares with humans'; break;
       case 'data_release': {
         const g = (opn.groups || [])[0], segs = g ? g.data.segments : [];
-        m.chart = segs.length ? stack(segs, 'released') : '';
+        m.chart = segs.some(x => x.n) ? stack(segs, 'released') : '';
         if (ex.code_released) m.line = `${fmt(c.numerator)} of ${fmt(c.denominator)} papers with a release record · code ${fmt(ex.code_released.n)}`;
         m.list.tag = () => 'Data released'; break; }
     }
+    if (on) {
+      /* with a scope: the papers in scope behind the card; the sentence, share and distribution are whole-corpus */
+      const wholeChart = ['no_human', 'full_lifecycle', 'iterative_loop', 'compare_with_humans'].includes(c.rule);
+      const k = (ORIG.cards.find(x => x.rule === c.rule) || { ids: [] }).ids.length;
+      if (c.rule !== 'most_varied_stage') { m.big = c.ids.length; m.unit = ''; m.line = `${fmt(c.ids.length)} of ${fmt(k)} papers behind this card are in scope`; }
+      else m.line = `techniques used at the stage, in scope · ${m.line}`;
+      if (wholeChart) m.chart += `<div class="nn">${SCOPE.label('corpus')} The distribution counts every included paper.</div>`;
+      m.sayLabel = ' ' + SCOPE.label('corpus') + ' <span class="nn">Statement and share are over the whole corpus.</span>';
+    }
     return m;
   }
-  const M = new Map(cards.map(c => [c.rule, model(c)]));
+  let M = new Map();
 
   /* ---------- list panel: papers or evidence, then the paper drawer ---------- */
   let lp = null;
@@ -239,39 +282,50 @@ HUB.load(['shell', 'findings']).then(d => {
     const f = cards.find(c => c.available);
     return f ? esc(sayText(f)) : 'Findings appear here once papers have been coded.';
   }
+  const leadWithLabel = () => leadText() + (scopeOn() && cards.some(c => c.available) ? WHOLE() : '');
 
   /* ---------- render ---------- */
-  const TOP = Math.ceil(Math.max(0, ...(cyc.stages || []).map(s => s.share || 0)) * 10) / 10 || 1;
+  let TOP = 1;
   const stagesInfo = `<b>What it shows</b>The seven stages of a research project, and how far the systems in this review automate each.<p><span class=k>How to read it.</span> Colour is the share of papers that do the stage on their own, from pale (few) to strong (many). Select a stage for the techniques used in it.</p><p><span class=k>How it’s computed.</span> ${esc(F.methods.cycle || '')}</p>`;
   const cardHtml = c => {
     const m = M.get(c.rule);
     if (!c.available) return `<article class="fc na" data-f="${esc(c.rule)}"><div class="top"><div class="big">–</div>${info(`<b>How this is computed</b>${esc(c.how)}`, 'How this number is computed')}</div><p class="say">${esc(c.title || pretty(c.rule))}</p><p class="say" style="font-size:var(--t-s)">Not enough data yet</p></article>`;
     return `<article class="fc" data-f="${esc(c.rule)}">
       <div class="top"><div class="big">${fmt(m.big)}<small>${m.unit}</small></div>${info(`<b>How this is computed</b>${esc(c.how)}<p>${esc(popText(c.population))}.</p>`, 'How this number is computed')}</div>
-      <p class="say">${sayHtml(c)}</p>
+      <p class="say">${sayHtml(c)}${m.sayLabel || ''}</p>
       <div class="chart">${m.chart}</div>
       <div class="nn">${m.line}</div>
       <div class="acts"><button class="btn primary" data-act="papers">Show papers</button><button class="btn" data-act="evidence">Show evidence</button></div></article>`;
   };
 
   function render() {
+    deriveScoped();
+    if (SRES.n === 0 && SRES.N > 0) {
+      main.innerHTML = `<div class="fp">${header({ level: 1, title: 'Findings', infoHtml: '' })}<div id="fscope"></div>${emptyScopeHTML()}</div>`;
+      SCOPE.renderLine(document.getElementById('fscope'), SRES, { onToggle: () => render() });
+      return;
+    }
+    M = new Map(cards.map(c => [c.rule, model(c)]));
+    const on = scopeOn();
+    TOP = on ? 1 : (Math.ceil(Math.max(0, ...(ORIG.cyc.stages || []).map(s => s.share || 0)) * 10) / 10 || 1);
     const stages = cyc.stages || [];
     main.innerHTML = `<div class="fp">
     ${header({ level: 1, title: 'Findings', infoHtml: `<b>What it shows</b>What the review has found so far, as plain statements.<p><span class=k>How to read it.</span> Each card gives one number, the papers behind it, and quotations from those papers.</p><p><span class=k>How it’s computed.</span> ${esc(F.methods.cards || '')}</p>` })}
-    <p class="lead">${leadText()}</p>
-    <p class="meta">${fmt((F.population || {}).included || 0)} ${term('included', 'included papers')}, as of ${esc((d.shell.generated || '').slice(0, 10))}</p>
+    <div id="fscope"></div>
+    <p class="lead">${leadWithLabel()}</p>
+    <p class="meta">${fmt((F.population || {}).included || 0)} ${term('included', 'included papers')}${WHOLE()}, as of ${esc((d.shell.generated || '').slice(0, 10))}</p>
     <div class="fgrid" id="fg">${cards.map(cardHtml).join('')}</div>
 
     <section id="cycle">
       ${header({ title: 'The research cycle', sub: 'How far systems automate each stage, and with which techniques.', infoHtml: stagesInfo })}
       ${stages.length ? `<div class="cyc" id="cyc">${stages.map((s, i) => { const tp = (s.techniques || []).filter(t => t.n).slice(0, 3);
-        return `<button type="button" class="stg" data-s="${esc(s.stage)}" aria-pressed="false" data-tip="${esc(s.label)}: ${fmt(s.automated)} of ${fmt(s.of)} papers automate it">
+        return `<button type="button" class="stg" data-s="${esc(s.stage)}" aria-pressed="false" data-tip="${esc(s.label)}: ${on ? fmt(s.automated) + ' papers in scope automate it' : fmt(s.automated) + ' of ' + fmt(s.of) + ' papers automate it'}">
           <span class="band" style="background:color-mix(in srgb,var(--seq-4) ${Math.round(Math.min(1, (s.share || 0) / TOP) * 100)}%,var(--seq-1))"></span>
           <span class="k">Stage ${i + 1}</span><span class="nm">${esc(s.label)}</span>
-          <span class="pc">${pctN(s.automated, s.of)}<small>% ${term('automated', 'automate it')}</small></span>
-          <span class="ds">${fmt(s.automated)} of ${fmt(s.of)} papers<br>${fmt(s.techniques_listed)} techniques listed, ${fmt(s.techniques_used)} used</span>
+          <span class="pc">${on ? fmt(s.automated) : pctN(s.automated, s.of)}<small>${on ? ' papers ' : '% '}${term('automated', 'automate it')}</small></span>
+          <span class="ds">${on ? fmt(s.automated) + ' papers in scope; share of the stage’s papers ' + SCOPE.label('corpus') : fmt(s.automated) + ' of ' + fmt(s.of) + ' papers'}<br>${fmt(s.techniques_listed)} techniques listed, ${fmt(s.techniques_used)} used</span>
           <ul class="tt">${tp.map(t => `<li><span>${esc(t.label)}</span><span>${fmt(t.n)}</span></li>`).join('')}</ul></button>`; }).join('')}</div>
-        <div class="legend"><span>Share of papers that automate the stage</span><span>0%</span><span class="ramp"></span><span>${Math.round(TOP * 100)}%</span><span class="meta">Technique counts: ${fmt(cyc.core)} core papers</span></div>
+        <div class="legend"><span>${on ? 'Papers in scope that automate the stage' : 'Share of papers that automate the stage'}</span><span>0${on ? '' : '%'}</span><span class="ramp"></span><span>${on ? fmt(cyc._top) : Math.round(TOP * 100) + '%'}</span><span class="meta">Technique counts: ${fmt(cyc.core)} core papers${WHOLE()}</span></div>
         <div id="sp"></div>` : '<div class="empty">The cycle appears here once the stage readings are recorded.</div>'}
     </section>
 
@@ -286,6 +340,7 @@ HUB.load(['shell', 'findings']).then(d => {
     </section>
 
     <footer class="foot">Papers, counts and sets ${info(H.SETS_NOTE, 'About the paper counts')}</footer></div>`;
+    SCOPE.renderLine(document.getElementById('fscope'), SRES, { onToggle: () => render() });
     wireCards(); drawOpen(); drawMx(); wireStages(); applyHash();
   }
 
@@ -335,7 +390,7 @@ HUB.load(['shell', 'findings']).then(d => {
     const ts = s.techniques || [], mx = Math.max(1, ...ts.map(x => x.n)), axMax = Math.ceil(mx / 5) * 5;
     const sel = ts.find(x => x.code === p.get('tech')) || ts.find(x => x.n);
     sp.innerHTML = `<div class="sp"><div class="hd"><div><h3 class="h2">${esc(s.label)} ${info(`<b>Techniques for ${esc(s.label.toLowerCase())}</b>Every technique in the codebook for this stage, ranked by how many core papers use it.<p><span class=k>How it’s computed.</span> A paper counts once per technique. ${fmt(s.not_stated)} paper readings said the technique was not stated and ${fmt(s.other)} were “other”; these are not ranked.</p>`, 'About this list')}</h3>
-      <div class="meta">${fmt(s.automated)} of ${fmt(s.of)} papers automate it · ${fmt(s.techniques_listed)} techniques listed, ${fmt(s.techniques_used)} used by the ${fmt(s.core)} core papers</div></div><button class="btn" id="spX">Close</button></div>
+      <div class="meta">${scopeOn() ? `${fmt(s.automated)} papers in scope automate it · ${fmt(s.techniques_listed)} techniques listed, ${fmt(s.techniques_used)} used by core papers in scope` : `${fmt(s.automated)} of ${fmt(s.of)} papers automate it · ${fmt(s.techniques_listed)} techniques listed, ${fmt(s.techniques_used)} used by the ${fmt(s.core)} core papers`}</div></div><button class="btn" id="spX">Close</button></div>
       <div class="cols"><div><div class="dax"><span></span><span class="ax"><span>0</span><span>${Math.round(axMax / 2)}</span><span>${axMax} papers</span></span><span></span></div>
       <div class="dp" role="list">${ts.map(x => `<button type="button" class="dr ${x.n ? '' : 'z'}" role="listitem" data-code="${esc(x.code)}" aria-pressed="${!!sel && sel.code === x.code}" style="--p:${100 * x.n / axMax}%" data-tip="${esc(x.label)}"><span class="l">${esc(x.label)}</span><span class="tr"><i></i></span><span class="v">${fmt(x.n)}</span></button>`).join('')}</div></div>
       <div class="tdet">${sel ? detail(s, sel) : '<div class="empty">No technique recorded.</div>'}</div></div></div>`;
@@ -346,7 +401,7 @@ HUB.load(['shell', 'findings']).then(d => {
   }
   function detail(s, x) {
     const ids = sortIds(x.ids), ev = evOf(ids, x.quotes, 3);
-    return `<h3 class="h3">${esc(x.label)}</h3><div class="meta"><span class="mono">${esc(x.code)}</span> · ${fmt(x.n)} of ${fmt(s.core)} core papers (${pctN(x.n, s.core)}%)</div>
+    return `<h3 class="h3">${esc(x.label)}</h3><div class="meta"><span class="mono">${esc(x.code)}</span> · ${scopeOn() ? fmt(x.n) + ' core papers in scope' : fmt(x.n) + ' of ' + fmt(s.core) + ' core papers (' + pctN(x.n, s.core) + '%)'}</div>
       <ul class="pp">${(ev.length ? ev : ids.slice(0, 3).map(id => [id, ''])).map(([id, q]) => `<li><a href="#" data-open="${esc(id)}">${esc(byId.get(id).title)}</a>${q ? `<blockquote class="quote">“${esc(quoteText(q))}”</blockquote>` : ''}</li>`).join('')}</ul>
       ${x.n > 3 ? `<p style="margin-top:14px"><button class="btn" data-all>Show all ${fmt(x.n)} papers</button></p>` : ''}`;
   }
@@ -358,6 +413,8 @@ HUB.load(['shell', 'findings']).then(d => {
   }
   render();
   window.addEventListener('hashchange', drawStage);
+  document.addEventListener('click', e => { if (e.target.closest('[data-scope-reset]')) SCOPE.reset(); });
+  SCOPE.onChange(() => render());
 }).catch(e => {
   document.body.textContent = 'Findings failed to load: ' + e.message;
 });
